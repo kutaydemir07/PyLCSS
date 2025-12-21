@@ -582,14 +582,20 @@ class PlotWidget(QtWidgets.QWidget):
         view_box.setLimits(xMin=x_min, xMax=x_max, yMin=y_min, yMax=y_max)
         view_box.enableAutoRange(enable=False)
 
-        # Create scatter plot data
+        # --- FIX: Apply filtering to ALL arrays to keep indices synchronized ---
         if self.samples is not None and x_data is not None and y_data is not None:
-            # Filter out NaN and infinite values
+            # 1. Create the mask for valid (finite) numbers
             valid_mask = np.isfinite(x_data) & np.isfinite(y_data)
+            
+            # 2. Apply mask to coordinates
             x_data = x_data[valid_mask]
             y_data = y_data[valid_mask]
-            if is_objective_plot:
+            
+            # 3. Apply mask to status arrays (CRITICAL FIX)
+            if is_good is not None:
                 is_good = is_good[valid_mask]
+            if violation_idx is not None:
+                violation_idx = violation_idx[valid_mask]
             
             # Objective plot: green for good, red for bad
             if is_objective_plot:
@@ -703,43 +709,73 @@ class PlotWidget(QtWidgets.QWidget):
                     except Exception as e:
                         logger.exception("Interpolation failed")
                 else:
-                    # Points mode: vectorized color computation for performance
-                    # Preallocate color array as RGB tuples for vectorized processing
+                    # --- FAST VECTORIZED POINTS MODE ---
                     n_points = len(x_data)
                     
-                    # Create base colors array - start with green for all good points
+                    # 1. Create array of RGBA values (Default: Red for bad points)
+                    # Shape: (N, 4), type: uint8 (0-255)
                     colors = np.zeros((n_points, 4), dtype=np.uint8)
-                    colors[is_good] = [0, 170, 0, 153]  # Green with alpha=0.6*255
+                    colors[:] = [255, 0, 0, 150]  # Default red for all
                     
-                    # Handle bad points
-                    bad_mask = ~is_good
-                    if np.any(bad_mask):
-                        # Default red for all bad points
-                        colors[bad_mask] = [255, 0, 0, 153]  # Red with alpha=0.6*255
-                        
-                        # Color by violating constraint if available
-                        if violation_idx is not None:
-                            for v_idx_val in range(num_qoi):
-                                # Find points with this specific violation
-                                violation_mask = bad_mask & (violation_idx == v_idx_val)
-                                if np.any(violation_mask):
-                                    q_name = qoi_names[v_idx_val] if v_idx_val < len(qoi_names) else None
-                                    if q_name:
-                                        color_hex = self.parent_widget.qoi_colors.get(q_name, '#ff0000')
-                                        # Convert hex to RGB
-                                        color_hex = color_hex.lstrip('#')
-                                        r, g, b = tuple(int(color_hex[i:i+2], 16) for i in (0, 2, 4))
-                                        colors[violation_mask] = [r, g, b, 153]
-                    
-                    # Convert to list of QColor brushes for pyqtgraph
-                    brush_list = [pg.mkBrush(QtGui.QColor(int(r), int(g), int(b), int(a))) 
-                                  for r, g, b, a in colors]
+                    # 2. Set Green for Good points (overwrite default)
+                    if is_good is not None and np.any(is_good):
+                        colors[is_good] = [0, 170, 0, 150]
+
+                    # 3. Handle Violation Colors (Vectorized)
+                    # Only process bad points that have a violation index
+                    if violation_idx is not None and is_good is not None:
+                        # Safety: ensure arrays are same length
+                        if len(violation_idx) != len(is_good):
+                            logger.warning(f"Array length mismatch: violation_idx={len(violation_idx)}, is_good={len(is_good)}")
+                        else:
+                            # Get mask of bad points
+                            bad_mask = ~is_good
+                            
+                            # Only proceed if there are bad points
+                            if np.any(bad_mask):
+                                # Extract violation indices for bad points only
+                                bad_violation_idx = violation_idx[bad_mask]
+                                
+                                # Filter out NaN/infinite values
+                                valid_mask = np.isfinite(bad_violation_idx)
+                                
+                                if np.any(valid_mask):
+                                    # Get valid violation indices and clamp to range [0, num_qoi)
+                                    valid_violations = bad_violation_idx[valid_mask].astype(int)
+                                    
+                                    # Safety: ensure num_qoi > 0 to avoid division by zero
+                                    if num_qoi > 0:
+                                        valid_violations = valid_violations % num_qoi
+                                        
+                                        # Get the indices in the original array where we need to set colors
+                                        bad_indices = np.where(bad_mask)[0]
+                                        valid_bad_indices = bad_indices[valid_mask]
+                                        
+                                        # Loop through constraints (small loop) instead of points (large loop)
+                                        for v_idx_val in range(num_qoi):
+                                            # Find all points that violated this specific constraint
+                                            constraint_mask = (valid_violations == v_idx_val)
+                                            
+                                            if np.any(constraint_mask):
+                                                # Get the color for this constraint
+                                                q_name = qoi_names[v_idx_val]
+                                                hex_color = self.parent_widget.qoi_colors.get(q_name, '#ff0000')
+                                                
+                                                # Convert hex to RGB
+                                                c = QtGui.QColor(hex_color)
+                                                rgb = np.array([c.red(), c.green(), c.blue(), 150], dtype=np.uint8)
+                                                
+                                                # Apply color to all points that violated this constraint
+                                                colors[valid_bad_indices[constraint_mask]] = rgb
+
+                    # 4. Convert NumPy RGBA array to pyqtgraph brushes
+                    brush_list = [pg.mkBrush(QtGui.QColor(int(r), int(g), int(b), int(a))) for r, g, b, a in colors]
                     
                     self.scatter_good = pg.ScatterPlotItem(
                         x=x_data, y=y_data, 
-                        pen=pg.mkPen('w', width=0.5), 
+                        pen=pg.mkPen(None),  # No outline for better performance
                         brush=brush_list,
-                        size=6, alpha=0.6
+                        size=6
                     )
                     self.scatter_good.setZValue(1)
                     self.plot_widget.addItem(self.scatter_good)
