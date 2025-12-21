@@ -35,7 +35,7 @@ PyLCSS (Python Low-Code System Solutions) is a comprehensive source-available pl
 | **Multi-Objective Optimization** | Pareto-optimal solutions with multiple conflicting objectives using SLSQP, Nevergrad, and Differential Evolution | Design trade-off analysis, cost-performance optimization |
 | **Global Sensitivity Analysis** | Sobol variance-based sensitivity with confidence intervals | Parameter importance ranking, uncertainty propagation |
 | **Surrogate Modeling** | ML approximations including PyTorch neural networks for expensive simulations | Computational cost reduction, real-time analysis |
-| **Solution Space Exploration** | Monte Carlo sampling with interactive visualization and optional optimization inclusion | Design space characterization, feasibility analysis |
+| **Solution Space Exploration (Markus Zimmermann, Johannes Edler von Hoessle, Computing solution spaces for robust design https://doi.org/10.1002/nme.4450)** | Monte Carlo sampling with interactive visualization and optional optimization inclusion | Design space characterization, feasibility analysis |
 | **Constraint Scaling** | Automatic scaling of variables and constraints to improve solver convergence | Robust optimization of problems with mixed scales |
 
 ### 🏗️ System Modeling Engine

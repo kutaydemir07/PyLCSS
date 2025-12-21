@@ -1,5 +1,8 @@
 # Copyright (c) 2025 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
+# Markus Zimmermann, Johannes Edler von Hoessle 
+# Computing solution spaces for robust design 
+# https://doi.org/10.1002/nme.4450
 
 import numpy as np
 import time
@@ -358,7 +361,7 @@ class SolutionSpaceSolver:
                 elif purity > 0.1:
                     # Partial Success: We expanded too much, but there are still good points.
                     # Instead of rejecting entirely, let's TRIM the box to the good points.
-                    # This mimics the LPL "Growth -> Trim" cycle.
+                    # This mimics the "Growth -> Trim" cycle.
                     dvbox_trimmed = self._trim_box(dvbox_new, dv_sample, Points_A)
                     
                     # Verify the trimmed box is actually better

@@ -47,7 +47,7 @@ class SolverResult:
 
 
 def solve_with_slsqp(objective_func: Callable, x0: np.ndarray, bounds: List[Tuple[float, float]],
-                     constraints: Optional[List[Dict]] = None, maxiter: int = 100, **kwargs) -> SolverResult:
+                     constraints: Optional[List[Dict]] = None, maxiter: int = 5000, **kwargs) -> SolverResult:
     """
     Solve optimization problem using SLSQP.
 
@@ -100,7 +100,7 @@ def solve_with_slsqp(objective_func: Callable, x0: np.ndarray, bounds: List[Tupl
 
 
 def solve_with_nevergrad(objective_func: Callable, x0: np.ndarray,
-                         bounds: List[Tuple[float, float]], maxiter: int = 1000,
+                         bounds: List[Tuple[float, float]], maxiter: int = 5000,
                          constraints: Optional[List[Dict]] = None,
                          callback: Optional[Callable] = None, **kwargs) -> SolverResult:
     """
@@ -339,7 +339,7 @@ def solve_with_nevergrad(objective_func: Callable, x0: np.ndarray,
 
 def solve_with_differential_evolution(objective_func: Callable, bounds: List[Tuple[float, float]],
                                        constraints: Optional[List[Dict]] = None,
-                                       maxiter: int = 1000, x0: Optional[np.ndarray] = None,
+                                       maxiter: int = 5000, x0: Optional[np.ndarray] = None,
                                        callback: Optional[Callable] = None, **kwargs) -> SolverResult:
     """
     Solve optimization problem using Scipy Differential Evolution with native constraint support.

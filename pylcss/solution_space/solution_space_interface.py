@@ -1,5 +1,8 @@
 # Copyright (c) 2025 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
+# Markus Zimmermann, Johannes Edler von Hoessle 
+# Computing solution spaces for robust design 
+# https://doi.org/10.1002/nme.4450
 
 """
 Solution space analysis and visualization interface for PyLCSS.
@@ -700,28 +703,42 @@ class PlotWidget(QtWidgets.QWidget):
                     except Exception as e:
                         logger.exception("Interpolation failed")
                 else:
-                    # Points mode: original implementation
-                    colors = []
-                    for i in range(len(x_data)):
-                        if is_good[i]:
-                            colors.append(pg.mkBrush('#00aa00'))  # Green for good
-                        else:
-                            # Color by violating constraint
-                            if violation_idx is not None and i < len(violation_idx):
-                                v_idx = int(violation_idx[i]) % num_qoi
-                                if v_idx < len(qoi_names):
-                                    q_name = qoi_names[v_idx]
-                                    color = self.parent_widget.qoi_colors.get(q_name, 'red')
-                                    colors.append(pg.mkBrush(color))
-                                else:
-                                    colors.append(pg.mkBrush('red'))
-                            else:
-                                colors.append(pg.mkBrush('red'))
+                    # Points mode: vectorized color computation for performance
+                    # Preallocate color array as RGB tuples for vectorized processing
+                    n_points = len(x_data)
+                    
+                    # Create base colors array - start with green for all good points
+                    colors = np.zeros((n_points, 4), dtype=np.uint8)
+                    colors[is_good] = [0, 170, 0, 153]  # Green with alpha=0.6*255
+                    
+                    # Handle bad points
+                    bad_mask = ~is_good
+                    if np.any(bad_mask):
+                        # Default red for all bad points
+                        colors[bad_mask] = [255, 0, 0, 153]  # Red with alpha=0.6*255
+                        
+                        # Color by violating constraint if available
+                        if violation_idx is not None:
+                            for v_idx_val in range(num_qoi):
+                                # Find points with this specific violation
+                                violation_mask = bad_mask & (violation_idx == v_idx_val)
+                                if np.any(violation_mask):
+                                    q_name = qoi_names[v_idx_val] if v_idx_val < len(qoi_names) else None
+                                    if q_name:
+                                        color_hex = self.parent_widget.qoi_colors.get(q_name, '#ff0000')
+                                        # Convert hex to RGB
+                                        color_hex = color_hex.lstrip('#')
+                                        r, g, b = tuple(int(color_hex[i:i+2], 16) for i in (0, 2, 4))
+                                        colors[violation_mask] = [r, g, b, 153]
+                    
+                    # Convert to list of QColor brushes for pyqtgraph
+                    brush_list = [pg.mkBrush(QtGui.QColor(int(r), int(g), int(b), int(a))) 
+                                  for r, g, b, a in colors]
                     
                     self.scatter_good = pg.ScatterPlotItem(
                         x=x_data, y=y_data, 
                         pen=pg.mkPen('w', width=0.5), 
-                        brush=colors,
+                        brush=brush_list,
                         size=6, alpha=0.6
                     )
                     self.scatter_good.setZValue(1)
