@@ -92,11 +92,12 @@ class SystemModel:
             spec.loader.exec_module(module)
 
             # Get the system_function
-            if hasattr(module, 'system_function'):
-                system_function = module.system_function
-                if not callable(system_function):
-                    raise TypeError(f"system_function is not callable: {type(system_function)}")
-            else:
+            system_function = None
+            for attr_name in dir(module):
+                if attr_name.startswith('system_function') and callable(getattr(module, attr_name)):
+                    system_function = getattr(module, attr_name)
+                    break
+            if system_function is None:
                 raise AttributeError("system_function not found in generated code")
 
             return cls(name, system_function, inputs, outputs, code_string)

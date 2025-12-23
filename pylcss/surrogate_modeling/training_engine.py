@@ -21,7 +21,7 @@ try:
     from sklearn.neural_network import MLPRegressor
     from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
     from sklearn.gaussian_process import GaussianProcessRegressor
-    from sklearn.gaussian_process.kernels import RBF, ConstantKernel as C, WhiteKernel
+    from sklearn.gaussian_process.kernels import RBF, Matern, ConstantKernel as C, WhiteKernel
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import StandardScaler, MinMaxScaler
     from sklearn.compose import TransformedTargetRegressor
@@ -35,6 +35,9 @@ try:
     
 except ImportError:
     SKLEARN_AVAILABLE = False
+
+# --- Scipy Imports for Optimization ---
+from scipy.optimize import minimize
 
 # --- Optional Imports for Enhanced Sampling ---
 try:
@@ -207,11 +210,33 @@ class MLPStrategy(SurrogateModelStrategy):
 
 class GaussianProcessStrategy(SurrogateModelStrategy):
     def train(self, X, y, config, X_test=None, y_test=None, callback=None, stop_flag=None, loss_callback=None):
-        kernel = C(1.0, (1e-3, 1e3)) * RBF(10, (1e-2, 1e2)) + WhiteKernel(noise_level=1e-5)
+        
+        # 1. Define a robust optimizer wrapper
+        # This prevents the "ABNORMAL_TERMINATION" by explicitly controlling the solver
+        def robust_optimizer(obj_func, initial_theta, bounds):
+            res = minimize(
+                obj_func, 
+                initial_theta, 
+                method="L-BFGS-B", 
+                jac=True,  # <--- Add this line
+                bounds=bounds, 
+                options={'maxiter': 2000, 'ftol': 1e-9, 'gtol': 1e-9}
+            )
+            return res.x, res.fun
+
+        # 2. Use Matern Kernel (nu=2.5) instead of RBF
+        # Matern(nu=2.5) allows for non-smooth physical behavior (common in engineering)
+        # Generalized "wide" bounds to handle any engineering scale
+        kernel = C(1.0, (1e-5, 1e10)) * \
+                 Matern(length_scale=1.0, length_scale_bounds=(1e-5, 1e6), nu=2.5) + \
+                 WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-9, 1e2))
+        
         regressor = GaussianProcessRegressor(
             kernel=kernel,
-            n_restarts_optimizer=5,
+            n_restarts_optimizer=10,
+            optimizer=robust_optimizer, # <--- Inject custom optimizer
             normalize_y=True,
+            alpha=0.0,
             random_state=config.get('random_state', 42)
         )
         
@@ -228,6 +253,7 @@ class GaussianProcessStrategy(SurrogateModelStrategy):
             transformer=target_scaler
         )
         
+        # ... (keep the rest of your data splitting logic exactly the same) ...
         if config.get('debug_mode', False):
             X_train, y_train = X, y
             X_test_eval, y_test_eval = X, y
@@ -241,9 +267,11 @@ class GaussianProcessStrategy(SurrogateModelStrategy):
             
         model.fit(X_train, y_train)
         
+        # Change label to 'Gaussian Process (Matern)' if you prefer, or keep it generic
         metrics = self._evaluate(model, X_test_eval, y_test_eval, config)
         return UncertaintyWrapper(model, 'Gaussian Process (Kriging)'), metrics
 
+    # ... keep _evaluate method exactly the same ...
     def _evaluate(self, model, X_test, y_test, config):
         if len(X_test) == 0:
             return {'RMSE': None, 'R2': None, 'y_test': [], 'y_pred': [], 'debug_mode': config.get('debug_mode', False)}
@@ -402,6 +430,7 @@ class SurrogateTrainer:
         filename = f"spy_{uuid.uuid4().hex}.py"
         filepath = os.path.join(temp_dir, filename)
         
+        # Write the spy code to temporary file
         with open(filepath, 'w') as f:
             f.write(spy_code)
             
@@ -420,11 +449,13 @@ class SurrogateTrainer:
             # Log the generated code for debugging before raising error
             logger.error("Generated spy model code compilation failed.")
             logger.debug(f"Code:\n{spy_code}")
+            raise RuntimeError(f"Failed to compile spy model: {e}")
+        finally:
+            # Always clean up the temporary file
             try:
                 os.unlink(filepath)
             except:
                 pass
-            raise RuntimeError(f"Failed to compile spy model: {e}")
 
         # Generate Data
         total_samples = num_samples + test_samples
@@ -620,7 +651,15 @@ class SurrogateTrainer:
             X_test = X_test
             y_test = y_test
         else:
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=config.get('validation_split', 0.2), random_state=42)
+            validation_split = config.get('validation_split', 0.2)
+            if validation_split <= 0.0:
+                # No validation split requested, use all data for training
+                X_train = X
+                y_train = y
+                X_test = X[:1]  # Keep one sample to avoid scaler issues
+                y_test = y[:1]
+            else:
+                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=validation_split, random_state=42)
         
         scaler_x = StandardScaler()
         scaler_y = StandardScaler()

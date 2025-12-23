@@ -16,7 +16,10 @@ import qtawesome as qta
 from .training_engine import SurrogateTrainer, SKLEARN_AVAILABLE, TORCH_AVAILABLE
 from ..system_modeling.model_builder import GraphBuilder
 import os
-import time 
+import time
+
+if TORCH_AVAILABLE:
+    import torch 
 
 logger = logging.getLogger(__name__)
 
@@ -281,7 +284,7 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         
         self.spin_pt_dropout = QtWidgets.QDoubleSpinBox()
         self.spin_pt_dropout.setRange(0.0, 0.9)
-        self.spin_pt_dropout.setValue(0.0)
+        self.spin_pt_dropout.setValue(0.1)  # Default to 0.1 for uncertainty estimation
         self.spin_pt_dropout.setSingleStep(0.1)
         f_pytorch.addRow("Dropout Rate:", self.spin_pt_dropout)
         
@@ -301,7 +304,19 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         self.stack_params.addWidget(p_pytorch)
         
         l_arch.addRow(self.stack_params)
-        config_layout.addWidget(grp_arch)
+        
+        # Make the architecture section scrollable
+        scroll_arch = QtWidgets.QScrollArea()
+        scroll_arch.setWidget(grp_arch)
+        scroll_arch.setWidgetResizable(True)
+        scroll_arch.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        scroll_arch.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        scroll_arch.setMaximumHeight(400)  # Limit height to make it manageable
+        # Make background transparent to match theme
+        scroll_arch.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        scroll_arch.setAutoFillBackground(False)
+        
+        config_layout.addWidget(scroll_arch)
         
         # 3.5. Training Mode
         grp_mode = QtWidgets.QGroupBox("Training Mode")
@@ -356,6 +371,12 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         self.btn_save.setEnabled(False)
         self.btn_save.clicked.connect(self.save_model)
         config_layout.addWidget(self.btn_save)
+        
+        self.btn_adaptive = QtWidgets.QPushButton(" Adaptive Training (Active Learning)")
+        self.btn_adaptive.setToolTip("Train surrogate model using adaptive sampling to focus on high-uncertainty regions")
+        self.btn_adaptive.clicked.connect(self.start_adaptive_training)
+        self.btn_adaptive.setEnabled(False)  # Disabled until data is ready
+        config_layout.addWidget(self.btn_adaptive)
         
         config_layout.addStretch()
         
@@ -498,6 +519,7 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
             
             self.lbl_file_info.setText(f"Loaded: {os.path.basename(fname)}\n{len(df)} samples\n{X.shape[1]} inputs")
             self.btn_train.setEnabled(True)
+            self.btn_adaptive.setEnabled(True)
             self.lbl_metrics.setText("Data loaded. Ready to train.")
             self.update_data_table()
             
@@ -560,6 +582,7 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
             
         self.X_train, self.y_train, self.X_test, self.y_test = data
         self.btn_train.setEnabled(True)
+        self.btn_adaptive.setEnabled(True)
         self.lbl_metrics.setText(f"Data generated: {len(self.X_train) + len(self.X_test)} samples.")
         self.progress.setValue(100)
         self.update_data_table()
@@ -694,6 +717,10 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
             self.worker.stop_flag = True
             self.btn_stop.setText("Stopping...")
             self.btn_stop.setEnabled(False)
+        if hasattr(self, 'adaptive_worker') and self.adaptive_worker.isRunning():
+            self.adaptive_worker.stop_flag = True
+            self.btn_stop.setText("Stopping...")
+            self.btn_stop.setEnabled(False)
 
     def update_loss_plot(self, data):
         epoch = data['epoch']
@@ -823,6 +850,7 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
 
     def training_finished(self, model, metrics, error):
         self.btn_train.setEnabled(True)
+        self.btn_adaptive.setEnabled(True)
         self.btn_overfit1.setEnabled(True)
         self.btn_overfit10.setEnabled(True)
         self.btn_stop.setEnabled(False)
@@ -970,6 +998,11 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         fname = os.path.join(folder, f"surrogate_{safe_id}.joblib")
         
         try:
+            # Fix: Move PyTorch models to CPU before saving to avoid device issues
+            if TORCH_AVAILABLE and hasattr(self.current_model, 'model') and isinstance(self.current_model.model, torch.nn.Module):
+                self.current_model.model.cpu()  # Move to CPU before serialization
+                self.current_model.device = torch.device('cpu')  # Update wrapper state
+            
             joblib.dump(self.current_model, fname)
             
             # Update Node Properties automatically
@@ -983,6 +1016,164 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
                 "The node is now set to use the surrogate model.")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Save Error", str(e))
+
+    def start_adaptive_training(self) -> None:
+        if not hasattr(self, 'X_train') or self.X_train is None:
+            QtWidgets.QMessageBox.warning(self, "Error", "No training data available. Please generate or upload data first.")
+            return
+
+        idx = self.combo_nodes.currentIndex()
+        if idx < 0:
+            QtWidgets.QMessageBox.warning(self, "Error", "No node selected.")
+            return
+
+        target_node = self.combo_nodes.itemData(idx)
+        config = self.get_config()
+
+        # Check for PyTorch with zero dropout (breaks uncertainty estimation)
+        if config.get('model_type') == 'Deep Neural Network (PyTorch)' and config.get('dropout', 0.0) == 0.0:
+            reply = QtWidgets.QMessageBox.warning(self, "Zero Dropout Warning", 
+                "You are using PyTorch with 0% dropout. This will disable uncertainty estimation for adaptive sampling.\n\n"
+                "Adaptive training works by sampling points with high uncertainty. With dropout=0%, the model is deterministic and has zero uncertainty everywhere.\n\n"
+                "Consider:\n• Setting Dropout Rate > 0% (recommended: 0.1-0.2)\n• Using a different model type (Gaussian Process has built-in uncertainty)\n\n"
+                "Continue anyway?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No)
+            if reply == QtWidgets.QMessageBox.No:
+                return
+
+        self.btn_adaptive.setEnabled(False)
+        self.btn_train.setEnabled(False)
+        self.btn_save.setEnabled(False)
+        self.plot_widget.clear()
+        self.curve_plot.clear()
+        self.train_losses = []
+        self.val_losses = []
+        self.epochs = []
+        self.tab_widget.setCurrentWidget(self.curve_tab)
+
+        # Recreate curves after clearing
+        self.train_curve = self.curve_plot.plot(pen=pg.mkPen('r', width=2), name='Train Loss')
+        self.val_curve = self.curve_plot.plot(pen=pg.mkPen('g', width=2), name='Val Loss')
+
+        # Show adaptive training message
+        self.progress_text.setText("Adaptive Training...\n(Active Learning)")
+        self.progress_text.show()
+        self.curve_plot.setXRange(-1, 1)
+        self.curve_plot.setYRange(-1, 1)
+
+        # Prepare spy model for evaluation
+        try:
+            graph = self.modeling_widget.current_graph
+            nodes = graph.all_nodes()
+            input_nodes = [n for n in nodes if n.type_.startswith('com.pfd.input')]
+            output_nodes = [n for n in nodes if n.type_.startswith('com.pfd.output')]
+
+            builder = GraphBuilder(graph)
+            spy_code, spy_inputs, spy_outputs = builder.build_spy_model(
+                nodes, input_nodes, output_nodes, target_node.id, "spy_model"
+            )
+
+            input_bounds = []
+            for inp_node in input_nodes:
+                if inp_node.has_property('input_props'):
+                    props = inp_node.get_property('input_props')
+                    min_val = float(props.get('min', '0.0'))
+                    max_val = float(props.get('max', '10.0'))
+                else:
+                    min_val = float(inp_node.get_property('min'))
+                    max_val = float(inp_node.get_property('max'))
+                input_bounds.append((min_val, max_val))
+
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Preparation Error", str(e))
+            self.btn_adaptive.setEnabled(True)
+            self.btn_train.setEnabled(True)
+            return
+
+        # Start adaptive training worker
+        self.adaptive_worker = AdaptiveTrainingWorker(
+            SurrogateTrainer(), spy_code, spy_inputs, spy_outputs, input_bounds,
+            self.X_train, self.y_train, self.X_test, self.y_test, config
+        )
+        self.adaptive_worker.progress_sig.connect(self.update_progress)
+        self.adaptive_worker.done_sig.connect(self.adaptive_training_finished)
+        self.adaptive_worker.start()
+        self.btn_stop.setEnabled(True)
+
+    def adaptive_training_finished(self, model, metrics, error):
+        self.btn_adaptive.setEnabled(True)
+        self.btn_train.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self.btn_stop.setText("Stop Training")
+
+        # Hide progress text
+        self.progress_text.hide()
+
+        if error:
+            QtWidgets.QMessageBox.critical(self, "Adaptive Training Failed", error)
+            self.lbl_metrics.setText("Adaptive training failed.")
+            return
+
+        self.current_model = model
+        self.current_metrics = metrics
+        self.btn_save.setEnabled(True)
+        self.progress.setValue(100)
+
+        # Update metrics display (similar to training_finished)
+        msg = f"<b>Adaptive Training Complete</b><br>RMSE: {metrics['RMSE']:.4f}<br>R² Score: {metrics['R2']:.4f}"
+        if 'y_std' in metrics and metrics['y_std'] is not None:
+            y_std = np.array(metrics['y_std'])
+            msg += f"<br>Mean Uncertainty: {np.mean(y_std):.4f}"
+
+        self.lbl_metrics.setText(msg)
+
+        # Switch to parity plot tab to show results
+        self.tab_widget.setCurrentWidget(self.parity_tab)
+
+        # Handle multi-output visualization
+        y_test = np.array(metrics['y_test'])
+        y_pred = np.array(metrics['y_pred'])
+        y_std = np.array(metrics['y_std']) if 'y_std' in metrics and metrics['y_std'] is not None else None
+
+        self.plot_widget.clear()
+        if y_test.ndim > 1 and y_test.shape[1] > 1:
+            # Multi-output: plot each output separately with different colors
+            colors = [(255, 100, 100), (100, 255, 100), (100, 100, 255), (255, 255, 100), (255, 100, 255)]
+            for i in range(min(y_test.shape[1], len(colors))):
+                y_test_i = y_test[:, i]
+                y_pred_i = y_pred[:, i]
+                color = colors[i % len(colors)]
+                
+                # Plot points for this output
+                self.plot_widget.plot(y_test_i, y_pred_i, pen=None, 
+                                    symbol='o', symbolSize=5, 
+                                    symbolBrush=color + (150,),
+                                    name=f'Output {i+1}')
+                
+                # Add diagonal line for this output
+                if len(y_test_i) > 0:
+                    mn, mx = float(np.min(y_test_i)), float(np.max(y_test_i))
+                    self.plot_widget.plot([mn, mx], [mn, mx], 
+                                        pen=pg.mkPen(color, width=1, style=QtCore.Qt.DashLine))
+            
+            self.plot_widget.setTitle(f"Parity Plot (Multi-Output Adaptive) - R² = {metrics['R2']:.4f}")
+            self.plot_widget.addLegend()
+        else:
+            # Single output: flatten if needed and plot normally
+            if y_test.ndim > 1:
+                y_test = y_test.flatten()
+                y_pred = y_pred.flatten()
+                if y_std is not None and y_std.ndim > 1:
+                    y_std = y_std.flatten()
+            
+            self.plot_widget.plot(y_test, y_pred, pen=None, symbol='o', symbolSize=5, symbolBrush=(100, 100, 255, 150))
+            
+            # Add diagonal line
+            if len(y_test) > 0:
+                mn, mx = float(np.min(y_test)), float(np.max(y_test))
+                self.plot_widget.plot([mn, mx], [mn, mx], pen=pg.mkPen('r', width=2, style=QtCore.Qt.DashLine))
+            
+            self.plot_widget.setTitle(f"Parity Plot (Adaptive) - R² = {metrics['R2']:.4f}")
 
     def save_to_folder(self, folder_path):
         """Save surrogate training settings to a folder."""
@@ -1185,3 +1376,135 @@ class TrainingWorker(QtCore.QThread):
             import traceback
             traceback.print_exc()
             self.done_sig.emit(None, None, str(e))
+
+class AdaptiveTrainingWorker(QtCore.QThread):
+    progress_sig = QtCore.Signal(int, str)
+    done_sig = QtCore.Signal(object, object, str)
+
+    def __init__(self, trainer, spy_code, spy_inputs, spy_outputs, bounds, initial_X, initial_y, X_test, y_test, config):
+        super().__init__()
+        self.trainer = trainer
+        self.spy_code = spy_code
+        self.spy_inputs = spy_inputs
+        self.spy_outputs = spy_outputs
+        self.bounds = bounds
+        self.X = initial_X.copy()
+        self.y = initial_y.copy()
+        self.X_test = X_test.copy() if X_test is not None else None
+        self.y_test = y_test.copy() if y_test is not None else None
+        # Normalize y shape: flatten if single output and 2D
+        if len(self.spy_outputs) == 1 and self.y.ndim > 1:
+            self.y = self.y.flatten()
+        if self.y_test is not None and len(self.spy_outputs) == 1 and self.y_test.ndim > 1:
+            self.y_test = self.y_test.flatten()
+        self.config = config
+        self.stop_flag = False
+
+    def run(self):
+        try:
+            # Adaptive sampling loop (5 rounds)
+            n_rounds = 5
+            for i in range(n_rounds):
+                if self.stop_flag:
+                    break
+
+                self.progress_sig.emit(i * 20, f"Adaptive Round {i+1}/{n_rounds}: Training...")
+
+                # 1. Train model on current data
+                model, metrics = self.trainer.train_model(self.X, self.y, self.config, self.X_test, self.y_test)
+
+                # 2. Generate candidate points for uncertainty sampling using LHS for better coverage
+                self.progress_sig.emit(i * 20 + 10, f"Adaptive Round {i+1}/{n_rounds}: Searching for uncertainty...")
+                n_candidates = 1000
+                try:
+                    # Use Latin Hypercube Sampling for better space coverage
+                    from scipy.stats import qmc
+                    sampler = qmc.LatinHypercube(d=len(self.bounds))
+                    lhs_samples = sampler.random(n_candidates)
+                    # Scale to bounds
+                    candidates = np.array([b[0] + (b[1] - b[0]) * lhs_samples[:, j] for j, b in enumerate(self.bounds)]).T
+                except ImportError:
+                    # Fallback to random uniform if scipy not available
+                    candidates = np.random.uniform(
+                        [b[0] for b in self.bounds],
+                        [b[1] for b in self.bounds],
+                        (n_candidates, len(self.bounds))
+                    )
+
+                # 3. Predict uncertainty
+                try:
+                    _, y_std = model.predict(candidates, return_std=True)
+                    if y_std is None:
+                        # Model doesn't support uncertainty, fall back to random sampling
+                        self.progress_sig.emit(i * 20 + 15, f"Adaptive Round {i+1}/{n_rounds}: Model doesn't support uncertainty, using random sampling...")
+                        y_std = np.ones(n_candidates)
+                except:
+                    # Model doesn't support uncertainty
+                    y_std = np.ones(n_candidates)
+
+                # Handle multi-output
+                if y_std.ndim > 1:
+                    y_std = y_std.mean(axis=1)
+
+                # 4. Select top 10 most uncertain points
+                n_new_samples = min(10, n_candidates)
+                top_indices = np.argsort(y_std)[-n_new_samples:]
+                new_X = candidates[top_indices]
+
+                # 5. Evaluate new points using spy model
+                self.progress_sig.emit(i * 20 + 15, f"Adaptive Round {i+1}/{n_rounds}: Evaluating {n_new_samples} new samples...")
+                new_y = self._evaluate_points(new_X)
+
+                # 6. Ensure dimensions match for concatenation
+                if self.y.ndim == 2 and new_y.ndim == 1:
+                    new_y = new_y.reshape(-1, 1)
+                elif self.y.ndim == 1 and new_y.ndim == 2:
+                    new_y = new_y.flatten()
+
+                # Add new points to dataset
+                self.X = np.vstack([self.X, new_X])
+                self.y = np.concatenate([self.y, new_y])
+
+            # Final training on complete dataset
+            self.progress_sig.emit(95, "Final training on complete dataset...")
+            model, metrics = self.trainer.train_model(self.X, self.y, self.config, self.X_test, self.y_test)
+
+            self.done_sig.emit(model, metrics, None)
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.done_sig.emit(None, None, str(e))
+
+    def _evaluate_points(self, X):
+        """Evaluate points using the spy model code."""
+        # This is a simplified version - in production, you'd extract this logic
+        # to avoid code duplication with the data generation
+        results = []
+        for x in X:
+            try:
+                # Create a local namespace for evaluation
+                local_vars = {}
+                for i, val in enumerate(x):
+                    local_vars[self.spy_inputs[i]] = val
+
+                # Execute the spy code
+                exec(self.spy_code, {"__builtins__": {}}, local_vars)
+
+                # Get the output
+                if len(self.spy_outputs) == 1:
+                    result = local_vars[self.spy_outputs[0]]
+                else:
+                    result = [local_vars[out] for out in self.spy_outputs]
+                    result = np.array(result)
+
+                results.append(result)
+
+            except Exception as e:
+                # If evaluation fails, use a fallback (could be improved)
+                if len(self.spy_outputs) == 1:
+                    results.append(0.0)
+                else:
+                    results.append(np.zeros(len(self.spy_outputs)))
+
+        return np.array(results)

@@ -64,7 +64,10 @@ if TORCH_AVAILABLE:
             return cls(loaded_wrapper.model, loaded_wrapper.scaler_x, loaded_wrapper.scaler_y, loaded_wrapper.n_mc_samples)
 
         def predict(self, X_in: np.ndarray, return_std: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
-            if X_in.ndim == 1:
+            # Track if input was 1D for proper output shape handling
+            input_is_1d = X_in.ndim == 1
+            
+            if input_is_1d:
                 X_in = X_in.reshape(1, -1)
 
             X_s = self.scaler_x.transform(X_in)
@@ -89,13 +92,28 @@ if TORCH_AVAILABLE:
                 batch_size = t_in.shape[0]
                 predictions = batch_output_np.reshape(n_samples, batch_size, -1)  # (n_samples, batch_size, output_dim)
                 
-                # Inverse transform predictions
-                pred_reshaped = predictions.reshape(n_samples * batch_size, -1)
-                pred_inverse = self.scaler_y.inverse_transform(pred_reshaped)
-                pred_inverse = pred_inverse.reshape(n_samples, batch_size, -1)
+                # Calculate statistics in scaled space for efficiency
+                pred_mean_scaled = np.mean(predictions, axis=0)  # (batch_size, output_dim)
+                pred_std_scaled = np.std(predictions, axis=0)    # (batch_size, output_dim)
                 
-                pred_mean = np.mean(pred_inverse, axis=0)
-                pred_std = np.std(pred_inverse, axis=0)
+                # Inverse transform mean normally
+                pred_mean = self.scaler_y.inverse_transform(pred_mean_scaled)
+                
+                # Scale std by the scaler's scale factor (std is scale-invariant for translation but not scaling)
+                if hasattr(self.scaler_y, 'scale_'):
+                    # sklearn StandardScaler uses .scale_ (which is the std dev of each feature)
+                    pred_std = pred_std_scaled * self.scaler_y.scale_
+                else:
+                    # Fallback for complex scalers: use the original method
+                    pred_reshaped = predictions.reshape(n_samples * batch_size, -1)
+                    pred_inverse = self.scaler_y.inverse_transform(pred_reshaped)
+                    pred_inverse = pred_inverse.reshape(n_samples, batch_size, -1)
+                    pred_std = np.std(pred_inverse, axis=0)
+                
+                # Squeeze output if input was 1D
+                if input_is_1d:
+                    pred_mean = pred_mean.squeeze()
+                    pred_std = pred_std.squeeze()
                 
                 return pred_mean, pred_std
             else:
@@ -105,6 +123,11 @@ if TORCH_AVAILABLE:
                     # Move back to CPU for numpy conversion
                     out_s = self.model(t_in).cpu().numpy()
                 pred = self.scaler_y.inverse_transform(out_s)
+                
+                # Squeeze output if input was 1D to ensure scalar return for single samples
+                if input_is_1d:
+                    pred = pred.squeeze()
+                
                 return pred
 else:
     # Dummy classes if PyTorch not available

@@ -18,7 +18,9 @@ import logging
 # Suppress SALib FutureWarning about pd.unique
 warnings.filterwarnings("ignore", message="unique with argument that is not not a Series, Index, ExtensionArray, or np.ndarray is deprecated", category=FutureWarning, module="SALib")
 
-from .sensitivity_analysis import SensitivityAnalyzer
+from ..optimization.sensitivity import SensitivityAnalyzer
+from ..optimization.evaluator import ModelEvaluator
+from ..optimization.core import Variable
 
 logger = logging.getLogger(__name__)
 
@@ -205,8 +207,8 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         self.progress.setValue(0)
 
         # Run analysis in a separate thread
-        # Use the same scaling setting as the optimization
-        scaling = self.optimization_widget.chk_constraint_scaling.isChecked() if hasattr(self.optimization_widget, 'chk_constraint_scaling') else True
+        # Scaling disabled as per user request
+        scaling = False
         self.worker = SensitivityWorker(problem, output_name, n_samples, scaling)
         self.worker.progress_sig.connect(self.update_progress)
         self.worker.done_sig.connect(self.analysis_finished)
@@ -473,10 +475,18 @@ class SensitivityWorker(QtCore.QThread):
         self.n_samples = n_samples
         self.scaling = scaling
         
-        # Create optimization setup for consistent evaluation and caching
-        # Use empty objectives/constraints since sensitivity analysis doesn't need them
-        from .common import OptimizationSetup
-        self.opt_setup = OptimizationSetup(problem, [], [], scaling)
+        # Create ModelEvaluator for consistent evaluation and caching
+        variables = [Variable(name=dv['name'], min_val=float(dv['min']), max_val=float(dv['max'])) for dv in self.problem.design_variables]
+        parameters = {p['name']: p['value'] for p in self.problem.parameters}
+        
+        # We use scaling=False because SALib generates physical samples
+        self.evaluator = ModelEvaluator(
+            self.problem.system_model,
+            variables,
+            [], [], # No objectives/constraints
+            parameters=parameters,
+            scaling=False
+        )
         
         # Safe initialization of analyzer
         try:
@@ -513,8 +523,8 @@ class SensitivityWorker(QtCore.QThread):
                 x_phys = np.array(x_sample)
                 
                 try:
-                    # Use optimization setup for consistent evaluation with caching
-                    result = self.opt_setup.evaluate_system_model_physical(x_phys, self.problem.system_model)
+                    # Use evaluator
+                    _, result, _ = self.evaluator.evaluate(x_phys)
                     output_val = result.get(self.output_name, 0.0)
                     Y.append(float(output_val))
                 except Exception as e:
@@ -537,9 +547,3 @@ class SensitivityWorker(QtCore.QThread):
 
         except Exception as e:
             self.done_sig.emit(None, str(e))
-
-
-
-
-
-

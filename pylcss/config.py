@@ -47,9 +47,9 @@ class OptimizationConfig:
     """Configuration for optimization solvers."""
     
     # Default solver settings
-    DEFAULT_TOLERANCE: float = 1e-6
+    DEFAULT_TOLERANCE: float = 1e-4  # Relaxed for noisy black-box models (was 1e-6)
     DEFAULT_MAX_ITERATIONS: int = 100
-    DEFAULT_PENALTY_WEIGHT: float = 1000.0
+    DEFAULT_PENALTY_WEIGHT: float = 1e6  # Scaled for typical engineering costs (was 1000.0)
     
     # Constraint violation threshold
     CONSTRAINT_VIOLATION_TOLERANCE: float = 1e-12

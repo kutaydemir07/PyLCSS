@@ -11,7 +11,8 @@ from scipy.optimize import minimize
 from .monte_carlo_sampling import monte_carlo
 from .step_analysis import step_a_vectorized as step_a
 
-from ..optimization_module.solvers import solve_with_nevergrad, solve_with_differential_evolution, run_goal_attainment_slsqp
+from ..optimization.solvers.legacy import solve_with_nevergrad, solve_with_differential_evolution, run_goal_attainment_slsqp
+from ..optimization.solvers.feasibility import FeasibilityProblem
 
 logger = logging.getLogger(__name__)
 
@@ -201,34 +202,6 @@ class SolutionSpaceSolver:
         
         return x_optimized, initial_samples
 
-    def _compute_objective_sum(self, y, include_objectives):
-        # Compute sum of positive constraint violations: sum(max(0, violations))
-        # Normalize constraints by requirement width for balanced optimization
-        req_width = self.reqU - self.reqL
-        # Avoid division by zero for infinite bounds
-        req_width = np.where(np.isinf(req_width), 1.0, req_width)
-        
-        # Calculate normalized constraint violations (only when outside bounds)
-        c_upper = np.maximum(0, (y - self.reqU) / req_width)  # Violation when y > reqU
-        c_lower = np.maximum(0, (self.reqL - y) / req_width)  # Violation when y < reqL
-            
-        # Handle infinite bounds - these don't contribute to violations
-        c_upper = np.where(np.isinf(self.reqU), 0.0, c_upper)
-        c_lower = np.where(np.isinf(self.reqL), 0.0, c_lower)
-            
-        # Sum of positive violations (constraint violations)
-        violations = np.concatenate([c_upper, c_lower])
-        positive_violations = np.maximum(0, violations)
-        
-        obj_sum = np.sum(positive_violations)
-        
-        # Add objectives if requested and objectives exist
-        if include_objectives and self.objective_indices:
-            for idx, weight in zip(self.objective_indices, self.objective_weights):
-                obj_sum += weight * y[idx]
-            
-        return obj_sum
-
     def _trim_box(self, dvbox, dv_sample, Points_A):
         """
         Trims the box to the bounding box of the good points, with some relaxation.
@@ -248,7 +221,9 @@ class SolutionSpaceSolver:
         
         # Relaxed trim: Don't shrink all the way to the samples, keep some margin
         # This prevents over-fitting to the specific random samples
-        alpha = 0.8 # Trim factor (1.0 = strict bounding box, 0.0 = no trim)
+        # Adaptive alpha based on sample count: more samples = more confident trimming
+        n_good_samples = good_samples.shape[1]
+        alpha = min(0.8, max(0.5, n_good_samples / (self.dim * 50)))
         
         new_min = current_min * (1 - alpha) + min_good * alpha
         new_max = current_max * (1 - alpha) + max_good * alpha
@@ -712,66 +687,16 @@ class SolutionSpaceSolver:
         """
         logger.info("Running Standard SLSQP Optimization...")
         
-        def objective_func(x_norm):
-            # Denormalize to Physical Space for evaluation
-            x_phys = x_norm * self.dv_norm + self.dv_norm_l
-            
-            # Construct full input vector (handling fixed parameters)
-            total_vars = self.parameters.shape[1]
-            x_full = np.zeros(total_vars)
-            ind_dvs = np.setdiff1d(np.arange(total_vars), self.ind_parameters)
-            x_full[ind_dvs] = x_phys
-            
-            if len(self.ind_parameters) > 0:
-                x_full[self.ind_parameters] = self.parameters[0, self.ind_parameters]
-            
-            # Evaluate System
-            y = self.problem.evaluate_matrix(x_full.reshape(-1, 1)).flatten()
-            
-            # Compute objective sum
-            obj_sum = self._compute_objective_sum(y, self.include_objectives)
-            
-            return obj_sum
-
-        def constraints_func(x_norm):
-            # Denormalize to Physical Space for evaluation
-            x_phys = x_norm * self.dv_norm + self.dv_norm_l
-            
-            # Construct full input vector (handling fixed parameters)
-            total_vars = self.parameters.shape[1]
-            x_full = np.zeros(total_vars)
-            ind_dvs = np.setdiff1d(np.arange(total_vars), self.ind_parameters)
-            x_full[ind_dvs] = x_phys
-            
-            if len(self.ind_parameters) > 0:
-                x_full[self.ind_parameters] = self.parameters[0, self.ind_parameters]
-            
-            # Evaluate System
-            y = self.problem.evaluate_matrix(x_full.reshape(-1, 1)).flatten()
-            
-            # Calculate constraints for SLSQP (must be >= 0)
-            # Normalize constraints by requirement width for balanced optimization
-            req_width = self.reqU - self.reqL
-            # Avoid division by zero for infinite bounds
-            req_width = np.where(np.isinf(req_width), 1.0, req_width)
-            
-            # Req: y <= reqU  --> (reqU - y) / req_width >= 0
-            # Req: y >= reqL  --> (y - reqL) / req_width >= 0
-            c_upper = (self.reqU - y) / req_width
-            c_lower = (y - self.reqL) / req_width
-            
-            # Handle infinite bounds - these are always satisfied
-            c_upper = np.where(np.isinf(self.reqU), 1e19, c_upper)
-            c_lower = np.where(np.isinf(self.reqL), 1e19, c_lower)
-            
-            all_constraints = np.concatenate((c_upper, c_lower))
-            
-            return all_constraints
-
+        feas_prob = FeasibilityProblem(
+            self.problem, self.parameters, self.ind_parameters, 
+            self.reqL, self.reqU, self.dv_norm, self.dv_norm_l,
+            self.include_objectives, self.objective_indices, self.objective_weights
+        )
+        
         # Bounds: Design variables bounded [0, 1] (normalized)
         bounds = list(zip(self.dsl_norm, self.dsu_norm))
         
-        return run_goal_attainment_slsqp(objective_func, constraints_func, x_start, bounds)
+        return run_goal_attainment_slsqp(feas_prob.compute_objective, feas_prob.compute_constraints_normalized, x_start, bounds)
 
     def _solve_with_nevergrad(self, x_start):
         """
@@ -779,54 +704,18 @@ class SolutionSpaceSolver:
         """
         logger.info("Running Nevergrad with constraint handling")
 
-        def objective_func(x_norm):
-            # Manually Denormalize for Evaluation
-            x_phys = x_norm * self.dv_norm + self.dv_norm_l
-
-            # Construct full vector
-            total_vars = self.parameters.shape[1]
-            x_full = np.zeros(total_vars)
-            ind_dvs = np.setdiff1d(np.arange(total_vars), self.ind_parameters)
-            x_full[ind_dvs] = x_phys
-            if len(self.ind_parameters) > 0:
-                x_full[self.ind_parameters] = self.parameters[0, self.ind_parameters]
-
-            y = self.problem.evaluate_matrix(x_full.reshape(-1, 1)).flatten()
-            return self._compute_objective_sum(y, self.include_objectives)
-
-        # Create Scipy-style constraints
-        def constraint_func(x_norm):
-            # Denormalize
-            x_phys = x_norm * self.dv_norm + self.dv_norm_l
-
-            # Construct full vector
-            total_vars = self.parameters.shape[1]
-            x_full = np.zeros(total_vars)
-            ind_dvs = np.setdiff1d(np.arange(total_vars), self.ind_parameters)
-            x_full[ind_dvs] = x_phys
-            if len(self.ind_parameters) > 0:
-                x_full[self.ind_parameters] = self.parameters[0, self.ind_parameters]
-
-            y = self.problem.evaluate_matrix(x_full.reshape(-1, 1)).flatten()
-            
-            # Collect only finite constraints to avoid ill-conditioning
-            constraints = []
-            if np.any(np.isfinite(self.reqU)):
-                constraints.append(self.reqU[np.isfinite(self.reqU)] - y[np.isfinite(self.reqU)])
-            if np.any(np.isfinite(self.reqL)):
-                constraints.append(y[np.isfinite(self.reqL)] - self.reqL[np.isfinite(self.reqL)])
-            
-            if constraints:
-                return np.concatenate(constraints)
-            else:
-                return np.array([0.0])  # No constraints, dummy satisfied
+        feas_prob = FeasibilityProblem(
+            self.problem, self.parameters, self.ind_parameters, 
+            self.reqL, self.reqU, self.dv_norm, self.dv_norm_l,
+            self.include_objectives, self.objective_indices, self.objective_weights
+        )
 
         bounds = list(zip(self.l_norm, self.u_norm))
 
         # Create constraint for Nevergrad
-        constraints = [{'type': 'ineq', 'fun': constraint_func}]
+        constraints = [{'type': 'ineq', 'fun': feas_prob.compute_constraints_finite_only}]
 
-        result = solve_with_nevergrad(objective_func, x_start, bounds, maxiter=5000, constraints=constraints)
+        result = solve_with_nevergrad(feas_prob.compute_objective, x_start, bounds, maxiter=5000, constraints=constraints)
         return result.x if result.success else None
 
     def _solve_with_differential_evolution(self, x_start):
@@ -835,51 +724,19 @@ class SolutionSpaceSolver:
         """
         logger.info("Running Differential Evolution with constraint handling")
 
-        def objective_func(x_norm):
-            # Manually Denormalize for Evaluation
-            x_phys = x_norm * self.dv_norm + self.dv_norm_l
+        feas_prob = FeasibilityProblem(
+            self.problem, self.parameters, self.ind_parameters, 
+            self.reqL, self.reqU, self.dv_norm, self.dv_norm_l,
+            self.include_objectives, self.objective_indices, self.objective_weights
+        )
 
-            # Construct full vector
-            total_vars = self.parameters.shape[1]
-            x_full = np.zeros(total_vars)
-            ind_dvs = np.setdiff1d(np.arange(total_vars), self.ind_parameters)
-            x_full[ind_dvs] = x_phys
-            if len(self.ind_parameters) > 0:
-                x_full[self.ind_parameters] = self.parameters[0, self.ind_parameters]
-
-            y = self.problem.evaluate_matrix(x_full.reshape(-1, 1)).flatten()
-            return self._compute_objective_sum(y, self.include_objectives)
-
-        # Create Scipy-style constraints
-        def constraint_func(x_norm):
-            # Denormalize
-            x_phys = x_norm * self.dv_norm + self.dv_norm_l
-
-            # Construct full vector
-            total_vars = self.parameters.shape[1]
-            x_full = np.zeros(total_vars)
-            ind_dvs = np.setdiff1d(np.arange(total_vars), self.ind_parameters)
-            x_full[ind_dvs] = x_phys
-            if len(self.ind_parameters) > 0:
-                x_full[self.ind_parameters] = self.parameters[0, self.ind_parameters]
-
-            y = self.problem.evaluate_matrix(x_full.reshape(-1, 1)).flatten()
-
-            # FIX: Standardize to (Bound - Value) >= 0
-            c1 = self.reqU - y 
-            c2 = y - self.reqL
-            # Use a large but reasonable value for infinite bounds to avoid ill-conditioning
-            c1 = np.where(np.isinf(self.reqU), 1e6, c1)
-            c2 = np.where(np.isinf(self.reqL), 1e6, c2)
-            return np.concatenate((c1, c2))
-
-        # Create constraint objects for differential evolution
-        constraints = [{'type': 'ineq', 'fun': lambda x, i=i: constraint_func(x)[i]} for i in range(len(constraint_func(x_start)))]
+        # Use single constraint for efficiency and robustness
+        constraints = [{'type': 'ineq', 'fun': feas_prob.compute_constraints_raw}]
         bounds = list(zip(self.l_norm, self.u_norm))
 
         # Pass a dummy callback to keep the UI responsive if needed, 
         # but solve_with_differential_evolution handles its own internal callback logic
-        result = solve_with_differential_evolution(objective_func, bounds, constraints=constraints, maxiter=5000)
+        result = solve_with_differential_evolution(feas_prob.compute_objective, bounds, constraints=constraints, maxiter=5000)
         
         # If we found a valid point, return it.
         if result.success:
@@ -887,7 +744,7 @@ class SolutionSpaceSolver:
         else:
             # If DE failed but returned a "best so far" (result.x), check if it's actually feasible
             # Evaluate constraints one last time
-            cons = constraint_func(result.x)
+            cons = feas_prob.compute_constraints_raw(result.x)
             if np.all(cons >= -1e-6): # Allow small tolerance
                 return result.x
             return None

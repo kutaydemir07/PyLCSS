@@ -198,9 +198,3 @@ class SensitivityAnalyzer:
         }
 
         return plot_data
-
-
-
-
-
-

@@ -337,6 +337,19 @@ class ModelingWidget(QtWidgets.QWidget):
             if node_out.type_.startswith('com.pfd.input') and node_in.type_.startswith('com.pfd.custom_block'):
                 var_name = node_out.get_property('var_name')
                 if var_name:
+                    # Count how many input_nodes with same var_name are connected to this custom_block
+                    count = 0
+                    for inp_port in node_in.input_ports():
+                        for connected_port in inp_port.connected_ports():
+                            connected_node = connected_port.node()
+                            if connected_node.type_.startswith('com.pfd.input') and connected_node.get_property('var_name') == var_name:
+                                count += 1
+                    if count > 1:
+                        # Disconnect and warn
+                        port_in.disconnect_from(port_out)
+                        QtWidgets.QMessageBox.warning(self, "Connection Error", 
+                            f"Cannot connect multiple inputs with the same variable name '{var_name}' to the same function block.")
+                        return
                     if port_in.name() != var_name:
                         self.rename_port(node_in, port_in.name(), var_name, 'input', node_out, preferred_target=var_name)
                     if port_out.name() != var_name:
@@ -346,6 +359,19 @@ class ModelingWidget(QtWidgets.QWidget):
             if node_out.type_.startswith('com.pfd.custom_block') and node_in.type_.startswith('com.pfd.output'):
                 var_name = node_in.get_property('var_name')
                 if var_name:
+                    # Count how many output_nodes with same var_name are connected to this custom_block
+                    count = 0
+                    for out_port in node_out.output_ports():
+                        for connected_port in out_port.connected_ports():
+                            connected_node = connected_port.node()
+                            if connected_node.type_.startswith('com.pfd.output') and connected_node.get_property('var_name') == var_name:
+                                count += 1
+                    if count > 1:
+                        # Disconnect and warn
+                        port_in.disconnect_from(port_out)
+                        QtWidgets.QMessageBox.warning(self, "Connection Error", 
+                            f"Cannot connect multiple quantities of interest with the same name '{var_name}' to the same function block.")
+                        return
                     if port_out.name() != var_name:
                         self.rename_port(node_out, port_out.name(), var_name, 'output', node_in, preferred_target=var_name)
                     if port_in.name() != var_name:
@@ -355,6 +381,19 @@ class ModelingWidget(QtWidgets.QWidget):
             if node_out.type_.startswith('com.pfd.custom_block') and node_in.type_.startswith('com.pfd.intermediate'):
                 var_name = node_in.get_property('var_name')
                 if var_name:
+                    # Count how many intermediate_nodes with same var_name are connected to this custom_block
+                    count = 0
+                    for out_port in node_out.output_ports():
+                        for connected_port in out_port.connected_ports():
+                            connected_node = connected_port.node()
+                            if connected_node.type_.startswith('com.pfd.intermediate') and connected_node.get_property('var_name') == var_name:
+                                count += 1
+                    if count > 1:
+                        # Disconnect and warn
+                        port_in.disconnect_from(port_out)
+                        QtWidgets.QMessageBox.warning(self, "Connection Error", 
+                            f"Cannot connect multiple intermediates with the same name '{var_name}' to the same function block.")
+                        return
                     if port_out.name() != var_name:
                         self.rename_port(node_out, port_out.name(), var_name, 'output', node_in, preferred_target=var_name, fallback_target=port_in.name())
                     if port_in.name() != var_name:
@@ -364,6 +403,19 @@ class ModelingWidget(QtWidgets.QWidget):
             if node_out.type_.startswith('com.pfd.intermediate') and node_in.type_.startswith('com.pfd.custom_block'):
                 var_name = node_out.get_property('var_name')
                 if var_name:
+                    # Count how many intermediate_nodes with same var_name are connected to this custom_block
+                    count = 0
+                    for inp_port in node_in.input_ports():
+                        for connected_port in inp_port.connected_ports():
+                            connected_node = connected_port.node()
+                            if connected_node.type_.startswith('com.pfd.intermediate') and connected_node.get_property('var_name') == var_name:
+                                count += 1
+                    if count > 1:
+                        # Disconnect and warn
+                        port_in.disconnect_from(port_out)
+                        QtWidgets.QMessageBox.warning(self, "Connection Error", 
+                            f"Cannot connect multiple intermediates with the same variable name '{var_name}' to the same function block.")
+                        return
                     if port_in.name() != var_name:
                         self.rename_port(node_in, port_in.name(), var_name, 'input', node_out, preferred_target=var_name, fallback_target=port_out.name())
                     if port_out.name() != var_name:

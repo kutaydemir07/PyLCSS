@@ -17,6 +17,8 @@ class SolverWorker(QtCore.QThread):
         super().__init__()
         self.solver = solver
         self._stop_requested = False
+        # Add mutex to protect shared data access
+        self.result_mutex = QtCore.QMutex()
 
     def stop(self):
         self._stop_requested = True
@@ -35,9 +37,12 @@ class SolverWorker(QtCore.QThread):
                 
             if not self._stop_requested:
                 elapsed_time = time.time() - start_time
-                # Store heavy data in the solver instance instead of emitting it
-                # This prevents UI freeze due to deep copying of large arrays in signals
-                self.solver.latest_results = result[3] # samples
+                # Protect the write of heavy data with mutex
+                self.result_mutex.lock()
+                try:
+                    self.solver.latest_results = result[3] # samples
+                finally:
+                    self.result_mutex.unlock()
                 
                 # Emit signal with None for samples, UI should read from solver.latest_results
                 self.finished_signal.emit(result[0], elapsed_time, None)  # box, time, samples=None

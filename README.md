@@ -2,122 +2,128 @@
 
 <div align="center">
 
-**🚀 Source-Available Engineering Simulation Platform**
+![PyLCSS Banner](pylcss/user_interface/icon.png)
 
-*Visual modeling, optimization, and AI-powered analysis for engineers*
+**🚀 Source-Available Engineering Simulation & Optimization Platform**
+
+*Visual Modeling • Solution Space Exploration • AI-Powered Surrogates • Multi-Objective Optimization*
+
+[![License](https://img.shields.io/badge/License-PolyForm_Shield_1.0.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-green.svg)](https://www.python.org/)
+[![Status](https://img.shields.io/badge/Status-Production_Ready-orange.svg)]()
 
 </div>
 
 ---
 
-## 🎯 What is PyLCSS?
+## 🎯 Overview
 
-PyLCSS (Python Low-Code System Solutions) is a comprehensive source-available platform designed to accelerate engineering analysis and design optimization. Built specifically for engineers, it combines an intuitive visual programming interface with advanced computational algorithms to transform complex engineering problems into solvable optimization challenges.
+**PyLCSS** (Python Low-Code System Solutions) is a high-performance engineering platform designed to bridge the gap between intuitive visual design and rigorous mathematical analysis.
 
-**Current Version: 1.3.0** - Complete engineering analysis suite with multi-objective optimization, global sensitivity analysis, AI-powered surrogate modeling, and advanced constraint handling.
-
-### ✨ Key Benefits
-
-- **🏗️ Visual System Design**: Drag-and-drop interface for building complex engineering systems
-- **📊 Advanced Analytics**: Multi-objective optimization, sensitivity analysis, uncertainty quantification, and solution space exploration
-- **🧠 AI Integration**: Machine learning surrogate models with PyTorch support for computationally intensive simulations
-- **⚡ Performance Optimized**: Parallel processing, efficient algorithms, and smart constraint scaling for large-scale problems
-- **🛡️ Production Ready**: Robust error handling, comprehensive validation, and user-friendly interface
+It enables engineers to model complex systems using a node-based interface, explore high-dimensional **Solution Spaces**, and optimize designs using industry-standard algorithms. Built for robustness, it features a crash-free multi-threaded architecture, vectorized computation kernels, and integrated AI capabilities.
 
 ---
 
-## 🚀 Core Features
+## 🔬 Scientific Foundation: Solution Spaces
 
-### 🔬 Advanced Analysis Suite
+PyLCSS implements the **Solution Space** approach for robust design. Instead of seeking a single optimal point (which may be sensitive to manufacturing tolerances), PyLCSS identifies **box-shaped regions** of valid designs. This allows for decoupled development of subsystems in complex engineering projects.
 
-| Feature | Description | Applications |
-|---------|-------------|--------------|
-| **Multi-Objective Optimization** | Pareto-optimal solutions with multiple conflicting objectives using SLSQP, Nevergrad, and Differential Evolution | Design trade-off analysis, cost-performance optimization |
-| **Global Sensitivity Analysis** | Sobol variance-based sensitivity with confidence intervals | Parameter importance ranking, uncertainty propagation |
-| **Surrogate Modeling** | ML approximations including PyTorch neural networks for expensive simulations | Computational cost reduction, real-time analysis |
-| **Solution Space Exploration (Markus Zimmermann, Johannes Edler von Hoessle, Computing solution spaces for robust design https://doi.org/10.1002/nme.4450)** | Monte Carlo sampling with interactive visualization and optional optimization inclusion | Design space characterization, feasibility analysis |
-| **Constraint Scaling** | Automatic scaling of variables and constraints to improve solver convergence | Robust optimization of problems with mixed scales |
-
-### 🏗️ System Modeling Engine
-
-- **🎨 Node-Based Architecture**: Visual programming with drag-and-drop components
-- **🐍 Python Integration**: Custom function blocks with full Python syntax and NumPy support
-- **📏 Unit Management**: Automatic dimensional analysis and unit conversion with Pint
-- **✅ Real-Time Validation**: Immediate feedback on model connectivity and errors
-- **🔄 System Merging**: Combine multiple sub-systems for complex analysis
-
-### 📈 Analysis Capabilities
-
-- **🎯 Optimization Algorithms**: SLSQP, COBYLA, Nevergrad, Differential Evolution with native constraint support
-- **📊 Statistical Analysis**: Monte Carlo sampling, confidence intervals, convergence metrics
-- **🔍 Interactive Visualization**: Real-time plotting, data filtering, Pareto front exploration
-- **💾 Data Management**: HDF5-based storage, CSV export, project persistence
-- **⚖️ Smart Scaling**: Automatic variable and constraint scaling for improved convergence
+> **Reference Algorithm:** > The solution space computation and approximation methods are based on:  
+> *Markus Zimmermann, Johannes Edler von Hoessle*, "Computing solution spaces for robust design", *International Journal for Numerical Methods in Engineering*, 2013.  
+> [DOI: 10.1002/nme.4450](https://doi.org/10.1002/nme.4450)
 
 ---
 
-## 📚 Documentation
+## ✨ Key Features
 
-**Integrated Help System**: PyLCSS features a comprehensive built-in documentation system directly within the GUI. 
+### 🏗️ Visual Modeling Environment
+* **Node-Based Architecture:** Intuitive drag-and-drop interface powered by `NodeGraphQt`.
+* **Unit Intelligence:** Automatic dimensional analysis and compatibility checking via `Pint` ensures physical consistency.
+* **Python Integration:** Write custom logic blocks with full `NumPy` support.
 
-- **Context-Aware Help**: Hover over any component or setting to see detailed tooltips.
-- **Help Widget**: Access the dedicated Help tab in the application for full guides on:
-    - Getting Started
-    - Node Reference
-    - Optimization Strategies
-    - Scripting API
-- **Examples**: The `data/` directory contains example projects (e.g., `Gear Unit.json`) to help you get started immediately.
+### 📊 Advanced Analysis Suite
+* **Monte Carlo Exploration:** Rapidly evaluate thousands of design variants using vectorized sampling.
+* **Solution Space Visualization:** Interactive 2D/3D scatter plots, parallel coordinates, and feasibility maps.
+* **Global Sensitivity Analysis:** Variance-based Sobol indices (via `SALib`) to identify critical design drivers.
+
+### 🧠 AI & Optimization
+* **Surrogate Modeling:** Replace expensive simulations with fast approximations using **PyTorch** Neural Networks, Random Forests, or Gradient Boosting.
+* **Multi-Objective Optimization:** Generate Pareto fronts using state-of-the-art solvers:
+    * **Gradient-Based:** SLSQP (SciPy)
+    * **Gradient-Free:** Nevergrad, Differential Evolution, COBYLA
+
+### ⚡ Industrial-Grade Performance
+* **Vectorized Kernels:** Calculation engines are optimized with NumPy vectorization for maximum throughput.
+* **Non-Blocking UI:** Heavy computations run in background threads with signal throttling to ensure the GUI remains responsive at 60 FPS.
+* **Crash Protection:** Robust error handling and race-condition prevention using Mutex locks.
 
 ---
 
 ## 📦 Installation
 
-### System Requirements
+### Prerequisites
+* **Python:** 3.8 or higher
+* **OS:** Windows 10/11, macOS, or Linux
 
-| Component | Minimum | Recommended |
-|-----------|---------|-------------|
-| **Operating System** | Windows 10 / Ubuntu 18.04 / macOS 10.15 | Windows 11 / Ubuntu 22.04 / macOS 12+ |
-| **Python Version** | 3.8 | 3.11+ |
-| **RAM** | 8 GB | 16 GB+ |
-| **Storage** | 2 GB | 5 GB+ |
-| **Display** | 1920x1080 | 2560x1440+ |
-
-### Quick Installation
+### Quick Install
 
 ```bash
-# Clone the repository
+# 1. Clone the repository
 git clone <repository-url>
-cd pylcss
+cd pylowcodesolutionspace
 
-# Create virtual environment
+# 2. Create and activate a virtual environment (Recommended)
 python -m venv venv
-
-# Activate environment
 # Windows:
 venv\Scripts\activate
-# macOS/Linux:
+# Linux/Mac:
 source venv/bin/activate
 
-# Install PyLCSS
-pip install -e .
+# 3. Install dependencies
+pip install -r requirements.txt
 
-# Launch the application
-pylcss
+# 4. Launch PyLCSS
+python scripts/main.py
 ```
 
-### 🏃‍♂️ Quick Start
+## 🚀 Quick Start Guide
 
-1.  **Launch PyLCSS**: Run `pylcss` (or `run_gui.bat` on Windows).
-2.  **Load Example**: Go to `File > Open` and select `data/Gear Unit.json`.
-3.  **Explore**:
-    *   **Editor Tab**: View the node graph structure.
-    *   **Solution Space Tab**: Click "Compute Solution Space" to visualize feasible designs.
-    *   **Optimization Tab**: Run multi-objective optimization to find Pareto fronts.
+**Launch the App:** Run `run_gui.bat` (Windows) or execute `python scripts/main.py`.
 
----
+**Load a Model:** Navigate to `File > Open` and select `data/Gear Unit.json`.
+
+**Validate:** Click the "Validate" button to check for unit consistency and connection errors.
+
+**Compute:** Switch to the Solution Space tab and click "Compute" to generate design samples.
+
+**Visualize:** Use the "Plot Settings" to visualize trade-offs between Weight vs Safety Factor.
+
+**Optimize:** Go to the Optimization tab, select objectives (e.g., Minimize Weight), and run the solver.
+
+## 📚 Tech Stack
+
+PyLCSS is built on the shoulders of giants:
+
+**UI/UX:** PySide6, NodeGraphQt, QtAwesome
+
+**Computation:** NumPy, SciPy, Pandas
+
+**Visualization:** PyQtGraph
+
+**Machine Learning:** PyTorch, Scikit-learn
+
+**Optimization:** Nevergrad, SALib
+
+**Physics:** Pint
 
 ## 📄 License
 
-This project is licensed under the **PolyForm Shield License 1.0.0**. See the [LICENSE](LICENSE) file for details.
+PyLCSS is licensed under the **PolyForm Shield License 1.0.0**.
 
-*Free for non-competing use.*
+**✅ Allowed:** Personal use, academic research, internal business use.
+
+**❌ Restricted:** You cannot use this software to build a competing product or service.
+
+See [LICENSE](LICENSE) for full details.
+
+<div align="center"> <sub>Copyright © 2025 Kutay Demir. All rights reserved.</sub> </div>

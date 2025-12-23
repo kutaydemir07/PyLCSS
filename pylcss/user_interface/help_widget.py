@@ -23,11 +23,14 @@ class HelpWidget(QtWidgets.QWidget):
         """Initialize the help widget with all documentation tabs."""
         super().__init__()
 
+        # specialized layout for help widget
         layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
 
         # Title
-        title = QtWidgets.QLabel("PyLCSS Documentation & News")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; margin: 10px;")
+        title = QtWidgets.QLabel("PyLCSS Documentation")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 5px;")
         layout.addWidget(title)
 
         # Tab widget for different help sections
@@ -35,7 +38,6 @@ class HelpWidget(QtWidgets.QWidget):
         layout.addWidget(self.help_tabs)
 
         # Add help tabs for each main section
-        self._add_news_tab()
         self._add_modeling_help()
         self._add_surrogate_help()
         self._add_solution_space_help()
@@ -43,68 +45,22 @@ class HelpWidget(QtWidgets.QWidget):
         self._add_sensitivity_help()
         self._add_about_tab()
 
-    def _add_news_tab(self) -> None:
-        """Add the News and Updates tab."""
-        scroll_area = QtWidgets.QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        scroll_area.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-
-        content_widget = QtWidgets.QWidget()
-        content_layout = QtWidgets.QVBoxLayout(content_widget)
-
-        news_text = """
-        <h2>What's New in PyLCSS</h2>
-
-        <h3>Latest Updates (December 2025)</h3>
+    def _create_browser(self, html_content: str) -> QtWidgets.QTextBrowser:
+        """Helper to create a configured QTextBrowser."""
+        browser = QtWidgets.QTextBrowser()
+        browser.setHtml(html_content)
         
-        <h4>🚀 Performance & Core</h4>
-        <ul>
-        <li><b>Optimized Vectorization Engine:</b> Significant speedup in model compilation and execution.</li>
-        <li><b>Enhanced Stability:</b> Robust error handling for solver convergence and thread management.</li>
-        <li><b>Smart Memory Management:</b> Improved handling of large datasets in Monte Carlo simulations.</li>
-        </ul>
-
-        <h4>🧠 AI & Surrogate Modeling</h4>
-        <ul>
-        <li><b>PyTorch Deep Learning:</b> Full integration of PyTorch for training advanced neural network surrogates.</li>
-        <li><b>GPU Acceleration:</b> Automatic GPU detection and utilization for training deep models.</li>
-        <li><b>Sanity Check Mode:</b> New debugging tools to verify model training and detect overfitting.</li>
-        </ul>
-
-        <h4>📊 Analysis & Visualization</h4>
-        <ul>
-        <li><b>Interactive Plots:</b> Enhanced 2D/3D scatter plots with better filtering and color mapping.</li>
-        <li><b>Real-time Monitoring:</b> Live updates for optimization progress and training loss curves.</li>
-        <li><b>Sobol Sensitivity:</b> Improved visualization for parameter importance and confidence intervals.</li>
-        </ul>
-
-        <h4>🛠️ User Interface</h4>
-        <ul>
-        <li><b>Modernized UI:</b> Refreshed look and feel with better high-DPI support.</li>
-        <li><b>Improved Editors:</b> Better syntax highlighting and auto-completion in custom code blocks.</li>
-        <li><b>Streamlined Workflow:</b> Simplified steps for common tasks like system merging and export.</li>
-        </ul>
-        """
-
-        text_browser = QtWidgets.QTextBrowser()
-        text_browser.setHtml(news_text)
-        text_browser.setOpenExternalLinks(False)
-        content_layout.addWidget(text_browser)
-
-        scroll_area.setWidget(content_widget)
-        self.help_tabs.addTab(scroll_area, qta.icon('fa5s.newspaper'), "News")
+        # [CRITICAL FIX]: Allow links to open in the system default browser
+        # If False (default), clicking a link tries to load it inside the widget,
+        # which fails and makes the content disappear.
+        browser.setOpenExternalLinks(True)
+        
+        # Ensure it looks good in both light/dark themes by respecting palette
+        browser.setAutoFillBackground(True)
+        return browser
 
     def _add_modeling_help(self) -> None:
         """Add comprehensive help for the Modeling Environment tab."""
-        scroll_area = QtWidgets.QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        scroll_area.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-
-        content_widget = QtWidgets.QWidget()
-        content_layout = QtWidgets.QVBoxLayout(content_widget)
-
         help_text = """
         <h2>Modeling Environment</h2>
 
@@ -143,25 +99,11 @@ class HelpWidget(QtWidgets.QWidget):
         <li><b>Test Blocks:</b> Verify custom code blocks individually before integrating them.</li>
         </ul>
         """
-
-        text_browser = QtWidgets.QTextBrowser()
-        text_browser.setHtml(help_text)
-        text_browser.setOpenExternalLinks(False)
-        content_layout.addWidget(text_browser)
-
-        scroll_area.setWidget(content_widget)
-        self.help_tabs.addTab(scroll_area, qta.icon('fa5s.project-diagram'), "Modeling")
+        browser = self._create_browser(help_text)
+        self.help_tabs.addTab(browser, qta.icon('fa5s.project-diagram'), "Modeling")
 
     def _add_surrogate_help(self) -> None:
         """Add comprehensive help for the Surrogate Training tab."""
-        scroll_area = QtWidgets.QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        scroll_area.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-
-        content_widget = QtWidgets.QWidget()
-        content_layout = QtWidgets.QVBoxLayout(content_widget)
-
         help_text = """
         <h2>Surrogate Modeling</h2>
 
@@ -190,25 +132,11 @@ class HelpWidget(QtWidgets.QWidget):
         <h3>Sanity Check</h3>
         <p>Use the "Sanity Check" mode to debug your training pipeline. Try overfitting a small number of samples (1 or 10) to ensure the model architecture is capable of learning the data patterns.</p>
         """
-
-        text_browser = QtWidgets.QTextBrowser()
-        text_browser.setHtml(help_text)
-        text_browser.setOpenExternalLinks(False)
-        content_layout.addWidget(text_browser)
-
-        scroll_area.setWidget(content_widget)
-        self.help_tabs.addTab(scroll_area, qta.icon('fa5s.brain'), "Surrogate AI")
+        browser = self._create_browser(help_text)
+        self.help_tabs.addTab(browser, qta.icon('fa5s.brain'), "Surrogate AI")
 
     def _add_solution_space_help(self) -> None:
         """Add comprehensive help for the Solution Space tab."""
-        scroll_area = QtWidgets.QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        scroll_area.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-
-        content_widget = QtWidgets.QWidget()
-        content_layout = QtWidgets.QVBoxLayout(content_widget)
-
         help_text = """
         <h2>Solution Space Exploration</h2>
 
@@ -231,26 +159,19 @@ class HelpWidget(QtWidgets.QWidget):
         <li><b>Filter:</b> Isolate specific regions of interest for detailed analysis.</li>
         <li><b>Export:</b> Save results to CSV for external reporting.</li>
         </ol>
+
+        <h3>Scientific Reference</h3>
+        <p>The solution space computation and box-shaped approximation methods implemented in this module are based on:</p>
+        <p><b>Markus Zimmermann, Johannes Edler von Hoessle</b><br>
+        <i>"Computing solution spaces for robust design"</i><br>
+        International Journal for Numerical Methods in Engineering (2013)<br>
+        DOI: <a href="https://doi.org/10.1002/nme.4450">10.1002/nme.4450</a></p>
         """
-
-        text_browser = QtWidgets.QTextBrowser()
-        text_browser.setHtml(help_text)
-        text_browser.setOpenExternalLinks(False)
-        content_layout.addWidget(text_browser)
-
-        scroll_area.setWidget(content_widget)
-        self.help_tabs.addTab(scroll_area, qta.icon('fa5s.chart-area'), "Solution Space")
+        browser = self._create_browser(help_text)
+        self.help_tabs.addTab(browser, qta.icon('fa5s.chart-area'), "Solution Space")
 
     def _add_optimization_help(self) -> None:
         """Add comprehensive help for the Optimization tab."""
-        scroll_area = QtWidgets.QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        scroll_area.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-
-        content_widget = QtWidgets.QWidget()
-        content_layout = QtWidgets.QVBoxLayout(content_widget)
-
         help_text = """
         <h2>Optimization</h2>
 
@@ -280,25 +201,11 @@ class HelpWidget(QtWidgets.QWidget):
         <li><b>Pareto Analysis:</b> Explore trade-offs between conflicting objectives.</li>
         </ul>
         """
-
-        text_browser = QtWidgets.QTextBrowser()
-        text_browser.setHtml(help_text)
-        text_browser.setOpenExternalLinks(False)
-        content_layout.addWidget(text_browser)
-
-        scroll_area.setWidget(content_widget)
-        self.help_tabs.addTab(scroll_area, qta.icon('fa5s.rocket'), "Optimization")
+        browser = self._create_browser(help_text)
+        self.help_tabs.addTab(browser, qta.icon('fa5s.rocket'), "Optimization")
 
     def _add_sensitivity_help(self) -> None:
         """Add comprehensive help for the Sensitivity Analysis tab."""
-        scroll_area = QtWidgets.QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        scroll_area.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-
-        content_widget = QtWidgets.QWidget()
-        content_layout = QtWidgets.QVBoxLayout(content_widget)
-
         help_text = """
         <h2>Sensitivity Analysis</h2>
 
@@ -327,25 +234,11 @@ class HelpWidget(QtWidgets.QWidget):
         <li><b>Understand Physics:</b> Gain insights into the driving forces of your system.</li>
         </ul>
         """
-
-        text_browser = QtWidgets.QTextBrowser()
-        text_browser.setHtml(help_text)
-        text_browser.setOpenExternalLinks(False)
-        content_layout.addWidget(text_browser)
-
-        scroll_area.setWidget(content_widget)
-        self.help_tabs.addTab(scroll_area, qta.icon('fa5s.chart-bar'), "Sensitivity")
+        browser = self._create_browser(help_text)
+        self.help_tabs.addTab(browser, qta.icon('fa5s.chart-bar'), "Sensitivity")
 
     def _add_about_tab(self) -> None:
         """Add the About information as a help tab."""
-        scroll_area = QtWidgets.QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        scroll_area.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-
-        content_widget = QtWidgets.QWidget()
-        content_layout = QtWidgets.QVBoxLayout(content_widget)
-
         about_text = """
         <h2>About PyLCSS</h2>
 
@@ -368,11 +261,5 @@ class HelpWidget(QtWidgets.QWidget):
 
         <p><i>Developed for advanced engineering research and industrial applications.</i></p>
         """
-
-        text_browser = QtWidgets.QTextBrowser()
-        text_browser.setHtml(about_text)
-        text_browser.setOpenExternalLinks(False)
-        content_layout.addWidget(text_browser)
-
-        scroll_area.setWidget(content_widget)
-        self.help_tabs.addTab(scroll_area, qta.icon('fa5s.info-circle'), "About")
+        browser = self._create_browser(about_text)
+        self.help_tabs.addTab(browser, qta.icon('fa5s.info-circle'), "About")

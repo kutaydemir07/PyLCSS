@@ -15,13 +15,14 @@ import qtawesome as qta
 from pylcss.system_modeling.editor import ModelingWidget
 from pylcss.system_modeling.system_model import SystemModel
 from pylcss.system_modeling.model_merge import validate_merge_connections
+from pylcss.system_modeling.graph_validation import validate_graph
 from pylcss.solution_space.solution_space_interface import SolutionSpaceWidget
-from pylcss.optimization_module.optimization_interface import OptimizationWidget
+from pylcss.user_interface.optimization_widget import OptimizationWidget
 from pylcss.user_interface.theme_manager import apply_professional_theme
 
 # --- NEW IMPORTS ---
 from pylcss.surrogate_modeling.surrogate_interface import SurrogateTrainingWidget
-from pylcss.optimization_module.sensitivity_interface import SensitivityAnalysisWidget
+from pylcss.user_interface.sensitivity_widget import SensitivityAnalysisWidget
 from pylcss.user_interface.help_widget import HelpWidget
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -140,6 +141,10 @@ class MainWindow(QtWidgets.QMainWindow):
         handles model merging for multiple systems, and loads the resulting
         models into the solution space and optimization widgets.
         """
+        # Validate the graph before building
+        if not validate_graph(self.modeling_widget):
+            return  # Validation failed, don't build
+        
         models = self.modeling_widget.get_compiled_code()
         if models:
             if len(models) > 1:

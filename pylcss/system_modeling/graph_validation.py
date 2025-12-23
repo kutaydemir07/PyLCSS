@@ -11,6 +11,7 @@ unit mismatches before compilation or execution.
 
 from PySide6 import QtWidgets
 import networkx as nx
+from collections import Counter
 
 try:
     import pint
@@ -32,7 +33,7 @@ def validate_graph(widget):
         widget: Main application widget containing system_manager with systems
 
     Returns:
-        None: Shows dialog with validation results (errors/warnings/success)
+        bool: True if validation passed (no errors), False if errors found
 
     Validation Checks:
         - Syntax errors in custom block Python code
@@ -53,6 +54,22 @@ def validate_graph(widget):
         graph = sys['graph']
         nodes = graph.all_nodes()
 
+        # Check for duplicate DV, QoI, and intermediate names
+        var_names = []
+        for node in nodes:
+            if node.type_.startswith(('com.pfd.input', 'com.pfd.output', 'com.pfd.intermediate')):
+                var_name = node.get_property('var_name')
+                if var_name:
+                    node_type = 'DV' if node.type_.startswith('com.pfd.input') else 'QoI' if node.type_.startswith('com.pfd.output') else 'Intermediate'
+                    var_names.append((var_name, node_type, node.name()))
+        
+        name_counts = Counter(name for name, _, _ in var_names)
+        duplicates = [name for name, count in name_counts.items() if count > 1]
+        if duplicates:
+            for dup in duplicates:
+                items = [f"{node_name} ({typ})" for name, typ, node_name in var_names if name == dup]
+                errors.append(f"System '{sys['name']}': Duplicate variable name '{dup}' found in: {', '.join(items)}")
+
         # Check syntax of custom block code
         has_custom_code = False
         for node in nodes:
@@ -64,9 +81,6 @@ def validate_graph(widget):
                 except SyntaxError as e:
                     errors.append(f"Syntax Error in '{node.name()}' line {e.lineno}: {e.msg}")
         
-        if has_custom_code:
-            warnings.append(f"Security Warning: System '{sys['name']}' contains custom code blocks. Ensure you trust the source of this model before running.")
-
         # Build directed graph for cycle detection
         G = nx.DiGraph()
         node_map = {n.id: n for n in nodes}
@@ -125,11 +139,13 @@ def validate_graph(widget):
         if warnings:
             msg += "\n\nWarnings:\n" + "\n".join(warnings)
         QtWidgets.QMessageBox.warning(widget, "Validation Failed", msg)
+        return False
     else:
         msg = "Graph validation passed!"
         if warnings:
             msg += "\n\nWarnings:\n" + "\n".join(warnings)
         QtWidgets.QMessageBox.information(widget, "Validation Successful", msg)
+        return True
 
 
 

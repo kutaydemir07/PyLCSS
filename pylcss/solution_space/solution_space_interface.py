@@ -54,6 +54,47 @@ from ..user_interface.text_utils import format_latex, format_html
 
 logger = logging.getLogger(__name__)
 
+
+class ArrowLine(pg.GraphicsObject):
+    """Custom arrow line that automatically handles arrowhead placement and rotation."""
+    
+    def __init__(self, start_pos, end_pos, pen='k', head_len=12, node_radius=0.12):
+        super().__init__()
+        self.start_pos = pg.Point(start_pos)
+        self.end_pos = pg.Point(end_pos)
+        self.pen = pg.mkPen(pen, width=1.5)
+        self.head_len = head_len
+        self.node_radius = node_radius
+        
+        # Internal arrow head
+        self.arrow = pg.ArrowItem(pen=self.pen, brush=self.pen.color())
+        self.arrow.setParentItem(self)
+        self.update_geometry()
+
+    def update_geometry(self):
+        diff = self.end_pos - self.start_pos
+        dist = np.sqrt(diff.x()**2 + diff.y()**2)
+        if dist == 0:
+            return
+        
+        # Stop line/arrow at the boundary of the node
+        edge_x = self.end_pos.x() - (diff.x() / dist) * self.node_radius
+        edge_y = self.end_pos.y() - (diff.y() / dist) * self.node_radius
+        
+        angle = np.degrees(np.arctan2(diff.y(), diff.x()))
+        self.arrow.setPos(edge_x, edge_y)
+        self.arrow.setStyle(angle=180-angle, headLen=self.head_len, tipAngle=30, baseAngle=20)
+        
+        # Store adjusted end point for painting the line
+        self.adj_end = pg.Point(edge_x, edge_y)
+
+    def paint(self, p, *args):
+        p.setPen(self.pen)
+        p.drawLine(self.start_pos, self.adj_end)
+
+    def boundingRect(self):
+        return QtCore.QRectF(self.start_pos, self.end_pos).normalized()
+
 class VariantRequirementsDialog(QtWidgets.QDialog):
     def __init__(self, variant_name, problem, parent=None):
         super().__init__(parent)
@@ -461,42 +502,41 @@ class PlotWidget(QtWidgets.QWidget):
             return
         self.plotting = True
 
+        # [CRITICAL FIX]: Cancel background thread IMMEDIATELY before doing anything else.
+        # This prevents "zombie" threads from updating the plot while we are drawing new points.
+        if self.interpolation_thread is not None:
+            if self.interpolation_thread.isRunning():
+                self.interpolation_thread.cancel()
+                # Disconnect signals to prevent late updates
+                try:
+                    self.interpolation_thread.finished.disconnect()
+                    self.interpolation_thread.quick_result.disconnect()
+                    self.interpolation_thread.error.disconnect()
+                except:
+                    pass
+                # Move to old threads list to keep reference until it finishes naturally
+                self.old_threads.append(self.interpolation_thread)
+            self.interpolation_thread = None
+
         if not self.parent_widget or not self.parent_widget.problem:
             self.plotting = False
             return
 
         # SMART CLEAR - Remove data but keep structure
-        if self.scatter_good:
-            self.plot_widget.removeItem(self.scatter_good)
-            self.scatter_good = None
-        if self.scatter_bad:
-            self.plot_widget.removeItem(self.scatter_bad)
-            self.scatter_bad = None
-        if self.scatter_optimal:
-            self.plot_widget.removeItem(self.scatter_optimal)
-            self.scatter_optimal = None
-        if self.img_item:
-            self.plot_widget.removeItem(self.img_item)
-            self.img_item = None
-        for item in self.limit_lines:
-            self.plot_widget.removeItem(item)
+        self.plot_widget.clear() # Clears items managed by PlotItem
+        
+        # Explicit cleanup of heavy references
+        self.scatter_good = None
+        self.scatter_bad = None
+        self.scatter_optimal = None
+        self.img_item = None
         self.limit_lines = []
+        self.hull_item = None
+        self.roi_item = None # ROI is re-added if needed
+        self.roi_lines = []
         
-        if self.hull_item:
-            self.plot_widget.removeItem(self.hull_item)
-            self.hull_item = None
-        
-        # Clean up multiple hull items if they exist
-        if hasattr(self, 'hull_items') and self.hull_items:
-            for item in self.hull_items:
-                try:
-                    self.plot_widget.removeItem(item)
-                except:
-                    pass
-            self.hull_items = []
-
-        # Force update to ensure items are removed
-        self.plot_widget.update()
+        if hasattr(self, 'color_scatter_items'):
+            self.color_scatter_items = []
 
         x_name = self.x_name
         y_name = self.y_name
@@ -582,20 +622,35 @@ class PlotWidget(QtWidgets.QWidget):
         view_box.setLimits(xMin=x_min, xMax=x_max, yMin=y_min, yMax=y_max)
         view_box.enableAutoRange(enable=False)
 
-        # --- FIX: Apply filtering to ALL arrays to keep indices synchronized ---
+        # --- FIX: STRICT 1D ENFORCEMENT ---
+        # Ensure all arrays are 1D before any masking or processing
+        if x_data is not None: x_data = np.asarray(x_data).ravel()
+        if y_data is not None: y_data = np.asarray(y_data).ravel()
+        if is_good is not None: is_good = np.asarray(is_good).ravel()
+        if violation_idx is not None: violation_idx = np.asarray(violation_idx).ravel()
+
+        # Apply filtering
         if self.samples is not None and x_data is not None and y_data is not None:
             # 1. Create the mask for valid (finite) numbers
+            # Now safe because x_data and y_data are guaranteed 1D
             valid_mask = np.isfinite(x_data) & np.isfinite(y_data)
             
-            # 2. Apply mask to coordinates
+            # 2. Apply mask (Results are 1D)
             x_data = x_data[valid_mask]
             y_data = y_data[valid_mask]
             
-            # 3. Apply mask to status arrays (CRITICAL FIX)
+            # 3. Apply mask to status arrays
             if is_good is not None:
-                is_good = is_good[valid_mask]
+                # Resize is_good to match valid points (safe because both are 1D)
+                if len(is_good) == len(valid_mask):
+                    is_good = is_good[valid_mask]
+                else:
+                    # Fallback if lengths mismatch (should not happen with strict sync)
+                    is_good = is_good[:len(valid_mask)][valid_mask]
+                    
             if violation_idx is not None:
-                violation_idx = violation_idx[valid_mask]
+                if len(violation_idx) == len(valid_mask):
+                    violation_idx = violation_idx[valid_mask]
             
             # Objective plot: green for good, red for bad
             if is_objective_plot:
@@ -718,6 +773,7 @@ class PlotWidget(QtWidgets.QWidget):
                     colors[:] = [255, 0, 0, 150]  # Default red for all
                     
                     # 2. Set Green for Good points (overwrite default)
+                    # Safe because is_good is guaranteed 1D
                     if is_good is not None and np.any(is_good):
                         colors[is_good] = [0, 170, 0, 150]
 
@@ -768,17 +824,48 @@ class PlotWidget(QtWidgets.QWidget):
                                                 # Apply color to all points that violated this constraint
                                                 colors[valid_bad_indices[constraint_mask]] = rgb
 
-                    # 4. Convert NumPy RGBA array to pyqtgraph brushes
-                    brush_list = [pg.mkBrush(QtGui.QColor(int(r), int(g), int(b), int(a))) for r, g, b, a in colors]
+                    # 4. Group points by color and create batched ScatterPlotItems for performance
+                    # Instead of creating thousands of individual brushes, group points by color
+                    unique_colors, inverse_indices = np.unique(colors, axis=0, return_inverse=True)
                     
-                    self.scatter_good = pg.ScatterPlotItem(
-                        x=x_data, y=y_data, 
-                        pen=pg.mkPen(None),  # No outline for better performance
-                        brush=brush_list,
-                        size=6
-                    )
-                    self.scatter_good.setZValue(1)
-                    self.plot_widget.addItem(self.scatter_good)
+                    # [CRITICAL FIX]: Ensure inverse_indices is 1D. 
+                    # If np.unique returns a column vector (N, 1), this flattening fixes it.
+                    inverse_indices = inverse_indices.ravel()
+                    
+                    # Create a ScatterPlotItem for each unique color
+                    for color_idx, unique_color in enumerate(unique_colors):
+                        # Get mask for points with this color
+                        # Now guaranteed to be 1D because inverse_indices is 1D
+                        color_mask = (inverse_indices == color_idx)
+                        
+                        if np.any(color_mask):
+                            # Extract points for this color
+                            # [SAFE]: x_data is 1D, color_mask is 1D.
+                            # We double-check x_data dimensionality to be absolutely safe
+                            if x_data.ndim > 1: x_data = x_data.ravel()
+                            if y_data.ndim > 1: y_data = y_data.ravel()
+                            
+                            color_x = x_data[color_mask]
+                            color_y = y_data[color_mask]
+                            
+                            # Create single brush for this color group
+                            brush = pg.mkBrush(QtGui.QColor(int(unique_color[0]), int(unique_color[1]), 
+                                                          int(unique_color[2]), int(unique_color[3])))
+                            
+                            # Create ScatterPlotItem for this color group
+                            scatter_item = pg.ScatterPlotItem(
+                                x=color_x, y=color_y, 
+                                pen=pg.mkPen(None),  # No outline for better performance
+                                brush=brush,
+                                size=6
+                            )
+                            scatter_item.setZValue(1)
+                            self.plot_widget.addItem(scatter_item)
+                            
+                            # Store reference to avoid garbage collection
+                            if not hasattr(self, 'color_scatter_items'):
+                                self.color_scatter_items = []
+                            self.color_scatter_items.append(scatter_item)
 
         # Draw Optimal Point (if objectives are included and we have the optimized point)
         if hasattr(self.parent_widget, 'optimal_point') and self.parent_widget.optimal_point is not None:
@@ -1565,6 +1652,61 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         
         self.right_tabs.addTab(self.family_tab, "Product Family Analysis")
         
+        # Tab 5: ADG (Attribute Dependency Graph)
+        self.adg_tab = QtWidgets.QWidget()
+        adg_tab_layout = QtWidgets.QVBoxLayout(self.adg_tab)
+        
+        # Title and Generate button
+        adg_header = QtWidgets.QHBoxLayout()
+        self.lbl_adg_title = QtWidgets.QLabel("Attribute Dependency Graph")
+        self.lbl_adg_title.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        self.lbl_adg_title.setStyleSheet("font-size: 16px; font-weight: bold; margin: 10px;")
+        adg_header.addWidget(self.lbl_adg_title)
+        
+        adg_header.addStretch()
+
+        # Generate scope selector for ADG
+        adg_header.addWidget(QtWidgets.QLabel("Generate for:"))
+        self.combo_adg_scope = QtWidgets.QComboBox()
+        self.combo_adg_scope.addItem("Merged System")
+        self.combo_adg_scope.setMinimumWidth(150)
+        self.combo_adg_scope.setToolTip("Select which system to generate the dependency graph for.")
+        adg_header.addWidget(self.combo_adg_scope)
+
+        self.btn_refresh_adg_list = QtWidgets.QPushButton("\u21bb")
+        self.btn_refresh_adg_list.setFixedWidth(30)
+        self.btn_refresh_adg_list.setToolTip("Refresh system list")
+        self.btn_refresh_adg_list.clicked.connect(self.refresh_adg_system_list)
+        adg_header.addWidget(self.btn_refresh_adg_list)
+        
+        self.btn_compute_adg = QtWidgets.QPushButton("Generate Graph")
+        self.btn_compute_adg.setToolTip("Generate attribute dependency graph from system model structure")
+        self.btn_compute_adg.clicked.connect(self.compute_adg)
+        self.btn_compute_adg.setEnabled(True)
+        adg_header.addWidget(self.btn_compute_adg)
+        
+        btn_save_adg = QtWidgets.QPushButton("Save Graph")
+        btn_save_adg.clicked.connect(self.save_adg_graph)
+        adg_header.addWidget(btn_save_adg)
+        
+        adg_tab_layout.addLayout(adg_header)
+        
+        # Graph visualization widget
+        self.adg_plot = pg.PlotWidget()
+        self.adg_plot.setBackground('w')
+        self.adg_plot.hideAxis('bottom')
+        self.adg_plot.hideAxis('left')
+        self.adg_plot.setAspectLocked(True)
+        adg_tab_layout.addWidget(self.adg_plot, stretch=2)
+        
+        # Info label
+        self.lbl_adg_info = QtWidgets.QLabel("Graph shows direct connections from design variables to outputs")
+        self.lbl_adg_info.setStyleSheet("margin: 5px; color: #666;")
+        self.lbl_adg_info.setAlignment(QtCore.Qt.AlignCenter)
+        adg_tab_layout.addWidget(self.lbl_adg_info)
+        
+        self.right_tabs.addTab(self.adg_tab, "ADG")
+        
         # Connect tab change to update data table on demand
         self.right_tabs.currentChanged.connect(self.on_right_tab_changed)
 
@@ -1592,6 +1734,10 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         """Handle right panel tab changes."""
         if self.right_tabs.tabText(index) == "Data Table":
             self.update_data_table()
+        elif self.right_tabs.tabText(index) == "ADG":
+            # Refresh ADG system list when switching to ADG tab
+            if hasattr(self, 'refresh_adg_system_list'):
+                self.refresh_adg_system_list()
 
     def set_product_family_mode(self, enabled: bool):
         """
@@ -1875,7 +2021,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
 
         self.btn_compute_feasible.setEnabled(True)
         # Check if there are any objectives defined
-        has_objectives = self.problem and any(qoi.get('minimize', False) or qoi.get('maximize', False) 
+        has_objectives = self.problem is not None and any(qoi.get('minimize', False) or qoi.get('maximize', False) 
                            for qoi in self.problem.quantities_of_interest)
         # Enable optimization controls if objectives exist
         self.chk_include_optimization.setEnabled(has_objectives)
@@ -2045,7 +2191,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
 
         self.btn_compute_feasible.setEnabled(True)
         # Check if there are any objectives defined
-        has_objectives = self.problem and any(qoi.get('minimize', False) or qoi.get('maximize', False) 
+        has_objectives = self.problem is not None and any(qoi.get('minimize', False) or qoi.get('maximize', False) 
                            for qoi in self.problem.quantities_of_interest)
         # Enable optimization controls if objectives exist
         self.chk_include_optimization.setEnabled(has_objectives)
@@ -2079,6 +2225,10 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         if self.models:
             self.system_combo.setCurrentIndex(0)
             self.load_selected_system()
+        
+        # Refresh ADG system list when models are loaded
+        if hasattr(self, 'refresh_adg_system_list'):
+            self.refresh_adg_system_list()
 
     def create_merged_model(self, models):
         """
@@ -2454,6 +2604,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
     def on_compute_finished(self, box, elapsed_time, samples):
         self.status_msg.close()
         self.btn_compute_feasible.setEnabled(True)
+        self.btn_compute_adg.setEnabled(True)
         self.dv_par_box = box
         
         # Update DV Table with Solution Bounds
@@ -2489,8 +2640,9 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
     def on_compute_error(self, error_msg):
         self.status_msg.close()
         self.btn_compute_feasible.setEnabled(True)
+        self.btn_compute_adg.setEnabled(True)
         # Check if there are any objectives defined
-        has_objectives = self.problem and any(qoi.get('minimize', False) or qoi.get('maximize', False) 
+        has_objectives = self.problem is not None and any(qoi.get('minimize', False) or qoi.get('maximize', False) 
                            for qoi in self.problem.quantities_of_interest)
         # Enable optimization controls if objectives exist
         self.chk_include_optimization.setEnabled(has_objectives)
@@ -2999,10 +3151,23 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                 pw.cached_categorical_img = None
                 pw.cached_data_hash = None
                 pw.cached_bounds_hash = None
-                # Cancel any running interpolation threads
+                
+                # [CRITICAL FIX]: Cancel interpolation threads WITHOUT waiting
                 if pw.interpolation_thread is not None and pw.interpolation_thread.isRunning():
                     pw.interpolation_thread.cancel()
-                    pw.interpolation_thread.wait()
+                    # REMOVED: pw.interpolation_thread.wait()  <-- THIS CAUSED THE FREEZE
+                    
+                    # Disconnect signals so it dies quietly
+                    try:
+                        pw.interpolation_thread.finished.disconnect()
+                        pw.interpolation_thread.quick_result.disconnect()
+                        pw.interpolation_thread.error.disconnect()
+                    except:
+                        pass
+                    
+                    # Store reference to prevent garbage collection while running
+                    pw.old_threads.append(pw.interpolation_thread)
+                    pw.interpolation_thread = None
         
         for pw in self.plot_widgets:
             pw.plot()
@@ -4070,6 +4235,390 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
             # Update the requirement set
             overrides = dialog.get_overrides()
             self.problem.requirement_sets[variant_name] = overrides
+
+    def compute_adg(self):
+        """Compute and visualize the Attribute Dependency Graph from the system model."""
+        if not self.problem:
+            QtWidgets.QMessageBox.warning(self, "Warning", "No system loaded.")
+            return
+        
+        # Determine scope selection if available
+        selected_scope = None
+        if hasattr(self, 'combo_adg_scope') and isinstance(self.combo_adg_scope, QtWidgets.QComboBox):
+            selected_scope = self.combo_adg_scope.currentText()
+        
+        # Get the graph from the main application's modeling widget
+        try:
+            main_window = self.window()
+            if not hasattr(main_window, 'modeling_widget'):
+                # Try to refresh list just in case, but usually this means we are standalone
+                if hasattr(self, 'refresh_adg_system_list'):
+                    self.refresh_adg_system_list()
+                if selected_scope is None or (hasattr(self, 'combo_adg_scope') and self.combo_adg_scope.count() <= 1):
+                    QtWidgets.QMessageBox.warning(self, "Warning", "Modeling environment not available.")
+                    return
+            
+            modeling_widget = main_window.modeling_widget
+            if not hasattr(modeling_widget, 'system_manager'):
+                QtWidgets.QMessageBox.warning(self, "Warning", "System manager not found.")
+                return
+            
+            # Get systems
+            systems = modeling_widget.system_manager.systems
+            if not systems:
+                QtWidgets.QMessageBox.warning(self, "Warning", "No systems in Modeling Environment. Create a system first.")
+                return
+            
+            # Create NetworkX graph (single or merged depending on scope)
+            G = nx.DiGraph()
+            node_to_name = {}
+            
+            # Select target systems based on scope
+            target_systems = []
+            if selected_scope in (None, "Merged System"):
+                target_systems = systems
+            else:
+                for sys in systems:
+                    # Systems are dictionaries with 'name' key
+                    sys_name = sys.get('name') if isinstance(sys, dict) else getattr(sys, 'name', None)
+                    if sys_name == selected_scope:
+                        target_systems = [sys]
+                        break
+            
+            if not target_systems:
+                QtWidgets.QMessageBox.warning(self, "Warning", f"System '{selected_scope}' not found.")
+                return
+            
+            # Process systems
+            for sys_idx, system in enumerate(target_systems):
+                graph = system.get('graph')
+                if not graph:
+                    continue
+                
+                # Get all nodes from this system's graph
+                nodes = graph.all_nodes()
+                
+                # Categorize nodes
+                input_nodes = [n for n in nodes if n.type_.startswith('com.pfd.input')]
+                output_nodes = [n for n in nodes if n.type_.startswith('com.pfd.output')]
+                intermediate_nodes = [n for n in nodes if n.type_.startswith('com.pfd.intermediate')]
+                blackbox_nodes = [n for n in nodes if n.type_.startswith('com.pfd.custom_block')]
+                
+                # Add input nodes (design variables)
+                for n in input_nodes:
+                    if n.has_property('input_props'):
+                        var_name = n.get_property('input_props').get('var_name', n.name())
+                    else:
+                        var_name = n.get_property('var_name') or n.name()
+                    node_to_name[n.id] = var_name
+                    if not G.has_node(var_name):
+                        G.add_node(var_name, node_type='input', node_obj=n)
+                
+                # Add output nodes (QoIs)
+                for n in output_nodes:
+                    if n.has_property('output_props'):
+                        var_name = n.get_property('output_props').get('var_name', n.name())
+                    else:
+                        var_name = n.get_property('var_name') or n.name()
+                    node_to_name[n.id] = var_name
+                    if not G.has_node(var_name):
+                        G.add_node(var_name, node_type='output', node_obj=n)
+                
+                # Add intermediate variable nodes
+                for n in intermediate_nodes:
+                    var_name = n.get_property('var_name') or n.name()
+                    # Make unique across systems if merging
+                    unique_name = var_name
+                    if selected_scope in (None, "Merged System"):
+                        counter = 1
+                        while G.has_node(unique_name):
+                            unique_name = f"{var_name}_{counter}"
+                            counter += 1
+                    node_to_name[n.id] = unique_name
+                    G.add_node(unique_name, node_type='intermediate', node_obj=n)
+                
+                # Add blackbox function nodes (small black dots)
+                for n in blackbox_nodes:
+                    func_name = n.name()
+                    # Make unique across systems if merging
+                    unique_name = func_name
+                    if selected_scope in (None, "Merged System"):
+                        counter = 1
+                        while G.has_node(unique_name):
+                            unique_name = f"{func_name}_{counter}"
+                            counter += 1
+                    node_to_name[n.id] = unique_name
+                    G.add_node(unique_name, node_type='blackbox', node_obj=n)
+                
+                # Build edges from connections in this system's graph
+                for n in nodes:
+                    source_name = node_to_name.get(n.id)
+                    if source_name:
+                        for port in n.output_ports():
+                            for connected_port in port.connected_ports():
+                                target_node = connected_port.node()
+                                target_name = node_to_name.get(target_node.id)
+                                if target_name:
+                                    G.add_edge(source_name, target_name)
+            
+            if G.number_of_nodes() == 0:
+                QtWidgets.QMessageBox.warning(self, "Warning", "No nodes found in system graphs.")
+                return
+            
+            # Visualize the graph
+            self.visualize_adg(G)
+            
+            # Switch to ADG tab
+            for i in range(self.right_tabs.count()):
+                if self.right_tabs.tabText(i) == "ADG":
+                    self.right_tabs.setCurrentIndex(i)
+                    break
+            
+            num_inputs = len([n for n in G.nodes() if G.nodes[n]['node_type']=='input'])
+            num_outputs = len([n for n in G.nodes() if G.nodes[n]['node_type']=='output'])
+            num_intermediate = len([n for n in G.nodes() if G.nodes[n]['node_type']=='intermediate'])
+            num_blackbox = len([n for n in G.nodes() if G.nodes[n]['node_type']=='blackbox'])
+            scope_label = selected_scope or "Merged System"
+            self.lbl_adg_info.setText(f"Scope: {scope_label} | {G.number_of_nodes()} nodes ({num_inputs} inputs, {num_outputs} outputs, {num_intermediate} intermediate, {num_blackbox} functions), {G.number_of_edges()} connections")
+            
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to compute ADG: {str(e)}")
+            logger.exception("ADG computation failed")
+
+    def refresh_adg_system_list(self):
+        """Populate the ADG scope combo box with available systems."""
+        if not hasattr(self, 'combo_adg_scope'):
+            return
+        current_text = self.combo_adg_scope.currentText() if self.combo_adg_scope.count() > 0 else "Merged System"
+        self.combo_adg_scope.blockSignals(True)
+        self.combo_adg_scope.clear()
+        self.combo_adg_scope.addItem("Merged System")
+
+        # Try to get systems from modeling widget if available
+        try:
+            main_window = self.window()
+            if hasattr(main_window, 'modeling_widget') and hasattr(main_window.modeling_widget, 'system_manager'):
+                systems = main_window.modeling_widget.system_manager.systems
+                for sys in systems:
+                    # Systems are dictionaries with 'name' key
+                    name = sys.get('name') if isinstance(sys, dict) else getattr(sys, 'name', None)
+                    if name:
+                        self.combo_adg_scope.addItem(name)
+        except Exception as e:
+            logger.warning(f"Failed to refresh ADG system list: {e}")
+
+        # Restore selection if possible
+        idx = self.combo_adg_scope.findText(current_text)
+        if idx >= 0:
+            self.combo_adg_scope.setCurrentIndex(idx)
+        self.combo_adg_scope.blockSignals(False)
+    
+    def visualize_adg(self, G):
+        """Visualize the attribute dependency graph using pyqtgraph."""
+        self.adg_plot.clear()
+        
+        if G.number_of_nodes() == 0:
+            return
+        
+        try:
+            # Calculate hierarchical layout
+            pos = self._hierarchical_layout(G)
+            
+            # --- FIX: Define sizes in Data Coordinates (not pixels) ---
+            # Layout spacing is approx 1.2 units (see _hierarchical_layout)
+            SIZE_STD = 0.8   # Standard node diameter
+            SIZE_BB = 0.25   # Blackbox node diameter
+            
+            # Radii for arrow calculation
+            # Slightly larger than half-size to stop arrow right at the edge
+            RADIUS_STD = SIZE_STD / 2
+            RADIUS_BB = SIZE_BB / 2
+            
+            # Draw edges with arrows (drawn first, so nodes appear on top)
+            for edge in G.edges(data=True):
+                source = edge[0]
+                target = edge[1]
+                x1, y1 = pos[source]
+                x2, y2 = pos[target]
+                
+                # Determine node radius based on target type
+                target_type = G.nodes[target].get('node_type', 'unknown')
+                source_type = G.nodes[source].get('node_type', 'unknown')
+                
+                # Use data-coordinate radii
+                target_radius = RADIUS_BB if target_type == 'blackbox' else RADIUS_STD
+                
+                # Create arrow line that stops at node boundary
+                edge_item = ArrowLine(
+                    start_pos=(x1, y1),
+                    end_pos=(x2, y2),
+                    pen='k',
+                    head_len=10,
+                    node_radius=target_radius
+                )
+                self.adg_plot.addItem(edge_item)
+            
+            # Draw nodes (drawn after edges so they appear on top)
+            for node in G.nodes(data=True):
+                name = node[0]
+                x, y = pos[name]
+                node_type = node[1].get('node_type', 'unknown')
+                
+                if node_type == 'blackbox':
+                    # Draw small black dot for blackbox functions
+                    node_scatter = pg.ScatterPlotItem(
+                        [x], [y], 
+                        size=SIZE_BB,       # Size in data units
+                        pen=pg.mkPen('k', width=1),
+                        brush=pg.mkBrush('k'),
+                        symbol='o',
+                        pxMode=False        # Disable pixel mode so it scales
+                    )
+                    self.adg_plot.addItem(node_scatter)
+                else:
+                    # Draw white circle with black border for all other nodes
+                    node_scatter = pg.ScatterPlotItem(
+                        [x], [y], 
+                        size=SIZE_STD,      # Size in data units
+                        pen=pg.mkPen('k', width=2), # Pen width stays in pixels (cosmetic)
+                        brush=pg.mkBrush('w'),
+                        symbol='o',
+                        pxMode=False        # Disable pixel mode so it scales
+                    )
+                    self.adg_plot.addItem(node_scatter)
+                    
+                    # Add text label inside circle
+                    # Note: pg.TextItem does not scale geometry by default, keeping text readable.
+                    text = pg.TextItem(text=name, color='k', anchor=(0.5, 0.5))
+                    text.setPos(x, y)
+                    text.setFont(QtGui.QFont("Arial", 8, QtGui.QFont.Bold))
+                    self.adg_plot.addItem(text)
+            
+            # Store for later reference
+            self.adg_graph = G
+            self.adg_positions = pos
+            
+        except Exception as e:
+            logger.exception("Graph visualization failed")
+            QtWidgets.QMessageBox.warning(self, "Warning", f"Graph layout failed: {str(e)}")
+    
+    def _hierarchical_layout(self, G):
+        """Create a hierarchical layout with horizontal placement (left to right)."""
+        pos = {}
+        
+        # If graph is directed, use topological levels
+        if G.is_directed():
+            try:
+                # Compute levels: inputs (DVs) at bottom, outputs (QoIs) at top
+                levels = {}
+                
+                # First pass: assign levels based on topological order
+                for node in nx.topological_sort(G):
+                    # Node level = max(predecessor levels) + 1
+                    predecessors = list(G.predecessors(node))
+                    if not predecessors:
+                        # Source nodes (inputs/DVs) start at level 0 (bottom)
+                        levels[node] = 0
+                    else:
+                        levels[node] = max(levels[p] for p in predecessors) + 1
+                
+                # Second pass: ensure all sink nodes (no outgoing edges) are at max level
+                # These are the true QoIs/outputs
+                max_level = max(levels.values()) if levels else 0
+                for node in G.nodes():
+                    if G.out_degree(node) == 0:  # Sink node = true output
+                        levels[node] = max_level
+                
+                # Organize nodes by level
+                nodes_by_level = {}
+                for node, level in levels.items():
+                    if level not in nodes_by_level:
+                        nodes_by_level[level] = []
+                    nodes_by_level[level].append(node)
+                
+                # Position nodes with generous spacing and minimize crossings
+                max_level = max(nodes_by_level.keys())
+                
+                pos = {}
+                for level, nodes in nodes_by_level.items():
+                    # Sort nodes to minimize crossings with previous level
+                    if level > 0:
+                        # Calculate average position of predecessors for each node
+                        node_scores = {}
+                        for node in nodes:
+                            preds = list(G.predecessors(node))
+                            if preds and all(p in pos for p in preds):
+                                avg_x = sum(pos[p][0] for p in preds) / len(preds)
+                                node_scores[node] = avg_x
+                            else:
+                                node_scores[node] = 0
+                        # Sort nodes by their predecessor average position
+                        nodes = sorted(nodes, key=lambda n: node_scores.get(n, 0))
+                    
+                    # Vertical position: bottom to top with 5x spacing
+                    y = (level / max(1, max_level)) * 5.0
+                    
+                    # Horizontal spacing: generous spacing between nodes
+                    width = len(nodes)
+                    for i, node in enumerate(nodes):
+                        # Center nodes and give generous horizontal spacing
+                        x = (i - (width - 1) / 2.0) * 1.2  # 1.2 spacing between nodes
+                        pos[node] = (x, y)
+                
+            except nx.NetworkXError:
+                # Fallback if topological sort fails (graph has cycles)
+                pos = nx.spring_layout(G, k=2.5, iterations=50)
+        else:
+            # For undirected graphs, use spring layout with increased spacing
+            pos = nx.spring_layout(G, k=2.5, iterations=50)
+        
+        return pos
+    
+    def update_adg_layout(self):
+        """Update graph layout when layout algorithm changes."""
+        if hasattr(self, 'adg_graph') and hasattr(self, 'adg_positions'):
+            # Re-visualize with new layout
+            self.visualize_adg(self.adg_graph)
+    
+    def save_adg_graph(self):
+        """Save the ADG graph visualization."""
+        if not hasattr(self, 'adg_graph'):
+            QtWidgets.QMessageBox.warning(self, "Warning", "No graph to save. Generate graph first.")
+            return
+        
+        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Graph", "", "PNG Image (*.png);;GraphML (*.graphml);;All Files (*)"
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            if file_path.endswith('.graphml'):
+                # Save graph structure
+                nx.write_graphml(self.adg_graph, file_path)
+                QtWidgets.QMessageBox.information(self, "Success", f"Graph saved to {file_path}")
+            else:
+                # Save plot image using QPixmap
+                # Get the scene from the plot widget
+                scene = self.adg_plot.sceneObj
+                # Create a QImage to render into
+                scene_rect = scene.itemsBoundingRect()
+                image = QtGui.QImage(int(scene_rect.width()), int(scene_rect.height()), 
+                                     QtGui.QImage.Format_ARGB32)
+                image.fill(QtCore.Qt.white)
+                
+                # Render the scene to the image
+                painter = QtGui.QPainter(image)
+                scene.render(painter, QtCore.QRectF(image.rect()), scene_rect)
+                painter.end()
+                
+                # Save the image
+                image.save(file_path)
+                QtWidgets.QMessageBox.information(self, "Success", f"Graph image saved to {file_path}")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to save graph: {str(e)}")
+
 
 
 
