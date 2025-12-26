@@ -20,8 +20,10 @@ from typing import Optional
 # SYSTEM CONFIGURATION
 # ============================================================================
 
-# Directory for temporary model files
-TEMP_MODELS_DIR = os.path.join(tempfile.gettempdir(), "pylcss_models")
+# Get the directory where config.py resides (the pylcss folder)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Define a local folder for generated models
+TEMP_MODELS_DIR = os.path.join(BASE_DIR, "generated_models")
 
 # ============================================================================
 # LOGGING CONFIGURATION

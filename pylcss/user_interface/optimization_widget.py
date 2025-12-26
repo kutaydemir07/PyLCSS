@@ -16,7 +16,7 @@ import pyqtgraph as pg
 from ..problem_definition.problem_setup import XRayProblem
 from ..user_interface.text_utils import format_html
 from ..optimization.workers import OptimizationWorker
-from ..config import optimization_config, SOLVER_DESCRIPTIONS
+from ..config import optimization_config, SOLVER_DESCRIPTIONS, TEMP_MODELS_DIR
 from .optimization_settings_dialog import OptimizationSettingsDialog  # New import
 
 logger = logging.getLogger(__name__)
@@ -776,7 +776,11 @@ class OptimizationWidget(QtWidgets.QWidget):
         return 0.0
 
     def _execute_code_safely(self, code):
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        # 1. Ensure the directory exists
+        os.makedirs(TEMP_MODELS_DIR, exist_ok=True)
+
+        # 2. Pass the 'dir' argument to NamedTemporaryFile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, dir=TEMP_MODELS_DIR) as f:
             f.write(code)
             temp_file = f.name
         spec = importlib.util.spec_from_file_location("temp_module", temp_file)
