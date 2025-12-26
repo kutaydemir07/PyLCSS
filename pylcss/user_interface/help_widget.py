@@ -147,7 +147,7 @@ class HelpWidget(QtWidgets.QWidget):
         <ul>
         <li><b>Monte Carlo Sampling:</b> Rapidly evaluate thousands of design points.</li>
         <li><b>Feasibility Analysis:</b> Automatically classify designs as "Feasible" or "Infeasible" based on constraints.</li>
-        <li><b>Interactive Visualization:</b> Explore data with 2D and 3D scatter plots, histograms, and parallel coordinates.</li>
+        <li><b>Interactive Visualization:</b> Explore data with 2D scatter plots, histograms, and parallel coordinates.</li>
         <li><b>Product Families:</b> Analyze multiple system variants simultaneously to find common platforms.</li>
         </ul>
 
@@ -161,7 +161,7 @@ class HelpWidget(QtWidgets.QWidget):
         </ol>
 
         <h3>Scientific Reference</h3>
-        <p>The solution space computation and box-shaped approximation methods implemented in this module are based on:</p>
+        <p>The solution space computation methods implemented in this module are based on:</p>
         <p><b>Markus Zimmermann, Johannes Edler von Hoessle</b><br>
         <i>"Computing solution spaces for robust design"</i><br>
         International Journal for Numerical Methods in Engineering (2013)<br>

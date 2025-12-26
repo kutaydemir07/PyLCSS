@@ -51,6 +51,7 @@ from .resample_worker_thread import ResampleThread
 from .interpolation_worker_thread import InterpolationThread
 
 from ..user_interface.text_utils import format_latex, format_html
+from ..user_interface.qt_patches import NumericTableWidgetItem
 
 logger = logging.getLogger(__name__)
 
@@ -3227,7 +3228,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         for i in range(limit):
             for j, col in enumerate(df.columns):
                 val = df.iloc[i, j]
-                item = QtWidgets.QTableWidgetItem(f"{val:.4f}")
+                item = NumericTableWidgetItem(f"{val:.4f}")
                 self.data_table.setItem(i, j, item)
 
     def export_csv(self):

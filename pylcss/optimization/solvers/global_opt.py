@@ -24,11 +24,13 @@ class GlobalSolver(BaseSolver):
         if desired_scaling and all_finite_bounds:
             evaluator.scaling = True
             bounds = [(0.0, 1.0) for _ in evaluator.vars]
+            x0_use = evaluator.to_normalized(np.array(x0))
         else:
             if desired_scaling and not all_finite_bounds:
                 logger.warning("Scaling requested but bounds infinite; disabling.")
             evaluator.scaling = False
             bounds = [(v.min_val, v.max_val) for v in evaluator.vars]
+            x0_use = np.array(x0)
         
         # Prepare Constraints
         real_constraints = []
@@ -47,9 +49,14 @@ class GlobalSolver(BaseSolver):
         best_plot_val = float('inf')
 
         def objective_wrapper(x):
-            # Feed Penalized Cost to optimizer so it respects constraints
-            cost, _, _ = evaluator.evaluate(x)
-            return cost
+            cost, raw, _ = evaluator.evaluate(x)
+            # Return unpenalized objective for global solvers
+            unpenalized = 0.0
+            for obj in evaluator.objs:
+                val = raw.get(obj.name, 0.0)
+                sign = 1.0 if obj.minimize else -1.0
+                unpenalized += sign * obj.weight * (val / evaluator.objective_scale)
+            return unpenalized
 
         def callback_wrapper(x):
             nonlocal best_plot_val
@@ -78,10 +85,9 @@ class GlobalSolver(BaseSolver):
             }
             # FIX: Suppress Nevergrad warnings about bounds
             with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
                 res = solve_with_nevergrad(
                     objective_wrapper, 
-                    x0, 
+                    x0_use, 
                     bounds, 
                     maxiter=maxiter, 
                     constraints=real_constraints,
@@ -91,17 +97,28 @@ class GlobalSolver(BaseSolver):
             
         elif method == 'Differential Evolution':
             de_kwargs = {}
-            valid_keys = ['strategy', 'popsize', 'tol', 'mutation', 'recombination', 'seed', 'disp', 'polish', 'atol']
+            # ADD 'workers' and 'updating' to this list
+            valid_keys = ['strategy', 'popsize', 'tol', 'mutation', 'recombination', 
+                          'seed', 'disp', 'polish', 'atol', 'workers', 'updating']
+            
             for k in valid_keys:
                 if k in self.settings:
                     de_kwargs[k] = self.settings[k]
+
+            # MAP the dialog setting 'num_workers' to SciPy's 'workers'
+            if 'num_workers' in self.settings:
+                 de_kwargs['workers'] = int(self.settings['num_workers'])
+                 
+                 # CRITICAL: As per SciPy docs, parallelization requires deferred updating
+                 if de_kwargs['workers'] != 1:
+                     de_kwargs['updating'] = 'deferred'
 
             res = solve_with_differential_evolution(
                 objective_wrapper,
                 bounds,
                 constraints=real_constraints,
                 maxiter=maxiter,
-                x0=x0,
+                x0=x0_use,
                 callback=callback_wrapper,
                 **de_kwargs
             )

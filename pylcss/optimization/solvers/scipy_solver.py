@@ -20,20 +20,6 @@ class ScipySolver(BaseSolver):
         # Safe cap constant
         MAX_COST = 1e15
 
-        # --- Throttling State for GUI Updates ---
-        last_callback_time = 0.0
-        CALLBACK_INTERVAL = 0.1  # 100ms minimum between GUI updates
-
-        # --- Explicit Warning Filtering ---
-        # Only filter specific expected warnings, not all RuntimeWarnings
-        # This prevents masking legitimate bugs in user-defined nodes
-        with warnings.catch_warnings():
-            # Filter expected numerical issues from optimization
-            warnings.filterwarnings("ignore", message=".*divide by zero.*", category=RuntimeWarning)
-            warnings.filterwarnings("ignore", message=".*overflow.*", category=RuntimeWarning)
-            warnings.filterwarnings("ignore", message=".*invalid value.*", category=RuntimeWarning)
-            # Allow other RuntimeWarnings to show (potential user code issues)
-
         # Track best solution
         best_cost = float('inf')
         best_x = None
@@ -43,102 +29,96 @@ class ScipySolver(BaseSolver):
         def obj_wrapper(x):
             if self.stop_requested: raise StopIteration
             
-            # --- 1. Linear Penalty for Bound Violations ---
-            # Replace "brick wall" with distance-based penalty that guides solver back
-            penalty = 0.0
-            is_out_of_bounds = False
-            
-            # Check bounds and calculate distance
-            if evaluator.scaling:
-                # Scaled mode: bounds are [0, 1]
-                if np.any(x < 0):
-                    penalty += np.sum(np.abs(x[x < 0]))
-                    is_out_of_bounds = True
-                if np.any(x > 1):
-                    penalty += np.sum(np.abs(x[x > 1] - 1))
-                    is_out_of_bounds = True
-            else:
-                # Physical bounds
-                for i, val in enumerate(x):
-                    v_var = evaluator.vars[i]
-                    if val < v_var.min_val:
-                        penalty += abs(v_var.min_val - val)
-                        is_out_of_bounds = True
-                    elif val > v_var.max_val:
-                        penalty += abs(val - v_var.max_val)
-                        is_out_of_bounds = True
-            
-            if is_out_of_bounds:
-                # Return Max Cost + Penalty Slope to guide solver back
-                return MAX_COST + (penalty * 1e5)
-
-            # --- 2. Evaluate ---
+            # --- Evaluate ---
+            # If scaling is on, 'x' here is normalized [0,1].
+            # evaluator.evaluate handles the conversion to physical.
             cost, raw, viol = evaluator.evaluate(x)
             
-            # Add penalty to cost (only if not already returned above)
-            penalized_cost = cost + penalty
+            # Calculate unpenalized objective
+            unpenalized_obj = 0.0
+            for obj in evaluator.objs:
+                val = raw.get(obj.name, 0.0)
+                sign = 1.0 if obj.minimize else -1.0
+                unpenalized_obj += sign * obj.weight * (val / evaluator.objective_scale)
             
-            # --- 3. Track Best ---
+            # --- Track Best ---
             nonlocal best_cost, best_x, best_raw, best_viol
-            if cost < best_cost:
-                best_cost = cost
+            if unpenalized_obj < best_cost:
+                best_cost = unpenalized_obj
                 best_x = np.array(x)
                 best_raw = raw
                 best_viol = viol
 
-            # --- 4. Throttled Callback to Prevent GUI Freeze ---
-            nonlocal last_callback_time
-            current_time = time.time()
-            if current_time - last_callback_time >= CALLBACK_INTERVAL:
-                # Calculate real obj for UI
-                real_obj_val = 0.0
-                for obj in evaluator.objs:
-                    val = raw.get(obj.name, 0.0)
-                    sign = 1.0 if obj.minimize else -1.0
-                    real_obj_val += sign * obj.weight * val
+            # --- Callback ---
+            # Just call the callback directly. Let the worker handle throttling.
+            # Calculate real obj for UI
+            real_obj_val = 0.0
+            for obj in evaluator.objs:
+                val = raw.get(obj.name, 0.0)
+                sign = 1.0 if obj.minimize else -1.0
+                real_obj_val += sign * obj.weight * val
 
-                callback(x, real_obj_val, raw, viol)
-                last_callback_time = current_time 
+            callback(x, real_obj_val, raw, viol)
             
-            # Return PENALIZED cost to solver
+            # --- Return to Solver ---
             if supports_constraints:
-                # Re-calculate Scaled Objective (without penalty)
-                scaled_obj_cost = 0.0
-                for obj in evaluator.objs:
-                    val = raw.get(obj.name, 0.0)
-                    sign = 1.0 if obj.minimize else -1.0
-                    scaled_obj_cost += sign * obj.weight * (val / evaluator.objective_scale)
-                # Add penalty to scaled objective for constrained solvers
-                return scaled_obj_cost + penalty
+                # Return unpenalized objective for constrained solvers
+                return unpenalized_obj
             else:
-                # For unconstrained solvers, return penalized cost directly
-                return penalized_cost
+                # For unconstrained methods, return full cost
+                return cost
 
-        # Handle Scaling for x0 and bounds
+        # --- FIX 1: Correct Bounds Handling for Fixed Variables ---
         if evaluator.scaling:
             x0_use = evaluator.to_normalized(np.array(x0))
-            bounds = [(0, 1)] * len(x0)
+            bounds = []
+            for i, v in enumerate(evaluator.vars):
+                if abs(v.max_val - v.min_val) < 1e-12:
+                    bounds.append((0.0, 0.0))
+                    x0_use[i] = 0.0
+                else:
+                    bounds.append((0.0, 1.0))
+                    x0_use[i] = np.clip(x0_use[i], 0.0, 1.0)
         else:
             x0_use = np.array(x0)
             bounds = [(v.min_val, v.max_val) for v in evaluator.vars]
 
-        # Constraints Construction
+        # --- FIX 2: Vectorized Constraints (Much Faster) ---
         cons = []
         if evaluator.cons and supports_constraints:
-            for con in evaluator.cons:
-                if con.min_val != float('-inf'):
-                    def lb_fun(x, name=con.name, limit=con.min_val):
-                        _, raw, _ = evaluator.evaluate(x)
-                        val = raw.get(name, 0.0)
-                        return val - limit
-                    cons.append({'type': 'ineq', 'fun': lb_fun})
-                
-                if con.max_val != float('inf'):
-                    def ub_fun(x, name=con.name, limit=con.max_val):
-                        _, raw, _ = evaluator.evaluate(x)
-                        val = raw.get(name, 0.0)
-                        return limit - val
-                    cons.append({'type': 'ineq', 'fun': ub_fun})
+            
+            if method == 'COBYLA':
+                # COBYLA expects separate constraint functions, not vectorized
+                for con in evaluator.cons:
+                    def make_con_fun(con_name):
+                        return lambda x: evaluator.evaluate(x)[1].get(con_name, 0.0)
+                    con_fun = make_con_fun(con.name)
+                    
+                    if con.min_val != float('-inf'):
+                        cons.append({'type': 'ineq', 'fun': lambda x, f=con_fun, m=con.min_val: f(x) - m})
+                    if con.max_val != float('inf'):
+                        cons.append({'type': 'ineq', 'fun': lambda x, f=con_fun, m=con.max_val: m - f(x)})
+            else:
+                def vectorized_cons(x):
+                    # This calls evaluate() once, hitting the cache
+                    _, raw, _ = evaluator.evaluate(x)
+                    
+                    residuals = []
+                    for con in evaluator.cons:
+                        val = raw.get(con.name, 0.0)
+                        
+                        # Inequality: val >= min  =>  val - min >= 0
+                        if con.min_val != float('-inf'):
+                            residuals.append(val - con.min_val)
+                        
+                        # Inequality: val <= max  =>  max - val >= 0
+                        if con.max_val != float('inf'):
+                            residuals.append(con.max_val - val)
+                            
+                    return np.array(residuals)
+
+                # Register as a single vectorized constraint
+                cons.append({'type': 'ineq', 'fun': vectorized_cons})
 
         # COBYLA Bound Fix
         if method == 'COBYLA':
@@ -148,45 +128,28 @@ class ScipySolver(BaseSolver):
                 if mx is not None and mx < 1e19:
                     cons.append({'type': 'ineq', 'fun': lambda x, i=i, m=mx: m - x[i]})
 
-        # --- 5. Strict Option Handling ---
-        options = {}
-        max_evals = maxiter * 10
-        
-        if method == 'COBYLA':
-            options['maxiter'] = maxiter
-            options['tol'] = tol
-            # FIX: rhobeg must be smaller than the domain (1.0). 
-            # 0.2 is a safe start for [0,1] scaled variables.
-            options['rhobeg'] = 0.2 
+        # --- Solver Options ---
+        options = {'maxiter': maxiter}
             
-        elif method == 'SLSQP':
-            options['maxiter'] = maxiter
+        if method == 'SLSQP':
             options['ftol'] = tol
-            # Good standard step for normalized variables
-            options['eps'] = 1e-4 
+            # Add eps for gradient step size if specified
+            if 'eps' in self.settings:
+                options['eps'] = self.settings['eps']
             
-        elif method in ['L-BFGS-B', 'TNC']:
-            options['maxfun'] = max_evals
-            options['ftol'] = tol
-            options['gtol'] = atol
-            if method == 'L-BFGS-B': 
-                options['maxiter'] = maxiter
-                options['eps'] = 1e-4
-                
+        elif method == 'COBYLA':
+            # FIX: Only set rhobeg/disp here. 'tol' is passed in kwargs.
+            options['rhobeg'] = 0.5  # Allow faster movement across unit hypercube
+            options['disp'] = False
         elif method == 'trust-constr':
-            options['maxiter'] = maxiter
-            options['xtol'] = tol
-            options['gtol'] = atol
-            # FIX: Explicit finite diff step prevents "delta_grad == 0.0" errors
-            options['finite_diff_rel_step'] = 1e-4
-            
-        else:
-            options['maxiter'] = maxiter
-            options['gtol'] = tol
+            # Force a larger finite difference step to avoid delta_grad == 0
+            # and tell it not to approximate the Hessian if it's unstable
+            options['finite_diff_rel_step'] = 1e-4  # Larger step size
 
         kwargs = {
             'method': method,
             'bounds': bounds,
+            'tol': tol, 
             'options': options
         }
         
@@ -194,50 +157,65 @@ class ScipySolver(BaseSolver):
             kwargs['constraints'] = cons
 
         try:
-            # Execute optimization with specific warning filtering
             res = minimize(obj_wrapper, x0_use, **kwargs)
             
-            # Result Extraction
-            if best_x is not None and best_cost < (evaluator.evaluate(res.x)[0] - 1e-9):
-                x_final = best_x
+            # Select Best Found vs Last Returned
+            # Sometimes the last step of the solver is slightly worse than the best internal step
+            final_x = res.x
+            final_cost, final_raw, final_viol = evaluator.evaluate(final_x)
+            
+            # Calculate unpenalized objective for final point
+            final_unpenalized = 0.0
+            for obj in evaluator.objs:
+                val = final_raw.get(obj.name, 0.0)
+                sign = 1.0 if obj.minimize else -1.0
+                final_unpenalized += sign * obj.weight * (val / evaluator.objective_scale)
+            
+            # If our tracked best is significantly better and valid, use it
+            better_cost = best_cost < (final_unpenalized - 1e-9)
+            valid_track = best_viol is None or best_viol < 1e-6
+            
+            if best_x is not None and better_cost and valid_track:
+                x_phys = evaluator.to_physical(best_x)
                 raw = best_raw
                 viol = best_viol
-                message = getattr(res, 'message', 'Done') + " (Best Found)"
-                cost = best_cost
+                success = res.success # Trust solver's status even if we pick a better point
+                message = getattr(res, 'message', 'Done') + " (Best Tracked)"
             else:
-                x_final = res.x
-                cost, raw, viol = evaluator.evaluate(x_final)
+                x_phys = evaluator.to_physical(final_x)
+                raw = final_raw
+                viol = final_viol
+                success = res.success
                 message = getattr(res, 'message', str(res.success))
 
-            x_phys = evaluator.to_physical(x_final)
+            # Reconstruct Real Objectives
+            real_objectives = {obj.name: raw.get(obj.name, 0.0) for obj in evaluator.objs}
+            constraints_val = {con.name: raw.get(con.name, 0.0) for con in evaluator.cons}
             
-            # Real Objective for Final Result
-            real_obj_val = 0.0
+            # Calculate final real cost for the result object
+            final_real_cost = 0.0
             for obj in evaluator.objs:
                 val = raw.get(obj.name, 0.0)
                 sign = 1.0 if obj.minimize else -1.0
-                real_obj_val += sign * obj.weight * val
+                final_real_cost += sign * obj.weight * val
 
-            objectives = {obj.name: raw.get(obj.name, 0.0) for obj in evaluator.objs}
-            constraints = {con.name: raw.get(con.name, 0.0) for con in evaluator.cons}
-            
             return OptimizationResult(
-                x=x_phys, 
-                cost=real_obj_val, # Real objective
-                objectives=objectives,
-                constraints=constraints,
+                x=x_phys,
+                cost=final_real_cost,
+                objectives=real_objectives,
+                constraints=constraints_val,
                 max_violation=viol,
                 message=message,
-                success=res.success
+                success=success
             )
             
         except StopIteration:
-            return self._fallback_result(evaluator, best_x, best_raw, best_viol, best_cost, x0_use, "Stopped by user")
-            
+            return self._fallback_result(evaluator, best_x, best_raw, best_viol, "Stopped by user", x0_use)
         except Exception as e:
-            return self._fallback_result(evaluator, best_x, best_raw, best_viol, best_cost, x0_use, f"Solver Failed: {str(e)}")
+            return self._fallback_result(evaluator, best_x, best_raw, best_viol, f"Solver Failed: {str(e)}", x0_use)
 
-    def _fallback_result(self, evaluator, best_x, best_raw, best_viol, best_cost, x0_use, msg):
+    def _fallback_result(self, evaluator, best_x, best_raw, best_viol, msg, x0_use):
+        # ... (Same as before, just ensure fallback logic handles None correctly)
         if best_x is not None:
             x_final = best_x
             raw = best_raw
@@ -248,20 +226,18 @@ class ScipySolver(BaseSolver):
             
         x_phys = evaluator.to_physical(x_final)
         
-        real_obj_val = 0.0
+        # Calculate real cost
+        real_cost = 0.0
         for obj in evaluator.objs:
             val = raw.get(obj.name, 0.0)
             sign = 1.0 if obj.minimize else -1.0
-            real_obj_val += sign * obj.weight * val
-
-        objectives = {obj.name: raw.get(obj.name, 0.0) for obj in evaluator.objs}
-        constraints = {con.name: raw.get(con.name, 0.0) for con in evaluator.cons}
-        
+            real_cost += sign * obj.weight * val
+            
         return OptimizationResult(
             x=x_phys,
-            cost=real_obj_val,
-            objectives=objectives,
-            constraints=constraints,
+            cost=real_cost,
+            objectives={obj.name: raw.get(obj.name, 0.0) for obj in evaluator.objs},
+            constraints={con.name: raw.get(con.name, 0.0) for con in evaluator.cons},
             max_violation=viol,
             message=msg,
             success=False

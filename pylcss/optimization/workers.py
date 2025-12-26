@@ -65,13 +65,16 @@ class OptimizationWorker(QtCore.QThread):
 
             # 3. Define Throttled Callback (Limit to 20Hz)
             last_emit_time = 0.0
+            eval_count = 0  # <--- NEW: Track actual evaluations
             
             def on_step(x, cost, raw_res, violation):
-                nonlocal last_emit_time
+                nonlocal last_emit_time, eval_count
+                eval_count += 1  # <--- NEW: Increment count
                 current_time = time.time()
                 # Limit updates to ~20Hz (50ms) to prevent GUI freezing
                 if current_time - last_emit_time >= 0.05:
                     self.progress.emit({
+                        'iteration': eval_count,  # <--- NEW: Send real count
                         'x': evaluator.to_physical(x),
                         'cost': cost,
                         'raw': raw_res,
@@ -80,10 +83,7 @@ class OptimizationWorker(QtCore.QThread):
                     last_emit_time = current_time
 
             # 4. Execute
-            # Normalize x0 if scaling is enabled
             x0 = self.setup['x0']
-            if evaluator.scaling:
-                x0 = evaluator.to_normalized(x0)
                 
             result = self.solver.solve(evaluator, x0, on_step)
             
@@ -91,6 +91,7 @@ class OptimizationWorker(QtCore.QThread):
             # Note: result.x is already physical, so we don't use evaluator.to_physical
             raw_combined = {**result.objectives, **result.constraints}
             self.progress.emit({
+                'iteration': eval_count,  # <--- NEW: Send final count
                 'x': result.x,
                 'cost': result.cost,
                 'raw': raw_combined,

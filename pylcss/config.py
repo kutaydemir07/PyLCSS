@@ -48,7 +48,7 @@ class OptimizationConfig:
     
     # Default solver settings
     DEFAULT_TOLERANCE: float = 1e-4  # Relaxed for noisy black-box models (was 1e-6)
-    DEFAULT_MAX_ITERATIONS: int = 100
+    DEFAULT_MAX_ITERATIONS: int = 5000  # Increased for global solvers (was 100)
     DEFAULT_PENALTY_WEIGHT: float = 1e6  # Scaled for typical engineering costs (was 1000.0)
     
     # Constraint violation threshold
@@ -256,42 +256,6 @@ SOLVER_DESCRIPTIONS = {
         'speed': 'Medium',
         'robustness': 'High',
         'when_to_use': 'Use when derivatives are unavailable or unreliable. Handles noise well.'
-    },
-    'L-BFGS-B': {
-        'name': 'Limited-memory BFGS with Bounds',
-        'description': 'Memory-efficient gradient optimizer for large-scale problems',
-        'best_for': 'High-dimensional smooth optimization (100+ variables)',
-        'supports_constraints': False,
-        'speed': 'Very Fast',
-        'robustness': 'Medium',
-        'when_to_use': 'Use for unconstrained or bound-constrained problems with many variables.'
-    },
-    'TNC': {
-        'name': 'Truncated Newton with Constraints',
-        'description': 'Newton-type optimizer with bound constraints',
-        'best_for': 'Medium-scale problems with bounds only',
-        'supports_constraints': False,
-        'speed': 'Fast',
-        'robustness': 'Medium',
-        'when_to_use': 'Alternative to L-BFGS-B for bound-constrained problems.'
-    },
-    'Nelder-Mead': {
-        'name': 'Downhill Simplex',
-        'description': 'Geometric search method, no derivatives required',
-        'best_for': 'Small problems (< 20 variables) with difficult landscapes',
-        'supports_constraints': False,
-        'speed': 'Slow',
-        'robustness': 'High',
-        'when_to_use': 'Use for exploration when other methods fail. Good for initial feasibility.'
-    },
-    'Powell': {
-        'name': "Powell's Conjugate Direction",
-        'description': 'Conjugate direction search, derivative-free',
-        'best_for': 'Medium-scale problems without constraints',
-        'supports_constraints': False,
-        'speed': 'Medium',
-        'robustness': 'Medium',
-        'when_to_use': 'Alternative derivative-free method for unconstrained problems.'
     },
     'trust-constr': {
         'name': 'Trust Region Constrained',

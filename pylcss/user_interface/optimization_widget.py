@@ -6,6 +6,8 @@ import logging
 import colorsys
 import tempfile
 import importlib.util
+import os
+import json
 from typing import List, Dict, Any, Optional
 
 from PySide6 import QtWidgets, QtCore, QtGui
@@ -14,237 +16,127 @@ import pyqtgraph as pg
 from ..problem_definition.problem_setup import XRayProblem
 from ..user_interface.text_utils import format_html
 from ..optimization.workers import OptimizationWorker
+from ..config import optimization_config, SOLVER_DESCRIPTIONS
+from .optimization_settings_dialog import OptimizationSettingsDialog  # New import
 
 logger = logging.getLogger(__name__)
 
 # --- Helper Functions ---
 
 def get_plot_color(index: int, total_lines: int) -> str:
-    if total_lines <= 1: return '#3498db'  # Nice Blue
-    colors = []
-    num_colors = max(20, total_lines)
-    for i in range(num_colors):
-        hue = (i * 0.618033988749895) % 1.0
-        saturation = 0.7 + (i % 3) * 0.1
-        value = 0.8 + (i % 2) * 0.1
-        rgb = colorsys.hsv_to_rgb(hue, saturation, value)
-        hex_color = '#{:02x}{:02x}{:02x}'.format(int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255))
-        colors.append(hex_color)
-    return colors[index % len(colors)]
+    """Returns a consistent color based on index."""
+    if total_lines <= 0: return '#3498db'
+    # Use golden angle approximation for distinct colors
+    hue = (index * 0.618033988749895) % 1.0
+    saturation = 0.7 + (index % 3) * 0.1
+    value = 0.8 + (index % 2) * 0.1
+    rgb = colorsys.hsv_to_rgb(hue, saturation, value)
+    return '#{:02x}{:02x}{:02x}'.format(int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255))
 
 
 # --- Sub-Component: Solver Configuration ---
 
 class SolverSettingsWidget(QtWidgets.QWidget):
     """
-    Handles algorithm selection, system selection, and solver-specific parameters.
+    Handles algorithm selection, system selection, and opens advanced settings.
     """
     method_changed = QtCore.Signal(str)
     system_changed = QtCore.Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.settings = {} # Stores the config dictionary
         self.init_ui()
+        # Initialize default settings
+        self.settings = self._get_default_settings()
 
     def init_ui(self):
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Group Box instead of Tabs
+        grp = QtWidgets.QGroupBox("Solver Setup")
+        form_layout = QtWidgets.QFormLayout(grp)
+        form_layout.setContentsMargins(10, 15, 10, 10)
 
-        # Tabs for General / Config
-        self.tabs = QtWidgets.QTabWidget()
-        layout.addWidget(self.tabs)
-
-        # --- Tab 1: General ---
-        tab_general = QtWidgets.QWidget()
-        form_layout = QtWidgets.QFormLayout(tab_general)
-        form_layout.setContentsMargins(10, 10, 10, 10)
-
+        # 1. System Selection
         self.system_combo = QtWidgets.QComboBox()
         self.system_combo.currentIndexChanged.connect(lambda idx: self.system_changed.emit(idx))
         form_layout.addRow("System Model:", self.system_combo)
 
+        # 2. Algorithm Selection
         self.combo_method = QtWidgets.QComboBox()
-        self.combo_method.addItems(['SLSQP', 'L-BFGS-B', 'trust-constr', 'COBYLA', 
-                                  'Nevergrad', 'Differential Evolution'])
+        self.combo_method.addItems(list(SOLVER_DESCRIPTIONS.keys()))
         self.combo_method.currentTextChanged.connect(self.on_method_changed)
         
         btn_info = QtWidgets.QPushButton("?")
         btn_info.setFixedWidth(25)
+        btn_info.setToolTip("Show details about the selected algorithm")
         btn_info.clicked.connect(self.show_algorithm_info)
         
         h_algo = QtWidgets.QHBoxLayout()
         h_algo.addWidget(self.combo_method)
         h_algo.addWidget(btn_info)
         form_layout.addRow("Algorithm:", h_algo)
-
-        self.tabs.addTab(tab_general, "General")
-
-        # --- Tab 2: Solver Config ---
-        self.tab_config = QtWidgets.QWidget()
-        config_layout = QtWidgets.QVBoxLayout(self.tab_config)
         
-        scroll = QtWidgets.QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        
-        self.config_container = QtWidgets.QWidget()
-        self.config_form = QtWidgets.QFormLayout(self.config_container)
-        self.config_form.setContentsMargins(10, 10, 10, 10)
+        # 3. Settings Button (The pop-up trigger)
+        self.btn_settings = QtWidgets.QPushButton("Advanced Settings")
+        self.btn_settings.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_FileDialogDetailedView))
+        self.btn_settings.clicked.connect(self.open_settings_dialog)
+        form_layout.addRow("", self.btn_settings)
 
-        # -- Common Controls --
-        self.spin_maxiter = self._add_spin("Max Iterations:", 10, 100000, 1000)
-        self.spin_tol = self._add_double_spin("Tolerance (ftol):", 1e-12, 1.0, 1e-6, decimals=9)
-        self.spin_atol = self._add_double_spin("Abs. Tolerance:", 1e-12, 1.0, 1e-8, decimals=9)
-        self.chk_scaling = QtWidgets.QCheckBox("Enable Variable Scaling")
-        self.chk_scaling.setChecked(True)
-        self.config_form.addRow("Scaling:", self.chk_scaling)
-        
-        self.spin_obj_scale = self._add_double_spin("Objective Scale:", 1.0, 1e12, 1.0)
-        self.spin_obj_scale.setToolTip("Divide objective by this value to bring it close to 1.0. \nHelps constraints work correctly for large objective values.")
-        
-        self.spin_maxfun = self._add_spin("Max Func Evals:", 10, 1000000, 15000)
-
-        # -- DE Controls --
-        self.grp_de_header = QtWidgets.QLabel("<b>Differential Evolution</b>")
-        self.config_form.addRow(self.grp_de_header)
-        self.spin_popsize = self._add_spin("Pop. Size (x DVs):", 5, 200, 15)
-        
-        self.spin_mut_min = QtWidgets.QDoubleSpinBox()
-        self.spin_mut_min.setRange(0.0, 1.9); self.spin_mut_min.setValue(0.5)
-        self.spin_mut_max = QtWidgets.QDoubleSpinBox()
-        self.spin_mut_max.setRange(0.0, 1.9); self.spin_mut_max.setValue(1.0)
-        h_mut = QtWidgets.QHBoxLayout()
-        h_mut.addWidget(self.spin_mut_min); h_mut.addWidget(QtWidgets.QLabel("-")); h_mut.addWidget(self.spin_mut_max)
-        self.lbl_mut = QtWidgets.QLabel("Mutation Range:")
-        self.config_form.addRow(self.lbl_mut, h_mut)
-        
-        self.spin_recomb = self._add_double_spin("Recombination:", 0.0, 1.0, 0.7)
-        self.combo_de_strat = QtWidgets.QComboBox()
-        self.combo_de_strat.addItems(['best1bin', 'rand1exp', 'randtobest1bin', 'currenttobest1bin'])
-        self.config_form.addRow("Strategy:", self.combo_de_strat)
-        self.de_controls = [self.grp_de_header, self.spin_popsize, self.lbl_mut, self.spin_mut_min, 
-                            self.spin_mut_max, self.spin_recomb, self.combo_de_strat]
-
-        # -- Nevergrad Controls --
-        self.grp_ng_header = QtWidgets.QLabel("<b>Nevergrad</b>")
-        self.config_form.addRow(self.grp_ng_header)
-        self.combo_ng_opt = QtWidgets.QComboBox()
-        self.combo_ng_opt.addItems(["NGOpt", "TwoPointsDE", "Portfolio", "OnePlusOne", "CMA"])
-        self.config_form.addRow("Optimizer:", self.combo_ng_opt)
-        
-        import os
-        workers = max(1, os.cpu_count() or 1)
-        self.spin_ng_workers = self._add_spin("Workers:", 1, 64, workers)
-        self.ng_controls = [self.grp_ng_header, self.combo_ng_opt, self.spin_ng_workers]
-
-        scroll.setWidget(self.config_container)
-        config_layout.addWidget(scroll)
-        self.tabs.addTab(self.tab_config, "Configuration")
-
-        # Initial visibility update
-        self.update_visibility(self.combo_method.currentText())
-
-    def _add_spin(self, label, min_val, max_val, default):
-        spin = QtWidgets.QSpinBox()
-        spin.setRange(min_val, max_val)
-        spin.setValue(default)
-        self.config_form.addRow(label, spin)
-        return spin
-
-    def _add_double_spin(self, label, min_val, max_val, default, decimals=2):
-        spin = QtWidgets.QDoubleSpinBox()
-        spin.setRange(min_val, max_val)
-        spin.setValue(default)
-        spin.setDecimals(decimals)
-        self.config_form.addRow(label, spin)
-        return spin
+        layout.addWidget(grp)
+        layout.addStretch()
 
     def on_method_changed(self, method_name):
-        self.update_visibility(method_name)
         self.method_changed.emit(method_name)
 
-    def update_visibility(self, method):
-        # Default: Scipy Gradient Based
-        scipy_gradient = ['SLSQP', 'L-BFGS-B', 'TNC', 'trust-constr']
-        
-        # Hide all specific groups first
-        self._set_visible(self.de_controls, False)
-        self._set_visible(self.ng_controls, False)
-        
-        # Common visibility - start with everything visible
-        self.spin_tol.setVisible(True)
-        self.spin_atol.setVisible(True)
-        self.chk_scaling.setVisible(True)
-        self.spin_maxfun.setVisible(True)
-        self.config_form.labelForField(self.spin_tol).setVisible(True)
-        self.config_form.labelForField(self.spin_atol).setVisible(True)
-
-        if method == 'Differential Evolution':
-            self._set_visible(self.de_controls, True)
-            self.spin_tol.setVisible(False)
-            self.spin_atol.setVisible(False)
-            self.spin_maxfun.setVisible(False)
-            self.config_form.labelForField(self.spin_tol).setVisible(False)
-            self.config_form.labelForField(self.spin_atol).setVisible(False)
-            self.config_form.labelForField(self.spin_maxfun).setVisible(False)
-            
-        elif method == 'Nevergrad':
-            self._set_visible(self.ng_controls, True)
-            self.spin_maxfun.setVisible(False)
-            self.spin_tol.setVisible(False)
-            self.spin_atol.setVisible(False)
-            self.config_form.labelForField(self.spin_maxfun).setVisible(False)
-            self.config_form.labelForField(self.spin_tol).setVisible(False)
-            self.config_form.labelForField(self.spin_atol).setVisible(False)
-
-        elif method == 'COBYLA':
-            # COBYLA only uses tol, not atol
-            self.spin_atol.setVisible(False)
-            self.config_form.labelForField(self.spin_atol).setVisible(False)
-
-        else: # Scipy Gradient methods (SLSQP, L-BFGS-B, trust-constr)
-            self.config_form.labelForField(self.spin_tol).setVisible(True)
-            self.config_form.labelForField(self.spin_atol).setVisible(True)
-            self.config_form.labelForField(self.spin_maxfun).setVisible(True)
-
-    def _set_visible(self, widgets, visible):
-        for w in widgets:
-            w.setVisible(visible)
-            if self.config_form.labelForField(w):
-                self.config_form.labelForField(w).setVisible(visible)
+    def open_settings_dialog(self):
+        """Opens the pop-up dialog."""
+        current_method = self.combo_method.currentText()
+        dialog = OptimizationSettingsDialog(current_method, self.settings, self)
+        if dialog.exec():
+            self.settings = dialog.get_settings()
 
     def get_config(self):
+        """Returns the full configuration dict (method + params)."""
+        config = self.settings.copy()
+        config['method'] = self.combo_method.currentText()
+        return config
+
+    def _get_default_settings(self):
+        """Returns defaults matching pylcss.config"""
         return {
-            'method': self.combo_method.currentText(),
-            'maxiter': self.spin_maxiter.value(),
-            'scaling': self.chk_scaling.isChecked(),
-            'objective_scale': self.spin_obj_scale.value(),
-            'tol': self.spin_tol.value(),
-            'atol': self.spin_atol.value(),
-            'maxfun': self.spin_maxfun.value(),
-            'popsize': self.spin_popsize.value(),
-            'mutation': (self.spin_mut_min.value(), self.spin_mut_max.value()),
-            'recombination': self.spin_recomb.value(),
-            'strategy': self.combo_de_strat.currentText(),
-            'optimizer_name': self.combo_ng_opt.currentText(),
-            'num_workers': self.spin_ng_workers.value()
+            'maxiter': optimization_config.DEFAULT_MAX_ITERATIONS,
+            'tol': optimization_config.DEFAULT_TOLERANCE,
+            'atol': 1e-8,
+            'scaling': True,
+            'objective_scale': 1.0,
+            'maxfun': 15000,
+            'popsize': 15,
+            'mutation': (0.5, 1.0),
+            'recombination': 0.7,
+            'strategy': 'best1bin',
+            'optimizer_name': 'NGOpt',
+            'num_workers': 1
         }
 
-    # --- UPDATED METHOD: Full Descriptions for All Solvers ---
     def show_algorithm_info(self):
         method = self.combo_method.currentText()
-        desc = {
-            'SLSQP': "Gradient-based (Sequential Least SQuares Programming). \nBest general-purpose solver for smooth, constrained problems.",
-            'L-BFGS-B': "Gradient-based (Limited-memory BFGS). \nExcellent for bound-constrained problems. Uses very little memory.",
-            'TNC': "Gradient-based (Truncated Newton). \nDesigned for problems with many variables and simple bounds.",
-            'trust-constr': "Gradient-based (Trust Region). \nModern solver. Handles all constraint types robustly. Can be slower than SLSQP.",
-            'COBYLA': "Gradient-free (Linear Approximation). \nSupports inequality constraints. Good for models where gradients are unavailable.",
-            'Nelder-Mead': "Gradient-free (Simplex). \nRobust local search. Does not support constraints natively (uses penalty).",
-            'Powell': "Gradient-free. \nOptimizes each variable sequentially. Does not support constraints natively (uses penalty).",
-            'Nevergrad': "Gradient-free Meta-Solver. \nRobust for noisy, black-box, or non-smooth problems. Supports parallel evaluation.",
-            'Differential Evolution': "Global Optimization (Genetic Algorithm). \nBest for finding the global minimum in complex/multi-modal landscapes. Slower."
-        }
-        QtWidgets.QMessageBox.information(self, method, desc.get(method, "No description available."))
+        info = SOLVER_DESCRIPTIONS.get(method, {})
+        if not info:
+            text = "No description available."
+        else:
+            text = f"""
+            <h3>{info.get('name', method)}</h3>
+            <p><b>Description:</b> {info.get('description', '-')}</p>
+            <p><b>Best For:</b> {info.get('best_for', '-')}</p>
+            <hr>
+            <ul>
+                <li><b>Speed:</b> {info.get('speed', '-')}</li>
+                <li><b>Robustness:</b> {info.get('robustness', '-')}</li>
+            </ul>
+            """
+        QtWidgets.QMessageBox.information(self, f"Algorithm Info: {method}", text)
 
 
 # --- Sub-Component: Plotting Manager ---
@@ -277,11 +169,11 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
         self.plot_cons = self._create_plot("Constraints", "Value", combo=True, callback=self.update_cons_plot, legend=True)
         self.addTab(self.plot_cons['widget'], "Constraints")
 
-        # 6. Individual Objectives
+        # 4. Individual Objectives
         self.plot_objs = self._create_plot("Individual Objectives", "Value", combo=True, callback=self.update_objs_plot, legend=True)
         self.addTab(self.plot_objs['widget'], "Objectives")
         
-        # 7. Problem Formulation (Text)
+        # 5. Problem Formulation (Text)
         self.problem_text = QtWidgets.QTextBrowser()
         self.problem_text.setOpenExternalLinks(False)
         self.problem_text.setStyleSheet("background-color: white; font-size: 11pt; padding: 10px;")
@@ -364,27 +256,40 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
         
         for p in [self.plot_obj, self.plot_dv, self.plot_cons, self.plot_objs]:
             p['plot'].clear()
+            # --- FIX STARTS HERE ---
+            # Remove the reference to the old curve so a new one is created
+            if hasattr(p['plot'], '_curve'):
+                del p['plot']._curve
+            # --- FIX ENDS HERE ---
+            
         self.dv_items = {}; self.cons_items = {}; self.objs_items = {}
 
     def update_data(self, data):
         """
         Receives data dictionary from OptimizationWorker.
-        Keys: 'x', 'cost', 'violation', 'raw'
+        Keys: 'iteration', 'x', 'cost', 'violation', 'raw'
         """
-        self.iteration_count += 1
+        # OLD: self.iteration_count += 1
+        # NEW: Get the real evaluation count from the worker
+        current_eval = data.get('iteration', self.iteration_count + 1)
+        self.iteration_count = current_eval
         
         x_vals = data['x']
-        cost = data['cost']
-        max_violation = data['violation']
+        # cost = data['cost'] # Unused variable
+        # max_violation = data['violation'] # Unused variable
         raw_results = data['raw']
 
-        self.iter_data.append(self.iteration_count)
+        # Use the real evaluation count for the X-axis
+        self.iter_data.append(current_eval)
         self.dv_data.append(x_vals)
         
         for name in self.cons_data:
-            self.cons_data[name].append(raw_results.get(name, 0.0))
+            val = raw_results.get(name, 0.0)
+            self.cons_data[name].append(val)
+            
         for name in self.objs_data:
-            self.objs_data[name].append(raw_results.get(name, 0.0))
+            val = raw_results.get(name, 0.0)
+            self.objs_data[name].append(val)
         
         # Calculate unpenalized total objective
         total_obj = 0.0
@@ -397,24 +302,28 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
         # Update Simple Plots (Objective)
         self._update_simple_curve(self.plot_obj['plot'], self.iter_data, self.total_obj_data, '#2ecc71')
 
-        # Update Complex Plots (throttled slightly for performance)
-        if len(self.iter_data) % 2 == 0 or len(self.iter_data) < 10:
-            self.update_dv_plot()
-            self.update_cons_plot()
-            self.update_objs_plot()
+        # Update Complex Plots
+        # FIX: Removed the modulo throttling check so data is always up to date.
+        # The worker thread already throttles emissions to 20Hz.
+        self.update_dv_plot()
+        self.update_cons_plot()
+        self.update_objs_plot()
 
     def _update_simple_curve(self, plot, x, y, color):
-        if hasattr(plot, '_curve'):
+        # Check if curve exists AND is still in the plot's item list
+        if hasattr(plot, '_curve') and plot._curve in plot.items():
             plot._curve.setData(x, y)
         else:
+            # Create new curve if missing or removed
             plot._curve = plot.plot(x, y, pen=pg.mkPen(color, width=2), symbol='o', symbolSize=5)
 
     def update_dv_plot(self):
+        if not self.dv_data: return
         self._update_multi_plot(self.plot_dv, self.problem.design_variables, 
-                              np.array(self.dv_data).T if self.dv_data else [], self.dv_items)
+                              np.array(self.dv_data).T, self.dv_items)
 
     def update_cons_plot(self):
-        # Constraints are stored in a dict of lists, need to handle appropriately
+        # Constraints are stored in a dict of lists
         self._update_multi_plot(self.plot_cons, self.constraints, None, self.cons_items, use_dict_data=self.cons_data)
 
     def update_objs_plot(self):
@@ -433,15 +342,19 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
         # Update curves
         for idx, (original_idx, item_def) in enumerate(to_draw):
             name = item_def['name']
+            
             if use_dict_data:
                 y_vals = use_dict_data[name]
             else:
+                if data_matrix is None or len(data_matrix) <= original_idx: continue
                 y_vals = data_matrix[original_idx]
 
-            color = get_plot_color(idx, len(to_draw))
+            # FIX: Use original_idx for color stability (so 'x' is always blue, 'y' always orange)
+            color = get_plot_color(original_idx, len(definitions))
             
             if name in item_store:
                 item_store[name].setData(self.iter_data, y_vals)
+                # Ensure pen style persists
                 item_store[name].setPen(pg.mkPen(color, width=2))
             else:
                 curve = plot.plot(self.iter_data, y_vals, pen=pg.mkPen(color, width=2), name=name)
@@ -604,11 +517,9 @@ class OptimizationWidget(QtWidgets.QWidget):
         grp_exec = QtWidgets.QGroupBox("Execution")
         exec_layout = QtWidgets.QVBoxLayout(grp_exec)
         
-        # --- NEW CODE START ---
         self.chk_use_current = QtWidgets.QCheckBox("Use Current Values as Initial Guess")
         self.chk_use_current.setToolTip("Start optimization from the values currently in the design variables table/model.")
         exec_layout.addWidget(self.chk_use_current)
-        # --- NEW CODE END ---
         
         btn_layout = QtWidgets.QHBoxLayout()
         self.btn_run = QtWidgets.QPushButton("Run Optimization")
@@ -699,6 +610,7 @@ class OptimizationWidget(QtWidgets.QWidget):
         
         # Populate UI components
         self._populate_objectives_table()
+        self._init_results_table()  # Initialize results table structure
         self.plots_widget.set_problem(problem, self.objectives, self.constraints)
         self.lbl_status.setText(f"Loaded: {problem.name}")
 
@@ -711,6 +623,20 @@ class OptimizationWidget(QtWidgets.QWidget):
             self.table_objectives.setItem(i, 1, QtWidgets.QTableWidgetItem(type_str))
             self.table_objectives.setItem(i, 2, QtWidgets.QTableWidgetItem(str(obj.get('weight', 1.0))))
         self.table_objectives.blockSignals(False)
+
+    def _init_results_table(self):
+        """Pre-allocates rows for the results table to avoid flicker."""
+        if not self.problem: return
+        
+        num_vars = len(self.problem.design_variables)
+        self.table_results.setRowCount(1 + num_vars) # Cost + Variables
+        
+        self.table_results.setItem(0, 0, QtWidgets.QTableWidgetItem("Total Cost"))
+        self.table_results.setItem(0, 1, QtWidgets.QTableWidgetItem("-"))
+        
+        for i, dv in enumerate(self.problem.design_variables):
+            self.table_results.setItem(i + 1, 0, QtWidgets.QTableWidgetItem(dv['name']))
+            self.table_results.setItem(i + 1, 1, QtWidgets.QTableWidgetItem("-"))
 
     def on_objective_weight_changed(self, item):
         if item.column() != 2: return
@@ -725,7 +651,7 @@ class OptimizationWidget(QtWidgets.QWidget):
         if not self.problem: return
         
         if not self.objectives:
-            QtWidgets.QMessageBox.warning(self, "No Objectives", "Please define at least one objective (minimize or maximize) in the system model.")
+            QtWidgets.QMessageBox.warning(self, "No Objectives", "Please define at least one objective.")
             return
         
         # Stop any existing optimization
@@ -739,11 +665,13 @@ class OptimizationWidget(QtWidgets.QWidget):
         self.plots_widget.clear_plots()
         self.progress_bar.setRange(0, 0) # Indeterminate
         self.lbl_status.setText("Optimizing...")
+        
+        # Reset Results Table items
+        self._init_results_table()
 
         # Setup Data
         x0 = []
         
-        # --- MODIFIED CODE START ---
         use_current = self.chk_use_current.isChecked()
         
         for dv in self.problem.design_variables:
@@ -762,7 +690,6 @@ class OptimizationWidget(QtWidgets.QWidget):
                 elif np.isfinite(mn): x0.append(mn + 1)
                 elif np.isfinite(mx): x0.append(mx - 1)
                 else: x0.append(0.0)
-        # --- MODIFIED CODE END ---
 
         setup_data = {
             'variables': self.problem.design_variables,
@@ -784,27 +711,18 @@ class OptimizationWidget(QtWidgets.QWidget):
         self.worker.start()
 
     def _update_results_table(self, data):
-        # Update summary table occasionally
-        if len(self.plots_widget.iter_data) % 5 != 0: return
-        
+        # FIX: Removed throttling here. It's safe to update text labels at 20Hz.
         x_vals = data['x']
         cost = data['cost']
-        raw = data['raw']
 
-        self.table_results.setRowCount(0)
-        # Cost Row
-        row = self.table_results.rowCount()
-        self.table_results.insertRow(row)
-        self.table_results.setItem(row, 0, QtWidgets.QTableWidgetItem("Total Cost"))
-        self.table_results.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{cost:.4f}"))
+        # Update Cost
+        item = self.table_results.item(0, 1)
+        if item: item.setText(f"{cost:.4f}")
         
-        # Variable Rows
+        # Update Variables
         for i, val in enumerate(x_vals):
-            row = self.table_results.rowCount()
-            self.table_results.insertRow(row)
-            name = self.problem.design_variables[i]['name']
-            self.table_results.setItem(row, 0, QtWidgets.QTableWidgetItem(name))
-            self.table_results.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{val:.4f}"))
+            item = self.table_results.item(i + 1, 1)
+            if item: item.setText(f"{val:.4f}")
 
     def stop_optimization(self):
         if self.worker:
@@ -820,11 +738,22 @@ class OptimizationWidget(QtWidgets.QWidget):
         self.btn_stop.setEnabled(False)
         self.progress_bar.setRange(0, 100); self.progress_bar.setValue(100)
         
-        msg = "Converged" if result.success else "Failed"
+        # FIX: Better Status Logic
+        is_feasible = result.max_violation < 1e-4
+        if result.success:
+            msg = "Converged"
+        elif is_feasible:
+            msg = "Done (Max Iter / Tol)" # Friendly success
+        else:
+            msg = "Failed"
+            
         if result.max_violation > 1e-3: msg += " (Constraints Violated)"
+        
         self.lbl_status.setText(f"{msg}: {result.message}")
         
-        if result.success and result.x is not None:
+        # Ensure the final result is written to table/model
+        if result.x is not None:
+             self._update_results_table({'x': result.x, 'cost': result.cost})
              for i, val in enumerate(result.x):
                 self.problem.design_variables[i]['value'] = float(val)
 
@@ -862,3 +791,102 @@ class OptimizationWidget(QtWidgets.QWidget):
         if system_function is None:
             raise AttributeError("system_function not found in generated code")
         return system_function
+
+    def save_to_folder(self, folder_path: str):
+        """
+        Saves the current optimization setup (variables, objectives, constraints, settings)
+        to a JSON file in the project folder.
+        """
+        data = {
+            "variables": self.problem.design_variables if self.problem else [],
+            "objectives": self.objectives,
+            "constraints": self.constraints,
+            "settings": self.settings_widget.get_config()
+        }
+
+        file_path = os.path.join(folder_path, "optimization_setup.json")
+        try:
+            with open(file_path, 'w') as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            print(f"Error saving optimization setup: {e}")
+
+    def load_from_folder(self, folder_path: str):
+        """
+        Loads the optimization setup from a JSON file and populates the UI.
+        """
+        file_path = os.path.join(folder_path, "optimization_setup.json")
+        if not os.path.exists(file_path):
+            return
+
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+
+            # 1. Load Variables
+            if self.problem and "variables" in data:
+                self.problem.design_variables = data["variables"]
+
+            # 2. Load Objectives
+            if "objectives" in data:
+                self.objectives = data["objectives"]
+                self._populate_objectives_table()
+
+            # 3. Load Constraints
+            if "constraints" in data:
+                self.constraints = data["constraints"]
+
+            # 4. Load Settings
+            if "settings" in data:
+                self._apply_settings_to_ui(data["settings"])
+
+        except Exception as e:
+            print(f"Error loading optimization setup: {e}")
+
+    def _apply_settings_to_ui(self, settings):
+        # Apply solver settings to the UI
+        if 'method' in settings:
+            idx = self.settings_widget.combo_method.findText(settings['method'])
+            if idx >= 0:
+                self.settings_widget.combo_method.setCurrentIndex(idx)
+        
+        if 'maxiter' in settings:
+            self.settings_widget.spin_maxiter.setValue(int(settings['maxiter']))
+        
+        if 'scaling' in settings:
+            self.settings_widget.chk_scaling.setChecked(bool(settings['scaling']))
+        
+        if 'objective_scale' in settings:
+            self.settings_widget.spin_obj_scale.setValue(float(settings['objective_scale']))
+        
+        if 'tol' in settings:
+            self.settings_widget.spin_tol.setValue(float(settings['tol']))
+        
+        if 'atol' in settings:
+            self.settings_widget.spin_atol.setValue(float(settings['atol']))
+        
+        if 'maxfun' in settings:
+            self.settings_widget.spin_maxfun.setValue(int(settings['maxfun']))
+        
+        if 'popsize' in settings:
+            self.settings_widget.spin_popsize.setValue(int(settings['popsize']))
+        
+        if 'mutation' in settings and isinstance(settings['mutation'], (list, tuple)) and len(settings['mutation']) == 2:
+            self.settings_widget.spin_mut_min.setValue(float(settings['mutation'][0]))
+            self.settings_widget.spin_mut_max.setValue(float(settings['mutation'][1]))
+        
+        if 'recombination' in settings:
+            self.settings_widget.spin_recomb.setValue(float(settings['recombination']))
+        
+        if 'strategy' in settings:
+            idx = self.settings_widget.combo_de_strat.findText(settings['strategy'])
+            if idx >= 0:
+                self.settings_widget.combo_de_strat.setCurrentIndex(idx)
+        
+        if 'optimizer_name' in settings:
+            idx = self.settings_widget.combo_ng_opt.findText(settings['optimizer_name'])
+            if idx >= 0:
+                self.settings_widget.combo_ng_opt.setCurrentIndex(idx)
+        
+        if 'num_workers' in settings:
+            self.settings_widget.spin_ng_workers.setValue(int(settings['num_workers']))

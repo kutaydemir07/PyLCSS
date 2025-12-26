@@ -13,9 +13,6 @@ import numpy as np
 from typing import Dict, List, Any, Optional, Tuple
 import pyqtgraph as pg
 
-# Suppress SALib FutureWarning about pd.unique
-warnings.filterwarnings("ignore", message="unique with argument that is not not a Series, Index, ExtensionArray, or np.ndarray is deprecated", category=FutureWarning, module="SALib")
-
 # Try to import SALib for sensitivity analysis
 try:
     from SALib.sample import sobol, morris as morris_sample

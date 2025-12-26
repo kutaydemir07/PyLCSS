@@ -56,8 +56,9 @@ class ModelEvaluator:
         # -----------------------------------------------------------------------
         
         # 2. Check Cache
-        # Use x_input (solver space) for caching to avoid float precision issues
-        cache_key = tuple(np.round(x_input, 12))
+        # FIX: Round to 15 decimals (safe for 64-bit float eps ~1e-16) to prevent 
+        # aliasing x and x+eps during gradient calculation.
+        cache_key = tuple(np.round(x_input, 15))
         if cache_key in self._cache:
             return self._cache[cache_key]
 

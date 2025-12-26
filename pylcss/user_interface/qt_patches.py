@@ -40,5 +40,24 @@ except (ImportError, AttributeError):
 
 
 
+from PySide6.QtWidgets import QTableWidgetItem
+
+class NumericTableWidgetItem(QTableWidgetItem):
+    """
+    A TableWidgetItem that sorts numerically instead of lexicographically.
+    Handles floats, negatives, and scientific notation correctly.
+    """
+    def __lt__(self, other):
+        try:
+            # Try converting to float for comparison
+            # This respects negative values (-10.0 < -5.0)
+            return float(self.text()) < float(other.text())
+        except ValueError:
+            # Fallback to default string sorting if not a number
+            return super().__lt__(other)
+
+
+
+
 
 

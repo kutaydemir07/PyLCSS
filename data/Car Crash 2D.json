@@ -1,0 +1,399 @@
+{
+  "product_name": "Car Crash 2D",
+  "systems": [
+    {
+      "name": "Crash",
+      "graph": {
+        "graph": {
+          "layout_direction": 0,
+          "acyclic": true,
+          "pipe_collision": false,
+          "pipe_slicing": true,
+          "pipe_style": 1,
+          "accept_connection_types": "{}",
+          "reject_connection_types": "{}"
+        },
+        "nodes": {
+          "0x2cb0ad0d0d0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "f1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 204.359375,
+            "height": 249.60000000000002,
+            "pos": [
+              -52.90247596630596,
+              556.9687660251772
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "f1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "f1",
+              "unit": "N",
+              "min": "0",
+              "max": "1000000"
+            }
+          },
+          "0x2cb0c860c90": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "f2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 204.359375,
+            "height": 249.60000000000002,
+            "pos": [
+              -23.797254211061784,
+              997.0167189770231
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "f2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "f2",
+              "unit": "N",
+              "min": "0",
+              "max": "1000000"
+            }
+          },
+          "0x2cb0c82de10": {
+            "type_": "com.pfd.custom_block.CustomBlockNode",
+            "icon": null,
+            "name": "Black_Box_Function",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 444.890625,
+            "height": 552.0,
+            "pos": [
+              518.7522557776101,
+              651.9324173639297
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "f1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "f2",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [
+              {
+                "name": "amax",
+                "multi_connection": true,
+                "display_name": true
+              },
+              {
+                "name": "Erem",
+                "multi_connection": true,
+                "display_name": true
+              },
+              {
+                "name": "order",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "func_name": "Black_Box_Function",
+              "num_inputs": "2",
+              "num_outputs": "3",
+              "surrogate_controls": false,
+              "surrogate_model_path": "",
+              "use_surrogate": false,
+              "surrogate_status": "Not Trained",
+              "surrogate_train_trigger": 0.0,
+              "code_content": "# Example from TU Munich Laboratory for Product Development and Lightweight Design\n# 1. Energy Remaining\nm = 2000\nd1c = 0.3\nd2c = 0.3\nv0c = 15.6\n\nErem = (0.5 * m * (v0c**2)) - (f1 * d1c + f2 * d2c)\n\n# 2. Maximum Acceleration\namax = f2 / m\n\n# 3. Deformation Order\norder = f1 - f2"
+            }
+          },
+          "0x2cb0c861b50": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "amax",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 220.703125,
+            "height": 331.5,
+            "pos": [
+              1261.7015595140583,
+              289.38109163166473
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "amax",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "amax",
+              "unit": "m/s^2",
+              "req_min": "0",
+              "req_max": "320",
+              "minimize": false,
+              "maximize": false
+            }
+          },
+          "0x2cb12073fd0": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "order",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 221.28125,
+            "height": 331.5,
+            "pos": [
+              1237.553860782815,
+              1102.1056791288318
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "order",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "order",
+              "unit": "-",
+              "req_min": "-inf",
+              "req_max": "0",
+              "minimize": false,
+              "maximize": false
+            }
+          },
+          "0x2cb12059c50": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "Erem",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 219.59375,
+            "height": 331.5,
+            "pos": [
+              1257.8431449589696,
+              702.2314490261731
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "Erem",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "Erem",
+              "unit": "J",
+              "req_min": "-inf",
+              "req_max": "0",
+              "minimize": false,
+              "maximize": false
+            }
+          }
+        },
+        "connections": [
+          {
+            "out": [
+              "0x2cb0ad0d0d0",
+              "f1"
+            ],
+            "in": [
+              "0x2cb0c82de10",
+              "f1"
+            ]
+          },
+          {
+            "out": [
+              "0x2cb0c860c90",
+              "f2"
+            ],
+            "in": [
+              "0x2cb0c82de10",
+              "f2"
+            ]
+          },
+          {
+            "out": [
+              "0x2cb0c82de10",
+              "amax"
+            ],
+            "in": [
+              "0x2cb0c861b50",
+              "amax"
+            ]
+          },
+          {
+            "out": [
+              "0x2cb0c82de10",
+              "Erem"
+            ],
+            "in": [
+              "0x2cb12059c50",
+              "Erem"
+            ]
+          },
+          {
+            "out": [
+              "0x2cb0c82de10",
+              "order"
+            ],
+            "in": [
+              "0x2cb12073fd0",
+              "order"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

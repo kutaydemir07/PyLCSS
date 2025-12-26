@@ -29,6 +29,18 @@ if 'distutils.version' not in sys.modules:
     sys.modules['distutils.version'] = distutils_version
 
 from NodeGraphQt import NodeGraph
+from NodeGraphQt.base.commands import NodesRemovedCmd
+
+# Monkey patch NodesRemovedCmd to keep strong references to node views
+# to prevent garbage collection during undo/redo operations
+_original_init = NodesRemovedCmd.__init__
+
+def _patched_init(self, graph, nodes, emit_signal=True):
+    _original_init(self, graph, nodes, emit_signal)
+    # Keep strong references to the views to prevent GC
+    self.node_views = [node.view for node in nodes]
+
+NodesRemovedCmd.__init__ = _patched_init
 from .node_types import CustomBlockNode, InputNode, OutputNode, IntermediateNode, CodeEditorDialog
 from .model_builder import GraphBuilder
 from .system_list_manager import SystemManager
@@ -203,6 +215,10 @@ class ModelingWidget(QtWidgets.QWidget):
                 self._current_undo_connection = undo_stack.canUndoChanged.connect(self._safe_set_undo_enabled)
             if hasattr(undo_stack, 'canRedoChanged'):
                 self._current_redo_connection = undo_stack.canRedoChanged.connect(self._safe_set_redo_enabled)
+                
+            # Update button states immediately
+            self._safe_set_undo_enabled(undo_stack.canUndo())
+            self._safe_set_redo_enabled(undo_stack.canRedo())
 
     def find_node(self):
         """Search for nodes by name or variable name in the current graph."""
@@ -239,6 +255,20 @@ class ModelingWidget(QtWidgets.QWidget):
         graph.port_connected.connect(self.on_port_connected)
         graph.property_changed.connect(self.on_property_changed)
         self.setup_context_menu_for_graph(graph)
+        
+        # --- FIX: Use .scene() instead of ._viewer._scene ---
+        # The internal attribute _scene is gone/private. Use the public API.
+        if hasattr(graph, 'scene'):
+            scene = graph.scene()
+            if scene:
+                # Disable BSP indexing to prevent crashes during rapid remove/add operations
+                scene.setItemIndexMethod(QtWidgets.QGraphicsScene.NoIndex)
+
+        # --- FIX: Set Undo Limit Here (Only once per graph) ---
+        if hasattr(graph, 'undo_stack'):
+            # Only set limit if the stack is new/empty to avoid Qt warnings
+            if graph.undo_stack().count() == 0:
+                graph.undo_stack().setUndoLimit(50)
 
     def undo(self):
         """Undo the last action in the current graph."""
@@ -733,9 +763,7 @@ class NodeTrainingWorker(QtCore.QThread):
             from sklearn.pipeline import Pipeline
             from sklearn.model_selection import train_test_split
             from sklearn.metrics import mean_squared_error
-            
-            # Suppress sklearn DataConversionWarning about column-vector y
-            warnings.filterwarnings("ignore", message="A column-vector y was passed when a 1d array was expected", category=UserWarning, module="sklearn")
+        
         except ImportError:
             self.training_finished.emit(False, "Scikit-learn not installed. Please run: pip install scikit-learn joblib")
             return

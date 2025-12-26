@@ -29,9 +29,6 @@ try:
     from sklearn.metrics import mean_squared_error, r2_score
     SKLEARN_AVAILABLE = True
     
-    # Suppress sklearn DataConversionWarning about column-vector y
-    import warnings
-    warnings.filterwarnings("ignore", message="A column-vector y was passed when a 1d array was expected", category=UserWarning, module="sklearn")
     
 except ImportError:
     SKLEARN_AVAILABLE = False
@@ -217,10 +214,10 @@ class GaussianProcessStrategy(SurrogateModelStrategy):
             res = minimize(
                 obj_func, 
                 initial_theta, 
-                method="L-BFGS-B", 
+                method="SLSQP", 
                 jac=True,  # <--- Add this line
                 bounds=bounds, 
-                options={'maxiter': 2000, 'ftol': 1e-9, 'gtol': 1e-9}
+                options={'maxiter': 2000, 'ftol': 1e-9}
             )
             return res.x, res.fun
 

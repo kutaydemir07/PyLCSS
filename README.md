@@ -28,7 +28,7 @@ It enables engineers to model complex systems using a node-based interface, expl
 
 PyLCSS implements the **Solution Space** approach for robust design. Instead of seeking a single optimal point (which may be sensitive to manufacturing tolerances), PyLCSS identifies **box-shaped regions** of valid designs. This allows for decoupled development of subsystems in complex engineering projects.
 
-> **Reference Algorithm:** > The solution space computation and approximation methods are based on:  
+> **Reference Algorithm:** > The solution space computation methods are based on:  
 > *Markus Zimmermann, Johannes Edler von Hoessle*, "Computing solution spaces for robust design", *International Journal for Numerical Methods in Engineering*, 2013.  
 > [DOI: 10.1002/nme.4450](https://doi.org/10.1002/nme.4450)
 
@@ -43,7 +43,7 @@ PyLCSS implements the **Solution Space** approach for robust design. Instead of 
 
 ### 📊 Advanced Analysis Suite
 * **Monte Carlo Exploration:** Rapidly evaluate thousands of design variants using vectorized sampling.
-* **Solution Space Visualization:** Interactive 2D/3D scatter plots, parallel coordinates, and feasibility maps.
+* **Solution Space Visualization:** Interactive 2D scatter plots, parallel coordinates, and feasibility maps.
 * **Global Sensitivity Analysis:** Variance-based Sobol indices (via `SALib`) to identify critical design drivers.
 
 ### 🧠 AI & Optimization

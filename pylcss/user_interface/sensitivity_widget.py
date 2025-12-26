@@ -14,10 +14,6 @@ from PySide6 import QtWidgets, QtCore
 import pyqtgraph as pg
 import qtawesome as qta
 import logging
-
-# Suppress SALib FutureWarning about pd.unique
-warnings.filterwarnings("ignore", message="unique with argument that is not not a Series, Index, ExtensionArray, or np.ndarray is deprecated", category=FutureWarning, module="SALib")
-
 from ..optimization.sensitivity import SensitivityAnalyzer
 from ..optimization.evaluator import ModelEvaluator
 from ..optimization.core import Variable
