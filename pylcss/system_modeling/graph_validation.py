@@ -84,10 +84,11 @@ def validate_graph(widget):
 
     Performs comprehensive validation including:
     - Syntax checking of custom block code
-    - Cycle detection in graph structure
+    - Cycle detection in graph structure (Local)
+    - **Global Cycle detection between systems**
     - Unconnected input port detection
     - Unit consistency checking between connected ports
-    - **Global QoI duplication checks across all systems**
+    - Global QoI duplication checks across all systems
 
     Args:
         widget: Main application widget containing system_manager with systems
@@ -100,21 +101,40 @@ def validate_graph(widget):
 
     # --- NEW: Global Registry for Cross-System Checking ---
     global_qoi_map = {}  # Key: QoI Name, Value: List of "SystemName::NodeName"
+    
+    # Data structures for Global Cycle Check
+    system_definitions = [] # List of dicts: {'id': int, 'name': str, 'inputs': set, 'outputs': set}
 
     # Validate each system in the system manager
-    for sys in widget.system_manager.systems:
+    for i, sys in enumerate(widget.system_manager.systems):
         graph = sys['graph']
         nodes = graph.all_nodes()
+        
+        current_sys_inputs = set()
+        current_sys_outputs = set()
 
-        # --- 1. Collect Data for Global Check ---
+        # --- 1. Collect Data for Global Checks ---
         for node in nodes:
-            if node.type_.startswith('com.pfd.output'):
-                var_name = node.get_property('var_name')
-                if var_name:
-                    if var_name not in global_qoi_map:
-                        global_qoi_map[var_name] = []
-                    # Store location as "SystemName::NodeName"
-                    global_qoi_map[var_name].append(f"{sys['name']} :: {node.name()}")
+            var_name = node.get_property('var_name')
+            
+            # For Global QoI Check
+            if node.type_.startswith('com.pfd.output') and var_name:
+                if var_name not in global_qoi_map:
+                    global_qoi_map[var_name] = []
+                # Store location as "SystemName::NodeName"
+                global_qoi_map[var_name].append(f"{sys['name']} :: {node.name()}")
+                current_sys_outputs.add(var_name)
+            
+            # For Global Cycle Check
+            if node.type_.startswith('com.pfd.input') and var_name:
+                current_sys_inputs.add(var_name)
+
+        system_definitions.append({
+            'id': i,
+            'name': sys['name'],
+            'inputs': current_sys_inputs,
+            'outputs': current_sys_outputs
+        })
 
         # --- 2. Per-System Checks ---
         
@@ -143,7 +163,7 @@ def validate_graph(widget):
                 except SyntaxError as e:
                     errors.append(f"Syntax Error in '{sys['name']}' -> '{node.name()}' line {e.lineno}: {e.msg}")
         
-        # Build directed graph for cycle detection
+        # Build directed graph for LOCAL cycle detection
         G = nx.DiGraph()
         for n in nodes:
             G.add_node(n.id)
@@ -152,7 +172,7 @@ def validate_graph(widget):
                     target_node = connected_port.node()
                     G.add_edge(n.id, target_node.id)
 
-        # Check for cycles
+        # Check for LOCAL cycles
         try:
             nx.topological_sort(G)
         except nx.NetworkXUnfeasible:
@@ -199,6 +219,43 @@ def validate_graph(widget):
                 f"   Found in: {', '.join(locations)}"
             )
 
+    # --- 4. Process Global Cycles (Inter-System) ---
+    GlobalG = nx.DiGraph()
+    # Add nodes (systems)
+    for s in system_definitions:
+        GlobalG.add_node(s['id'])
+    
+    # Add edges based on variable flow
+    # If System A outputs 'x' and System B inputs 'x', then A -> B
+    for s1 in system_definitions:
+        for s2 in system_definitions:
+            if s1['id'] == s2['id']:
+                continue
+            
+            # Find common variables (Output of S1 matches Input of S2)
+            common_vars = s1['outputs'].intersection(s2['inputs'])
+            if common_vars:
+                # Add edge
+                GlobalG.add_edge(s1['id'], s2['id'])
+    
+    # Check for cycles in the System Graph
+    try:
+        cycles = list(nx.simple_cycles(GlobalG))
+        if cycles:
+            for cycle in cycles:
+                # cycle is a list of system IDs [0, 2, 1]
+                path_names = [system_definitions[nid]['name'] for nid in cycle]
+                # Format: SysA -> SysB -> SysA
+                path_str = " -> ".join(path_names) + " -> " + path_names[0]
+                errors.append(f"Global Circular Dependency detected between systems: {path_str}")
+    except Exception:
+        # Fallback if simple_cycles fails
+        try:
+             nx.find_cycle(GlobalG)
+             errors.append("Global Circular Dependency detected between systems (complex loop).")
+        except nx.NetworkXNoCycle:
+             pass
+
     # Display results
     if errors:
         msg = "Validation Errors:\n\n" + "\n".join(errors)
@@ -212,9 +269,3 @@ def validate_graph(widget):
             msg += "\n\nWarnings:\n" + "\n".join(warnings)
         QtWidgets.QMessageBox.information(widget, "Validation Successful", msg)
         return True
-
-
-
-
-
-
