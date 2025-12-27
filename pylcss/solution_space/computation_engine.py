@@ -50,7 +50,6 @@ def compute_solution_space(problem, weight, dsl, dsu, l, u, reqU, reqL, paramete
     """
     solver = SolutionSpaceSolver(problem, weight, dsl, dsu, l, u, reqU, reqL, parameters, solver_type=solver_type)
 
-    # Configure solver based on slider/sample_size if needed
     solver.final_sample_size = sample_size
 
     # Run solver
