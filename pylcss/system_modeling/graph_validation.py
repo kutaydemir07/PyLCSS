@@ -152,6 +152,7 @@ def validate_graph(widget):
         if duplicates:
             for dup in duplicates:
                 items = [f"{node_name} ({typ})" for name, typ, node_name in var_names if name == dup]
+                # STRICT: Treat local duplicates as ERRORS
                 errors.append(f"System '{sys['name']}': Duplicate variable name '{dup}' found in: {', '.join(items)}")
 
         # Check syntax of custom block code
@@ -213,11 +214,15 @@ def validate_graph(widget):
     # --- 3. Process Global Duplicate QoIs ---
     for qoi_name, locations in global_qoi_map.items():
         if len(locations) > 1:
-            warnings.append(
-                f"Global QoI Conflict: '{qoi_name}' is defined in multiple systems. "
-                f"This will overwrite columns in the solution space.\n"
-                f"   Found in: {', '.join(locations)}"
-            )
+            systems = {loc.split(" :: ")[0] for loc in locations}
+            # Only flag if defined in >1 system (local duplicates are handled above)
+            if len(systems) > 1:
+                # FIX: Upgraded from Warning to Error
+                errors.append(
+                    f"Global QoI Conflict: '{qoi_name}' is defined in multiple systems. "
+                    f"\n"
+                    f"   Found in: {', '.join(locations)}"
+                )
 
     # --- 4. Process Global Cycles (Inter-System) ---
     GlobalG = nx.DiGraph()

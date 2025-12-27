@@ -771,12 +771,12 @@ class PlotWidget(QtWidgets.QWidget):
                     # 1. Create array of RGBA values (Default: Red for bad points)
                     # Shape: (N, 4), type: uint8 (0-255)
                     colors = np.zeros((n_points, 4), dtype=np.uint8)
-                    colors[:] = [255, 0, 0, 150]  # Default red for all
+                    colors[:] = [255, 0, 0, 255]  # Default red for all
                     
                     # 2. Set Green for Good points (overwrite default)
                     # Safe because is_good is guaranteed 1D
                     if is_good is not None and np.any(is_good):
-                        colors[is_good] = [0, 170, 0, 150]
+                        colors[is_good] = [0, 170, 0, 255]
 
                     # 3. Handle Violation Colors (Vectorized)
                     # Only process bad points that have a violation index
@@ -820,7 +820,7 @@ class PlotWidget(QtWidgets.QWidget):
                                                 
                                                 # Convert hex to RGB
                                                 c = QtGui.QColor(hex_color)
-                                                rgb = np.array([c.red(), c.green(), c.blue(), 150], dtype=np.uint8)
+                                                rgb = np.array([c.red(), c.green(), c.blue(), 255], dtype=np.uint8)
                                                 
                                                 # Apply color to all points that violated this constraint
                                                 colors[valid_bad_indices[constraint_mask]] = rgb
@@ -856,7 +856,7 @@ class PlotWidget(QtWidgets.QWidget):
                             # Create ScatterPlotItem for this color group
                             scatter_item = pg.ScatterPlotItem(
                                 x=color_x, y=color_y, 
-                                pen=pg.mkPen(None),  # No outline for better performance
+                                pen=pg.mkPen('w', width=0.5),  # White border
                                 brush=brush,
                                 size=6
                             )
@@ -967,6 +967,12 @@ class PlotWidget(QtWidgets.QWidget):
                 hline_bottom = pg.InfiniteLine(pos=by_min, angle=0, pen=pg.mkPen('black', style=QtCore.Qt.DashLine, width=1))
                 hline_top = pg.InfiniteLine(pos=by_max, angle=0, pen=pg.mkPen('black', style=QtCore.Qt.DashLine, width=1))
                 
+                # Set Z-Value higher than points (points are usually 1 or 0)
+                vline_left.setZValue(2)
+                vline_right.setZValue(2)
+                hline_bottom.setZValue(2)
+                hline_top.setZValue(2)
+                
                 self.plot_widget.addItem(vline_left)
                 self.plot_widget.addItem(vline_right)
                 self.plot_widget.addItem(hline_bottom)
@@ -997,10 +1003,12 @@ class PlotWidget(QtWidgets.QWidget):
                         
                         if l_val > -1e8: # Arbitrary large number check
                             l_line = pg.InfiniteLine(pos=l_val, angle=90, pen=pg.mkPen('red', style=QtCore.Qt.DashLine, alpha=0.5))
+                            l_line.setZValue(2)
                             self.plot_widget.addItem(l_line)
                             self.limit_lines.append(l_line)
                         if u_val < 1e8:
                             u_line = pg.InfiniteLine(pos=u_val, angle=90, pen=pg.mkPen('red', style=QtCore.Qt.DashLine, alpha=0.5))
+                            u_line.setZValue(2)
                             self.plot_widget.addItem(u_line)
                             self.limit_lines.append(u_line)
                     except: pass
@@ -1016,10 +1024,12 @@ class PlotWidget(QtWidgets.QWidget):
                         
                         if l_val > -1e8:
                             l_line = pg.InfiniteLine(pos=l_val, angle=0, pen=pg.mkPen('red', style=QtCore.Qt.DashLine, alpha=0.5))
+                            l_line.setZValue(2)
                             self.plot_widget.addItem(l_line)
                             self.limit_lines.append(l_line)
                         if u_val < 1e8:
                             u_line = pg.InfiniteLine(pos=u_val, angle=0, pen=pg.mkPen('red', style=QtCore.Qt.DashLine, alpha=0.5))
+                            u_line.setZValue(2)
                             self.plot_widget.addItem(u_line)
                             self.limit_lines.append(u_line)
                     except: pass
@@ -2766,9 +2776,19 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
     def on_resample_finished(self, samples, silent=False):
         if self.status_msg:
             self.status_msg.close()
-        self.btn_resample.setEnabled(True)
+        
+        # [CRITICAL FIX] Keep a reference to the thread and ensure it's finished
+        # before letting it go out of scope.
+        old_thread = self.resample_thread
         self.resample_thread = None
         self.resampling = False
+        
+        if old_thread:
+            old_thread.wait()       # Block briefly to ensure C++ thread is done
+            old_thread.deleteLater() # Schedule cleanup
+
+        self.btn_resample.setEnabled(True)
+        
         self.process_results(samples, update_table=not silent)
         if not silent:
             QtWidgets.QMessageBox.information(self, "Success", "Resampling complete!")
@@ -2780,9 +2800,17 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
     def on_resample_error(self, error_msg):
         if self.status_msg:
             self.status_msg.close()
-        self.btn_resample.setEnabled(True)
+            
+        # [CRITICAL FIX] Same cleanup for error case
+        old_thread = self.resample_thread
         self.resample_thread = None
         self.resampling = False
+        
+        if old_thread:
+            old_thread.wait()
+            old_thread.deleteLater()
+
+        self.btn_resample.setEnabled(True)
         self.pending_restart = False
         QtWidgets.QMessageBox.critical(self, "Error", f"Resampling failed: {error_msg}")
 
