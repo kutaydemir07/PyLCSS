@@ -1741,40 +1741,74 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
     def set_product_family_mode(self, enabled: bool):
         """
         Switch between normal solution space mode and product family analysis mode.
-        
-        Args:
-            enabled: True to enable product family mode, False for normal mode
+        OPTIMIZED: Prevents layout thrashing by switching tabs before hiding the old ones.
         """
+        if self.product_family_mode == enabled:
+            return
+
         self.product_family_mode = enabled
-        self.update_right_tabs_visibility()
         
-        if enabled:
-            # Switch to product family tab
+        # Freeze UI to prevent flickering
+        self.right_tabs.setUpdatesEnabled(False)
+        try:
+            # 1. Identify Target Tab
+            target_text = "Product Family Analysis" if enabled else "Solution Spaces"
+            target_idx = -1
+            
             for i in range(self.right_tabs.count()):
-                if self.right_tabs.tabText(i) == "Product Family Analysis":
-                    self.right_tabs.setCurrentIndex(i)
+                if self.right_tabs.tabText(i) == target_text:
+                    target_idx = i
                     break
-        else:
-            # Switch to solution spaces tab
-            for i in range(self.right_tabs.count()):
-                if self.right_tabs.tabText(i) == "Solution Spaces":
-                    self.right_tabs.setCurrentIndex(i)
-                    break
+            
+            # 2. Make target visible AND active first (Crucial step)
+            if target_idx >= 0:
+                self.right_tabs.setTabVisible(target_idx, True)
+                self.right_tabs.setCurrentIndex(target_idx)
+            
+            # 3. Now it is safe to update visibility of all other tabs
+            self.update_right_tabs_visibility()
+            
+        finally:
+            self.right_tabs.setUpdatesEnabled(True)
     
     def update_right_tabs_visibility(self):
         """
         Update the visibility of right panel tabs based on current mode.
+        OPTIMIZED: Ensures target tab is shown and activated before hiding others to prevent layout thrashing.
         """
-        for i in range(self.right_tabs.count()):
-            tab_text = self.right_tabs.tabText(i)
-            if self.product_family_mode:
-                # In product family mode, only show Product Family Analysis
-                visible = (tab_text == "Product Family Analysis")
-            else:
-                # In normal mode, show all except Product Family Analysis
-                visible = (tab_text != "Product Family Analysis")
+        # Freeze UI updates to prevent flickering and repeated layout calculations
+        self.right_tabs.setUpdatesEnabled(False)
+        
+        try:
+            # 1. First, make sure the correct tab is visible and active
+            target_text = "Product Family Analysis" if self.product_family_mode else "Solution Spaces"
+            target_idx = -1
             
-            self.right_tabs.setTabVisible(i, visible)
+            for i in range(self.right_tabs.count()):
+                if self.right_tabs.tabText(i) == target_text:
+                    target_idx = i
+                    break
+            
+            # 2. Show and activate target tab first (critical for smooth transition)
+            if target_idx >= 0:
+                self.right_tabs.setTabVisible(target_idx, True)
+                self.right_tabs.setCurrentIndex(target_idx)
+            
+            # 3. Now update visibility of all tabs
+            for i in range(self.right_tabs.count()):
+                tab_text = self.right_tabs.tabText(i)
+                if self.product_family_mode:
+                    # In product family mode, only show Product Family Analysis
+                    visible = (tab_text == "Product Family Analysis")
+                else:
+                    # In normal mode, show all except Product Family Analysis
+                    visible = (tab_text != "Product Family Analysis")
+                
+                self.right_tabs.setTabVisible(i, visible)
+                
+        finally:
+            # Re-enable updates and trigger a single layout refresh
+            self.right_tabs.setUpdatesEnabled(True)
 
     def sync_plots_roi(self, source_widget):
         """Force update ROI visuals for all plots except source."""
