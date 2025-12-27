@@ -980,7 +980,6 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         # Generate filename based on node ID, save in user data directory
         safe_id = target_node.id.replace('-', '_')
         
-        # FIX: Save to local project directory 'data_surrogate' instead of AppData
         # This ensures portability and visibility
         # Try to find project root by going up from this file
         # pylcss/surrogate_modeling/surrogate_interface.py -> pylcss/surrogate_modeling -> pylcss -> root
@@ -998,7 +997,6 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         fname = os.path.join(folder, f"surrogate_{safe_id}.joblib")
         
         try:
-            # Fix: Move PyTorch models to CPU before saving to avoid device issues
             if TORCH_AVAILABLE and hasattr(self.current_model, 'model') and isinstance(self.current_model.model, torch.nn.Module):
                 self.current_model.model.cpu()  # Move to CPU before serialization
                 self.current_model.device = torch.device('cpu')  # Update wrapper state

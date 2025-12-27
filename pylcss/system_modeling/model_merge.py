@@ -398,5 +398,4 @@ def validate_merge_connections(models, parent=None):
     buttons.rejected.connect(dialog.reject)
     layout.addWidget(buttons)
     
-    # PySide6 uses .exec(), .exec_() is deprecated/removed in some contexts
     return dialog.exec() == QtWidgets.QDialog.Accepted

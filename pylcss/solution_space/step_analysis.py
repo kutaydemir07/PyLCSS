@@ -222,9 +222,3 @@ def step_a_vectorized(dvbox, dv_sample, Points_A, Points_B, dim, weight):
     
     return best_box, best_mu
 
-
-
-
-
-
-

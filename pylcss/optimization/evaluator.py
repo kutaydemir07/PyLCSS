@@ -48,15 +48,12 @@ class ModelEvaluator:
     def evaluate(self, x_input: np.ndarray) -> Tuple[float, Dict, float]:
         """Returns (total_cost, results_dict, max_violation)"""
         
-        # --- FIX: Convert from normalized solver space to physical model space ---
         if self.scaling:
             x_phys = self.to_physical(x_input)
         else:
             x_phys = x_input
-        # -----------------------------------------------------------------------
         
         # 2. Check Cache
-        # FIX: Round to 15 decimals (safe for 64-bit float eps ~1e-16) to prevent 
         # aliasing x and x+eps during gradient calculation.
         cache_key = tuple(np.round(x_input, 15))
         if cache_key in self._cache:

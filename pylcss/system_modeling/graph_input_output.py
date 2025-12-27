@@ -115,13 +115,11 @@ def load_graph_from_file(widget, path):
             graph = widget.system_manager.systems[-1]['graph']
             graph.deserialize_session(sys_data["graph"])
             
-            # FIX: Ensure all output ports allow multiple connections
             # This fixes an issue where loaded graphs might have single-connection outputs
             # Also sync port names with var_name property
             from .node_types import InputNode, OutputNode
             
             for node in graph.all_nodes():
-                # Fix multi-connection
                 for port in node.output_ports():
                     port.model.multi_connection = True
                 for port in node.input_ports():

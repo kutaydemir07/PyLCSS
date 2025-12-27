@@ -303,7 +303,6 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
         self._update_simple_curve(self.plot_obj['plot'], self.iter_data, self.total_obj_data, '#2ecc71')
 
         # Update Complex Plots
-        # FIX: Removed the modulo throttling check so data is always up to date.
         # The worker thread already throttles emissions to 20Hz.
         self.update_dv_plot()
         self.update_cons_plot()
@@ -349,7 +348,6 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
                 if data_matrix is None or len(data_matrix) <= original_idx: continue
                 y_vals = data_matrix[original_idx]
 
-            # FIX: Use original_idx for color stability (so 'x' is always blue, 'y' always orange)
             color = get_plot_color(original_idx, len(definitions))
             
             if name in item_store:
@@ -711,7 +709,6 @@ class OptimizationWidget(QtWidgets.QWidget):
         self.worker.start()
 
     def _update_results_table(self, data):
-        # FIX: Removed throttling here. It's safe to update text labels at 20Hz.
         x_vals = data['x']
         cost = data['cost']
 
@@ -738,7 +735,6 @@ class OptimizationWidget(QtWidgets.QWidget):
         self.btn_stop.setEnabled(False)
         self.progress_bar.setRange(0, 100); self.progress_bar.setValue(100)
         
-        # FIX: Better Status Logic
         is_feasible = result.max_violation < 1e-4
         if result.success:
             msg = "Converged"

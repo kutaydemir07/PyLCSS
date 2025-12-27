@@ -503,7 +503,6 @@ class PlotWidget(QtWidgets.QWidget):
             return
         self.plotting = True
 
-        # [CRITICAL FIX]: Cancel background thread IMMEDIATELY before doing anything else.
         # This prevents "zombie" threads from updating the plot while we are drawing new points.
         if self.interpolation_thread is not None:
             if self.interpolation_thread.isRunning():
@@ -623,7 +622,6 @@ class PlotWidget(QtWidgets.QWidget):
         view_box.setLimits(xMin=x_min, xMax=x_max, yMin=y_min, yMax=y_max)
         view_box.enableAutoRange(enable=False)
 
-        # --- FIX: STRICT 1D ENFORCEMENT ---
         # Ensure all arrays are 1D before any masking or processing
         if x_data is not None: x_data = np.asarray(x_data).ravel()
         if y_data is not None: y_data = np.asarray(y_data).ravel()
@@ -940,7 +938,6 @@ class PlotWidget(QtWidgets.QWidget):
                 else:
                     self.roi_item.maxBounds = QtCore.QRectF(_s(x_min), _s(y_min), _s(x_max - x_min), _s(y_max - y_min))
                     
-                    # FIX: Update ROI position if external change detected (computation result), 
                     # but check threshold to avoid jitter during drag.
                     current_pos = self.roi_item.pos()
                     current_size = self.roi_item.size()
@@ -1474,15 +1471,6 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         
         actions_layout.addLayout(row4)
         
-        # Slider
-        slider_layout = QtWidgets.QHBoxLayout()
-        slider_layout.addWidget(QtWidgets.QLabel("Box Size:"))
-        self.slider_mosse = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        self.slider_mosse.setRange(0, 100)
-        self.slider_mosse.setValue(100)
-        slider_layout.addWidget(self.slider_mosse)
-        actions_layout.addLayout(slider_layout)
-        
         model_layout.addWidget(actions_group)
         
         # --- Bottom Section: Variables (Tabbed) ---
@@ -1938,14 +1926,12 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         elif len(self.inputs) >= 1:
             self.combo_add_y.setCurrentIndex(0)
             
-        # --- FIX START: Initialize bounds to prevent plot crash ---
         try:
             self.dsl = np.array([float(i.get('min', 0)) for i in inputs])
             self.dsu = np.array([float(i.get('max', 1)) for i in inputs])
         except:
             self.dsl = None
             self.dsu = None
-        # --- FIX END ---
         
         # Populate DV Table
         self.dv_table.blockSignals(True)
@@ -2099,7 +2085,6 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         self.input_units = {i['name']: i.get('unit', '-') for i in system_model.inputs}
         self.output_units = {o['name']: o.get('unit', '-') for o in system_model.outputs}
         
-        # --- FIX START: Initialize bounds to prevent plot crash ---
         try:
             def safe_val(v, default):
                 try: return float(v)
@@ -2110,7 +2095,6 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         except:
             self.dsl = None
             self.dsu = None
-        # --- FIX END ---
 
         # Populate DV Table
         self.dv_table.blockSignals(True)
@@ -2572,7 +2556,6 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
             # Other params
             weight = np.ones(len(dsl))
             parameters = None # Assuming no fixed parameters for now
-            slider_val = self.slider_mosse.value() / 100.0
             sample_size = self.sample_size_spin.value()
             solver_type = self.solver_combo.currentData()
             
@@ -2581,7 +2564,6 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
             # With dill, we can safely pass the problem object directly without manual reconstruction
             problem_to_use = copy.deepcopy(self.problem)
             
-            # FIX: Only remove objectives if the user did NOT check "Include Optimization"
             if not include_objectives:
                 for qoi in problem_to_use.quantities_of_interest:
                     qoi['minimize'] = False
@@ -2589,7 +2571,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
             
             status_text = "Computing Solution Space..."
             
-            solver = SolutionSpaceSolver(problem_to_use, weight, dsl, dsu, l, u, reqU, reqL, parameters, slider_value=slider_val, solver_type=solver_type, include_objectives=include_objectives)
+            solver = SolutionSpaceSolver(problem_to_use, weight, dsl, dsu, l, u, reqU, reqL, parameters, solver_type=solver_type, include_objectives=include_objectives)
             solver.final_sample_size = sample_size
             
             self.solver_worker = SolverWorker(solver)
@@ -2627,7 +2609,6 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                     self.dv_table.setItem(i, 5, QtWidgets.QTableWidgetItem(f"{box[i, 1]:.4f}"))
             self.dv_table.blockSignals(False)
         
-        # FIX: Retrieve samples from solver if not provided (optimization)
         if samples is None and hasattr(self.solver_worker.solver, 'latest_results'):
             samples = self.solver_worker.solver.latest_results
         
@@ -2675,7 +2656,6 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                 QtWidgets.QMessageBox.warning(self, "Warning", "No valid model loaded for resampling.")
             return
         
-        # FIX: Robust Thread Safety for Box Copy
         has_box = False
         self.dv_par_box_mutex.lock()
         try:
@@ -3184,7 +3164,6 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                 # [CRITICAL FIX]: Cancel interpolation threads WITHOUT waiting
                 if pw.interpolation_thread is not None and pw.interpolation_thread.isRunning():
                     pw.interpolation_thread.cancel()
-                    # REMOVED: pw.interpolation_thread.wait()  <-- THIS CAUSED THE FREEZE
                     
                     # Disconnect signals so it dies quietly
                     try:
@@ -3307,9 +3286,14 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
             u = np.array([dv['max'] for dv in self.problem.design_variables], dtype=float)
             parameters = None  # Assuming no parameters for now
             
-            from .computation_engine import compute_product_family
+            # Get requirements (use default/base requirements)
+            reqL = np.array([q['min'] for q in self.problem.quantities_of_interest], dtype=float)
+            reqU = np.array([q['max'] for q in self.problem.quantities_of_interest], dtype=float)
+            weight = np.ones(len(dsl))  # Default weights
+            
+            from .computation_engine import compute_product_family_solutions
             solver_type = self.family_solver_combo.currentData()
-            results = compute_product_family(self.problem, dsl, dsu, l, u, parameters, slider_value=self.slider_mosse.value() / 100.0, solver_type=solver_type)
+            results = compute_product_family_solutions(self.problem, weight, dsl, dsu, l, u, reqU, reqL, parameters, solver_type)
             
             # Visualize results
             self.plot_product_family(results)
@@ -3998,7 +3982,6 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
             # Other params
             weight = np.ones(len(dsl))
             parameters = None
-            slider_val = self.slider_mosse.value() / 100.0
             solver_type = self.family_solver_combo.currentData()
             
             # Create progress dialog
@@ -4013,7 +3996,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
             # Create worker thread for product family computation
             self.family_worker = ProductFamilyWorker(
                 self.problem, weight, dsl, dsu, l, u, reqU, reqL, 
-                parameters, slider_val, solver_type
+                parameters, solver_type
             )
             self.family_worker.progress_signal.connect(self.on_family_progress)
             self.family_worker.finished_signal.connect(self.on_family_finished)

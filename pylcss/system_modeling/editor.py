@@ -16,7 +16,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Fix for distutils removal in Python 3.12+
 # Patch NodeGraphQt to use packaging.version instead of distutils.version
 import sys
 from packaging.version import Version
@@ -621,7 +620,6 @@ class ModelingWidget(QtWidgets.QWidget):
                         for cp in port_obj.connected_ports():
                             if hasattr(graph, 'disconnect_ports'): graph.disconnect_ports(port_obj, cp)
                             else: port_obj.disconnect_from(cp)
-                        # QtWidgets.QApplication.processEvents()  # Removed to prevent recursion
                     node.delete_input(old_name)
                     node.add_input(new_name)
                     new_port = node.get_input(new_name)
@@ -663,7 +661,6 @@ class ModelingWidget(QtWidgets.QWidget):
                         for cp in port_obj.connected_ports():
                             if hasattr(graph, 'disconnect_ports'): graph.disconnect_ports(port_obj, cp)
                             else: port_obj.disconnect_from(cp)
-                        # QtWidgets.QApplication.processEvents()  # Removed to prevent recursion
                     node.delete_output(old_name)
                     node.add_output(new_name)
                     new_port = node.get_output(new_name)
@@ -699,7 +696,6 @@ class ModelingWidget(QtWidgets.QWidget):
                         if hasattr(graph, 'connect_ports'): graph.connect_ports(new_port, target_port)
                         else: new_port.connect_to(target_port)
                 graph._viewer.update()
-                # QtWidgets.QApplication.processEvents()  # Removed to prevent recursion
             except Exception as e:
                 logger.exception("Rename port error")
             finally:

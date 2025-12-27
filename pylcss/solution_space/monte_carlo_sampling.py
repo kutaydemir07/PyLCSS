@@ -119,9 +119,6 @@ def monte_carlo(problem, dvbox, parameters, reqL, reqU, dv_norm, dv_norm_l, ind_
         
         c_min_all[start_idx:end_idx] = c_min_batch
         violation_idx_all[start_idx:end_idx] = violation_idx_batch
-
-    # Removed expensive sorting for performance (O(N log N))
-    # ind_sort = np.argsort(c_min_all)
     
     # Return unsorted arrays directly
     c_min_sorted = c_min_all

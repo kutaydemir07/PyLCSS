@@ -19,7 +19,7 @@ from .monte_carlo_sampling import monte_carlo
 
 logger = logging.getLogger(__name__)
 
-def compute_solution_space(problem, weight, dsl, dsu, l, u, reqU, reqL, parameters, slider_value=1, sample_size=1000, callback=None, solver_type='pymoo'):
+def compute_solution_space(problem, weight, dsl, dsu, l, u, reqU, reqL, parameters, sample_size=1000, callback=None, solver_type='pymoo'):
     """
     Compute the maximal box-shaped solution space using evolutionary optimization.
 
@@ -37,7 +37,6 @@ def compute_solution_space(problem, weight, dsl, dsu, l, u, reqU, reqL, paramete
         reqU: Upper requirement bounds (constraints)
         reqL: Lower requirement bounds (constraints)
         parameters: Parameter matrix defining fixed vs variable parameters
-        slider_value: Convergence slider value (0-1)
         sample_size: Number of Monte Carlo samples for validation
         callback: Optional progress callback function
         solver_type: Solver type for feasible point finding ('pymoo' or 'goal_attainment')
@@ -49,7 +48,7 @@ def compute_solution_space(problem, weight, dsl, dsu, l, u, reqU, reqL, paramete
             - population_data: Final population of solutions
             - samples: Monte Carlo validation samples
     """
-    solver = SolutionSpaceSolver(problem, weight, dsl, dsu, l, u, reqU, reqL, parameters, slider_value=slider_value, solver_type=solver_type)
+    solver = SolutionSpaceSolver(problem, weight, dsl, dsu, l, u, reqU, reqL, parameters, solver_type=solver_type)
 
     # Configure solver based on slider/sample_size if needed
     solver.final_sample_size = sample_size
@@ -137,7 +136,7 @@ def resample_solution_space(problem, dv_par_box, dsl, dsu, reqU, reqL, parameter
 
     return samples_list
 
-def compute_product_family_solutions(problem, weight, dsl, dsu, l, u, reqU, reqL, parameters, slider_value, solver_type, progress_callback=None, stop_callback=None):
+def compute_product_family_solutions(problem, weight, dsl, dsu, l, u, reqU, reqL, parameters, solver_type, progress_callback=None, stop_callback=None):
     """
     Compute solution spaces for product family variants and platform with progress reporting.
 
@@ -155,7 +154,6 @@ def compute_product_family_solutions(problem, weight, dsl, dsu, l, u, reqU, reqL
         reqU: Upper requirement bounds (base requirements)
         reqL: Lower requirement bounds (base requirements)
         parameters: Parameter matrix
-        slider_value: Convergence slider value
         solver_type: Solver type for feasible point finding ('pymoo', 'goal_attainment', or 'nomad')
         progress_callback: Optional callback function for progress reporting
         stop_callback: Optional callback function for cancellation checking
@@ -206,7 +204,7 @@ def compute_product_family_solutions(problem, weight, dsl, dsu, l, u, reqU, reqL
     def solve_variant(task_data):
         rL, rU = task_data
         # Create a new solver instance for each task (thread-safe)
-        solver = SolutionSpaceSolver(problem, weight, dsl, dsu, l, u, rU, rL, parameters, slider_value=slider_value, solver_type=solver_type)
+        solver = SolutionSpaceSolver(problem, weight, dsl, dsu, l, u, rU, rL, parameters, solver_type=solver_type)
         final_box, _, _, _ = solver.solve(callback=None)
         return final_box
 
@@ -238,7 +236,7 @@ def compute_product_family_solutions(problem, weight, dsl, dsu, l, u, reqU, reqL
                 progress_callback(var_name, current_variant, total_variants + 1, f"Starting {var_name}")
             
             reqL_var, reqU_var = tasks[i]
-            solver = SolutionSpaceSolver(problem, weight, dsl, dsu, l, u, reqU_var, reqL_var, parameters, slider_value=slider_value, solver_type=solver_type)
+            solver = SolutionSpaceSolver(problem, weight, dsl, dsu, l, u, reqU_var, reqL_var, parameters, solver_type=solver_type)
             final_box, _, _, _ = solver.solve(callback=None)
             results[var_name] = final_box
 

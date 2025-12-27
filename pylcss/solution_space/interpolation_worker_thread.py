@@ -70,7 +70,6 @@ class InterpolationThread(QtCore.QThread):
         y_grid_low = np.linspace(y_min, y_max, grid_size)
         grid_x_low, grid_y_low = np.meshgrid(x_grid_low, y_grid_low)
         
-        # --- FIX: Normalize Coordinates ---
         x_range = x_max - x_min if x_max != x_min else 1.0
         y_range = y_max - y_min if y_max != y_min else 1.0
         
@@ -135,7 +134,6 @@ class InterpolationThread(QtCore.QThread):
         if self.cancelled:
             return None
             
-        # --- FIX: Normalize Coordinates ---
         # 1. Determine ranges
         x_min, x_max = x_grid.min(), x_grid.max()
         y_min, y_max = y_grid.min(), y_grid.max()

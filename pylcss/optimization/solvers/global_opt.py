@@ -83,7 +83,6 @@ class GlobalSolver(BaseSolver):
                 'optimizer_name': self.settings.get('optimizer_name', 'NGOpt'),
                 'num_workers': int(self.settings.get('num_workers', 1))
             }
-            # FIX: Suppress Nevergrad warnings about bounds
             with warnings.catch_warnings():
                 res = solve_with_nevergrad(
                     objective_wrapper, 

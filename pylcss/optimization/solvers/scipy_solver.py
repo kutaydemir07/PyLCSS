@@ -68,7 +68,6 @@ class ScipySolver(BaseSolver):
                 # For unconstrained methods, return full cost
                 return cost
 
-        # --- FIX 1: Correct Bounds Handling for Fixed Variables ---
         if evaluator.scaling:
             x0_use = evaluator.to_normalized(np.array(x0))
             bounds = []
@@ -83,7 +82,6 @@ class ScipySolver(BaseSolver):
             x0_use = np.array(x0)
             bounds = [(v.min_val, v.max_val) for v in evaluator.vars]
 
-        # --- FIX 2: Vectorized Constraints (Much Faster) ---
         cons = []
         if evaluator.cons and supports_constraints:
             
@@ -138,7 +136,6 @@ class ScipySolver(BaseSolver):
                 options['eps'] = self.settings['eps']
             
         elif method == 'COBYLA':
-            # FIX: Only set rhobeg/disp here. 'tol' is passed in kwargs.
             options['rhobeg'] = 0.5  # Allow faster movement across unit hypercube
             options['disp'] = False
         elif method == 'trust-constr':

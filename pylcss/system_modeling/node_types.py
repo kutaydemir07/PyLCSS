@@ -799,7 +799,6 @@ class CustomBlockNode(BaseNode):
         self.surrogate_widget = SurrogateControlWidget(parent=None, name='surrogate_controls', label='Surrogate')
         self.add_custom_widget(self.surrogate_widget, tab='Surrogate')
         
-        # FIX: Manually connect the widget signal to handle property updates
         # because the widget name 'surrogate_controls' doesn't match the property 'use_surrogate'
         self.surrogate_widget.value_changed.connect(self.on_surrogate_widget_changed)
         
@@ -857,7 +856,6 @@ class CustomBlockNode(BaseNode):
         else:
             super(CustomBlockNode, self).set_property(name, value, push_undo)
             
-        # Removed duplicate super call
         
         if name == 'surrogate_status' and hasattr(self, 'surrogate_widget'):
              self.surrogate_widget.set_status(value)
@@ -897,7 +895,6 @@ class CustomBlockNode(BaseNode):
             # Remove ports from the end
             ports_to_remove = current_ports[num_inputs:]
             for p in ports_to_remove:
-                # FIX: Explicitly disconnect before deleting to remove the visual pipe
                 for cp in p.connected_ports():
                     p.disconnect_from(cp)
                 self.delete_input(p.name())
@@ -931,7 +928,6 @@ class CustomBlockNode(BaseNode):
             # Remove ports from the end
             ports_to_remove = current_ports[num_outputs:]
             for p in ports_to_remove:
-                # FIX: Explicitly disconnect before deleting to remove the visual pipe
                 for cp in p.connected_ports():
                     p.disconnect_from(cp)
                 self.delete_output(p.name())

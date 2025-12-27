@@ -116,7 +116,6 @@ class XRayProblem:
         if not results_list:
             return
 
-        # FIX: Robustly identify keys. Don't rely on results_list[0] which might be empty on failure.
         # Instead, collect all unique keys found in any successful run.
         all_keys = set()
         for r in results_list:

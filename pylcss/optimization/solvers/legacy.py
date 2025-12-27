@@ -304,7 +304,6 @@ def solve_with_differential_evolution(objective_func: Callable, bounds: List[Tup
     Solve optimization problem using Scipy Differential Evolution with native constraint support.
     """
     try:
-        # --- REMOVED WRAPPER HACK ---
         # We no longer wrap objective_func to call callback.
         # This prevents plotting random candidate evaluations.
         

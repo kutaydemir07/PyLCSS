@@ -62,7 +62,7 @@ class ProductFamilyWorker(QtCore.QThread):
     finished_signal = QtCore.Signal(object)  # results dict
     error_signal = QtCore.Signal(str)
 
-    def __init__(self, problem, weight, dsl, dsu, l, u, reqU, reqL, parameters, slider_value, solver_type):
+    def __init__(self, problem, weight, dsl, dsu, l, u, reqU, reqL, parameters, solver_type):
         super().__init__()
         self.problem = problem
         self.weight = weight
@@ -73,7 +73,6 @@ class ProductFamilyWorker(QtCore.QThread):
         self.reqU = reqU
         self.reqL = reqL
         self.parameters = parameters
-        self.slider_value = slider_value
         self.solver_type = solver_type
         self._stop_requested = False
 
@@ -93,7 +92,7 @@ class ProductFamilyWorker(QtCore.QThread):
             # Run product family computation
             results = compute_product_family_solutions(
                 self.problem, self.weight, self.dsl, self.dsu, self.l, self.u, 
-                self.reqU, self.reqL, self.parameters, self.slider_value, self.solver_type,
+                self.reqU, self.reqL, self.parameters, self.solver_type,
                 progress_callback=progress_callback,
                 stop_callback=lambda: self._stop_requested
             )

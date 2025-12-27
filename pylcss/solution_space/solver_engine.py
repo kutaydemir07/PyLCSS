@@ -17,7 +17,7 @@ from ..optimization.solvers.feasibility import FeasibilityProblem
 logger = logging.getLogger(__name__)
 
 class SolutionSpaceSolver:
-    def __init__(self, problem, weight, dsl, dsu, l, u, reqU, reqL, parameters, slider_value=1, solver_type='goal_attainment', include_objectives=False):
+    def __init__(self, problem, weight, dsl, dsu, l, u, reqU, reqL, parameters, solver_type='goal_attainment', include_objectives=False):
         self.problem = problem
         self.weight = weight
         self.dsl = dsl
@@ -27,7 +27,6 @@ class SolutionSpaceSolver:
         self.reqU = np.asarray(reqU, dtype=float)
         self.reqL = np.asarray(reqL, dtype=float)
         self.parameters = parameters
-        self.slider_value = slider_value
         self.solver_type = solver_type
         self.include_objectives = include_objectives
         
@@ -104,26 +103,13 @@ class SolutionSpaceSolver:
         # 1. Initial Sampling & Feasible Point Search
         x0, initial_samples = self._find_feasible_point()
         
-        # FIX: Even if x0 is None (extreme failure), return empty result safely
         if x0 is None:
             return self._empty_result(start_time)
 
         # 2. Phase I: Expansion
-        if self.slider_value == 1:
-            dvbox, phase1_samples = self._phase_i_expansion(x0, callback, stop_callback)
-        else:
-            dvbox, phase1_samples = self._phase_i_expansion_fixed_lower(x0, callback, stop_callback)
-                    
-        # 3. Intermediate Phase 1 (Pareto Selection)
-        if self.slider_value != 1:
-            dvbox = self._intermediate_phase_1(phase1_samples)
-            # Re-sample for Phase 2 prep
-            Points_A, m, Points_B, dv_sample, violation_idx, _ = monte_carlo(
-                self.problem, dvbox, self.parameters, self.reqL, self.reqU, 
-                self.dv_norm, self.dv_norm_l, self.ind_parameters, self.optimization_sample_size, self.dim
-            )
+        dvbox, phase1_samples = self._phase_i_expansion(x0, callback, stop_callback)
         
-        # 4. Phase II: Refinement
+        # 3. Phase II: Refinement
         dvbox, phase2_samples = self._phase_ii_refinement(dvbox, callback, stop_callback)
         
         # 5. Final Analysis
@@ -241,14 +227,7 @@ class SolutionSpaceSolver:
         dvbox = np.column_stack((x0, x0))
         dvbox_old = dvbox.copy()
         mu_vec = []
-        
-        # Pareto tracking
-        pareto_samples = {
-            'dvbox': [dvbox.copy()],
-            'phi_1': [-0.0], # -mu (initial mu is 0)
-            'phi_2': [np.linalg.norm(self.weight * (dvbox[:, 0] - x0))] # Distance to x0
-        }
-        
+                
         anisotropic = False
         # Track which dimensions are still expanding (anisotropic growth)
         expanding_dims = np.ones(self.dim, dtype=bool)
@@ -404,12 +383,7 @@ class SolutionSpaceSolver:
             # Shrink Step (Step A)
             dvbox, mu = step_a(dvbox, dv_sample, Points_A, Points_B, self.dim, self.weight)
             mu_vec.append(mu)
-            
-            if self.slider_value != 1:
-                pareto_samples['dvbox'].append(dvbox.copy())
-                pareto_samples['phi_1'].append(-mu)
-                pareto_samples['phi_2'].append(np.linalg.norm(self.weight * (dvbox[:, 0] - self.dsl_norm)))
-            
+                        
             # Convergence Check
             if len(mu_vec) > 3:
                 rel_change = abs((mu_vec[-1] - mu_vec[-2]) / mu_vec[-1]) if mu_vec[-1] != 0 else 0
@@ -434,60 +408,7 @@ class SolutionSpaceSolver:
             if callback:
                 self._report_progress(callback, dvbox, dv_sample, Points_A, Points_B, violation_idx, f"Phase I - Iter {i}")
                 
-        return dvbox, pareto_samples
-
-    def _intermediate_phase_1(self, pareto_samples):
-        phi_1 = np.array(pareto_samples['phi_1'])
-        phi_2 = np.array(pareto_samples['phi_2'])
-        
-        # Normalize
-        def normalize(arr):
-            mn, mx = np.min(arr), np.max(arr)
-            if mx - mn == 0: return np.zeros_like(arr)
-            return (arr - mn) / (mx - mn)
-            
-        phi_1_norm = normalize(phi_1)
-        phi_2_norm = normalize(phi_2)
-        
-        costs = np.column_stack((phi_1_norm, phi_2_norm))
-        is_pareto = self._get_pareto_front(costs)
-        
-        pareto_indices = np.where(is_pareto)[0]
-        p_phi_1 = phi_1_norm[pareto_indices]
-        p_phi_2 = phi_2_norm[pareto_indices]
-        
-        # CHIM Selection
-        q = np.array([0, 2 * self.slider_value - 1, 0])
-        u = np.array([1, 1, 0])
-        u_norm = np.linalg.norm(u)
-        
-        best_idx = -1
-        min_dist = np.inf
-        
-        for i in range(len(pareto_indices)):
-            p = np.array([p_phi_1[i], p_phi_2[i], 0])
-            d = np.linalg.norm(np.cross(p - q, u)) / u_norm
-            
-            if d <= min_dist:
-                min_dist = d
-                best_idx = pareto_indices[i]
-                
-        return pareto_samples['dvbox'][best_idx]
-
-    def _get_pareto_front(self, costs):
-        is_efficient = np.arange(costs.shape[0])
-        n_points = costs.shape[0]
-        next_point_index = 0
-        while next_point_index < len(costs):
-            nondominated_point_mask = np.any(costs < costs[next_point_index], axis=1)
-            nondominated_point_mask[next_point_index] = True
-            is_efficient = is_efficient[nondominated_point_mask]
-            costs = costs[nondominated_point_mask]
-            next_point_index = np.sum(nondominated_point_mask[:next_point_index]) + 1
-        
-        is_pareto = np.zeros(n_points, dtype=bool)
-        is_pareto[is_efficient] = True
-        return is_pareto
+        return dvbox, None # We don't return pareto_samples anymore
 
     def _shift_box(self, dvbox, dv_sample, Points_A):
         """
@@ -529,11 +450,9 @@ class SolutionSpaceSolver:
             
             if m == N:
                 break
-                
-            # Step 1: Trim (Step A)
-            dvbox, mu = step_a(dvbox, dv_sample, Points_A, Points_B, self.dim, self.weight)
             
-            # Step 2: Shift
+            # Always run standard mode:
+            dvbox, mu = step_a(dvbox, dv_sample, Points_A, Points_B, self.dim, self.weight)
             dvbox = self._shift_box(dvbox, dv_sample, Points_A)
             
             if callback and i % 10 == 0:
@@ -758,104 +677,5 @@ class SolutionSpaceSolver:
             'qoi_values': np.zeros((len(self.reqL), 0))
         }
         return np.zeros((self.original_dim, 2)), 0, time.time() - start_time, empty_samples
-
-
-    def _phase_i_expansion_fixed_lower(self, x0, callback, stop_callback=None):
-        """
-        Expands the solution space box only in the upper direction, keeping 
-        lower bounds fixed at x0. Used for Multi-Objective SSE.
-        """
-        g = self.growth_rate_init
-        N = self.optimization_sample_size
-        
-        # Initial box is just the point x0
-        dvbox = np.column_stack((x0, x0)) 
-        dvbox_old = dvbox.copy()
-        
-        mu_vec = []
-        # Pareto tracking
-        pareto_samples = {
-            'dvbox': [dvbox.copy()],
-            'phi_1': [-0.0],
-            'phi_2': [0.0] 
-        }
-        
-        anisotropic = False
-        
-        for i in range(self.max_iter_phase_1):
-            if self._stop or (stop_callback and stop_callback()):
-                self._stop = True
-                break
-                
-            # --- Expansion Step (Fixed Lower Bound) ---
-            expanded = False
-            expansion_attempts = 0
-            
-            while not expanded and expansion_attempts < 10:
-                dvbox_new = dvbox_old.copy()
-                
-                if not anisotropic:
-                    # Isotropic: Expand Upper Bound by fraction of design space
-                    expansion = g * (self.dsu_norm - self.dsl_norm)
-                    dvbox_new[:, 1] += expansion # Only add to Upper Bound
-                else:
-                    # Anisotropic: Expand proportional to current box size
-                    box_size = dvbox_old[:, 1] - dvbox_old[:, 0]
-                    expansion = g * box_size
-                    dvbox_new[:, 1] += expansion # Only add to Upper Bound
-                
-                # Clip to Design Space limits
-                dvbox_new[:, 1] = np.minimum(dvbox_new[:, 1], self.dsu_norm)
-                # Ensure Lower Bound stays fixed (no change to dvbox_new[:, 0])
-
-                # Monte Carlo Check
-                Points_A, m, Points_B, dv_sample, violation_idx, _ = monte_carlo(
-                    self.problem, dvbox_new, self.parameters, self.reqL, self.reqU, 
-                    self.dv_norm, self.dv_norm_l, self.ind_parameters, N, self.dim
-                )
-                
-                # Growth Control (Same as standard)
-                if m / N >= 0.95 or expansion_attempts >= 9:
-                    dvbox = dvbox_new
-                    g = 2 * (m / N) * g
-                    expanded = True
-                else:
-                    g = 2 * (m / N) * g
-                    if g <= 0: g = 0.006
-                
-                expansion_attempts += 1
-            
-            if m == 0: break # Stop if invalid region
-                
-            # --- Shrink Step (Step A) ---
-            # Important: step_a might shrink the lower bound *upwards* (good), 
-            # but we must ensure it doesn't shrink *below* our fixed anchor if that was the intent.
-            # However, standard Step A is usually fine here as it shrinks tightest good box.
-            dvbox, mu = step_a(dvbox, dv_sample, Points_A, Points_B, self.dim, self.weight)
-            mu_vec.append(mu)
-            
-            if self.slider_value != 1:
-                pareto_samples['dvbox'].append(dvbox.copy())
-                pareto_samples['phi_1'].append(-mu)
-                pareto_samples['phi_2'].append(np.linalg.norm(self.weight * (dvbox[:, 0] - self.dsl_norm)))
-
-            # Convergence Check
-            if len(mu_vec) > 3:
-                rel_change = abs((mu_vec[-1] - mu_vec[-2]) / mu_vec[-1]) if mu_vec[-1] != 0 else 0
-                if rel_change < self.tol_phase_1:
-                    if not anisotropic:
-                        anisotropic = True
-                        g = 0.1 
-                        self.tol_phase_1 = 5e-3
-                    else:
-                        break
-            
-            dvbox_old = dvbox.copy()
-            
-            if callback:
-                self._report_progress(callback, dvbox, dv_sample, Points_A, Points_B, violation_idx, f"Phase I (Fixed LB) - Iter {i}")
-        
-        return dvbox, pareto_samples
-
 
 

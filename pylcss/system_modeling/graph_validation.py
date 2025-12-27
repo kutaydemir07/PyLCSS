@@ -217,7 +217,6 @@ def validate_graph(widget):
             systems = {loc.split(" :: ")[0] for loc in locations}
             # Only flag if defined in >1 system (local duplicates are handled above)
             if len(systems) > 1:
-                # FIX: Upgraded from Warning to Error
                 errors.append(
                     f"Global QoI Conflict: '{qoi_name}' is defined in multiple systems. "
                     f"\n"

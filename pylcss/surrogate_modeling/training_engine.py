@@ -400,7 +400,7 @@ class SurrogateTrainer:
         # Initialize strategies
         self.strategies = {
             'MLP Regressor': MLPStrategy(),
-            'Gaussian Process': GaussianProcessStrategy(), # Fixed key to match UI
+            'Gaussian Process': GaussianProcessStrategy(),
             'Gaussian Process (Kriging)': GaussianProcessStrategy(), # Keep old key for compatibility
             'Random Forest': RandomForestStrategy(),
             'Gradient Boosting': GradientBoostingStrategy(),

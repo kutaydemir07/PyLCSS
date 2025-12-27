@@ -193,7 +193,6 @@ class GraphBuilder:
             if not block.type_.startswith('com.pfd.custom_block'):
                 continue
             
-            # FIX: Correctly check for surrogate usage
             # The property might be a string "true"/"false" or a boolean or int
             use_surrogate_prop = block.get_property('use_surrogate')
             surrogate_path = block.get_property('surrogate_model_path')
@@ -562,7 +561,6 @@ class GraphBuilder:
                 continue
             
             block_name = f"block_{block.id.replace('-', '_')}"
-            # block.set_property('func_name', block_name) # Removed to prevent node renaming
             
             use_surrogate = block.get_property('use_surrogate') or False
             surrogate_path = block.get_property('surrogate_model_path') or ''
@@ -678,7 +676,6 @@ class GraphBuilder:
             func_name = f"block_{block.id.replace('-', '_')}"
             input_vars = []
             
-            # FIXED: Resolve inputs by looking up the SOURCE node (Producer)
             for port in block.input_ports():
                 connected = port.connected_ports()
                 if connected:
