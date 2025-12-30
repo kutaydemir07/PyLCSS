@@ -1,0 +1,468 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "0x2c81dab1310": {
+      "type_": "com.cad.box.BoxNode",
+      "icon": null,
+      "name": "Box",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 165.6,
+      "pos": [
+        -434.16330619850294,
+        -146.21567933465548
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "box_length": 20.0,
+        "box_width": 5.0,
+        "box_depth": 60.0,
+        "center_x": 0.0,
+        "center_y": 0.0,
+        "center_z": 0.0
+      }
+    },
+    "0x2c802b24310": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Select Face (Robust)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 60,
+      "pos": [
+        -55.8862717338622,
+        -117.09234482154692
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "selector_type": "Direction",
+        "direction": "<Z",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "face_index": 0,
+        "tag": "left"
+      }
+    },
+    "0x2c824a22d90": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Select Face (Robust) 1",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 60,
+      "pos": [
+        -33.53176304031733,
+        -0.3294076007933029
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "selector_type": "Direction",
+        "direction": ">Z",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "face_index": 0,
+        "tag": "right"
+      }
+    },
+    "0x2c802b676d0": {
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "icon": null,
+      "name": "Generate Mesh (Netgen)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 164.375,
+      "height": 119.4,
+      "pos": [
+        132.84872620962147,
+        -210.20946844290728
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "element_size": 2.0,
+        "refinement_size": 0.5
+      }
+    },
+    "0x2c824a2a5d0": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "Material",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 174.25,
+      "height": 96.3,
+      "pos": [
+        389.90824203216164,
+        155.98971562593604
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "youngs_modulus": 210000.0,
+        "poissons_ratio": 0.3,
+        "density": 7.85e-09
+      }
+    },
+    "0x2c824a2ba10": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "icon": null,
+      "name": "FEA Fixed Support (Face)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 164.265625,
+      "height": 73.2,
+      "pos": [
+        399.0316171214986,
+        -101.41174350227082
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "condition": ""
+      }
+    },
+    "0x2c8249e9010": {
+      "type_": "com.cad.sim.load.LoadNode",
+      "icon": null,
+      "name": "FEA Load (Face)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 142.5,
+      "pos": [
+        405.8937070301834,
+        -5.3294076007932745
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "condition": "",
+        "force_x": -1000.0,
+        "force_y": 0.0,
+        "force_z": 0.0
+      }
+    },
+    "0x2c81da72f50": {
+      "type_": "com.cad.sim.topopt.TopologyOptimizationNode",
+      "icon": null,
+      "name": "Topology Opt",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": true,
+      "visible": true,
+      "width": 187.125,
+      "height": 119.4,
+      "pos": [
+        688.4496360686062,
+        -67.03783987018676
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "vol_frac": 0.4,
+        "iterations": 1000,
+        "filter_radius": 1.5,
+        "density_cutoff": 0.3,
+        "shape_recovery": true,
+        "visualization": "Density",
+        "symmetry_x": null,
+        "symmetry_y": null,
+        "symmetry_z": null,
+        "penal": 3.0,
+        "move_limit": 0.2,
+        "min_density": 0.001,
+        "convergence_tol": 0.01,
+        "recovery_resolution": 50,
+        "smoothing_iterations": 3,
+        "filter_type": "density",
+        "update_scheme": "MMA"
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "0x2c81dab1310",
+        "shape"
+      ],
+      "in": [
+        "0x2c802b24310",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x2c81dab1310",
+        "shape"
+      ],
+      "in": [
+        "0x2c824a22d90",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x2c81dab1310",
+        "shape"
+      ],
+      "in": [
+        "0x2c802b676d0",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x2c802b24310",
+        "workplane"
+      ],
+      "in": [
+        "0x2c824a2ba10",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x2c824a22d90",
+        "workplane"
+      ],
+      "in": [
+        "0x2c8249e9010",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x2c802b676d0",
+        "mesh"
+      ],
+      "in": [
+        "0x2c824a2ba10",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x2c802b676d0",
+        "mesh"
+      ],
+      "in": [
+        "0x2c8249e9010",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x2c802b676d0",
+        "mesh"
+      ],
+      "in": [
+        "0x2c81da72f50",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x2c824a2a5d0",
+        "material"
+      ],
+      "in": [
+        "0x2c81da72f50",
+        "material"
+      ]
+    },
+    {
+      "out": [
+        "0x2c824a2ba10",
+        "constraints"
+      ],
+      "in": [
+        "0x2c81da72f50",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "0x2c8249e9010",
+        "loads"
+      ],
+      "in": [
+        "0x2c81da72f50",
+        "loads"
+      ]
+    }
+  ]
+}

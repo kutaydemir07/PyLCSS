@@ -39,6 +39,7 @@ class HelpWidget(QtWidgets.QWidget):
 
         # Add help tabs for each main section
         self._add_modeling_help()
+        self._add_cad_help()
         self._add_surrogate_help()
         self._add_solution_space_help()
         self._add_optimization_help()
@@ -77,7 +78,7 @@ class HelpWidget(QtWidgets.QWidget):
 
         <h3>Building a Model</h3>
         <ol>
-        <li><b>Add Nodes:</b> Right-click the canvas to add Input, Output, Constant, or Custom Block nodes.</li>
+        <li><b>Add Nodes:</b> Right-click the canvas to add Input, Output, Intermediate, or Custom Block nodes.</li>
         <li><b>Connect:</b> Drag connections between ports to define data flow.</li>
         <li><b>Configure:</b> Double-click nodes to set parameters, units, and bounds.</li>
         <li><b>Validate:</b> Use the validation tools to ensure connectivity and unit consistency.</li>
@@ -89,7 +90,7 @@ class HelpWidget(QtWidgets.QWidget):
         <li><b>Input Node:</b> Defines design variables with min/max bounds and units.</li>
         <li><b>Output Node:</b> Marks system results for analysis and optimization objectives.</li>
         <li><b>Custom Block:</b> Executes user-defined Python code. Supports complex logic and math.</li>
-        <li><b>Constant Node:</b> Provides fixed values with units to the system.</li>
+        <li><b>Intermediate Node:</b> Provides intermediate values with units to the system.</li>
         </ul>
 
         <h3>Best Practices</h3>
@@ -101,6 +102,62 @@ class HelpWidget(QtWidgets.QWidget):
         """
         browser = self._create_browser(help_text)
         self.help_tabs.addTab(browser, qta.icon('fa5s.project-diagram'), "Modeling")
+
+    def _add_cad_help(self) -> None:
+        """Add comprehensive help for the CAD tab."""
+        help_text = """
+        <h2>CAD Modeling and FEM Simulation</h2>
+
+        <h3>Overview</h3>
+        <p>PyLCSS includes a powerful parametric CAD module built on CadQuery, enabling you to create 3D models using a node-based interface. Combined with finite element analysis (FEA) capabilities, you can design and validate mechanical components entirely within the platform.</p>
+
+        <h3>Key Capabilities</h3>
+        <ul>
+        <li><b>Parametric Design:</b> Create 3D models using nodes for primitives, operations, and transformations.</li>
+        <li><b>Node-Based Workflow:</b> Connect nodes to build complex geometries visually.</li>
+        <li><b>FEM Simulation:</b> Perform structural analysis using scikit-fem with Netgen meshing.</li>
+        <li><b>Topology Optimization:</b> Optimize material distribution for minimum compliance.</li>
+        <li><b>Export Options:</b> Export to STEP, STL, and other CAD formats.</li>
+        </ul>
+
+        <h3>CAD Node Types</h3>
+        <ul>
+        <li><b>Primitives:</b> Box, Sphere, Cylinder, Cone - basic 3D shapes.</li>
+        <li><b>Sketch Operations:</b> Rectangle, Circle, Polygon - 2D profiles for extrusion.</li>
+        <li><b>Operations:</b> Extrude, Revolve, Fillet, Chamfer - modify and combine shapes.</li>
+        <li><b>Boolean Operations:</b> Union, Subtract, Intersect - combine multiple parts.</li>
+        <li><b>Transformations:</b> Translate, Rotate, Mirror, Pattern - position and replicate.</li>
+        </ul>
+
+        <h3>FEM Simulation Workflow</h3>
+        <ol>
+        <li><b>Create Geometry:</b> Build your 3D model using CAD nodes.</li>
+        <li><b>Generate Mesh:</b> Use the Mesh node to create finite elements with Netgen.</li>
+        <li><b>Define Material:</b> Set material properties (Young's modulus, Poisson's ratio, density).</li>
+        <li><b>Apply Constraints:</b> Fix supports on specific faces.</li>
+        <li><b>Apply Loads:</b> Define forces or pressure loads on faces.</li>
+        <li><b>Solve:</b> Run the FEA solver to compute stress and displacement.</li>
+        <li><b>Visualize:</b> View results with color-coded stress/displacement maps.</li>
+        </ol>
+
+        <h3>Topology Optimization</h3>
+        <p>The topology optimization module uses the SIMP (Solid Isotropic Material with Penalization) method with MMA (Method of Moving Asymptotes) optimizer to find optimal material layouts. Features include:</p>
+        <ul>
+        <li><b>Density Filtering:</b> Smooth density fields for manufacturable designs.</li>
+        <li><b>Volume Constraints:</b> Control material usage.</li>
+        <li><b>Shape Recovery:</b> Extract clean geometry using marching cubes.</li>
+        </ul>
+
+        <h3>Best Practices</h3>
+        <ul>
+        <li><b>Mesh Quality:</b> Use appropriate element sizes - smaller for detailed features.</li>
+        <li><b>Convergence:</b> Check that FEA results converge with mesh refinement.</li>
+        <li><b>Units:</b> Ensure consistent units throughout (e.g., mm, MPa, tonnes).</li>
+        <li><b>Export:</b> Use STEP format for maximum compatibility with other CAD software.</li>
+        </ul>
+        """
+        browser = self._create_browser(help_text)
+        self.help_tabs.addTab(browser, qta.icon('fa5s.cube'), "CAD and FEM")
 
     def _add_surrogate_help(self) -> None:
         """Add comprehensive help for the Surrogate Training tab."""

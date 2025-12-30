@@ -25,12 +25,16 @@ from pylcss.surrogate_modeling.surrogate_interface import SurrogateTrainingWidge
 from pylcss.user_interface.sensitivity_widget import SensitivityAnalysisWidget
 from pylcss.user_interface.help_widget import HelpWidget
 
+# --- NEW IMPORT ---
+from pylcss.cad.professional_gui import ProfessionalCadApp  # Import the widget
+
 class MainWindow(QtWidgets.QMainWindow):
     """
     Main application window containing all major components.
 
-    This window provides a tabbed interface with six main sections:
+    This window provides a tabbed interface with seven main sections:
     - Modeling Environment: Visual node-based system modeling
+    - CAD Environment: Parametric CAD modeling with 3D viewer
     - Surrogate Training: Machine learning surrogate model training
     - Solution Space Analysis: Monte Carlo sampling and visualization
     - Optimization: Multi-objective optimization tools
@@ -93,28 +97,34 @@ class MainWindow(QtWidgets.QMainWindow):
         tab_index = self.tabs.addTab(self.modeling_widget, qta.icon('fa5s.project-diagram'), "  Modeling Environment")
         self.tabs.setTabToolTip(tab_index, "Visual node-based system modeling environment. Create and connect computational nodes to define mathematical relationships between design variables and system outputs.")
 
-        # 2. Surrogate Training Tab (NEW)
+        # --- ADD NEW TAB HERE ---
+        # 2. CAD Environment Tab
+        self.cad_widget = ProfessionalCadApp()
+        tab_index = self.tabs.addTab(self.cad_widget, qta.icon('fa5s.cube'), "  CAD Environment")
+        self.tabs.setTabToolTip(tab_index, "Parametric CAD modeling with 3D viewer.")
+
+        # 3. Surrogate Training Tab (NEW)
         # Pass modeling_widget to it so it can access the graph nodes
         self.surrogate_widget: SurrogateTrainingWidget = SurrogateTrainingWidget(modeling_widget=self.modeling_widget)
         tab_index = self.tabs.addTab(self.surrogate_widget, qta.icon('fa5s.brain'), "  Surrogate Training")
         self.tabs.setTabToolTip(tab_index, "Train machine learning surrogate models to replace expensive computational models. Supports MLP, Random Forest, Gradient Boosting, Gaussian Process, and deep neural networks.")
         
-        # 3. Solution Space Tab
+        # 4. Solution Space Tab
         self.sol_space_widget: SolutionSpaceWidget = SolutionSpaceWidget()
         tab_index = self.tabs.addTab(self.sol_space_widget, qta.icon('fa5s.chart-area'), "  Solution Space")
         self.tabs.setTabToolTip(tab_index, "Explore and visualize the design space through Monte Carlo sampling. Analyze feasibility regions, constraint boundaries, and solution distributions.")
         
-        # 4. Optimization Tab
+        # 5. Optimization Tab
         self.optimization_widget: OptimizationWidget = OptimizationWidget()
         tab_index = self.tabs.addTab(self.optimization_widget, qta.icon('fa5s.rocket'), "  Optimization")
         self.tabs.setTabToolTip(tab_index, "Perform single and multi-objective optimization using various algorithms (SLSQP, NSGA-II, etc.). Includes real-time convergence plotting and constraint analysis.")
         
-        # 5. Sensitivity Analysis Tab (NEW)
+        # 6. Sensitivity Analysis Tab (NEW)
         self.sensitivity_widget: SensitivityAnalysisWidget = SensitivityAnalysisWidget(optimization_widget=self.optimization_widget)
         tab_index = self.tabs.addTab(self.sensitivity_widget, qta.icon('fa5s.chart-bar'), "  Sensitivity Analysis")
         self.tabs.setTabToolTip(tab_index, "Conduct global sensitivity analysis using Sobol indices to identify which design variables have the most influence on system outputs.")
         
-        # 6. Help Tab (NEW)
+        # 7. Help Tab (NEW)
         self.help_widget: HelpWidget = HelpWidget()
         tab_index = self.tabs.addTab(self.help_widget, qta.icon('fa5s.question-circle'), "  Help")
         self.tabs.setTabToolTip(tab_index, "Documentation, tutorials, and information about PyLCSS features, system requirements, and usage guidelines.")
@@ -189,8 +199,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     # Fallback to old method
                     self.sol_space_widget.load_models(models)
                     self.optimization_widget.load_models(models)
-            # Switch to Solution Space tab (Index 2)
-            self.tabs.setCurrentIndex(2)
+            # Switch to Solution Space tab (Index 3)
+            self.tabs.setCurrentIndex(3)
 
     def save_project(self):
         """Save the entire project to a folder."""

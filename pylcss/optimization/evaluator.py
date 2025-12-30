@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Kutay Demir.
+# Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
+
 import numpy as np
 from typing import List, Callable, Dict, Any, Tuple, Optional
 from .core import Variable, Objective, Constraint

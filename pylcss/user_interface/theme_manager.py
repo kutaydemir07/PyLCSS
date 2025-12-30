@@ -227,9 +227,13 @@ def _setup_app_text_eliding(app):
     if not app:
         return
 
-    # Find all top-level widgets (windows)
-    for widget in app.topLevelWidgets():
-        _setup_widget_text_eliding(widget)
+    try:
+        # Find all top-level widgets (windows)
+        for widget in app.topLevelWidgets():
+            _setup_widget_text_eliding(widget)
+    except RuntimeError:
+        # App is being destroyed, skip
+        pass
 
 
 def _setup_widget_text_eliding(widget):
@@ -239,14 +243,18 @@ def _setup_widget_text_eliding(widget):
     if not widget:
         return
 
-    # Set up eliding for this widget
-    if isinstance(widget, (QtWidgets.QPushButton, QtWidgets.QLabel, QtWidgets.QCheckBox, QtGui.QAction)):
-        _add_tooltip_for_long_text(widget)
+    try:
+        # Set up eliding for this widget
+        if isinstance(widget, (QtWidgets.QPushButton, QtWidgets.QLabel, QtWidgets.QCheckBox, QtGui.QAction)):
+            _add_tooltip_for_long_text(widget)
 
-    # Recursively process children
-    for child in widget.children():
-        if isinstance(child, QtWidgets.QWidget):
-            _setup_widget_text_eliding(child)
+        # Recursively process children
+        for child in widget.children():
+            if isinstance(child, QtWidgets.QWidget):
+                _setup_widget_text_eliding(child)
+    except RuntimeError:
+        # Widget has been deleted, skip it
+        pass
 
 
 def _add_tooltip_for_long_text(widget):

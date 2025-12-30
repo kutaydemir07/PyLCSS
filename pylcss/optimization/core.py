@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Kutay Demir.
+# Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
+
 from dataclasses import dataclass, field
 from typing import List, Optional, Callable, Dict, Any
 import numpy as np

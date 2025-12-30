@@ -129,25 +129,29 @@ class SurrogateConfig:
 
 
 # ============================================================================
-# UI SETTINGS
+# SIMULATION SETTINGS
 # ============================================================================
 
 @dataclass
-class UIConfig:
-    """Configuration for user interface."""
+class SimulationConfig:
+    """Configuration for FEA and simulation operations."""
     
-    # Window settings
-    DEFAULT_WINDOW_WIDTH: int = 1600
-    DEFAULT_WINDOW_HEIGHT: int = 900
-    MIN_WINDOW_WIDTH: int = 1024
-    MIN_WINDOW_HEIGHT: int = 768
+    # Verbosity settings
+    SUPPRESS_EXTERNAL_LIBRARY_OUTPUT: bool = True
+    SHOW_TOPOLOGY_OPTIMIZATION_PROGRESS: bool = True
     
-    # Plot settings
-    PLOT_UPDATE_INTERVAL: float = 0.1  # seconds
-    MAX_PLOT_POINTS: int = 10000
+    # Default mesh settings
+    DEFAULT_MESH_SIZE: float = 2.0
+    MIN_MESH_SIZE: float = 0.1
+    MAX_MESH_SIZE: float = 10.0
     
-    # Progress reporting
-    PROGRESS_UPDATE_FREQUENCY: int = 20  # Update every N% or 100 samples
+    # Topology optimization settings
+    DEFAULT_VOLUME_FRACTION: float = 0.4
+    DEFAULT_FILTER_RADIUS: float = 1.5
+    DEFAULT_ITERATIONS: int = 15
+    DENSITY_CUTOFF: float = 0.3
+
+simulation_config = SimulationConfig()
 
 
 # ============================================================================
@@ -198,7 +202,7 @@ class SystemConfig:
 optimization_config = OptimizationConfig()
 solution_space_config = SolutionSpaceConfig()
 surrogate_config = SurrogateConfig()
-ui_config = UIConfig()
+simulation_config = SimulationConfig()
 validation_config = ValidationConfig()
 system_config = SystemConfig()
 
@@ -231,6 +235,13 @@ def setup_logging(level: int = DEFAULT_LOG_LEVEL,
     
     # Set specific loggers to appropriate levels
     logging.getLogger('PIL').setLevel(logging.WARNING)
+    logging.getLogger('skfem').setLevel(logging.WARNING)
+    logging.getLogger('skfem.assembly').setLevel(logging.WARNING)
+    logging.getLogger('skfem.assembly.basis').setLevel(logging.WARNING)
+    logging.getLogger('skfem.assembly.form').setLevel(logging.WARNING)
+    logging.getLogger('skfem.utils').setLevel(logging.WARNING)
+    logging.getLogger('netgen').setLevel(logging.WARNING)
+    logging.getLogger('ngsolve').setLevel(logging.WARNING)
     
     logger = logging.getLogger(__name__)
     logger.info(f"PyLCSS logging initialized at level: {logging.getLevelName(level)}")

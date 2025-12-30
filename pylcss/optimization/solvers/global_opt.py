@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Kutay Demir.
+# Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
+
 from .base import BaseSolver
 from ..core import OptimizationResult
 from .legacy import solve_with_nevergrad, solve_with_differential_evolution

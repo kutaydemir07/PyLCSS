@@ -6,7 +6,7 @@
 
 **🚀 Source-Available Engineering Simulation & Optimization Platform**
 
-*Visual Modeling • Solution Space Exploration • AI-Powered Surrogates • Multi-Objective Optimization*
+*Visual Modeling • CAD and FEM • Solution Space Exploration • AI-Powered Surrogates • Multi-Objective Optimization*
 
 [![License](https://img.shields.io/badge/License-PolyForm_Shield_1.0.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-green.svg)](https://www.python.org/)
@@ -40,11 +40,13 @@ PyLCSS implements the **Solution Space** approach for robust design. Instead of 
 * **Node-Based Architecture:** Intuitive drag-and-drop interface powered by `NodeGraphQt`.
 * **Unit Intelligence:** Automatic dimensional analysis and compatibility checking via `Pint` ensures physical consistency.
 * **Python Integration:** Write custom logic blocks with full `NumPy` support.
+* **CAD Modeling:** Parametric 3D CAD design using `CadQuery` with node-based workflow.
 
 ### 📊 Advanced Analysis Suite
 * **Monte Carlo Exploration:** Rapidly evaluate thousands of design variants using vectorized sampling.
 * **Solution Space Visualization:** Interactive 2D scatter plots, parallel coordinates, and feasibility maps.
 * **Global Sensitivity Analysis:** Variance-based Sobol indices (via `SALib`) to identify critical design drivers.
+* **FEM Simulation:** Finite element analysis with `scikit-fem` and `Netgen` meshing for structural analysis.
 
 ### 🧠 AI & Optimization
 * **Surrogate Modeling:** Replace expensive simulations with fast approximations using **PyTorch** Neural Networks, Random Forests, or Gradient Boosting.
@@ -115,6 +117,8 @@ PyLCSS is built on the shoulders of giants:
 **Optimization:** Nevergrad, SALib
 
 **Physics:** Pint
+
+**CAD and FEM:** CadQuery, VTK, scikit-fem, Netgen, meshio
 
 ## 📄 License
 
