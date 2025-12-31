@@ -73,7 +73,10 @@ class AssemblyNode(AdvancedCadNode):
             if port and port.connected_ports():
                 try:
                     node = port.connected_ports()[0].node()
-                    part = node.run()
+                    # Use cached result if available
+                    part = getattr(node, '_last_result', None)
+                    if part is None:
+                        part = node.run()
                     if part:
                         parts.append(part)
                 except Exception as e:
@@ -113,9 +116,18 @@ class MassPropertiesNode(AdvancedCadNode):
         density = self.get_property('density')
         
         try:
-            bb = shape.val().BoundingBox()
-            volume = (bb.xlen * bb.ylen * bb.zlen) / 1e9  # Convert to m^3
+            solid = shape.val()
+            # Use actual solid volume, not bounding box approximation
+            volume = solid.Volume() / 1e9  # Convert mm^3 to m^3
             mass = volume * float(density)
+            
+            # Use actual center of mass if available
+            try:
+                com = solid.Center()
+                center = (com.x, com.y, com.z)
+            except:
+                bb = solid.BoundingBox()
+                center = (bb.center.x, bb.center.y, bb.center.z)
             
             return {
                 'type': 'analysis',
@@ -123,7 +135,7 @@ class MassPropertiesNode(AdvancedCadNode):
                 'mass': mass,
                 'volume': volume,
                 'density': float(density),
-                'center_of_mass': (bb.center.x, bb.center.y, bb.center.z)
+                'center_of_mass': center
             }
         except Exception as e:
             print(f"Mass properties error: {e}")
@@ -132,7 +144,12 @@ class MassPropertiesNode(AdvancedCadNode):
     def _get_input_shape(self):
         port = self.get_input('shape')
         if port and port.connected_ports():
-            return port.connected_ports()[0].node().run()
+            node = port.connected_ports()[0].node()
+            # Use cached result if available
+            res = getattr(node, '_last_result', None)
+            if res is None:
+                res = node.run()
+            return res
         return None
 
 
@@ -151,7 +168,11 @@ class BoundingBoxNode(AdvancedCadNode):
         if not port or not port.connected_ports():
             return None
         
-        shape = port.connected_ports()[0].node().run()
+        node = port.connected_ports()[0].node()
+        # Use cached result if available
+        shape = getattr(node, '_last_result', None)
+        if shape is None:
+            shape = node.run()
         if shape is None:
             return None
         

@@ -133,7 +133,8 @@ class MLPStrategy(SurrogateModelStrategy):
         layers = config.get('hidden_layers', (100, 50))
         if isinstance(layers, str):
             try:
-                layers = eval(layers)
+                import ast
+                layers = ast.literal_eval(layers)
             except:
                 layers = (100, 50)
         

@@ -89,8 +89,9 @@ class MultiHoleNode(CadQueryNode):
         face_selector = self.get_property("from_face")
         
         try:
-            # Parse coordinates
-            coords = eval(coords_str)
+            # Parse coordinates safely (no arbitrary code execution)
+            import ast
+            coords = ast.literal_eval(coords_str)
             if not isinstance(coords, list):
                 return shape
             
@@ -193,8 +194,6 @@ class SlotCutNode(CadQueryNode):
             # Select face
             wp = shape.faces(face_selector).workplane()
             
-            # Create slot using polyline with rounded ends
-            # Move to start, create circle, line to end, create circle
             import math
             dx = x2 - x1
             dy = y2 - y1
@@ -204,11 +203,14 @@ class SlotCutNode(CadQueryNode):
                 # Just a circle
                 wp = wp.moveTo(x1, y1).circle(width/2)
             else:
-                # Create slot profile
-                angle = math.atan2(dy, dx)
-                # Use a hull of two circles
-                wp = wp.moveTo(x1, y1).circle(width/2)
-                wp = wp.moveTo(x2, y2).circle(width/2)
+                # Calculate center point of slot and its rotation angle
+                cx = (x1 + x2) / 2
+                cy = (y1 + y2) / 2
+                angle_deg = math.degrees(math.atan2(dy, dx))
+                
+                # Use CadQuery's slot2D (creates proper stadium shape)
+                # slot2D takes the slot length (center-to-center + diameter) and diameter
+                wp = wp.center(cx, cy).slot2D(length + width, width, angle_deg)
             
             # Cut
             if through:

@@ -362,71 +362,6 @@ class CodeEditorDialog(QtWidgets.QDialog):
 
     def show_help(self) -> None:
         help_text = (
-            "# FUNCTION BLOCK HELP\n"
-            "# -------------------\n"
-            "# 1. Inputs: Use the variable names listed in the sidebar.\n"
-            "# 2. Outputs: Assign values to output variables listed in the sidebar.\n"
-            "#    (e.g., out_1, out_2, etc.)\n"
-            "# \n"
-            "# EXAMPLES:\n"
-            "#   out_1 = in_1 * 2\n"
-            "#   force = mass * acceleration\n"
-        )
-        QtWidgets.QMessageBox.information(self, "Function Block Help", help_text)
-        
-    def show_find_replace(self):
-        # (Same as before)
-        dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle("Find & Replace")
-        dialog.resize(400, 150)
-        layout = QtWidgets.QVBoxLayout(dialog)
-        find_layout = QtWidgets.QHBoxLayout()
-        find_layout.addWidget(QtWidgets.QLabel("Find:"))
-        self.find_edit = QtWidgets.QLineEdit()
-        find_layout.addWidget(self.find_edit)
-        layout.addLayout(find_layout)
-        replace_layout = QtWidgets.QHBoxLayout()
-        replace_layout.addWidget(QtWidgets.QLabel("Replace:"))
-        self.replace_edit = QtWidgets.QLineEdit()
-        replace_layout.addWidget(self.replace_edit)
-        layout.addLayout(replace_layout)
-        btn_layout = QtWidgets.QHBoxLayout()
-        find_btn = QtWidgets.QPushButton("Find")
-        find_btn.clicked.connect(self.find_text)
-        replace_btn = QtWidgets.QPushButton("Replace")
-        replace_btn.clicked.connect(self.replace_text)
-        replace_all_btn = QtWidgets.QPushButton("Replace All")
-        replace_all_btn.clicked.connect(self.replace_all_text)
-        btn_layout.addWidget(find_btn)
-        btn_layout.addWidget(replace_btn)
-        btn_layout.addWidget(replace_all_btn)
-        layout.addLayout(btn_layout)
-        dialog.exec_()
-        
-    def find_text(self):
-        text = self.find_edit.text()
-        if text:
-            found = self.editor.findFirst(text, False, False, False, True, True, -1, -1, True)
-            if not found:
-                self.editor.findFirst(text, False, False, False, True, True, 0, 0, True)
-    def replace_text(self):
-        text = self.find_edit.text()
-        replace = self.replace_edit.text()
-        if text and self.editor.hasSelectedText():
-            self.editor.replace(replace)
-            self.find_text()
-    def replace_all_text(self):
-        text = self.find_edit.text()
-        replace = self.replace_edit.text()
-        if text:
-            content = self.editor.toPlainText()
-            new_content = content.replace(text, replace)
-            self.editor.setPlainText(new_content)
-    def get_code(self):
-        return self.editor.toPlainText()
-        
-    def show_help(self) -> None:
-        help_text = (
             "# FUNCTION BLOCK CODE EDITOR\n"
             "# ==========================\n"
             "# \n"
@@ -489,17 +424,21 @@ class CodeEditorDialog(QtWidgets.QDialog):
     def find_text(self):
         text = self.find_edit.text()
         if text:
-            # Use QsciScintilla's findFirst for initial search
-            found = self.editor.findFirst(text, False, False, False, True, True, -1, -1, True)
+            # Use QPlainTextEdit's find() method
+            found = self.editor.find(text)
             if not found:
                 # Wrap around from beginning
-                self.editor.findFirst(text, False, False, False, True, True, 0, 0, True)
+                cursor = self.editor.textCursor()
+                cursor.movePosition(QtGui.QTextCursor.Start)
+                self.editor.setTextCursor(cursor)
+                self.editor.find(text)
                 
     def replace_text(self):
         text = self.find_edit.text()
         replace = self.replace_edit.text()
-        if text and self.editor.hasSelectedText():
-            self.editor.replace(replace)
+        cursor = self.editor.textCursor()
+        if text and cursor.hasSelection():
+            cursor.insertText(replace)
             self.find_text()  # Find next
             
     def replace_all_text(self):

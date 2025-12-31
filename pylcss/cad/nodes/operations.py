@@ -121,8 +121,16 @@ class SelectFaceNode(CadQueryNode):
         try:
             if method == 'Direction':
                 selector = self.get_property('direction')
-                face_selection = shape.faces(selector)
+                print(f"[SelectFace DEBUG] Method: Direction, Selector: {selector}")
+                try:
+                    face_selection = shape.faces(selector)
+                except Exception:
+                    # Fallback to .workplane().faces() if direct access fails
+                    print("[SelectFace DEBUG] Direct faces selection failed, trying .workplane().faces()")
+                    face_selection = shape.workplane().faces(selector)
+
                 faces = face_selection.vals()
+                print(f"[SelectFace DEBUG] Found {len(faces)} faces")
                 if not faces:
                     self.set_error("No faces found with selector")
                     return None
@@ -346,56 +354,3 @@ class CylinderCutNode(CadQueryNode):
         except Exception as e:
             print(f"CylinderCut error: {e}")
             return target
-
-
-class ChamferNode(CadQueryNode):
-    """Chamfers edges of a shape."""
-    __identifier__ = 'com.cad.chamfer'
-    NODE_NAME = 'Chamfer'
-
-    def __init__(self):
-        super(ChamferNode, self).__init__()
-        self.add_input('shape', color=(100, 255, 100))
-        self.add_input('length', color=(180, 180, 0))
-        self.add_output('shape', color=(100, 255, 100))
-        self.create_property('length', 1.0, widget_type='float')
-
-    def run(self):
-        shape = self.get_input_shape('shape')
-        length = self.get_input_value('length', 'length')
-        
-        if shape is None: return None
-        try:
-            # Default to chamfering all edges if no selector provided
-            # For more advanced use, we would add a selector input
-            return shape.edges().chamfer(float(length))
-        except Exception as e:
-            self.set_error(f"Chamfer error: {e}")
-            return shape
-
-
-class ShellNode(CadQueryNode):
-    """Hollows out a solid (Shelling)."""
-    __identifier__ = 'com.cad.shell'
-    NODE_NAME = 'Shell'
-
-    def __init__(self):
-        super(ShellNode, self).__init__()
-        self.add_input('shape', color=(100, 255, 100))
-        self.add_input('thickness', color=(180, 180, 0))
-        self.add_output('shape', color=(100, 255, 100))
-        self.create_property('thickness', -1.0, widget_type='float') # Negative = inward
-
-    def run(self):
-        shape = self.get_input_shape('shape')
-        thk = self.get_input_value('thickness', 'thickness')
-        
-        if shape is None: return None
-        try:
-            # Shelling usually requires selecting faces to remove.
-            # If no faces selected, CadQuery shells the whole solid (hollow inside).
-            # To remove faces, we would need a SelectFaceNode input.
-            return shape.shell(float(thk))
-        except Exception as e:
-            self.set_error(f"Shell error: {e}")
-            return shape

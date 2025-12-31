@@ -83,8 +83,13 @@ class ArcSketchNode(CadQueryNode):
             y1 = float(cy) + float(r) * math.sin(start_rad)
             x2 = float(cx) + float(r) * math.cos(end_rad)
             y2 = float(cy) + float(r) * math.sin(end_rad)
+            
+            # Calculate midpoint ON the arc (not the center!)
+            mid_rad = (start_rad + end_rad) / 2
+            mid_x = float(cx) + float(r) * math.cos(mid_rad)
+            mid_y = float(cy) + float(r) * math.sin(mid_rad)
 
-            return sketch.moveTo(x1, y1).threePointArc((float(cx), float(cy)), (x2, y2))
+            return sketch.moveTo(x1, y1).threePointArc((mid_x, mid_y), (x2, y2))
         except Exception as e:
             self.set_error(f"Arc creation failed: {e}")
             return None
@@ -139,8 +144,8 @@ class ParametricRectangleSketchNode(CadQueryNode):
 
         self.create_property('x', 0.0, widget_type='float')
         self.create_property('y', 0.0, widget_type='float')
-        self.create_property('rect_width', 10.0, widget_type='float')
-        self.create_property('rect_height', 10.0, widget_type='float')
+        self.create_property('width', 10.0, widget_type='float')
+        self.create_property('height', 10.0, widget_type='float')
 
     def run(self):
         sketch = self.get_input_shape('sketch')
@@ -149,8 +154,8 @@ class ParametricRectangleSketchNode(CadQueryNode):
 
         x = resolve_numeric_input(self.get_input('x'), self.get_property('x'))
         y = resolve_numeric_input(self.get_input('y'), self.get_property('y'))
-        w = resolve_numeric_input(self.get_input('width'), self.get_property('rect_width'))
-        h = resolve_numeric_input(self.get_input('height'), self.get_property('rect_height'))
+        w = resolve_numeric_input(self.get_input('width'), self.get_property('width'))
+        h = resolve_numeric_input(self.get_input('height'), self.get_property('height'))
 
         try:
             return sketch.moveTo(float(x), float(y)).rect(float(w), float(h))

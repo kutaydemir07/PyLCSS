@@ -43,10 +43,11 @@ from pylcss.cad.nodes.sketch import (
 # =============================================================================
 from pylcss.cad.nodes.operations import (
     ExtrudeNode, PocketNode, FilletNode, SelectFaceNode, 
-    CutExtrudeNode, BooleanNode, RevolveNode, CylinderCutNode,
-    ChamferNode, ShellNode
+    CutExtrudeNode, BooleanNode, RevolveNode, CylinderCutNode
 )
-from pylcss.cad.nodes.parametric import SweepNode, LoftNode, HelixNode
+from pylcss.cad.nodes.parametric import (
+    SweepNode, LoftNode, HelixNode, ChamferNode, ShellNode
+)
 
 # =============================================================================
 # CUTTING OPERATIONS
