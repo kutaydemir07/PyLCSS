@@ -15,39 +15,6 @@ from NodeGraphQt import BaseNode
 from pylcss.cad.core.base_node import CadQueryNode, resolve_numeric_input, resolve_shape_input
 
 
-class CoordinateBoxNode(CadQueryNode):
-    """Box with explicit coordinate positioning (like real CAD)."""
-    __identifier__ = "com.cad.coordinate_box"
-    NODE_NAME = "Box (Coordinates)"
-
-    def __init__(self):
-        super(CoordinateBoxNode, self).__init__()
-        self.add_output("shape", color=(100, 255, 100))
-        
-        # Dimensions
-        self.create_property("length", 50.0, widget_type="float")
-        self.create_property("box_width", 30.0, widget_type="float")
-        self.create_property("box_height", 10.0, widget_type="float")
-        
-        # Position (corner coordinates)
-        self.create_property("x_min", 0.0, widget_type="float")
-        self.create_property("y_min", 0.0, widget_type="float")
-        self.create_property("z_min", 0.0, widget_type="float")
-
-    def run(self):
-        l = float(self.get_property("length"))
-        w = float(self.get_property("box_width"))
-        h = float(self.get_property("box_height"))
-        x = float(self.get_property("x_min"))
-        y = float(self.get_property("y_min"))
-        z = float(self.get_property("z_min"))
-        
-        # Create box at origin then translate
-        box = cq.Workplane("XY").box(l, w, h)
-        # Translate so the corner is at (x, y, z)
-        return box.translate((x + l/2, y + w/2, z + h/2))
-
-
 class HoleAtCoordinatesNode(CadQueryNode):
     """Cut a hole at specific X, Y coordinates."""
     __identifier__ = "com.cad.hole_at_coords"
@@ -313,11 +280,9 @@ class ArrayHolesNode(CadQueryNode):
 
 # Registry for enhanced nodes
 ENHANCED_NODE_REGISTRY = {
-    "com.cad.coordinate_box": CoordinateBoxNode,
     "com.cad.hole_at_coords": HoleAtCoordinatesNode,
     "com.cad.multi_hole": MultiHoleNode,
     "com.cad.rectangular_cut": RectangularCutNode,
     "com.cad.slot_cut": SlotCutNode,
     "com.cad.array_holes": ArrayHolesNode,
 }
-

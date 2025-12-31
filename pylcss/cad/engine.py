@@ -1,41 +1,66 @@
 # Copyright (c) 2025 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""Graph execution engine with dirty-state caching."""
+"""Graph execution engine with dirty-state caching and simulation control."""
 from collections import deque
 import hashlib
 import pickle
 
+# Node identifiers for simulation nodes (skip during auto-update)
+SIMULATION_NODE_IDENTIFIERS = {
+    'com.cad.sim.material',
+    'com.cad.sim.mesh',
+    'com.cad.sim.constraint',
+    'com.cad.sim.load',
+    'com.cad.sim.pressure_load',
+    'com.cad.sim.solver',
+    'com.cad.sim.topopt',
+}
+
 def _hash_value(value):
     """Create a hash of a value for change detection."""
     try:
-        # Use pickle to serialize the value, then hash it
         data = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
         return hashlib.md5(data).hexdigest()
     except (TypeError, pickle.PicklingError):
-        # If pickling fails, use string representation
         return hashlib.md5(str(value).encode()).hexdigest()
 
-def execute_graph(graph_or_nodes):
+def _is_simulation_node(node):
+    """Check if a node is a simulation node that should be skipped during auto-update."""
+    identifier = getattr(node, '__identifier__', '')
+    return identifier in SIMULATION_NODE_IDENTIFIERS
+
+def execute_graph(graph_or_nodes, skip_simulation=False, **kwargs):
     """
     Execute nodes in topological order with deep hash-based dirty checks.
-    Accepts either a NodeGraph object or a list of nodes.
-    Only re-executes nodes when their inputs actually change.
+    
+    Args:
+        graph_or_nodes: NodeGraph object or list of nodes
+        skip_simulation: If True, skip FEA/TopOpt nodes (for auto-update mode)
+        **kwargs: Additional arguments passed to node.run() if supported (e.g. progress_callback)
+    
+    Returns:
+        dict: Results from executed nodes
     """
-    # CHANGE: Handle both Graph object and List of nodes
+    # Handle both Graph object and List of nodes
     if hasattr(graph_or_nodes, 'all_nodes'):
         nodes = list(graph_or_nodes.all_nodes())
     else:
-        nodes = graph_or_nodes # It's already a list from our worker
-    deps = {n: set() for n in nodes}
-    rev = {n: set() for n in nodes}
+        nodes = graph_or_nodes
 
-    for n in nodes:
-        # Check if node has inputs
+    # Filter out simulation nodes if skip_simulation is True
+    if skip_simulation:
+        nodes_to_execute = [n for n in nodes if not _is_simulation_node(n)]
+    else:
+        nodes_to_execute = nodes
+
+    deps = {n: set() for n in nodes_to_execute}
+    rev = {n: set() for n in nodes_to_execute}
+
+    for n in nodes_to_execute:
         if not hasattr(n, 'input_ports'):
             continue
 
-        # Handle input_ports returning list or dict
         inputs = n.input_ports()
         if isinstance(inputs, dict):
             inputs = list(inputs.values())
@@ -46,6 +71,7 @@ def execute_graph(graph_or_nodes):
 
             for cp in inp.connected_ports():
                 dep_node = cp.node()
+                # Only add dependency if it's in our execution list
                 if dep_node in deps:
                     deps[n].add(dep_node)
                     rev[dep_node].add(n)
@@ -63,8 +89,8 @@ def execute_graph(graph_or_nodes):
                 ready.append(m)
 
     # Handle cycles
-    if len(order) != len(nodes):
-        order = nodes
+    if len(order) != len(nodes_to_execute):
+        order = nodes_to_execute
 
     # 3. Execution with Deep Hash-Based Caching
     results = {}
@@ -87,7 +113,6 @@ def execute_graph(graph_or_nodes):
                         if upstream_result is not None:
                             input_values.append((cp.name(), upstream_result))
 
-            # Sort for consistent hashing
             input_values.sort(key=lambda x: x[0])
             current_input_hash = _hash_value(input_values)
 
@@ -95,7 +120,6 @@ def execute_graph(graph_or_nodes):
         last_input_hash = getattr(n, '_last_input_hash', None)
         cached_result = getattr(n, '_last_result', None)
 
-        # Only skip if inputs haven't changed AND we have a cached result
         can_skip = (current_input_hash == last_input_hash and
                    cached_result is not None and
                    not getattr(n, '_force_execute', False))
@@ -106,22 +130,27 @@ def execute_graph(graph_or_nodes):
 
         # Execute the node
         try:
-            res = n.run()
+            # Check if run() accepts kwargs (e.g., progress_callback)
+            import inspect
+            sig = inspect.signature(n.run)
+            valid_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+            
+            if valid_kwargs:
+                res = n.run(**valid_kwargs)
+            else:
+                res = n.run()
 
-            # Update cache with new result and input hash
             setattr(n, '_last_result', res)
             setattr(n, '_last_input_hash', current_input_hash)
             setattr(n, '_dirty', False)
             setattr(n, '_force_execute', False)
             executed_nodes.add(n)
 
-            # Clear error state
             if hasattr(n, 'clear_error'):
                 n.clear_error()
                 
             results[n] = res
         except Exception as e:
-            # Set error state on the node
             if hasattr(n, 'set_error'):
                 n.set_error(str(e))
             

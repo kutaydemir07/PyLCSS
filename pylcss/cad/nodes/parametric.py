@@ -200,118 +200,6 @@ class PyramidNode(ParametricNode):
         return result
 
 
-# ==========================================
-# 2D SKETCHING OPERATIONS
-# ==========================================
-
-class LineNode(ParametricNode):
-    """Creates a line segment."""
-    __identifier__ = 'com.cad.line'
-    NODE_NAME = 'Line'
-
-    def __init__(self):
-        super(LineNode, self).__init__()
-        self.add_input('sketch', color=(100, 200, 255))
-        self.add_input('x1', color=(180, 180, 0))
-        self.add_input('y1', color=(180, 180, 0))
-        self.add_input('x2', color=(180, 180, 0))
-        self.add_input('y2', color=(180, 180, 0))
-        self.add_output('shape', color=(100, 200, 255))
-        
-        self.create_property('x1', 0.0, widget_type='float')
-        self.create_property('y1', 0.0, widget_type='float')
-        self.create_property('x2', 10.0, widget_type='float')
-        self.create_property('y2', 10.0, widget_type='float')
-
-    def run(self):
-        sketch = _resolve_shape_input(self.get_input('sketch'))
-        if sketch is None:
-            sketch = cq.Workplane("XY")
-        
-        x1 = _resolve_numeric_input(self.get_input('x1'), self.get_property('x1'))
-        y1 = _resolve_numeric_input(self.get_input('y1'), self.get_property('y1'))
-        x2 = _resolve_numeric_input(self.get_input('x2'), self.get_property('x2'))
-        y2 = _resolve_numeric_input(self.get_input('y2'), self.get_property('y2'))
-        
-        return sketch.moveTo(float(x1), float(y1)).lineTo(float(x2), float(y2))
-
-
-class ArcNode(ParametricNode):
-    """Creates an arc."""
-    __identifier__ = 'com.cad.arc'
-    NODE_NAME = 'Arc'
-
-    def __init__(self):
-        super(ArcNode, self).__init__()
-        self.add_input('sketch', color=(100, 200, 255))
-        self.add_input('center_x', color=(180, 180, 0))
-        self.add_input('center_y', color=(180, 180, 0))
-        self.add_input('radius', color=(180, 180, 0))
-        self.add_input('start_angle', color=(180, 180, 0))
-        self.add_input('end_angle', color=(180, 180, 0))
-        self.add_output('shape', color=(100, 200, 255))
-        
-        self.create_property('center_x', 0.0, widget_type='float')
-        self.create_property('center_y', 0.0, widget_type='float')
-        self.create_property('radius', 10.0, widget_type='float')
-        self.create_property('start_angle', 0.0, widget_type='float')
-        self.create_property('end_angle', 90.0, widget_type='float')
-
-    def run(self):
-        sketch = _resolve_shape_input(self.get_input('sketch'))
-        if sketch is None:
-            sketch = cq.Workplane("XY")
-        
-        cx = _resolve_numeric_input(self.get_input('center_x'), self.get_property('center_x'))
-        cy = _resolve_numeric_input(self.get_input('center_y'), self.get_property('center_y'))
-        r = _resolve_numeric_input(self.get_input('radius'), self.get_property('radius'))
-        start = _resolve_numeric_input(self.get_input('start_angle'), self.get_property('start_angle'))
-        end = _resolve_numeric_input(self.get_input('end_angle'), self.get_property('end_angle'))
-        
-        # Calculate arc points
-        start_rad = math.radians(float(start))
-        end_rad = math.radians(float(end))
-        
-        x1 = float(cx) + float(r) * math.cos(start_rad)
-        y1 = float(cy) + float(r) * math.sin(start_rad)
-        x2 = float(cx) + float(r) * math.cos(end_rad)
-        y2 = float(cy) + float(r) * math.sin(end_rad)
-        
-        return sketch.moveTo(x1, y1).threePointArc((float(cx), float(cy)), (x2, y2))
-
-
-class PolygonNode(ParametricNode):
-    """Creates a regular polygon."""
-    __identifier__ = 'com.cad.polygon'
-    NODE_NAME = 'Polygon'
-
-    def __init__(self):
-        super(PolygonNode, self).__init__()
-        self.add_input('sketch', color=(100, 200, 255))
-        self.add_input('sides', color=(180, 180, 0))
-        self.add_input('radius', color=(180, 180, 0))
-        self.add_input('center_x', color=(180, 180, 0))
-        self.add_input('center_y', color=(180, 180, 0))
-        self.add_output('shape', color=(100, 200, 255))
-        
-        self.create_property('sides', 6, widget_type='int')
-        self.create_property('radius', 10.0, widget_type='float')
-        self.create_property('center_x', 0.0, widget_type='float')
-        self.create_property('center_y', 0.0, widget_type='float')
-
-    def run(self):
-        sketch = _resolve_shape_input(self.get_input('sketch'))
-        if sketch is None:
-            sketch = cq.Workplane("XY")
-        
-        sides = _resolve_numeric_input(self.get_input('sides'), self.get_property('sides'))
-        r = _resolve_numeric_input(self.get_input('radius'), self.get_property('radius'))
-        x = _resolve_numeric_input(self.get_input('center_x'), self.get_property('center_x'))
-        y = _resolve_numeric_input(self.get_input('center_y'), self.get_property('center_y'))
-        
-        return sketch.moveTo(float(x), float(y)).polygon(int(sides), float(r))
-
-
 class SplineNode(ParametricNode):
     """Creates a spline through points."""
     __identifier__ = 'com.cad.spline'
@@ -578,29 +466,7 @@ class OffsetNode(ParametricNode):
             return shape
 
 
-class DraftNode(ParametricNode):
-    """Applies draft angle to faces."""
-    __identifier__ = 'com.cad.draft'
-    NODE_NAME = 'Draft'
 
-    def __init__(self):
-        super(DraftNode, self).__init__()
-        self.add_input('shape', color=(100, 255, 100))
-        self.add_output('shape', color=(100, 255, 100))
-        
-        self.create_property('angle', 5.0, widget_type='float')
-        self.create_property('neutral_plane', 'XY', widget_type='string')
-
-    def run(self):
-        shape = _resolve_shape_input(self.get_input('shape'))
-        if shape is None:
-            return None
-        
-        angle = self.get_property('angle')
-        
-        # Draft is complex in CadQuery, return shape for now
-        # Real implementation would use OCCT draft operations
-        return shape
 
 
 # ==========================================
@@ -885,222 +751,6 @@ class CircularPatternNode(ParametricNode):
             return shape
 
 
-# ==========================================
-# ANALYSIS NODES
-# ==========================================
-
-class VolumeNode(ParametricNode):
-    """Calculates volume of a solid."""
-    __identifier__ = 'com.cad.volume'
-    NODE_NAME = 'Volume'
-
-    def __init__(self):
-        super(VolumeNode, self).__init__()
-        self.add_input('shape', color=(100, 255, 100))
-        self.add_output('value', color=(180, 180, 0))
-
-    def run(self):
-        shape = _resolve_shape_input(self.get_input('shape'))
-        if shape is None:
-            return 0.0
-        
-        try:
-            # Handle both Workplane and Shape objects
-            if hasattr(shape, 'val'):
-                actual_shape = shape.val()
-            else:
-                actual_shape = shape
-            bb = actual_shape.BoundingBox()
-            volume = bb.xlen * bb.ylen * bb.zlen
-            print(f"Volume: {volume:.2f} mm³")
-            return volume
-        except Exception as e:
-            print(f"Volume error: {e}")
-            return 0.0
-
-
-class SurfaceAreaNode(ParametricNode):
-    """Calculates surface area of a solid."""
-    __identifier__ = 'com.cad.surface_area'
-    NODE_NAME = 'Surface Area'
-
-    def __init__(self):
-        super(SurfaceAreaNode, self).__init__()
-        self.add_input('shape', color=(100, 255, 100))
-        self.add_output('value', color=(180, 180, 0))
-
-    def run(self):
-        shape = _resolve_shape_input(self.get_input('shape'))
-        if shape is None:
-            return 0.0
-        
-        # Approximate surface area calculation
-        try:
-            # Get all faces and sum areas
-            faces = shape.faces().vals()
-            total_area = sum(f.Area() for f in faces)
-            print(f"Surface Area: {total_area:.2f} mm²")
-            return total_area
-        except Exception as e:
-            print(f"Surface area error: {e}")
-            return 0.0
-
-
-class CenterOfMassNode(ParametricNode):
-    """Finds center of mass of a solid."""
-    __identifier__ = 'com.cad.center_of_mass'
-    NODE_NAME = 'Center of Mass'
-
-    def __init__(self):
-        super(CenterOfMassNode, self).__init__()
-        self.add_input('shape', color=(100, 255, 100))
-        self.add_output('point', color=(255, 200, 100))
-
-    def run(self):
-        shape = _resolve_shape_input(self.get_input('shape'))
-        if shape is None:
-            return (0.0, 0.0, 0.0)
-        
-        try:
-            # Handle both Workplane and Shape objects
-            if hasattr(shape, 'val'):
-                actual_shape = shape.val()
-            else:
-                actual_shape = shape
-            bb = actual_shape.BoundingBox()
-            com = (bb.center.x, bb.center.y, bb.center.z)
-            print(f"Center of Mass: ({com[0]:.2f}, {com[1]:.2f}, {com[2]:.2f})")
-            return com
-        except Exception as e:
-            print(f"Center of mass error: {e}")
-            return (0.0, 0.0, 0.0)
-
-
-# ==========================================
-# ADVANCED FEATURES
-# ==========================================
-
-class TextNode(ParametricNode):
-    """Creates 3D text."""
-    __identifier__ = 'com.cad.text'
-    NODE_NAME = '3D Text'
-
-    def __init__(self):
-        super(TextNode, self).__init__()
-        self.add_input('text', color=(180, 180, 0))
-        self.add_input('font_size', color=(180, 180, 0))
-        self.add_input('depth', color=(180, 180, 0))
-        self.add_output('shape', color=(100, 255, 100))
-        
-        self.create_property('text', 'CAD', widget_type='string')
-        self.create_property('font_size', 10.0, widget_type='float')
-        self.create_property('depth', 2.0, widget_type='float')
-
-    def run(self):
-        text = self.get_input_value('text', 'text')
-        size = _resolve_numeric_input(self.get_input('font_size'), self.get_property('font_size'))
-        depth = _resolve_numeric_input(self.get_input('depth'), self.get_property('depth'))
-        
-        size = float(size)
-        depth = float(depth)
-        
-        try:
-            # CadQuery text support is limited, create simple box placeholder
-            # Real implementation would use FreeType or similar
-            return cq.Workplane("XY").text(str(text), size, depth)
-        except:
-            # Fallback to box
-            return cq.Workplane("XY").box(size * len(str(text)), size, depth)
-
-
-class ThreadNode(ParametricNode):
-    """Creates a threaded hole or bolt."""
-    __identifier__ = 'com.cad.thread'
-    NODE_NAME = 'Thread'
-
-    def __init__(self):
-        super(ThreadNode, self).__init__()
-        self.add_input('shape', color=(100, 255, 100))
-        self.add_output('shape', color=(100, 255, 100))
-        
-        self.create_property('diameter', 6.0, widget_type='float')
-        self.create_property('pitch', 1.0, widget_type='float')
-        self.create_property('length', 20.0, widget_type='float')
-        self.create_property('external', True, widget_type='bool')
-
-    def run(self):
-        shape = _resolve_shape_input(self.get_input('shape'))
-        
-        d = float(self.get_property('diameter'))
-        pitch = float(self.get_property('pitch'))
-        length = float(self.get_property('length'))
-        external = self.get_property('external')
-        
-        # Creating actual threads is complex, return cylinder approximation
-        thread = cq.Workplane("XY").cylinder(length, d/2)
-        
-        if shape is not None:
-            try:
-                if external:
-                    return shape.union(thread)
-                else:
-                    return shape.cut(thread)
-            except:
-                return shape
-        
-        return thread
-
-
-class SplitNode(ParametricNode):
-    """Splits a solid by a plane."""
-    __identifier__ = 'com.cad.split'
-    NODE_NAME = 'Split'
-
-    def __init__(self):
-        super(SplitNode, self).__init__()
-        self.add_input('shape', color=(100, 255, 100))
-        self.add_output('shape', color=(100, 255, 100))
-        
-        self.create_property('plane', 'XY', widget_type='string')
-        self.create_property('keep', 'both', widget_type='string')
-
-    def run(self):
-        shape = _resolve_shape_input(self.get_input('shape'))
-        if shape is None:
-            return None
-        
-        # Split operation is complex in CadQuery
-        # Return original shape for now
-        return shape
-
-
-class DatumPlaneNode(ParametricNode):
-    """Creates a construction plane for sketching."""
-    __identifier__ = 'com.cad.datum_plane'
-    NODE_NAME = 'Datum Plane'
-
-    def __init__(self):
-        super(DatumPlaneNode, self).__init__()
-        self.add_input('ref_obj', label='Reference (Shape/Plane)', color=(100, 255, 100))
-        self.add_output('workplane', color=(100, 200, 255))
-        
-        self.create_property('offset', 0.0, widget_type='float')
-        self.create_property('rotation_x', 0.0, widget_type='float')
-        self.create_property('rotation_y', 0.0, widget_type='float')
-        self.create_property('rotation_z', 0.0, widget_type='float')
-
-    def run(self):
-        ref = _resolve_shape_input(self.get_input('ref_obj'))
-        offset = self.get_property('offset')
-        rx = self.get_property('rotation_x')
-        ry = self.get_property('rotation_y')
-        rz = self.get_property('rotation_z')
-        
-        # Start from reference or global XY
-        wp = ref.workplane() if ref else cq.Workplane("XY")
-        
-        # Apply transformations to create the new plane
-        return wp.workplane(offset=offset).transformed(rotate=(rx, ry, rz))
 
 
 class ShellNode(ParametricNode):
@@ -1135,49 +785,12 @@ class ShellNode(ParametricNode):
             return shape
 
 
-# ==========================================
-# UTILITY NODES
-# ==========================================
-
-class MeasureDistanceNode(ParametricNode):
-    """Measures distance between two points."""
-    __identifier__ = 'com.cad.measure_distance'
-    NODE_NAME = 'Measure Distance'
-
-    def __init__(self):
-        super(MeasureDistanceNode, self).__init__()
-        self.add_output('value', color=(180, 180, 0))
-        
-        self.create_property('x1', 0.0, widget_type='float')
-        self.create_property('y1', 0.0, widget_type='float')
-        self.create_property('z1', 0.0, widget_type='float')
-        self.create_property('x2', 10.0, widget_type='float')
-        self.create_property('y2', 0.0, widget_type='float')
-        self.create_property('z2', 0.0, widget_type='float')
-
-    def run(self):
-        x1 = float(self.get_property('x1'))
-        y1 = float(self.get_property('y1'))
-        z1 = float(self.get_property('z1'))
-        x2 = float(self.get_property('x2'))
-        y2 = float(self.get_property('y2'))
-        z2 = float(self.get_property('z2'))
-        
-        distance = math.sqrt((x2-x1)**2 + (y2-y1)**2 + (z2-z1)**2)
-        print(f"Distance: {distance:.2f} mm")
-        return distance
-
-
 # Registry of all parametric nodes
 PARAMETRIC_NODE_REGISTRY = {
     'com.cad.cone': ConeNode,
     'com.cad.torus': TorusNode,
     'com.cad.wedge': WedgeNode,
     'com.cad.pyramid': PyramidNode,
-    'com.cad.datum_plane': DatumPlaneNode,
-    'com.cad.line': LineNode,
-    'com.cad.arc': ArcNode,
-    'com.cad.polygon': PolygonNode,
     'com.cad.spline': SplineNode,
     'com.cad.ellipse': EllipseNode,
     'com.cad.sweep': SweepNode,
@@ -1186,18 +799,10 @@ PARAMETRIC_NODE_REGISTRY = {
     'com.cad.chamfer': ChamferNode,
     'com.cad.shell': ShellNode,
     'com.cad.offset': OffsetNode,
-    'com.cad.draft': DraftNode,
     'com.cad.translate': TranslateNode,
     'com.cad.rotate': RotateNode,
     'com.cad.scale': ScaleNode,
     'com.cad.mirror': MirrorNode,
     'com.cad.linear_pattern': LinearPatternNode,
     'com.cad.circular_pattern': CircularPatternNode,
-    'com.cad.volume': VolumeNode,
-    'com.cad.surface_area': SurfaceAreaNode,
-    'com.cad.center_of_mass': CenterOfMassNode,
-    'com.cad.text': TextNode,
-    'com.cad.thread': ThreadNode,
-    'com.cad.split': SplitNode,
-    'com.cad.measure_distance': MeasureDistanceNode,
 }

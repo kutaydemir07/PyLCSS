@@ -42,11 +42,12 @@ class GraphExecutionWorker(QtCore.QThread):
     """Background worker to run the node graph without freezing the UI."""
     computation_finished = QtCore.Signal(object)  # Emits results dict
     computation_error = QtCore.Signal(str)
+    optimization_step = QtCore.Signal(object, object, int, int) # mesh, densities, step, total
 
-    # CHANGE: Accept 'nodes' list instead of 'graph' object
-    def __init__(self, nodes, parent=None):
+    def __init__(self, nodes, skip_simulation=False, parent=None):
         super().__init__(parent)
-        self.nodes = nodes  # Store the list of nodes, not the graph wrapper
+        self.nodes = nodes
+        self.skip_simulation = skip_simulation
         self._is_running = False
 
     def run(self):
@@ -54,8 +55,17 @@ class GraphExecutionWorker(QtCore.QThread):
         try:
             from pylcss.cad.engine import execute_graph
             
-            # CHANGE: Pass the list of nodes to the engine
-            results = execute_graph(self.nodes)
+            # Callback for real-time updates
+            def progress_cb(mesh, densities, step, total):
+                if self._is_running:
+                    self.optimization_step.emit(mesh, densities, step, total)
+
+            # Pass skip_simulation and callback to engine
+            results = execute_graph(
+                self.nodes, 
+                skip_simulation=self.skip_simulation,
+                progress_callback=progress_cb
+            )
 
             self.computation_finished.emit(results)
         except Exception as e:
@@ -64,6 +74,7 @@ class GraphExecutionWorker(QtCore.QThread):
             self.computation_error.emit(str(e))
         finally:
             self._is_running = False
+
 
 class ExpressionEdit(QtWidgets.QLineEdit):
 
@@ -566,9 +577,10 @@ class LibraryPanel(QtWidgets.QWidget):
         self.layout.addWidget(title)
         
         # Search box
-        search = QtWidgets.QLineEdit()
-        search.setPlaceholderText("Search components...")
-        self.layout.addWidget(search)
+        self.search = QtWidgets.QLineEdit()
+        self.search.setPlaceholderText("Search components...")
+        self.search.textChanged.connect(self._filter_tree)
+        self.layout.addWidget(self.search)
         
         # Tree view for categories
         self.tree = QtWidgets.QTreeWidget()
@@ -581,7 +593,6 @@ class LibraryPanel(QtWidgets.QWidget):
         categories = {
             "Primitives": [
                 ("Box", "com.cad.box"),
-                ("Box (Coordinates)", "com.cad.coordinate_box"),
                 ("Cylinder", "com.cad.cylinder"),
                 ("Sphere", "com.cad.sphere"),
                 ("Cone", "com.cad.cone"),
@@ -591,11 +602,11 @@ class LibraryPanel(QtWidgets.QWidget):
             ],
             "2D Sketching": [
                 ("Sketch", "com.cad.sketch"),
-                ("Rectangle", "com.cad.rect_sketch"),
-                ("Circle", "com.cad.circle_sketch"),
-                ("Line", "com.cad.line"),
-                ("Arc", "com.cad.arc"),
-                ("Polygon", "com.cad.polygon"),
+                ("Rectangle", "com.cad.sketch.rectangle"),
+                ("Circle", "com.cad.sketch.circle"),
+                ("Line", "com.cad.sketch.line"),
+                ("Arc", "com.cad.sketch.arc"),
+                ("Polygon", "com.cad.sketch.polygon"),
                 ("Spline", "com.cad.spline"),
                 ("Ellipse", "com.cad.ellipse"),
             ],
@@ -621,7 +632,6 @@ class LibraryPanel(QtWidgets.QWidget):
                 ("Chamfer", "com.cad.chamfer"),
                 ("Shell", "com.cad.shell"),
                 ("Offset 2D", "com.cad.offset"),
-                ("Draft", "com.cad.draft"),
             ],
             "Boolean Operations": [
                 ("Boolean Op", "com.cad.boolean"),
@@ -639,51 +649,27 @@ class LibraryPanel(QtWidgets.QWidget):
             "Selection": [
                 ("Select Face", "com.cad.select_face"),
             ],
-            "Constraints": [
-                ("Distance", "com.cad.constraint_distance"),
-                ("Angle", "com.cad.constraint_angle"),
-                ("Coincident", "com.cad.constraint_coincident"),
-            ],
             "Assembly": [
                 ("Assembly", "com.cad.assembly"),
-                ("Mate", "com.cad.mate"),
             ],
             "Analysis": [
                 ("Mass Properties", "com.cad.mass_properties"),
-                ("Stress Analysis", "com.cad.stress_analysis"),
                 ("Bounding Box", "com.cad.bounding_box"),
-                ("Volume", "com.cad.volume"),
-                ("Surface Area", "com.cad.surface_area"),
-                ("Center of Mass", "com.cad.center_of_mass"),
             ],
-            "Simulation": [
-                ("Force", "com.cad.force"),
-                ("Fixed Support", "com.cad.fixed_support"),
-                ("Run Simulation", "com.cad.simulation_run"),
-            ],
-            "FEA & Optimization": [
+            "Simulation (FEA)": [
                 ("Generate Mesh", "com.cad.sim.mesh"),
                 ("Material", "com.cad.sim.material"),
-                ("FEA Fixed Support", "com.cad.sim.constraint"),
-                ("FEA Load", "com.cad.sim.load"),
-                ("FEA Solver", "com.cad.sim.solver"),
+                ("Constraint", "com.cad.sim.constraint"),
+                ("Load", "com.cad.sim.load"),
+                ("Pressure Load", "com.cad.sim.pressure_load"),
+                ("Solver", "com.cad.sim.solver"),
                 ("Topology Opt", "com.cad.sim.topopt"),
-            ],
-            "Advanced Features": [
-                ("3D Text", "com.cad.text"),
-                ("Thread", "com.cad.thread"),
-                ("Split", "com.cad.split"),
-            ],
-            "Measurement": [
-                ("Measure Distance", "com.cad.measure_distance"),
             ],
             "Parameters": [
                 ("Number", "com.cad.number"),
+                ("Variable", "com.cad.variable"),
             ],
             "Export": [
-                ("2D Drawing", "com.cad.drawing"),
-                ("Property Table", "com.cad.property_table"),
-                ("Report", "com.cad.report"),
                 ("Export STEP", "com.cad.export_step"),
                 ("Export STL", "com.cad.export_stl"),
             ],
@@ -702,6 +688,23 @@ class LibraryPanel(QtWidgets.QWidget):
         
         self.tree.itemDoubleClicked.connect(self._on_component_selected)
         self.layout.addWidget(self.tree)
+    
+    def _filter_tree(self, text):
+        """Filter tree items based on search text."""
+        text = text.lower().strip()
+        for i in range(self.tree.topLevelItemCount()):
+            category = self.tree.topLevelItem(i)
+            visible_children = 0
+            for j in range(category.childCount()):
+                item = category.child(j)
+                matches = text in item.text(0).lower() if text else True
+                item.setHidden(not matches)
+                if matches:
+                    visible_children += 1
+            # Show category if any children match, or if search is empty
+            category.setHidden(visible_children == 0 and bool(text))
+            if visible_children > 0 or not text:
+                category.setExpanded(bool(text))  # Auto-expand when searching
     
     def _on_component_selected(self, item, column):
         """Handle component selection from library."""
@@ -757,7 +760,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         # Setup UI
         self._setup_toolbar() 
         self._create_ui()
-        # self._setup_menu() 
+        self._setup_shortcuts()
 
         # Connect graph selection
         self.graph.node_selected.connect(self._on_node_selected)
@@ -823,42 +826,24 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         # Set central widget for QMainWindow
         self.setCentralWidget(content_widget)
     
-    def _setup_menu(self):
-        """Create menu bar."""
-        menubar = self.menuBar()
+    def _setup_shortcuts(self):
+        """Setup keyboard shortcuts."""
+        from PySide6.QtGui import QShortcut, QKeySequence
         
-        # File menu
-        file_menu = menubar.addMenu("File")
-        file_menu.addAction("New", self._new_project, QtGui.QKeySequence.New)
-        file_menu.addAction("Open", self._open_project, QtGui.QKeySequence.Open)
-        file_menu.addAction("Save", self._save_project, QtGui.QKeySequence.Save)
-        file_menu.addAction("Save As", self._save_as_project)
-        file_menu.addSeparator()
-        file_menu.addAction("Exit", self.close, QtGui.QKeySequence.Quit)
+        # File shortcuts
+        QShortcut(QKeySequence.New, self, self._new_project)
+        QShortcut(QKeySequence.Open, self, self._open_project)
+        QShortcut(QKeySequence.Save, self, self._save_project)
         
-        # Edit menu
-        edit_menu = menubar.addMenu("Edit")
-        edit_menu.addAction("Undo", self._undo, QtGui.QKeySequence.Undo)
-        edit_menu.addAction("Redo", self._redo, QtGui.QKeySequence.Redo)
-        edit_menu.addSeparator()
-        edit_menu.addAction("Delete", self._delete_selected, QtGui.QKeySequence.Delete)
-        edit_menu.addAction("Clear All", self._clear_graph)
+        # Edit shortcuts
+        QShortcut(QKeySequence.Undo, self, self._undo)
+        QShortcut(QKeySequence.Redo, self, self._redo)
+        QShortcut(QKeySequence.Delete, self, self._delete_selected)
         
-        # View menu
-        view_menu = menubar.addMenu("View")
-        view_menu.addAction("Fit All", self._fit_all)
-        view_menu.addAction("Reset View", self._reset_view)
-        
-        # Tools menu
-        tools_menu = menubar.addMenu("Tools")
-        tools_menu.addAction("Execute Graph", self._execute_graph)
-        tools_menu.addAction("Run Simulation", self._run_simulation)
-        tools_menu.addAction("Generate Report", self._generate_report)
-        tools_menu.addAction("Validate Model", self._validate_model)
-        
-        # Help menu
-        help_menu = menubar.addMenu("Help")
-        help_menu.addAction("About", self._show_about)
+        # Custom shortcuts
+        QShortcut(QKeySequence("F5"), self, self._execute_graph)  # Run
+        QShortcut(QKeySequence("F"), self, self._fit_all)  # Fit all
+        QShortcut(QKeySequence("R"), self, self._reset_view)  # Reset view
     
     def _setup_toolbar(self):
         """Create toolbar and add to layout."""
@@ -873,8 +858,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         self.toolbar.addAction("Undo", self._undo)
         self.toolbar.addAction("Redo", self._redo)
         self.toolbar.addSeparator()
-        self.toolbar.addAction("Run", self._execute_graph)
-        self.toolbar.addAction("Report", self._generate_report)
+        self.toolbar.addAction("▶ Run", self._execute_graph)
+        self.toolbar.addAction("✓ Validate", self._validate_model)
+        self.toolbar.addAction("📊 Report", self._generate_report)
         
         self.toolbar.addSeparator()
         self.auto_update_cb = QtWidgets.QCheckBox("Auto-Update")
@@ -1026,6 +1012,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                     if isinstance(obj, dict) and ('mesh' in obj or 'vertices' in obj): return True # Sim result
                     if hasattr(obj, 'tessellate'): return True # Shape
                     if hasattr(obj, 'val'): return True # Wrapper
+                    # Check for 2D sketch (has pending wires but no solid)
+                    if hasattr(obj, 'ctx') and hasattr(obj.ctx, 'pendingWires'):
+                        return bool(obj.ctx.pendingWires)
                     return False
 
                 if selected:
@@ -1049,13 +1038,22 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                     self._last_rendered_node = target_node
                     # Get result from the results dict or the node cache
                     geom = results.get(target_node, getattr(target_node, '_last_result', None))
+                    
+                    print(f"[GUI Debug] Rendering node: {target_node.name()}, Result type: {type(geom)}")
 
                     if isinstance(geom, dict) and ('mesh' in geom or 'displacement' in geom):
+                        print("[GUI Debug] Rendering Simulation")
                         self.viewer.render_simulation(geom)
                     elif hasattr(geom, 'p') and hasattr(geom, 't'):
                         # Direct Mesh object from skfem
+                        print("[GUI Debug] Rendering skfem Mesh")
                         self.viewer.render_simulation(geom)
+                    elif self._is_2d_sketch(geom):
+                        # 2D sketch - render as polylines
+                        print("[GUI Debug] Rendering 2D Sketch")
+                        self.viewer.render_sketch(geom)
                     else:
+                        print("[GUI Debug] Rendering Shape (Tessellation)")
                         self.viewer.render_shape(geom)
                 else:
                     self.viewer.clear()
@@ -1064,6 +1062,17 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 print(f"Visualization update error: {e}")
         finally:
             self.result_mutex.unlock()
+
+    def _is_2d_sketch(self, obj):
+        """Check if object is a 2D sketch (has wires)."""
+        if obj is None:
+            return False
+        # Check for pending wires (2D sketch)
+        # We prioritize this: if wires are pending, we visualize them as a sketch
+        if hasattr(obj, 'ctx') and hasattr(obj.ctx, 'pendingWires'):
+            if obj.ctx.pendingWires:
+                return True
+        return False
 
     def _on_execution_error(self, error_msg):
         """Called if background thread fails."""
@@ -1215,33 +1224,241 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
     
     def _fit_all(self):
         """Fit all nodes in view."""
-        self.statusBar().showMessage("Fit All (centering nodes)")
+        try:
+            # Fit the node graph view
+            self.graph.fit_to_selection()
+            # If no selection, center on all nodes
+            if not self.graph.selected_nodes():
+                self.graph.center_on_nodes(self.graph.all_nodes())
+            self.statusBar().showMessage("✓ Fit to view")
+        except Exception as e:
+            # Fallback - try basic centering
+            try:
+                self.graph.center_selection()
+            except:
+                pass
+            self.statusBar().showMessage("✓ View adjusted")
     
     def _reset_view(self):
-        """Reset view to default."""
-        self.statusBar().showMessage("View reset")
+        """Reset the 3D viewer to default orientation."""
+        try:
+            # Reset the 3D viewer camera
+            if hasattr(self.viewer, 'renderer') and self.viewer.renderer:
+                self.viewer.renderer.ResetCamera()
+                if hasattr(self.viewer, 'iren') and self.viewer.iren:
+                    self.viewer.iren.GetRenderWindow().Render()
+            self.statusBar().showMessage("✓ 3D View reset")
+            self.timeline.add_event("3D view reset to default")
+        except Exception as e:
+            self.statusBar().showMessage("View reset")
     
     def _run_simulation(self):
-        """Run simulation on current model."""
+        """Run simulation by executing the graph and finding simulation nodes."""
         self.statusBar().showMessage("Running simulation...")
         self.timeline.add_event("Simulation started")
-        # Find export or simulation nodes and run them
-        QtCore.QTimer.singleShot(1000, lambda: self.statusBar().showMessage("✓ Simulation complete"))
-        self.timeline.add_event("Simulation completed")
+        
+        # Find simulation-related nodes (Solver, TopOpt, etc.)
+        sim_nodes = []
+        for node in self.graph.all_nodes():
+            node_class = node.__class__.__name__
+            if node_class in ['SolverNode', 'TopologyOptimizationNode', 'MeshNode']:
+                sim_nodes.append(node)
+        
+        if not sim_nodes:
+            QtWidgets.QMessageBox.information(
+                self, "No Simulation",
+                "No simulation nodes found in the graph.\n\n"
+                "Add FEA nodes (Material, Mesh, Constraint, Load, Solver) "
+                "or a Topology Optimization node to run a simulation."
+            )
+            self.statusBar().showMessage("No simulation nodes found")
+            return
+        
+        # Execute the graph which will run the simulation
+        self._execute_graph()
+        self.timeline.add_event(f"Simulation executed ({len(sim_nodes)} sim nodes)")
     
     def _generate_report(self):
-        """Generate a report from the model."""
+        """Generate a report from the model with node information."""
         self.statusBar().showMessage("Generating report...")
         self.timeline.add_event("Report generation started")
-        QtCore.QTimer.singleShot(1000, lambda: self.statusBar().showMessage("✓ Report generated"))
+        
+        # Collect model information
+        all_nodes = list(self.graph.all_nodes())
+        if not all_nodes:
+            QtWidgets.QMessageBox.information(
+                self, "Empty Model",
+                "No nodes in the graph to report on."
+            )
+            self.statusBar().showMessage("No nodes to report")
+            return
+        
+        # Build report content
+        report_lines = [
+            "=" * 60,
+            "CAD MODEL REPORT",
+            "=" * 60,
+            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Project: {self.current_file or 'Unsaved'}",
+            "",
+            f"Total Nodes: {len(all_nodes)}",
+            "",
+            "NODE SUMMARY:",
+            "-" * 40,
+        ]
+        
+        # Categorize nodes
+        node_types = {}
+        for node in all_nodes:
+            node_class = node.__class__.__name__
+            node_types[node_class] = node_types.get(node_class, 0) + 1
+        
+        for node_type, count in sorted(node_types.items()):
+            report_lines.append(f"  {node_type}: {count}")
+        
+        report_lines.extend([
+            "",
+            "NODE DETAILS:",
+            "-" * 40,
+        ])
+        
+        for node in all_nodes:
+            report_lines.append(f"  [{node.__class__.__name__}] {node.name()}")
+            # Add key properties
+            try:
+                props = node.model.properties
+                for key, val in list(props.items())[:5]:  # First 5 properties
+                    if not key.startswith('_'):
+                        report_lines.append(f"      {key}: {val}")
+            except:
+                pass
+        
+        report_lines.append("\n" + "=" * 60)
+        report_text = "\n".join(report_lines)
+        
+        # Show in a dialog
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Model Report")
+        dialog.resize(600, 500)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        
+        text_edit = QtWidgets.QTextEdit()
+        text_edit.setReadOnly(True)
+        text_edit.setPlainText(report_text)
+        text_edit.setStyleSheet("font-family: Consolas, monospace; font-size: 11px;")
+        layout.addWidget(text_edit)
+        
+        # Save button
+        btn_layout = QtWidgets.QHBoxLayout()
+        save_btn = QtWidgets.QPushButton("Save Report...")
+        close_btn = QtWidgets.QPushButton("Close")
+        
+        def save_report():
+            fname, _ = QtWidgets.QFileDialog.getSaveFileName(
+                dialog, "Save Report", "model_report.txt", "Text Files (*.txt)"
+            )
+            if fname:
+                with open(fname, 'w') as f:
+                    f.write(report_text)
+                self.statusBar().showMessage(f"✓ Report saved to {fname}")
+        
+        save_btn.clicked.connect(save_report)
+        close_btn.clicked.connect(dialog.accept)
+        btn_layout.addWidget(save_btn)
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+        
+        dialog.exec()
+        self.statusBar().showMessage("✓ Report generated")
         self.timeline.add_event("Report generated")
     
     def _validate_model(self):
-        """Validate the current model."""
+        """Validate the current model for issues."""
         self.statusBar().showMessage("Validating model...")
         self.timeline.add_event("Model validation started")
-        QtCore.QTimer.singleShot(1000, lambda: self.statusBar().showMessage("✓ Model valid"))
-        self.timeline.add_event("Model validation complete")
+        
+        issues = []
+        warnings = []
+        
+        all_nodes = list(self.graph.all_nodes())
+        
+        if not all_nodes:
+            issues.append("Model is empty - no nodes found")
+        else:
+            # Check for disconnected nodes
+            for node in all_nodes:
+                has_input = False
+                has_output = False
+                
+                for port in node.input_ports():
+                    if port.connected_ports():
+                        has_input = True
+                        break
+                
+                for port in node.output_ports():
+                    if port.connected_ports():
+                        has_output = True
+                        break
+                
+                # Primitive nodes don't need inputs
+                node_class = node.__class__.__name__
+                is_primitive = node_class in ['BoxNode', 'CylinderNode', 'SphereNode', 
+                                               'ConeNode', 'TorusNode', 'NumberNode']
+                is_export = 'Export' in node_class
+                
+                if not is_primitive and not has_input:
+                    warnings.append(f"{node.name()} has no connected inputs")
+                
+                if not is_export and not has_output:
+                    # Check if it's a terminal node (not an issue)
+                    if node_class not in ['SolverNode', 'TopologyOptimizationNode']:
+                        pass  # Non-terminal nodes without outputs are fine
+            
+            # Check for simulation setup
+            has_mesh = any(n.__class__.__name__ == 'MeshNode' for n in all_nodes)
+            has_solver = any(n.__class__.__name__ == 'SolverNode' for n in all_nodes)
+            has_material = any(n.__class__.__name__ == 'MaterialNode' for n in all_nodes)
+            has_constraint = any(n.__class__.__name__ == 'ConstraintNode' for n in all_nodes)
+            has_load = any(n.__class__.__name__ == 'LoadNode' for n in all_nodes)
+            
+            if has_solver:
+                if not has_mesh:
+                    issues.append("Solver requires a Mesh node")
+                if not has_material:
+                    issues.append("Solver requires a Material node")
+                if not has_constraint:
+                    warnings.append("Solver may need constraint nodes (fixed supports)")
+                if not has_load:
+                    warnings.append("Solver may need load nodes")
+        
+        # Show results
+        if not issues and not warnings:
+            QtWidgets.QMessageBox.information(
+                self, "Validation Complete",
+                "✓ Model is valid!\n\n"
+                f"Total nodes: {len(all_nodes)}"
+            )
+            self.statusBar().showMessage("✓ Model valid")
+        else:
+            msg = ""
+            if issues:
+                msg += "ERRORS:\n" + "\n".join(f"  ❌ {i}" for i in issues) + "\n\n"
+            if warnings:
+                msg += "WARNINGS:\n" + "\n".join(f"  ⚠️ {w}" for w in warnings)
+            
+            box = QtWidgets.QMessageBox(self)
+            box.setWindowTitle("Validation Results")
+            box.setText(f"Found {len(issues)} errors and {len(warnings)} warnings")
+            box.setDetailedText(msg)
+            box.setIcon(QtWidgets.QMessageBox.Warning if issues else QtWidgets.QMessageBox.Information)
+            box.exec()
+            
+            if issues:
+                self.statusBar().showMessage(f"⚠️ {len(issues)} validation errors")
+            else:
+                self.statusBar().showMessage(f"✓ Valid with {len(warnings)} warnings")
+        
+        self.timeline.add_event(f"Validation: {len(issues)} errors, {len(warnings)} warnings")
     
     def _new_project(self):
         """Create a new project."""
@@ -1265,8 +1482,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 self.timeline.add_event(f"Opened project: {fname}")
                 self.statusBar().showMessage(f"Opened: {fname}")
                 
-                # Execute to restore view
-                self._execute_graph()
+                # Execute to restore view (but skip heavy simulation)
+                self._execute_graph(skip_simulation=True)
             except Exception as e:
                 QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open project: {e}")
                 print(f"Open error details: {e}")
@@ -1363,26 +1580,30 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             "© 2025 Kutay Demir"
         )
     
-    def _execute_graph(self):
-        """Start graph execution in a background thread."""
+    def _execute_graph(self, skip_simulation=False):
+        """Start graph execution in a background thread.
+        
+        Args:
+            skip_simulation: If True, skip FEA/TopOpt nodes (for auto-update mode)
+        """
         if self.worker and self.worker.isRunning():
             self.statusBar().showMessage("⚠️ Computation already in progress...")
             return
 
         self.graph.widget.setEnabled(False)
         self.toolbar.setEnabled(False)
-        self.statusBar().showMessage("⏳ Computing... (UI Locked)")
-        self.timeline.add_event("Graph execution started (Background)")
+        
+        if skip_simulation:
+            self.statusBar().showMessage("⏳ Updating CAD preview...")
+        else:
+            self.statusBar().showMessage("⏳ Computing... (UI Locked)")
+            self.timeline.add_event("Graph execution started (Full)")
 
-        # --- KEY CHANGE HERE ---
-        # Capture the list of nodes on the MAIN THREAD.
-        # This prevents the background thread from accessing the QGraphicsScene.
-        # We convert the iterator to a concrete list immediately.
+        # Capture the list of nodes on the MAIN THREAD
         all_nodes_snapshot = list(self.graph.all_nodes())
         
-        # Initialize worker with the snapshot list
-        self.worker = GraphExecutionWorker(all_nodes_snapshot, self)
-        # -----------------------
+        # Initialize worker with skip_simulation parameter
+        self.worker = GraphExecutionWorker(all_nodes_snapshot, skip_simulation=skip_simulation, parent=self)
 
         self.worker.computation_finished.connect(self._on_execution_finished)
         self.worker.computation_error.connect(self._on_execution_error)

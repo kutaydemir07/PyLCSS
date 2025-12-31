@@ -139,8 +139,8 @@ class ParametricRectangleSketchNode(CadQueryNode):
 
         self.create_property('x', 0.0, widget_type='float')
         self.create_property('y', 0.0, widget_type='float')
-        self.create_property('width', 10.0, widget_type='float')
-        self.create_property('height', 10.0, widget_type='float')
+        self.create_property('rect_width', 10.0, widget_type='float')
+        self.create_property('rect_height', 10.0, widget_type='float')
 
     def run(self):
         sketch = self.get_input_shape('sketch')
@@ -149,8 +149,8 @@ class ParametricRectangleSketchNode(CadQueryNode):
 
         x = resolve_numeric_input(self.get_input('x'), self.get_property('x'))
         y = resolve_numeric_input(self.get_input('y'), self.get_property('y'))
-        w = resolve_numeric_input(self.get_input('width'), self.get_property('width'))
-        h = resolve_numeric_input(self.get_input('height'), self.get_property('height'))
+        w = resolve_numeric_input(self.get_input('width'), self.get_property('rect_width'))
+        h = resolve_numeric_input(self.get_input('height'), self.get_property('rect_height'))
 
         try:
             return sketch.moveTo(float(x), float(y)).rect(float(w), float(h))

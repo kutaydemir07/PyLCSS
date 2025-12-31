@@ -269,7 +269,7 @@ def mma_update(n, itr, xval, xmin, xmax, xold1, xold2, f0val, df0dx,
     
     return xnew, low, upp
 
-def shape_recovery(mesh, densities, cutoff, smoothing_iterations=3):
+def shape_recovery(mesh, densities, cutoff, smoothing_iterations=3, resolution=100):
     """Recover manufacturable geometry from density field using isosurface extraction."""
     try:
         from skimage import measure
@@ -283,8 +283,8 @@ def shape_recovery(mesh, densities, cutoff, smoothing_iterations=3):
         y_min, y_max = centroids[1].min(), centroids[1].max()
         z_min, z_max = centroids[2].min(), centroids[2].max()
 
-        # Create regular grid
-        nx, ny, nz = 50, 50, 50
+        # Create regular grid with user-specified resolution
+        nx, ny, nz = resolution, resolution, resolution
         x = np.linspace(x_min, x_max, nx)
         y = np.linspace(y_min, y_max, ny)
         z = np.linspace(z_min, z_max, nz)
@@ -1082,14 +1082,14 @@ class TopologyOptimizationNode(CadQueryNode):
         self.create_property('move_limit', 0.2, widget_type='float')  # Max density change per iteration
         self.create_property('min_density', 0.001, widget_type='float')  # Minimum element density
         self.create_property('convergence_tol', 0.01, widget_type='float')  # Convergence threshold
-        self.create_property('recovery_resolution', 50, widget_type='int')  # Grid resolution for shape recovery
+        self.create_property('recovery_resolution', 100, widget_type='int')  # Grid resolution for shape recovery
         self.create_property('smoothing_iterations', 3, widget_type='int')  # Gaussian smoothing passes
         # NEW: Filter type and update scheme selection
         self.create_property('filter_type', 'density', widget_type='combo', items=['sensitivity', 'density'])
         self.create_property('update_scheme', 'MMA', widget_type='combo', items=['MMA', 'OC'])
 
 
-    def run(self):
+    def run(self, progress_callback=None):
         logger.info("TopOpt: Optimization started.")
         mesh = self.get_input_value('mesh', None)
         material = self.get_input_value('material', None)
@@ -1389,6 +1389,15 @@ class TopologyOptimizationNode(CadQueryNode):
             if filter_type == 'density' and filter_radius > 0:
                 densities_phys, weight_sums = density_filter_3d(densities, centroids, filter_radius)
             
+            # --- REAL-TIME VISUALIZATION CALLBACK ---
+            if progress_callback:
+                # Send physical densities (what actually matters)
+                # We catch exceptions to prevent UI errors from crashing the solver
+                try:
+                    progress_callback(mesh, densities_phys, loop, max_iter)
+                except Exception as cb_err:
+                    print(f"Callback error: {cb_err}")
+            
             # 2. FE Analysis (using physical densities)
             rho_interp = basis0.interpolate(densities_phys)
             K = stiffness.assemble(basis, rho=rho_interp, lam=lam_interp, mu=mu_interp)
@@ -1543,7 +1552,8 @@ class TopologyOptimizationNode(CadQueryNode):
         recovered_shape = None
         if shape_recovery_enabled:
             verts, faces = shape_recovery(mesh, densities, self.get_property('density_cutoff'), 
-                                          smoothing_iterations=int(smoothing_iter))
+                                          smoothing_iterations=int(smoothing_iter),
+                                          resolution=int(recovery_res))
             if verts is not None and faces is not None:
                 recovered_shape = {'vertices': verts, 'faces': faces}
         

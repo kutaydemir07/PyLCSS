@@ -148,11 +148,23 @@ class HelpWidget(QtWidgets.QWidget):
         <li><b>Shape Recovery:</b> Extract clean geometry using marching cubes.</li>
         </ul>
 
+        <h3>Units System</h3>
+        <p>PyLCSS CAD uses a consistent unit system throughout:</p>
+        <table border="1" cellpadding="5" cellspacing="0">
+        <tr><th>Quantity</th><th>Unit</th><th>Examples</th></tr>
+        <tr><td>Length</td><td><b>mm</b> (millimeters)</td><td>Box width: 20 = 20 mm</td></tr>
+        <tr><td>Force</td><td><b>N</b> (Newtons)</td><td>Load: 1000 = 1000 N</td></tr>
+        <tr><td>Stress/Pressure</td><td><b>MPa</b> (N/mm²)</td><td>Yield: 250 = 250 MPa</td></tr>
+        <tr><td>Young's Modulus</td><td><b>MPa</b></td><td>Steel: 210000 = 210 GPa</td></tr>
+        <tr><td>Density</td><td><b>tonne/mm³</b></td><td>Steel: 7.85e-9</td></tr>
+        </table>
+        <p><i>Note: This unit system (mm-N-MPa-tonne) is consistent for FEA and ensures numerical stability.</i></p>
+
         <h3>Best Practices</h3>
         <ul>
         <li><b>Mesh Quality:</b> Use appropriate element sizes - smaller for detailed features.</li>
         <li><b>Convergence:</b> Check that FEA results converge with mesh refinement.</li>
-        <li><b>Units:</b> Ensure consistent units throughout (e.g., mm, MPa, tonnes).</li>
+        <li><b>Units:</b> All dimensions are in mm. Material E in MPa, forces in N.</li>
         <li><b>Export:</b> Use STEP format for maximum compatibility with other CAD software.</li>
         </ul>
         """

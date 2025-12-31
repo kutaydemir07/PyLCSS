@@ -81,6 +81,134 @@ class CQ3DViewer(QtWidgets.QWidget):
             
         self.scalar_bar.VisibilityOn()
 
+    def render_sketch(self, sketch):
+        """
+        Render a 2D sketch (CadQuery Workplane with 2D geometry) as polylines.
+        Works with sketches that have wires but no 3D solid.
+        """
+        if sketch is None:
+            return
+            
+        self.clear()
+        
+        # Try to extract edges from the sketch
+        edges = []
+        try:
+            print(f"[Viewer] Rendering Sketch: {sketch}")
+            # CadQuery Workplane with pending wires
+            if hasattr(sketch, 'ctx') and hasattr(sketch.ctx, 'pendingWires'):
+                try:
+                    wires = sketch.ctx.pendingWires
+                    print(f"[Viewer] Found {len(wires)} pending wires")
+                except Exception as e:
+                    print(f"[Viewer] Error accessing pending wires: {e}")
+                    wires = [] # Ensure wires is defined even on error
+                if wires:
+                    # edges = [] # This line is now redundant as edges is initialized to [] above
+                    for wire in wires:
+                        if hasattr(wire, 'Edges'):
+                            edges.extend(wire.Edges())
+            
+            # Fallback: try to get edges directly
+            if not edges and hasattr(sketch, 'edges'):
+                try:
+                    edge_objects = sketch.edges().vals()
+                    if edge_objects:
+                        edges = edge_objects
+                except:
+                    pass
+            
+            # Fallback: try _edges attribute
+            if not edges and hasattr(sketch, '_edges'):
+                edges = sketch._edges
+                
+        except Exception as e:
+            print(f"Sketch edge extraction failed: {e}")
+            return
+            
+        if not edges:
+            return
+            
+        # Create VTK points and lines
+        points = vtk.vtkPoints()
+        lines = vtk.vtkCellArray()
+        
+        point_id = 0
+        
+        for edge in edges:
+            try:
+                # Discretize the edge into points
+                if hasattr(edge, 'discretize'):
+                    # CadQuery edge discretization
+                    pts = edge.discretize(5)  # 5 divisions
+                    
+                    if len(pts) >= 2:
+                        start_id = point_id
+                        for pt in pts:
+                            if hasattr(pt, 'x'):
+                                points.InsertNextPoint(pt.x, pt.y, pt.z if hasattr(pt, 'z') else 0)
+                            else:
+                                points.InsertNextPoint(pt[0], pt[1], pt[2] if len(pt) > 2 else 0)
+                            point_id += 1
+                        
+                        # Create polyline from these points
+                        for i in range(start_id, point_id - 1):
+                            line = vtk.vtkLine()
+                            line.GetPointIds().SetId(0, i)
+                            line.GetPointIds().SetId(1, i + 1)
+                            lines.InsertNextCell(line)
+                            
+                elif hasattr(edge, 'startPoint') and hasattr(edge, 'endPoint'):
+                    # Simple edge with start/end
+                    sp = edge.startPoint()
+                    ep = edge.endPoint()
+                    
+                    points.InsertNextPoint(sp.x, sp.y, sp.z if hasattr(sp, 'z') else 0)
+                    points.InsertNextPoint(ep.x, ep.y, ep.z if hasattr(ep, 'z') else 0)
+                    
+                    line = vtk.vtkLine()
+                    line.GetPointIds().SetId(0, point_id)
+                    line.GetPointIds().SetId(1, point_id + 1)
+                    lines.InsertNextCell(line)
+                    point_id += 2
+                    
+            except Exception as e:
+                print(f"Edge processing error: {e}")
+                continue
+        
+        if point_id == 0:
+            return  # No points extracted
+            
+        # Create polydata
+        poly_data = vtk.vtkPolyData()
+        poly_data.SetPoints(points)
+        poly_data.SetLines(lines)
+        
+        # Create mapper and actor
+        mapper = vtk.vtkPolyDataMapper()
+        mapper.SetInputData(poly_data)
+        
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
+        
+        # Style for sketch (bright cyan lines)
+        actor.GetProperty().SetColor(0.0, 0.9, 0.9)  # Cyan
+        actor.GetProperty().SetLineWidth(2.0)
+        
+        self.renderer.AddActor(actor)
+        self.current_actor = actor
+        self.actors.append(actor)
+        
+        # Set camera to top-down view for 2D sketch
+        camera = self.renderer.GetActiveCamera()
+        camera.SetPosition(0, 0, 100)
+        camera.SetFocalPoint(0, 0, 0)
+        camera.SetViewUp(0, 1, 0)
+        
+        self.renderer.ResetCamera()
+        self.vtkWidget.GetRenderWindow().Render()
+
+
     def render_shape(self, shape):
         """
         Accepts a CadQuery Workplane or Shape, tessellates it, and renders it.
@@ -274,6 +402,19 @@ class CQ3DViewer(QtWidgets.QWidget):
         
         self.renderer.AddActor(actor)
         self.actors.append(actor)
+
+    def update_simulation_field(self, mesh, values, field_name="Density"):
+        """Update scalar field on existing mesh for real-time visualization."""
+        data = {
+            'mesh': mesh,
+            'visualization_mode': field_name
+        }
+        if field_name == 'Density':
+            data['density'] = values
+        elif field_name == 'Von Mises Stress':
+            data['stress'] = values
+            
+        self.render_simulation(data)
 
     def render_simulation(self, data):
         """
