@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Kutay Demir.
+# Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 from pylcss.cad.core.base_node import CadQueryNode
@@ -40,10 +40,10 @@ class VariableNode(CadQueryNode):
         self.add_output('value', color=(180, 180, 0))
         
         # Add input fields directly on the node
+        # Note: add_text_input already creates the property, so no need for create_property
         self.add_text_input('variable_name', 'Name', text='var1')
         self.add_text_input('value_input', 'Value', text='0.0')
         
-        self.create_property('variable_name', 'var1', widget_type='string')
         self.create_property('value', 0.0, widget_type='float')
 
     def run(self):

@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Kutay Demir.
+# Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 """
@@ -14,14 +14,32 @@ import shutil
 import logging
 import numpy as np
 
+# Suppress Qt DPI awareness warning on Windows
+# Must be done before any Qt imports
+if sys.platform == 'win32':
+    # Suppress Qt's DPI warning messages
+    os.environ['QT_LOGGING_RULES'] = 'qt.qpa.window=false'
+    try:
+        import ctypes
+        # Set DPI awareness using the newer Windows 8.1+ API
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+    except Exception:
+        try:
+            # Fallback to older API
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass  # Ignore if it fails
+
 # Patch for NumPy 2.0 compatibility
 if not hasattr(np, 'float_'):
     np.float_ = np.float64
 
 from typing import NoReturn
 
-# Set environment variable for PySide6
+# Set environment variables for PySide6
 os.environ['QT_API'] = 'pyside6'
+# Suppress Qt DPI awareness warning on Windows
+os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 
 from PySide6 import QtWidgets
 

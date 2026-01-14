@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Kutay Demir.
+# Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 """
@@ -44,6 +44,7 @@ class HelpWidget(QtWidgets.QWidget):
         self._add_solution_space_help()
         self._add_optimization_help()
         self._add_sensitivity_help()
+        self._add_voice_assistant_help()
         self._add_about_tab()
 
     def _create_browser(self, html_content: str) -> QtWidgets.QTextBrowser:
@@ -305,6 +306,151 @@ class HelpWidget(QtWidgets.QWidget):
         """
         browser = self._create_browser(help_text)
         self.help_tabs.addTab(browser, qta.icon('fa5s.chart-bar'), "Sensitivity")
+
+    def _add_voice_assistant_help(self) -> None:
+        """Add comprehensive help for the Voice Assistant system."""
+        help_text = """
+        <h2>Voice Assistant (Hands-Free Control)</h2>
+
+        <h3>Overview</h3>
+        <p>PyLCSS includes an offline Voice Assistant powered by Vosk for hands-free control.
+        You can navigate tabs, execute commands, create CAD nodes, and run simulations using voice commands.</p>
+
+        <h3>Setup Requirements</h3>
+        <ol>
+        <li><b>Download Vosk Model:</b> Download <code>vosk-model-small-en-us-0.15</code> from
+            <a href="https://alphacephei.com/vosk/models">alphacephei.com/vosk/models</a></li>
+        <li><b>Extract to Models folder:</b> Place in <code>pylcss/models/vosk-model-small-en-us-0.15/</code></li>
+        <li><b>Enable Voice Control:</b> Toggle "Voice Control" in the Hands-Free menu</li>
+        </ol>
+
+        <h3>Mouse Actions</h3>
+        <table border="1" cellpadding="5" cellspacing="0" width="100%">
+        <tr><th>Command</th><th>Action</th></tr>
+        <tr><td>"click", "left click"</td><td>Left mouse click</td></tr>
+        <tr><td>"right click"</td><td>Right mouse click (context menu)</td></tr>
+        <tr><td>"double click"</td><td>Double left click</td></tr>
+        <tr><td>"drag", "drop"</td><td>Toggle drag mode</td></tr>
+        </table>
+
+        <h3>Scrolling</h3>
+        <table border="1" cellpadding="5" cellspacing="0" width="100%">
+        <tr><th>Command</th><th>Action</th></tr>
+        <tr><td>"scroll up", "scroll down"</td><td>Scroll content</td></tr>
+        <tr><td>"scroll left", "scroll right"</td><td>Horizontal scroll</td></tr>
+        <tr><td>"page up", "page down"</td><td>Fast scroll</td></tr>
+        </table>
+
+        <h3>Tab Navigation</h3>
+        <table border="1" cellpadding="5" cellspacing="0" width="100%">
+        <tr><th>Command</th><th>Action</th></tr>
+        <tr><td>"go to modeling"</td><td>Switch to Modeling Environment</td></tr>
+        <tr><td>"go to cad"</td><td>Switch to CAD Environment</td></tr>
+        <tr><td>"go to surrogate"</td><td>Switch to Surrogate Training</td></tr>
+        <tr><td>"go to solution space"</td><td>Switch to Solution Space</td></tr>
+        <tr><td>"go to optimization"</td><td>Switch to Optimization</td></tr>
+        <tr><td>"go to sensitivity"</td><td>Switch to Sensitivity Analysis</td></tr>
+        <tr><td>"go to help"</td><td>Switch to Help & Documentation</td></tr>
+        <tr><td>"next tab", "previous tab"</td><td>Navigate between tabs</td></tr>
+        </table>
+
+        <h3>Keyboard Shortcuts</h3>
+        <table border="1" cellpadding="5" cellspacing="0" width="100%">
+        <tr><th>Command</th><th>Action</th></tr>
+        <tr><td>"save", "save project"</td><td>Ctrl+S</td></tr>
+        <tr><td>"load project", "open project"</td><td>Ctrl+O</td></tr>
+        <tr><td>"undo", "redo"</td><td>Ctrl+Z / Ctrl+Y</td></tr>
+        <tr><td>"copy", "paste", "cut"</td><td>Ctrl+C / Ctrl+V / Ctrl+X</td></tr>
+        <tr><td>"delete"</td><td>Delete key</td></tr>
+        <tr><td>"escape"</td><td>Cancel/close dialogs</td></tr>
+        <tr><td>"enter"</td><td>Confirm/submit</td></tr>
+        </table>
+
+        <h3>Modeling Environment</h3>
+        <table border="1" cellpadding="5" cellspacing="0" width="100%">
+        <tr><th>Command</th><th>Action</th></tr>
+        <tr><td>"add input", "add design variable"</td><td>Create Input node</td></tr>
+        <tr><td>"add output", "add qoi"</td><td>Create Output node</td></tr>
+        <tr><td>"add function"</td><td>Create Custom Block</td></tr>
+        <tr><td>"add intermediate"</td><td>Create Intermediate node</td></tr>
+        <tr><td>"new system", "add system"</td><td>Add new system variant</td></tr>
+        <tr><td>"next system", "previous system"</td><td>Switch between systems</td></tr>
+        <tr><td>"validate graph"</td><td>Check model connectivity</td></tr>
+        <tr><td>"build model"</td><td>Compile model</td></tr>
+        <tr><td>"clear graph"</td><td>Delete all nodes</td></tr>
+        </table>
+
+        <h3>CAD Environment</h3>
+        <table border="1" cellpadding="5" cellspacing="0" width="100%">
+        <tr><th>Command</th><th>Action</th></tr>
+        <tr><td>"add box", "add cube"</td><td>Create Box primitive</td></tr>
+        <tr><td>"add cylinder"</td><td>Create Cylinder</td></tr>
+        <tr><td>"add sphere"</td><td>Create Sphere</td></tr>
+        <tr><td>"add cone"</td><td>Create Cone</td></tr>
+        <tr><td>"add torus", "add donut"</td><td>Create Torus</td></tr>
+        <tr><td>"add extrude"</td><td>Add Extrude operation</td></tr>
+        <tr><td>"add fillet", "add chamfer"</td><td>Edge modifications</td></tr>
+        <tr><td>"add boolean", "add union", "add cut"</td><td>Boolean operations</td></tr>
+        <tr><td>"run cad", "build cad"</td><td>Execute CAD graph</td></tr>
+        <tr><td>"export cad", "export stl"</td><td>Export to file</td></tr>
+        </table>
+
+        <h3>Solution Space</h3>
+        <table border="1" cellpadding="5" cellspacing="0" width="100%">
+        <tr><th>Command</th><th>Action</th></tr>
+        <tr><td>"generate samples"</td><td>Run Monte Carlo sampling</td></tr>
+        <tr><td>"resample"</td><td>Regenerate samples</td></tr>
+        <tr><td>"add plot", "clear plots"</td><td>Manage plots</td></tr>
+        <tr><td>"generate dependency graph"</td><td>Compute ADG</td></tr>
+        </table>
+
+        <h3>Surrogate Training</h3>
+        <table border="1" cellpadding="5" cellspacing="0" width="100%">
+        <tr><th>Command</th><th>Action</th></tr>
+        <tr><td>"train surrogate"</td><td>Start training</td></tr>
+        <tr><td>"stop training"</td><td>Cancel training</td></tr>
+        <tr><td>"generate data"</td><td>Create training data</td></tr>
+        <tr><td>"save surrogate"</td><td>Attach trained model</td></tr>
+        </table>
+
+        <h3>Optimization & Sensitivity</h3>
+        <table border="1" cellpadding="5" cellspacing="0" width="100%">
+        <tr><th>Command</th><th>Action</th></tr>
+        <tr><td>"run optimization"</td><td>Start optimization</td></tr>
+        <tr><td>"stop optimization"</td><td>Cancel optimization</td></tr>
+        <tr><td>"run sensitivity"</td><td>Run Sobol analysis</td></tr>
+        <tr><td>"export results"</td><td>Save results to file</td></tr>
+        </table>
+
+        <h3>Control Commands</h3>
+        <table border="1" cellpadding="5" cellspacing="0" width="100%">
+        <tr><th>Command</th><th>Action</th></tr>
+        <tr><td>"pause", "stop"</td><td>Pause voice recognition</td></tr>
+        <tr><td>"resume", "start"</td><td>Resume recognition</td></tr>
+        <tr><td>"start dictation"</td><td>Enable typing mode</td></tr>
+        <tr><td>"stop dictation"</td><td>Return to command mode</td></tr>
+        <tr><td>"minimize", "maximize"</td><td>Window controls</td></tr>
+        </table>
+
+        <h3>Tips for Best Recognition</h3>
+        <ul>
+        <li><b>Speak Clearly:</b> Enunciate commands distinctly</li>
+        <li><b>Short Phrases:</b> Use 1-3 word commands when possible</li>
+        <li><b>Wait for Beep:</b> Audio feedback confirms recognition</li>
+        <li><b>Quiet Environment:</b> Minimize background noise</li>
+        </ul>
+
+        <h3>Current Limitations</h3>
+        <ul>
+        <li><b>No Node Connections:</b> Connecting nodes in graphs requires mouse interaction</li>
+        <li><b>No Direct File Selection:</b> "Load project" opens file dialog requiring mouse</li>
+        <li><b>No System Switching by Name:</b> Use "next system" / "previous system" to navigate</li>
+        </ul>
+
+        <p><i>Note: Fuzzy matching is enabled - slight variations in pronunciation are accepted.</i></p>
+        """       
+        browser = self._create_browser(help_text)
+        self.help_tabs.addTab(browser, qta.icon('fa5s.microphone'), "Voice Assistant")
 
     def _add_about_tab(self) -> None:
         """Add the About information as a help tab."""

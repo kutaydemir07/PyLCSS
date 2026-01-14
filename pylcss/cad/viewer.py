@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Kutay Demir.
+# Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 import vtk
@@ -455,6 +455,11 @@ class CQ3DViewer(QtWidgets.QWidget):
         
         if mesh is None:
             return
+        
+        # DEBUG: Log what data we received
+        print(f"[Viewer DEBUG] visualization_mode: {visualization_mode}")
+        print(f"[Viewer DEBUG] density present: {density is not None}, len: {len(density) if density is not None else 0}")
+        print(f"[Viewer DEBUG] stress present: {stress is not None}, len: {len(stress) if stress is not None else 0}")
 
         # 2. Create VTK Unstructured Grid
         points = vtk.vtkPoints()
@@ -540,6 +545,14 @@ class CQ3DViewer(QtWidgets.QWidget):
             # 0 is usually THRESHOLD_BETWEEN
             threshold.SetThresholdFunction(getattr(vtk.vtkThreshold, 'THRESHOLD_BETWEEN', 0))
             
+            # IMPORTANT: Pass point arrays (like VonMises stress) through the threshold filter
+            # Without this, stress data is lost when thresholding by density
+            try:
+                threshold.SetPassPointArrays(True)
+            except AttributeError:
+                # Older VTK versions may not have this method
+                pass
+            
             threshold.Update()
 
             threshold_output = threshold.GetOutput()
@@ -558,45 +571,92 @@ class CQ3DViewer(QtWidgets.QWidget):
             mapper.SetInputData(threshold_output)
             mapper.SetScalarRange(0, 1)
         else:
-            # For plain meshes without simulation data
+            # For FEA/ShapeOpt meshes without density - use surface filter
             surface = vtk.vtkDataSetSurfaceFilter()
             surface.SetInputData(grid)
             surface.Update()
             mapper.SetInputData(surface.GetOutput())
             
-            # Set up coloring for the surface
+            # Set up coloring for stress/displacement
             dataset = surface.GetOutput()
+            
+            # First try to use the active scalars if set
             if dataset.GetPointData().GetScalars() is not None:
                 scalars = dataset.GetPointData().GetScalars()
                 min_val, max_val = scalars.GetRange()
+                
+                # Avoid degenerate range
+                if max_val - min_val < 1e-10:
+                    max_val = min_val + 1.0
+                    
                 mapper.SetScalarRange(min_val, max_val)
+                
+                lut = vtk.vtkLookupTable()
+                lut.SetHueRange(0.667, 0.0)  # Blue to Red
+                lut.Build()
+                mapper.SetLookupTable(lut)
+                
+                scalar_name = scalars.GetName()
+                if scalar_name == "VonMises":
+                    self._update_scalar_bar("Von Mises Stress (MPa)", min_val, max_val, lut)
+                elif scalar_name == "Displacement":
+                    self._update_scalar_bar("Displacement (mm)", min_val, max_val, lut)
+            
+            # If no active scalars but we have stress data, set it up manually
+            elif stress is not None and len(stress) > 0:
+                min_s, max_s = float(np.min(stress)), float(np.max(stress))
+                
+                # Avoid degenerate range
+                if max_s - min_s < 1e-10:
+                    max_s = min_s + 1.0
+                
+                mapper.SetScalarRange(min_s, max_s)
+                mapper.SetScalarModeToUsePointData()
                 
                 lut = vtk.vtkLookupTable()
                 lut.SetHueRange(0.667, 0.0)
                 lut.Build()
                 mapper.SetLookupTable(lut)
                 
-                scalar_name = scalars.GetName()
-                if scalar_name == "VonMises":
-                    self._update_scalar_bar("Von Mises Stress", min_val, max_val, lut)
-                elif scalar_name == "Displacement":
-                    self._update_scalar_bar("Displacement", min_val, max_val, lut)
+                self._update_scalar_bar("Von Mises Stress (MPa)", min_s, max_s, lut)
+            
+            else:
+                # Plain mesh - use default color (handled by actor properties below)
+                pass
 
         # If we have density (TopOpt), we might still want to color by Stress!
         if density is not None and stress is not None and visualization_mode == 'Von Mises Stress':
-             # Attach stress to the currently visualized dataset (thresholded or full)
-             # Scalars are already on the grid via AddArray above, we just need to verify range
-             # and mapper lookup table
-
-
-             min_s, max_s = float(np.min(stress)), float(np.max(stress))
-             mapper.SetScalarRange(min_s, max_s)
-             
-             lut = vtk.vtkLookupTable()
-             lut.SetHueRange(0.667, 0.0)
-             lut.Build()
-             mapper.SetLookupTable(lut)
-             self._update_scalar_bar("Von Mises Stress", min_s, max_s, lut)
+            print("[Viewer DEBUG] Entering Von Mises Stress visualization block for TopOpt")
+            # Configure mapper to use point data scalars (VonMises) instead of cell data (Density)
+            # The threshold filter should have passed point arrays through (if SetPassPointArrays was called)
+            
+            # Get the current mapper input and try to set active scalars
+            mapper_input = mapper.GetInput()
+            print(f"[Viewer DEBUG] mapper_input: {mapper_input}, has point data: {mapper_input.GetPointData() if mapper_input else None}")
+            if mapper_input is not None and mapper_input.GetPointData() is not None:
+                pd = mapper_input.GetPointData()
+                print(f"[Viewer DEBUG] Point data arrays: {pd.GetNumberOfArrays()}")
+                for i in range(pd.GetNumberOfArrays()):
+                    print(f"[Viewer DEBUG]   Array {i}: {pd.GetArrayName(i)}")
+                # Set VonMises as the active scalar array for coloring
+                mapper_input.GetPointData().SetActiveScalars("VonMises")
+            
+            # Tell mapper to use point data for coloring, not cell data
+            mapper.SetScalarModeToUsePointData()
+            mapper.SelectColorArray("VonMises")
+            
+            # Avoid degenerate range
+            min_s, max_s = float(np.min(stress)), float(np.max(stress))
+            if max_s - min_s < 1e-10:
+                max_s = min_s + 1.0
+            
+            mapper.SetScalarRange(min_s, max_s)
+            
+            lut = vtk.vtkLookupTable()
+            lut.SetHueRange(0.667, 0.0)  # Blue to Red
+            lut.Build()
+            mapper.SetLookupTable(lut)
+            self._update_scalar_bar("Von Mises Stress (MPa)", min_s, max_s, lut)
 
         actor = vtk.vtkActor()
         actor.SetMapper(mapper)

@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Kutay Demir.
+# Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 """
@@ -43,7 +43,7 @@ from pylcss.cad.nodes import (
     
     # Simulation
     MaterialNode, MeshNode, ConstraintNode, LoadNode, PressureLoadNode,
-    SolverNode, TopologyOptimizationNode,
+    SolverNode, TopologyOptimizationNode, RemeshNode, SizeOptimizationNode, ShapeOptimizationNode,
     
     # IO
     ExportStepNode, ExportStlNode, NumberNode, VariableNode,
@@ -123,6 +123,9 @@ NODE_CLASS_MAPPING = {
     'com.cad.sim.pressure_load': PressureLoadNode,
     'com.cad.sim.solver': SolverNode,
     'com.cad.sim.topopt': TopologyOptimizationNode,
+    'com.cad.sim.remesh': RemeshNode,
+    'com.cad.sim.sizeopt': SizeOptimizationNode,
+    'com.cad.sim.shapeopt': ShapeOptimizationNode,
 
     # IO (4)
     'com.cad.number': NumberNode,

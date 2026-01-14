@@ -130,4 +130,4 @@ PyLCSS is licensed under the **PolyForm Shield License 1.0.0**.
 
 See [LICENSE](LICENSE) for full details.
 
-<div align="center"> <sub>Copyright © 2025 Kutay Demir. All rights reserved.</sub> </div>
+<div align="center"> <sub>Copyright © 2026 Kutay Demir. All rights reserved.</sub> </div>

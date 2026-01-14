@@ -1,59 +1,59 @@
 # PyLCSS Third-Party Notices
+Document Version: 1.0 Last Updated: January 14, 2026
 
 This document outlines the third-party libraries and components used in PyLCSS, along with their respective licenses. PyLCSS is committed to respecting the intellectual property of all contributors and provides this information in accordance with open-source licensing requirements.
 
----
-
 ## 1. LGPL Licensed Software
 
-> ⚠️ **LGPL Compliance Note**: PyLCSS is distributed as a Python source package. All LGPL-licensed libraries are dynamically linked and can be replaced by the end user. If distributing as a compiled executable (EXE, DMG), these libraries must not be statically linked.
+> ⚠️ **LGPL Compliance Note**: PyLCSS is distributed as a Python source package. All LGPL-licensed libraries are dynamically linked and can be replaced by the end user. If distributing as a compiled executable (EXE, DMG), these libraries must not be statically linked. Distributors must ensure that the end-user retains the ability to replace these shared libraries with modified versions to maintain compliance with the LGPL.
 
 ### PySide6
-- **Copyright**: © 2025 The Qt Company Ltd.
+- **Copyright**: © 2025 The Qt Company Ltd. and other contributors.
 - **License**: GNU Lesser General Public License v3 (LGPLv3)
 - **Source**: [https://www.qt.io/](https://www.qt.io/)
-- **Note**: PyLCSS links to PySide6 dynamically. Users have the right to replace the version of PySide6 used by this software with their own modified version.
+- **Note**: PyLCSS links to PySide6 dynamically. PySide6 is the official Python module from the Qt for Python project, which provides access to the complete Qt 6.0+ framework. Users have the right to replace the version of PySide6 used by this software with their own modified version.
 
 ### netgen-mesher
 - **Copyright**: © 1995-2025, Joachim Schöberl and the NGSolve team
 - **License**: GNU Lesser General Public License v2.1 (LGPLv2.1)
 - **Source**: [https://ngsolve.org/](https://ngsolve.org/)
 - **Version**: 6.2.2506+
-- **Note**: PyLCSS uses netgen-mesher for finite element mesh generation. Users have the right to replace this library with their own version.
-
----
+- **Note**: PyLCSS uses netgen-mesher for automatic 3D tetrahedral mesh generation. Users have the right to replace this library with their own version.
 
 ## 2. MIT Licensed Software
 
-The following components are licensed under the MIT License. Copyright notices must be retained.
+The following components are licensed under the MIT License. This permissive license requires the retention of copyright notices and license text in all copies of the software.
 
 ### NodeGraphQt
 - **Copyright**: © 2017-2025 Johnny Chan (jchanvfx)
 - **Repository**: [https://github.com/jchanvfx/NodeGraphQt](https://github.com/jchanvfx/NodeGraphQt)
 - **Version**: 0.6.43
-- **Note**: This is the MIT-licensed fork by jchanvfx, not the GPL-licensed dsideb fork.
+- **Compliance Note**: This is the MIT-licensed fork by jchanvfx. It is distinct from the dsideb fork, which is licensed under the GPL.
 
 ### pyqtgraph
 - **Copyright**: © 2012-2025 University of North Carolina at Chapel Hill, Luke Campagnola, and PyQtGraph developers
+- **Note**: A pure-Python graphics library for scientific applications. The authors have explicitly clarified that the MIT license of PyQtGraph applies to its code regardless of the license of the underlying Qt bindings.
 
 ### nevergrad
 - **Copyright**: © Meta Platforms, Inc. and its affiliates
+- **Repository**: [https://github.com/facebookresearch/nevergrad](https://github.com/facebookresearch/nevergrad)
 - **Note**: Developed and maintained by Meta AI Research.
 
 ### SALib
 - **Copyright**: © 2013-2025 Jon Herman, Will Usher, and contributors
 - **Version**: 1.5.2 (1.0+)
-- **Note**: Versions 1.0+ are MIT licensed. Earlier versions were LGPL.
+- **Note**: Versions 1.0+ are MIT licensed. Earlier versions of this library were licensed under the LGPL.
 
 ### meshio
 - **Copyright**: © 2015-2025, Nico Schlömer and contributors
+- **Note**: A library for reading and writing unstructured meshes in various formats.
 
 ### QtAwesome
 - **Copyright**: © 2015 Spyder Development Team
+- **License**: MIT License (Python Code)
 
 #### QtAwesome Bundled Fonts
-
-QtAwesome bundles several icon fonts under separate licenses. Attribution is required per the terms of each font's license:
+QtAwesome bundles several third-party icon fonts. These assets are governed by their own licenses, distinct from the Python code. Attribution is provided below:
 
 | Font Pack | License | Copyright |
 |-----------|---------|-----------|
@@ -64,8 +64,13 @@ QtAwesome bundles several icon fonts under separate licenses. Attribution is req
 | Microsoft Codicons | Creative Commons Attribution 4.0 (CC-BY 4.0) | © Microsoft Corporation |
 | Phosphor Icons | MIT License | © Phosphor Icons |
 
+### PyAudio
+- **Copyright**: © 2006 Hubert Pham
+- **License**: MIT
+- **Source**: [https://people.csail.mit.edu/hubert/pyaudio/](https://people.csail.mit.edu/hubert/pyaudio/)
+
 ### MIT License Text
-```
+```text
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
@@ -73,19 +78,33 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
----
-
 ## 3. Apache 2.0 Licensed Software
 
-The following components are licensed under the Apache License Version 2.0:
+The following components are licensed under the Apache License Version 2.0. This license allows for use and modification and includes an explicit grant of patent rights from contributors.
 
 ### cadquery
 - **Copyright**: © 2015-2025, CadQuery Contributors
 - **Version**: 2.6.1 (2.0+)
 - **Note**: CadQuery 2.0+ is Apache 2.0 licensed. Earlier versions (pre-2.0) were LGPL.
 
+### opencv-python (OpenCV)
+- **Copyright**: © 2026 OpenCV Construction Team / OpenCV Foundation
+- **License**: Apache License 2.0
+- **Source**: [https://opencv.org/](https://opencv.org/)
+- **Note**: Standard distributions of opencv-python are used.
+
+### mediapipe
+- **Copyright**: © 2020-2026 Google LLC
+- **License**: Apache License 2.0
+- **Source**: [https://developers.google.com/mediapipe](https://developers.google.com/mediapipe)
+
+### vosk
+- **Copyright**: © 2019-2026 Alpha Cephei Inc.
+- **License**: Apache License 2.0
+- **Source**: [https://alphacephei.com/vosk/](https://alphacephei.com/vosk/)
+
 ### Apache License 2.0 Summary
-```
+```text
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -99,11 +118,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
----
-
 ## 4. BSD Licensed Software
 
-The following components are licensed under the BSD 3-Clause License:
+The following components are licensed under the BSD 3-Clause License. This license is similar to the MIT license but prohibits the use of the copyright holder's name to endorse derivative works.
 
 ### numpy
 - **Copyright**: © 2005-2025, NumPy Developers
@@ -125,10 +142,11 @@ The following components are licensed under the BSD 3-Clause License:
 - **Copyright**: © 2008-2025, Andrew Collette and contributors
 
 #### h5py Bundled Components
-h5py interfaces with the HDF5 library:
+h5py serves as a Pythonic interface to the HDF5 library. The distribution includes the HDF5 binary library.
+
 | Component | License | Copyright |
 |-----------|---------|-----------|
-| HDF5 | BSD-style | © The HDF Group |
+| HDF5 | BSD-style (The HDF Group License) | © The HDF Group |
 
 ### pint
 - **Copyright**: © 2012-2025 Hernan E. Grecco and contributors
@@ -152,13 +170,18 @@ h5py interfaces with the HDF5 library:
 - **Note**: Developed and maintained by Kitware, Inc.
 
 ### scikit-fem
-- **Copyright**: © 2016-2025, Tom Gustafsson and contributors
+- **Copyright**: © 2018-2025, scikit-fem developers
 
 ### scikit-image
 - **Copyright**: © 2009-2025, scikit-image team
 
+### PyAutoGUI
+- **Copyright**: © 2011-2026 Al Sweigart
+- **License**: BSD 3-Clause
+- **Source**: [https://github.com/asweigart/pyautogui](https://github.com/asweigart/pyautogui)
+
 ### BSD 3-Clause License Text
-```
+```text
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
 
 Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
@@ -167,10 +190,8 @@ Redistributions in binary form must reproduce the above copyright notice, this l
 
 Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
-
----
 
 ## 5. Additional License Texts
 
@@ -179,30 +200,26 @@ The following fonts are licensed under the SIL OFL 1.1:
 - Font Awesome (Free)
 - Elusive Icons
 
-```
-PREAMBLE
+**PREAMBLE**
+```text
 The goals of the Open Font License (OFL) are to stimulate worldwide development of collaborative font projects, to support the font creation efforts of academic and linguistic communities, and to provide a free and open framework in which fonts may be shared and improved in partnership with others.
 
 The OFL allows the licensed fonts to be used, studied, modified and redistributed freely as long as they are not sold by themselves.
 ```
-
-Full text available at: https://scripts.sil.org/OFL
+Full text available at: [https://scripts.sil.org/OFL](https://scripts.sil.org/OFL)
 
 ### Creative Commons Attribution 4.0 (CC-BY 4.0)
-Microsoft Codicons are licensed under CC-BY 4.0.
-Full text available at: https://creativecommons.org/licenses/by/4.0/
-
----
+The Microsoft Codicons bundled with QtAwesome are licensed under CC-BY 4.0. Full text available at: [https://creativecommons.org/licenses/by/4.0/](https://creativecommons.org/licenses/by/4.0/)
 
 ## 6. Version Verification
 
-The following versions are explicitly verified for license compliance:
+The following versions are explicitly verified for license compliance. Deviating from these versions or sources may alter the licensing obligations.
 
 | Library | Version | License | Notes |
 |---------|---------|---------|-------|
-| NodeGraphQt | 0.6.43 | MIT | jchanvfx fork, not dsideb (GPL) |
-| CadQuery | 2.6.1 | Apache 2.0 | 2.0+ required (pre-2.0 was LGPL) |
-| SALib | 1.5.2 | MIT | 1.0+ required (pre-1.0 was LGPL) |
+| NodeGraphQt | 0.6.43 | MIT | Must be the jchanvfx fork. Do not use the GPL-licensed dsideb fork. |
+| CadQuery | 2.6.1 | Apache 2.0 | Version 2.0+ required (pre-2.0 versions were LGPL). |
+| SALib | 1.5.2 | MIT | Version 1.0+ required (pre-1.0 versions were LGPL). |
 
 ---
 

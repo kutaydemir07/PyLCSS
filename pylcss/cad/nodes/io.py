@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Kutay Demir.
+# Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 import cadquery as cq
@@ -57,6 +57,7 @@ class ExportStlNode(CadQueryNode):
     Supports:
     - CadQuery shapes (Workplane, Solid, Compound)  
     - TopOpt mesh with thresholded surface extraction (exact GUI match)
+    - Optional mesh smoothing for organic, manufacturable shapes
     
     Note: All dimensions are in millimeters (mm). If your CAD geometry
     uses different units, the exported STL will reflect those units directly.
@@ -68,6 +69,8 @@ class ExportStlNode(CadQueryNode):
         super(ExportStlNode, self).__init__()
         self.add_input('shape', color=(100, 255, 100))
         self.create_property('filename', 'output.stl', widget_type='string')
+        # Smoothing options for TopOpt mesh
+        self.create_property('smoothing', 10, widget_type='int')  # Number of smoothing iterations (0=off)
 
     def run(self):
         import numpy as np
@@ -154,6 +157,13 @@ class ExportStlNode(CadQueryNode):
                 print(f"✓ SUCCESS: Saved {fname} (via CadQuery)")
                 return True
             
+            # Apply mesh smoothing for organic shapes (if enabled and we have mesh data)
+            smoothing_iters = int(self.get_property('smoothing'))
+            if smoothing_iters > 0 and vertices is not None and len(faces) > 0:
+                print(f"ExportStlNode: Applying Taubin smoothing ({smoothing_iters} iterations)...")
+                vertices = self._taubin_smooth(vertices, faces, smoothing_iters)
+                print(f"ExportStlNode: Smoothing complete")
+            
             # Write binary STL using raw NumPy (no numpy-stl dependency)
             self._write_binary_stl(fname, vertices, faces)
             print(f"✓ SUCCESS: Saved mesh to {fname} ({len(faces)} triangles)")
@@ -235,6 +245,64 @@ class ExportStlNode(CadQueryNode):
         faces = np.array([[vert_map[v] for v in face] for face in boundary_faces])
         
         return vertices, faces
+    
+    def _taubin_smooth(self, vertices, faces, iterations=10, lambda_factor=0.5, mu_factor=-0.53):
+        """
+        Taubin mesh smoothing - volume-preserving Laplacian smoothing.
+        
+        Unlike simple Laplacian smoothing which shrinks the mesh, Taubin alternates
+        between positive (smoothing) and negative (inflation) steps to maintain volume.
+        
+        Parameters:
+        -----------
+        vertices : ndarray (N, 3) - vertex positions
+        faces : ndarray (M, 3) - triangle indices
+        iterations : int - number of smoothing iterations
+        lambda_factor : float - smoothing factor (default 0.5)
+        mu_factor : float - inflation factor (default -0.53, calculated from lambda)
+        
+        Returns:
+        --------
+        smoothed_vertices : ndarray (N, 3)
+        """
+        import numpy as np
+        from collections import defaultdict
+        
+        vertices = np.array(vertices, dtype=np.float64)
+        faces = np.array(faces, dtype=np.int32)
+        n_verts = len(vertices)
+        
+        # Build adjacency: for each vertex, find its neighbors
+        adjacency = defaultdict(set)
+        for face in faces:
+            for i in range(3):
+                v1 = face[i]
+                v2 = face[(i + 1) % 3]
+                adjacency[v1].add(v2)
+                adjacency[v2].add(v1)
+        
+        # Convert to lists for faster iteration
+        neighbors = [list(adjacency[i]) for i in range(n_verts)]
+        
+        # Taubin smoothing iterations
+        for _ in range(iterations):
+            # Step 1: Laplacian smoothing with positive lambda
+            new_verts = vertices.copy()
+            for i in range(n_verts):
+                if len(neighbors[i]) > 0:
+                    neighbor_avg = np.mean(vertices[neighbors[i]], axis=0)
+                    new_verts[i] = vertices[i] + lambda_factor * (neighbor_avg - vertices[i])
+            vertices = new_verts
+            
+            # Step 2: Laplacian "unsmoothing" with negative mu (prevents shrinkage)
+            new_verts = vertices.copy()
+            for i in range(n_verts):
+                if len(neighbors[i]) > 0:
+                    neighbor_avg = np.mean(vertices[neighbors[i]], axis=0)
+                    new_verts[i] = vertices[i] + mu_factor * (neighbor_avg - vertices[i])
+            vertices = new_verts
+        
+        return vertices
     
     def _write_binary_stl(self, filename, vertices, faces):
         """

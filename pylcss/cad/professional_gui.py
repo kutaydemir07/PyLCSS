@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Kutay Demir.
+# Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 """Professional CAD Software - Full-Featured Simulink-like Interface.
@@ -32,11 +32,8 @@ except ImportError:
     simple_eval = None  # Fallback if not installed
 
 # Import all node types
-from pylcss.cad.nodes import (
-    NODE_REGISTRY, BoxNode, CylinderNode, SphereNode,
-    ExtrudeNode, PocketNode, FilletNode,
-    NumberNode, ExportStepNode, ExportStlNode, SelectFaceNode, CutExtrudeNode, BooleanNode, RevolveNode, CylinderCutNode
-)
+from pylcss.cad.nodes import NODE_REGISTRY, NumberNode, ExportStepNode, ExportStlNode
+
 
 class GraphExecutionWorker(QtCore.QThread):
     """Background worker to run the node graph without freezing the UI."""
@@ -503,13 +500,79 @@ class PropertiesPanel(QtWidgets.QWidget):
         group = QtWidgets.QGroupBox(f"Properties ({len(props)})")
         layout = QtWidgets.QFormLayout()
         
+        # Get widget metadata from node model if available
+        widget_info = {}
+        if hasattr(node, 'model') and hasattr(node.model, '_graph_model'):
+            try:
+                # NodeGraphQt stores widget info in the model's custom_widgets
+                model = node.model
+                if hasattr(model, '_custom_prop_widgets'):
+                    widget_info = model._custom_prop_widgets
+            except:
+                pass
+        
         sorted_keys = sorted(props.keys())
         
         for name in sorted_keys:
             val = props[name]
             label_text = name.replace('_', ' ').title()
             
-            if isinstance(val, bool):
+            # Check if this property has combo items defined
+            # Try to get widget info from node's internal data
+            combo_items = None
+            try:
+                # NodeGraphQt stores widget type and items in model._custom_prop_widgets
+                if hasattr(node, 'model'):
+                    model = node.model
+                    if hasattr(model, 'get_property_widget_type'):
+                        # Some versions have this method
+                        pass
+                    # Check for _node_widgets which may have items
+                    if hasattr(model, '_custom_prop_widgets'):
+                        wi = model._custom_prop_widgets.get(name, {})
+                        if isinstance(wi, dict) and 'items' in wi:
+                            combo_items = wi['items']
+                    # Alternative: check __property_widget
+                    if hasattr(node, '_BaseNode__property_widget'):
+                        pw = node._BaseNode__property_widget.get(name, {})
+                        if isinstance(pw, dict) and pw.get('widget_type') == 'combo':
+                            combo_items = pw.get('items', [])
+            except Exception as e:
+                print(f"[Inspector] Widget info error for {name}: {e}")
+            
+            # ALSO check if value looks like it could be from a known combo list
+            # This is a heuristic fallback for common patterns
+            known_combos = {
+                'preset': ['Custom', 'Steel (Structural)', 'Steel (Stainless 304)', 
+                          'Aluminum 6061-T6', 'Aluminum 7075-T6', 'Titanium Ti-6Al-4V',
+                          'Copper (Annealed)', 'Brass', 'Cast Iron (Gray)', 'Magnesium AZ31',
+                          'Nickel Alloy 718', 'CFRP (Quasi-Isotropic)', 'GFRP (E-Glass)',
+                          'Concrete (Normal)', 'ABS Plastic', 'Nylon 6/6', 'PEEK', 'Wood (Oak)'],
+                'mesh_type': ['Tet', 'Tet10'],
+                'constraint_type': ['Fixed', 'Roller X', 'Roller Y', 'Roller Z', 
+                                    'Pinned', 'Symmetry X', 'Symmetry Y', 'Symmetry Z', 'Displacement'],
+                'load_type': ['Force', 'Moment', 'Gravity', 'Remote Force'],
+                'gravity_direction': ['-Y', '-Z', '-X', '+Y', '+Z', '+X'],
+                'visualization': ['Density', 'Von Mises Stress', 'Displacement'],
+                'filter_type': ['sensitivity', 'density'],
+                'update_scheme': ['MMA', 'OC'],
+                'projection': ['None', 'Heaviside'],
+            }
+            
+            if combo_items is None and name in known_combos:
+                combo_items = known_combos[name]
+            
+            if combo_items:
+                # Create dropdown
+                widget = QtWidgets.QComboBox()
+                widget.addItems([str(item) for item in combo_items])
+                if val is not None:
+                    idx = widget.findText(str(val))
+                    if idx >= 0:
+                        widget.setCurrentIndex(idx)
+                widget.currentTextChanged.connect(lambda v, n=name: self.update_property(n, v))
+                layout.addRow(label_text, widget)
+            elif isinstance(val, bool):
                 widget = QtWidgets.QCheckBox()
                 widget.setChecked(val)
                 widget.stateChanged.connect(lambda s, n=name: self.update_property(n, bool(s)))
@@ -589,89 +652,104 @@ class LibraryPanel(QtWidgets.QWidget):
         self.tree.setDragEnabled(True)
         self.tree.itemPressed.connect(self._start_drag)
         
-        # Component categories
+        # Component categories - Professional CAD/FEA/TopOpt Library
+        # Format: (Label, node_id, tooltip_description)
         categories = {
-            "Primitives": [
-                ("Box", "com.cad.box"),
-                ("Cylinder", "com.cad.cylinder"),
-                ("Sphere", "com.cad.sphere"),
-                ("Cone", "com.cad.cone"),
-                ("Torus", "com.cad.torus"),
-                ("Wedge", "com.cad.wedge"),
-                ("Pyramid", "com.cad.pyramid"),
+            # ═══════════════════════════════════════════════════════════════
+            # WORKBENCH: SKETCHER
+            # ═══════════════════════════════════════════════════════════════
+            "Sketcher": [
+                ("Create Sketch", "com.cad.sketch", "Start a new 2D sketch on a plane"),
+                ("Line", "com.cad.sketch.line", "Draw a straight line segment"),
+                ("Rectangle", "com.cad.sketch.rectangle", "Draw a rectangle"),
+                ("Circle", "com.cad.sketch.circle", "Draw a circle"),
+                ("Arc", "com.cad.sketch.arc", "Draw an arc"),
+                ("Polygon", "com.cad.sketch.polygon", "Draw a regular polygon"),
+                ("Ellipse", "com.cad.ellipse", "Draw an ellipse"),
+                ("Spline", "com.cad.spline", "Draw a smooth B-spline curve"),
             ],
-            "2D Sketching": [
-                ("Sketch", "com.cad.sketch"),
-                ("Rectangle", "com.cad.sketch.rectangle"),
-                ("Circle", "com.cad.sketch.circle"),
-                ("Line", "com.cad.sketch.line"),
-                ("Arc", "com.cad.sketch.arc"),
-                ("Polygon", "com.cad.sketch.polygon"),
-                ("Spline", "com.cad.spline"),
-                ("Ellipse", "com.cad.ellipse"),
+            
+            # ═══════════════════════════════════════════════════════════════
+            # WORKBENCH: PART DESIGN
+            # ═══════════════════════════════════════════════════════════════
+            "Part Design - Primitives": [
+                ("Box", "com.cad.box", "Create a rectangular block"),
+                ("Cylinder", "com.cad.cylinder", "Create a cylinder"),
+                ("Sphere", "com.cad.sphere", "Create a sphere"),
+                ("Cone", "com.cad.cone", "Create a cone"),
+                ("Torus", "com.cad.torus", "Create a torus (donut)"),
+                ("Wedge", "com.cad.wedge", "Create a wedge"),
+                ("Pyramid", "com.cad.pyramid", "Create a pyramid"),
             ],
-            "3D Operations": [
-                ("Extrude", "com.cad.extrude"),
-                ("Revolve", "com.cad.revolve"),
-                ("Sweep", "com.cad.sweep"),
-                ("Loft", "com.cad.loft"),
-                ("Helix", "com.cad.helix"),
+            "Part Design - Create": [
+                ("Extrude", "com.cad.extrude", "Extrude 2D sketch to 3D"),
+                ("Revolve", "com.cad.revolve", "Revolve sketch around axis"),
+                ("Sweep", "com.cad.sweep", "Sweep profile along path"),
+                ("Loft", "com.cad.loft", "Loft between profiles"),
+                ("Helix", "com.cad.helix", "Create a helix/spiral"),
             ],
-            "Cutting Operations": [
-                ("Pocket", "com.cad.pocket"),
-                ("Extruded Cut", "com.cad.cut_extrude"),
-                ("Cylinder Cut", "com.cad.cylinder_cut"),
-                ("Hole at Coordinates", "com.cad.hole_at_coords"),
-                ("Multiple Holes", "com.cad.multi_hole"),
-                ("Rectangular Cut", "com.cad.rectangular_cut"),
-                ("Slot Cut", "com.cad.slot_cut"),
-                ("Array of Holes", "com.cad.array_holes"),
+            "Part Design - Modify": [
+                ("Boolean", "com.cad.boolean", "Union, Cut, or Intersect shapes"),
+                ("Fillet", "com.cad.fillet", "Round edges"),
+                ("Chamfer", "com.cad.chamfer", "Bevel edges"),
+                ("Shell", "com.cad.shell", "Hollow out part"),
+                ("Offset", "com.cad.offset", "Offset 3D shape"),
             ],
-            "Modifications": [
-                ("Fillet", "com.cad.fillet"),
-                ("Chamfer", "com.cad.chamfer"),
-                ("Shell", "com.cad.shell"),
-                ("Offset 2D", "com.cad.offset"),
+            "Part Design - Hole Wizard": [
+                ("Hole (Point)", "com.cad.hole_at_coords", "Drill hole at coordinates"),
+                ("Multi-Hole", "com.cad.multi_hole", "Drill multiple holes"),
+                ("Pocket", "com.cad.pocket", "Extrude cut"),
+                ("Slot", "com.cad.slot_cut", "Cut a slot"),
+                ("Rectangular Cut", "com.cad.rectangular_cut", "Square cut"),
+                ("Cylinder Cut", "com.cad.cylinder_cut", "Cylindrical cut"),
+                ("Array Holes", "com.cad.array_holes", "Pattern of holes"),
             ],
-            "Boolean Operations": [
-                ("Boolean Op", "com.cad.boolean"),
+            "Part Design - Transform & Pattern": [
+                ("Translate", "com.cad.translate", "Move object"),
+                ("Rotate", "com.cad.rotate", "Rotate object"),
+                ("Scale", "com.cad.scale", "Resize object"),
+                ("Mirror", "com.cad.mirror", "Mirror object"),
+                ("Linear Pattern", "com.cad.linear_pattern", "Linear repetition"),
+                ("Circular Pattern", "com.cad.circular_pattern", "Circular repetition"),
+                ("Radial Pattern", "com.cad.pattern.radial", "Radial repetition"),
+                ("Mirror Pattern", "com.cad.pattern.mirror", "Mirror pattern"),
+                ("Grid Pattern", "com.cad.pattern.grid", "Grid repetition"),
             ],
-            "Transformations": [
-                ("Translate", "com.cad.translate"),
-                ("Rotate", "com.cad.rotate"),
-                ("Scale", "com.cad.scale"),
-                ("Mirror", "com.cad.mirror"),
+
+            # ═══════════════════════════════════════════════════════════════
+            # WORKBENCH: SIMULATION (FEA)
+            # ═══════════════════════════════════════════════════════════════
+            "Simulation - Pre-Procesing": [
+                ("Select Face", "com.cad.select_face", "Select face for BCs"),
+                ("Material", "com.cad.sim.material", "Define material"),
+                ("Generate Mesh", "com.cad.sim.mesh", "Create FEM mesh"),
             ],
-            "Patterns": [
-                ("Linear Pattern", "com.cad.linear_pattern"),
-                ("Circular Pattern", "com.cad.circular_pattern"),
+            "Simulation - Loads & Constraints": [
+                ("Constraint", "com.cad.sim.constraint", "Apply fixation/support"),
+                ("Force Load", "com.cad.sim.load", "Apply force"),
+                ("Pressure Load", "com.cad.sim.pressure_load", "Apply uniform pressure"),
             ],
-            "Selection": [
-                ("Select Face", "com.cad.select_face"),
+            "Simulation - Solve & Optimize": [
+                ("Solver", "com.cad.sim.solver", "Run FEA solver"),
+                ("Topology Opt", "com.cad.sim.topopt", "Optimize topology (SIMP)"),
+                ("Remesh Surface", "com.cad.sim.remesh", "Recover geometry from TopOpt"),
+                ("Shape Opt", "com.cad.sim.shapeopt", "Optimize shape"),
+                ("Size Opt", "com.cad.sim.sizeopt", "Optimize parameters"),
             ],
-            "Assembly": [
-                ("Assembly", "com.cad.assembly"),
+
+            # ═══════════════════════════════════════════════════════════════
+            # WORKBENCH: ANALYSIS & UTILITIES
+            # ═══════════════════════════════════════════════════════════════
+            "Analysis & Assembly": [
+                ("Assembly", "com.cad.assembly", "Combine parts"),
+                ("Mass Properties", "com.cad.mass_properties", "Calculate mass/volume"),
+                ("Bounding Box", "com.cad.bounding_box", "Measure dimensions"),
             ],
-            "Analysis": [
-                ("Mass Properties", "com.cad.mass_properties"),
-                ("Bounding Box", "com.cad.bounding_box"),
-            ],
-            "Simulation (FEA)": [
-                ("Generate Mesh", "com.cad.sim.mesh"),
-                ("Material", "com.cad.sim.material"),
-                ("Constraint", "com.cad.sim.constraint"),
-                ("Load", "com.cad.sim.load"),
-                ("Pressure Load", "com.cad.sim.pressure_load"),
-                ("Solver", "com.cad.sim.solver"),
-                ("Topology Opt", "com.cad.sim.topopt"),
-            ],
-            "Parameters": [
-                ("Number", "com.cad.number"),
-                ("Variable", "com.cad.variable"),
-            ],
-            "Export": [
-                ("Export STEP", "com.cad.export_step"),
-                ("Export STL", "com.cad.export_stl"),
+            "IO & Parameters": [
+                ("Number", "com.cad.number", "Numeric constant"),
+                ("Variable", "com.cad.variable", "Named variable"),
+                ("Export STEP", "com.cad.export_step", "Export to .step"),
+                ("Export STL", "com.cad.export_stl", "Export to .stl"),
             ],
         }
         
@@ -679,9 +757,11 @@ class LibraryPanel(QtWidgets.QWidget):
             cat_item = QtWidgets.QTreeWidgetItem([category])
             cat_item.setIcon(0, QtGui.QIcon())
             
-            for label, node_id in items:
+            for item_data in items:
+                label, node_id, tooltip = item_data
                 item = QtWidgets.QTreeWidgetItem([label])
                 item.setData(0, QtCore.Qt.UserRole, node_id)
+                item.setToolTip(0, tooltip)  # Show description on hover
                 cat_item.addChild(item)
             
             self.tree.addTopLevelItem(cat_item)
@@ -948,6 +1028,25 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         # Update the properties panel if this node is selected
         if self.properties.current_node == node:
             self.properties.display_node(node)
+        
+        # SPECIAL CASE: Visualization mode changes should update display immediately
+        # without requiring full graph re-execution
+        if prop_name == 'visualization':
+            cached_result = getattr(node, '_last_result', None)
+            if cached_result is not None and isinstance(cached_result, dict):
+                # Update the visualization_mode in the cached result
+                cached_result['visualization_mode'] = prop_value
+                print(f"[GUI Debug] Updated cached visualization_mode to: {prop_value}")
+                
+                # Re-render with updated visualization mode
+                try:
+                    self.viewer.render_simulation(cached_result)
+                except Exception as e:
+                    print(f"[GUI Debug] Re-render failed: {e}")
+                
+                # Don't mark as dirty for visualization-only changes
+                setattr(node, '_dirty', False)
+                return
             
         # Auto-update if enabled
         if hasattr(self, 'auto_update_cb') and self.auto_update_cb.isChecked():
@@ -1590,13 +1689,14 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             self.statusBar().showMessage("⚠️ Computation already in progress...")
             return
 
-        self.graph.widget.setEnabled(False)
-        self.toolbar.setEnabled(False)
+        # Keep UI responsive during optimization (don't disable)
+        # self.graph.widget.setEnabled(False)  # Removed for real-time viz
+        # self.toolbar.setEnabled(False)  # Removed for real-time viz
         
         if skip_simulation:
             self.statusBar().showMessage("⏳ Updating CAD preview...")
         else:
-            self.statusBar().showMessage("⏳ Computing... (UI Locked)")
+            self.statusBar().showMessage("⏳ Computing... (watch 3D viewer for live updates)")
             self.timeline.add_event("Graph execution started (Full)")
 
         # Capture the list of nodes on the MAIN THREAD
@@ -1607,7 +1707,32 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
         self.worker.computation_finished.connect(self._on_execution_finished)
         self.worker.computation_error.connect(self._on_execution_error)
+        # Connect optimization step for real-time visualization
+        self.worker.optimization_step.connect(self._on_optimization_step)
         self.worker.start()
+    
+    def _on_optimization_step(self, mesh, densities, step, total):
+        """Update the 3D viewer with current optimization state (real-time viz)."""
+        try:
+            import numpy as np
+            self.statusBar().showMessage(f"⏳ TopOpt: Iteration {step+1}/{total} (Vol: {np.mean(densities):.1%})")
+            
+            # Update viewer with current density field
+            result = {
+                'mesh': mesh,
+                'density': densities,
+                'type': 'topopt',
+                'visualization_mode': 'Density',
+                'density_cutoff': 0.3  # Use default cutoff for preview
+            }
+            self.viewer.render_simulation(result)
+            
+            # Force Qt to process events and update the display
+            from PySide6.QtWidgets import QApplication
+            QApplication.processEvents()
+            
+        except Exception as e:
+            print(f"Real-time viz error: {e}")
 
 
 def main():

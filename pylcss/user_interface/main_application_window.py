@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Kutay Demir.
+# Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 """
@@ -27,6 +27,11 @@ from pylcss.user_interface.help_widget import HelpWidget
 
 # --- NEW IMPORT ---
 from pylcss.cad.professional_gui import ProfessionalCadApp  # Import the widget
+
+# --- HANDS-FREE IMPORTS ---
+from pylcss.hands_free import HandsFreeManager
+from pylcss.hands_free.ui import OverlayWidget
+
 
 class MainWindow(QtWidgets.QMainWindow):
     """
@@ -134,6 +139,65 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Style the TabWidget specifically for main navigation
         self.tabs.setIconSize(QtCore.QSize(20, 20))
+        
+        # --- HANDS-FREE CONTROL SETUP ---
+        self._setup_hands_free()
+
+    def _setup_hands_free(self) -> None:
+        """Initialize hands-free control system (voice control only)."""
+        # Create hands-free manager
+        self.hands_free_manager = HandsFreeManager(main_window=self)
+        
+        # Add Voice Control option to File menu (simple, near Save/Load)
+        self.file_menu.addSeparator()
+        
+        self.voice_control_action = QtGui.QAction(
+            qta.icon('fa5s.microphone'), "Voice Control", self
+        )
+        self.voice_control_action.setCheckable(True)
+        self.voice_control_action.setShortcut("Ctrl+Shift+V")
+        self.voice_control_action.setToolTip(
+            "Toggle voice control (Ctrl+Shift+V)\n"
+            "Say commands like 'add input', 'run optimization', 'save project'"
+        )
+        self.voice_control_action.toggled.connect(self._toggle_voice_control)
+        self.file_menu.addAction(self.voice_control_action)
+        
+        # Create overlay widget for visual feedback
+        self.hands_free_overlay = OverlayWidget(self)
+        self.hands_free_overlay.hide()
+        
+        # Connect manager signals to overlay
+        self.hands_free_manager.status_changed.connect(
+            lambda s: self.hands_free_overlay.set_active(self.hands_free_manager.is_running())
+        )
+        self.hands_free_manager.command_recognized.connect(
+            self.hands_free_overlay.show_command
+        )
+        self.hands_free_manager.partial_text.connect(
+            self.hands_free_overlay.show_partial
+        )
+    
+    def _toggle_voice_control(self, checked: bool) -> None:
+        """Toggle voice control on/off."""
+        if checked:
+            if self.hands_free_manager.start():
+                self.voice_control_action.setIcon(qta.icon('fa5s.microphone', color='green'))
+                self.voice_control_action.setText("Voice Control (ON)")
+                # Show overlay for feedback
+                if self.hands_free_manager.get_config().overlay_enabled:
+                    self.hands_free_overlay.position_in_corner("top-right")
+                    self.hands_free_overlay.show()
+                self.statusBar().showMessage("Voice control enabled - say commands to control the app", 3000)
+            else:
+                self.voice_control_action.setChecked(False)
+                self.statusBar().showMessage("Failed to start voice control - check microphone", 5000)
+        else:
+            self.hands_free_manager.stop()
+            self.voice_control_action.setIcon(qta.icon('fa5s.microphone'))
+            self.voice_control_action.setText("Voice Control")
+            self.hands_free_overlay.hide()
+            self.statusBar().showMessage("Voice control disabled", 2000)
 
     def on_tab_changed(self, index: int) -> None:
         """Refresh node list when switching to Surrogate Tab and outputs for Sensitivity Tab."""

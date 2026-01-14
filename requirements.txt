@@ -20,3 +20,9 @@ netgen-mesher==6.2.2506
 scikit-fem==11.0.0
 meshio==5.3.5
 scikit-image==0.26.0
+# Hands-free control
+opencv-python>=4.8.0
+mediapipe==0.10.18
+vosk>=0.3.45
+pyaudio>=0.2.13
+pyautogui>=0.9.54

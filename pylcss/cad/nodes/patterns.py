@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Kutay Demir.
+# Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 """Advanced patterning nodes for parametric CAD design."""
@@ -152,3 +152,102 @@ class GridPatternNode(CadQueryNode):
         except Exception as e:
             self.set_error(f"Grid pattern failed: {e}")
             return None
+class LinearPatternNode(CadQueryNode):
+    """Creates a linear pattern of shapes."""
+    __identifier__ = 'com.cad.linear_pattern'
+    NODE_NAME = 'Linear Pattern'
+
+    def __init__(self):
+        super(LinearPatternNode, self).__init__()
+        self.add_input('shape', color=(100, 255, 100))
+        self.add_input('count', color=(180, 180, 0))
+        self.add_input('distance', color=(180, 180, 0))
+        self.add_input('dx', color=(180, 180, 0))
+        self.add_input('dy', color=(180, 180, 0))
+        self.add_input('dz', color=(180, 180, 0))
+        self.add_output('shape', color=(100, 255, 100))
+
+        self.create_property('count', 3, widget_type='int')
+        self.create_property('distance', 10.0, widget_type='float')
+        self.create_property('dx', 1.0, widget_type='float')
+        self.create_property('dy', 0.0, widget_type='float')
+        self.create_property('dz', 0.0, widget_type='float')
+
+    def run(self):
+        shape = self.get_input_shape('shape')
+        if shape is None: return None
+
+        count = int(resolve_numeric_input(self.get_input('count'), self.get_property('count')))
+        dist = float(resolve_numeric_input(self.get_input('distance'), self.get_property('distance')))
+        dx = float(resolve_numeric_input(self.get_input('dx'), self.get_property('dx')))
+        dy = float(resolve_numeric_input(self.get_input('dy'), self.get_property('dy')))
+        dz = float(resolve_numeric_input(self.get_input('dz'), self.get_property('dz')))
+
+        # Normalize direction vector
+        import math
+        length = math.sqrt(dx*dx + dy*dy + dz*dz)
+        if length < 1e-9: length = 1.0
+        
+        vec = (dx/length * dist, dy/length * dist, dz/length * dist)
+
+        try:
+            result = shape
+            for i in range(1, count):
+                # Translate i * vec
+                t = (vec[0]*i, vec[1]*i, vec[2]*i)
+                result = result.union(shape.translate(t))
+            return result
+        except Exception as e:
+            self.set_error(f"Linear pattern error: {e}")
+            return shape
+
+
+class CircularPatternNode(CadQueryNode):
+    """Creates a circular pattern of shapes."""
+    __identifier__ = 'com.cad.circular_pattern'
+    NODE_NAME = 'Circular Pattern'
+
+    def __init__(self):
+        super(CircularPatternNode, self).__init__()
+        self.add_input('shape', color=(100, 255, 100))
+        self.add_input('count', color=(180, 180, 0))
+        self.add_input('angle', color=(180, 180, 0))
+        self.add_output('shape', color=(100, 255, 100))
+
+        self.create_property('count', 6, widget_type='int')
+        self.create_property('angle', 360.0, widget_type='float')
+        self.create_property('axis_x', 0.0, widget_type='float')
+        self.create_property('axis_y', 0.0, widget_type='float')
+        self.create_property('axis_z', 1.0, widget_type='float')
+
+    def run(self):
+        shape = self.get_input_shape('shape')
+        if shape is None: return None
+
+        count = int(resolve_numeric_input(self.get_input('count'), self.get_property('count')))
+        angle = float(resolve_numeric_input(self.get_input('angle'), self.get_property('angle')))
+        ax = float(self.get_property('axis_x'))
+        ay = float(self.get_property('axis_y'))
+        az = float(self.get_property('axis_z'))
+
+        center = (0,0,0) # Assuming rotating around origin/axis passing through origin for now
+        axis = (ax, ay, az)
+
+        try:
+            result = shape
+            step = angle / count if angle == 360 else angle / (count - 1)
+            # If 360, we usually want to distribute evenly, but if count includes 0, logic varies.
+            # CadQuery rotate is absolute? No.
+            # Simple union loop:
+            
+            for i in range(1, count):
+                d_ang = step * i
+                # If 360 and i==0 is implied as start.
+                if angle == 360 and i == count: break # Don't overlap start
+                
+                rotated = shape.rotate(center, (ax+center[0], ay+center[1], az+center[2]), d_ang)
+                result = result.union(rotated)
+            return result
+        except Exception as e:
+            self.set_error(f"Circular pattern error: {e}")
+            return shape

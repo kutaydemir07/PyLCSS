@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Kutay Demir.
+# Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 # Markus Zimmermann, Johannes Edler von Hoessle 
 # Computing solution spaces for robust design 
@@ -56,45 +56,154 @@ from ..user_interface.qt_patches import NumericTableWidgetItem
 logger = logging.getLogger(__name__)
 
 
-class ArrowLine(pg.GraphicsObject):
-    """Custom arrow line that automatically handles arrowhead placement and rotation."""
+class ScalableText(pg.GraphicsObject):
+    """
+    Text item that scales with the view (unlike pg.TextItem which stays fixed size).
+    Uses data coordinates so it zooms in/out with the graph.
+    """
+    def __init__(self, text, x, y, size=0.15, color='k'):
+        super().__init__()
+        self.text = text
+        self.x = x
+        self.y = y
+        self.size = size  # Text height in data coordinates
+        self.color = pg.mkColor(color)
+        self._generate_path()
     
-    def __init__(self, start_pos, end_pos, pen='k', head_len=12, node_radius=0.12):
+    def _generate_path(self):
+        """Generate text as a QPainterPath for scalable rendering."""
+        self.path = QtGui.QPainterPath()
+        font = QtGui.QFont("Arial", 100, QtGui.QFont.Bold)  # Use large font then scale
+        self.path.addText(0, 0, font, self.text)
+        
+        # Get bounding rect and calculate scale factor
+        br = self.path.boundingRect()
+        if br.height() > 0:
+            self.scale_factor = self.size / br.height()
+        else:
+            self.scale_factor = 0.001
+        
+        # Store bounding rect info for centering
+        self.path_width = br.width()
+        self.path_height = br.height()
+        self.path_x = br.x()  # Left edge (usually 0 or small positive)
+        self.path_y = br.y()  # Top edge (usually negative due to baseline)
+    
+    def paint(self, p, *args):
+        p.save()
+        # Translate to node center, then offset to center the text
+        # In Qt coordinates: Y increases downward, but we flip Y in scale
+        # Center calculation: after scaling, text width = path_width * scale_factor
+        scaled_width = self.path_width * self.scale_factor
+        scaled_height = self.path_height * self.scale_factor
+        
+        # Move to position where text center aligns with (self.x, self.y)
+        # We draw at origin then translate
+        p.translate(self.x, self.y)
+        p.scale(self.scale_factor, -self.scale_factor)  # Flip Y for proper orientation
+        
+        # Offset to center: move left by half width, and vertically center
+        # path_y is typically negative (above baseline), so center = path_y + path_height/2
+        center_x = self.path_x + self.path_width / 2
+        center_y = self.path_y + self.path_height / 2
+        
+        # Translate so center of path is at origin (which is now at node center)
+        p.translate(-center_x, -center_y)
+        
+        p.fillPath(self.path, self.color)
+        p.restore()
+    
+    def boundingRect(self):
+        w = self.path_width * self.scale_factor
+        h = self.path_height * self.scale_factor
+        return QtCore.QRectF(self.x - w/2, self.y - h/2, w, h)
+
+
+class ArrowLine(pg.GraphicsObject):
+    """
+    Arrow line that scales with the view (line width, arrow head all in data coords).
+    Uses cosmetic=False so everything scales together when zooming.
+    """
+    
+    def __init__(self, start_pos, end_pos, pen='k', head_len=0.12, node_radius=0.4, line_width=0.03):
         super().__init__()
         self.start_pos = pg.Point(start_pos)
         self.end_pos = pg.Point(end_pos)
-        self.pen = pg.mkPen(pen, width=1.5)
-        self.head_len = head_len
+        self.head_len = head_len  # Arrow head length in data coordinates
         self.node_radius = node_radius
+        self.line_width = line_width  # Line width in data coordinates
+        self.color = pg.mkColor(pen)
         
-        # Internal arrow head
-        self.arrow = pg.ArrowItem(pen=self.pen, brush=self.pen.color())
-        self.arrow.setParentItem(self)
-        self.update_geometry()
+        self._calculate_geometry()
 
-    def update_geometry(self):
+    def _calculate_geometry(self):
+        """Calculate line and arrow head geometry."""
         diff = self.end_pos - self.start_pos
         dist = np.sqrt(diff.x()**2 + diff.y()**2)
-        if dist == 0:
+        if dist < 0.001:
+            self.valid = False
             return
+        self.valid = True
         
-        # Stop line/arrow at the boundary of the node
-        edge_x = self.end_pos.x() - (diff.x() / dist) * self.node_radius
-        edge_y = self.end_pos.y() - (diff.y() / dist) * self.node_radius
+        # Unit vector from start to end
+        ux = diff.x() / dist
+        uy = diff.y() / dist
         
-        angle = np.degrees(np.arctan2(diff.y(), diff.x()))
-        self.arrow.setPos(edge_x, edge_y)
-        self.arrow.setStyle(angle=180-angle, headLen=self.head_len, tipAngle=30, baseAngle=20)
+        # Stop line at node boundary
+        self.adj_end_x = self.end_pos.x() - ux * self.node_radius
+        self.adj_end_y = self.end_pos.y() - uy * self.node_radius
         
-        # Store adjusted end point for painting the line
-        self.adj_end = pg.Point(edge_x, edge_y)
+        # Arrow head points (triangle)
+        # Tip is at adj_end, two base points spread perpendicular
+        tip_x = self.adj_end_x
+        tip_y = self.adj_end_y
+        
+        # Base of arrow head (behind tip)
+        base_x = tip_x - ux * self.head_len
+        base_y = tip_y - uy * self.head_len
+        
+        # Perpendicular vector
+        px = -uy
+        py = ux
+        
+        # Arrow head width
+        head_width = self.head_len * 0.5
+        
+        # Two base corners
+        self.arrow_points = [
+            (tip_x, tip_y),
+            (base_x + px * head_width, base_y + py * head_width),
+            (base_x - px * head_width, base_y - py * head_width),
+        ]
+        
+        # Line ends before arrow head base
+        self.line_end_x = base_x
+        self.line_end_y = base_y
 
     def paint(self, p, *args):
-        p.setPen(self.pen)
-        p.drawLine(self.start_pos, self.adj_end)
+        if not self.valid:
+            return
+        
+        # Use a pen with width in data coordinates (cosmetic=False)
+        pen = QtGui.QPen(self.color)
+        pen.setWidthF(self.line_width)
+        pen.setCosmetic(False)  # Scale with view
+        pen.setCapStyle(QtCore.Qt.RoundCap)
+        p.setPen(pen)
+        
+        # Draw line
+        p.drawLine(QtCore.QPointF(self.start_pos.x(), self.start_pos.y()),
+                   QtCore.QPointF(self.line_end_x, self.line_end_y))
+        
+        # Draw arrow head as filled triangle
+        arrow_polygon = QtGui.QPolygonF([QtCore.QPointF(pt[0], pt[1]) for pt in self.arrow_points])
+        p.setBrush(self.color)
+        p.setPen(QtCore.Qt.NoPen)
+        p.drawPolygon(arrow_polygon)
 
     def boundingRect(self):
-        return QtCore.QRectF(self.start_pos, self.end_pos).normalized()
+        return QtCore.QRectF(self.start_pos, self.end_pos).normalized().adjusted(-0.2, -0.2, 0.2, 0.2)
+
 
 class VariantRequirementsDialog(QtWidgets.QDialog):
     def __init__(self, variant_name, problem, parent=None):
@@ -4470,13 +4579,14 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
             # Calculate hierarchical layout
             pos = self._hierarchical_layout(G)
             
-            # --- FIX: Define sizes in Data Coordinates (not pixels) ---
-            # Layout spacing is approx 1.2 units (see _hierarchical_layout)
+            # --- All sizes in Data Coordinates (scale with zoom) ---
             SIZE_STD = 0.8   # Standard node diameter
             SIZE_BB = 0.25   # Blackbox node diameter
+            TEXT_SIZE = 0.25  # Text height in data coords
+            LINE_WIDTH = 0.02  # Line width in data coords
+            ARROW_HEAD = 0.12  # Arrow head length in data coords
             
             # Radii for arrow calculation
-            # Slightly larger than half-size to stop arrow right at the edge
             RADIUS_STD = SIZE_STD / 2
             RADIUS_BB = SIZE_BB / 2
             
@@ -4489,18 +4599,16 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                 
                 # Determine node radius based on target type
                 target_type = G.nodes[target].get('node_type', 'unknown')
-                source_type = G.nodes[source].get('node_type', 'unknown')
-                
-                # Use data-coordinate radii
                 target_radius = RADIUS_BB if target_type == 'blackbox' else RADIUS_STD
                 
-                # Create arrow line that stops at node boundary
+                # Create arrow line with data-coordinate sizing
                 edge_item = ArrowLine(
                     start_pos=(x1, y1),
                     end_pos=(x2, y2),
                     pen='k',
-                    head_len=10,
-                    node_radius=target_radius
+                    head_len=ARROW_HEAD,
+                    node_radius=target_radius,
+                    line_width=LINE_WIDTH
                 )
                 self.adg_plot.addItem(edge_item)
             
@@ -4514,31 +4622,40 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                     # Draw small black dot for blackbox functions
                     node_scatter = pg.ScatterPlotItem(
                         [x], [y], 
-                        size=SIZE_BB,       # Size in data units
+                        size=SIZE_BB,
                         pen=pg.mkPen('k', width=1),
                         brush=pg.mkBrush('k'),
                         symbol='o',
-                        pxMode=False        # Disable pixel mode so it scales
+                        pxMode=False  # Scales with zoom
                     )
                     self.adg_plot.addItem(node_scatter)
                 else:
-                    # Draw white circle with black border for all other nodes
+                    # Draw white circle with black border
                     node_scatter = pg.ScatterPlotItem(
                         [x], [y], 
-                        size=SIZE_STD,      # Size in data units
-                        pen=pg.mkPen('k', width=2), # Pen width stays in pixels (cosmetic)
+                        size=SIZE_STD,
+                        pen=pg.mkPen('k', width=2),
                         brush=pg.mkBrush('w'),
                         symbol='o',
-                        pxMode=False        # Disable pixel mode so it scales
+                        pxMode=False  # Scales with zoom
                     )
                     self.adg_plot.addItem(node_scatter)
                     
-                    # Add text label inside circle
-                    # Note: pg.TextItem does not scale geometry by default, keeping text readable.
-                    text = pg.TextItem(text=name, color='k', anchor=(0.5, 0.5))
-                    text.setPos(x, y)
-                    text.setFont(QtGui.QFont("Arial", 8, QtGui.QFont.Bold))
-                    self.adg_plot.addItem(text)
+                    # Add scalable text label (truncate long names)
+                    display_name = name if len(name) <= 8 else name[:7] + "…"
+                    # Adjust text size based on name length
+                    text_size = TEXT_SIZE if len(display_name) <= 4 else TEXT_SIZE * 0.8
+                    text_item = ScalableText(display_name, x, y, size=text_size, color='k')
+                    self.adg_plot.addItem(text_item)
+            
+            # Auto-fit view to show all nodes with padding
+            if pos:
+                all_x = [p[0] for p in pos.values()]
+                all_y = [p[1] for p in pos.values()]
+                x_min, x_max = min(all_x) - 1, max(all_x) + 1
+                y_min, y_max = min(all_y) - 0.5, max(all_y) + 0.5
+                self.adg_plot.setXRange(x_min, x_max, padding=0.1)
+                self.adg_plot.setYRange(y_min, y_max, padding=0.1)
             
             # Store for later reference
             self.adg_graph = G
@@ -4549,8 +4666,12 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, "Warning", f"Graph layout failed: {str(e)}")
     
     def _hierarchical_layout(self, G):
-        """Create a hierarchical layout with horizontal placement (left to right)."""
+        """Create a hierarchical layout optimized for ADG visualization."""
         pos = {}
+        
+        # Base spacing parameters (relative to node diameter of 0.8)
+        NODE_DIAMETER = 0.8
+        H_SPACING = NODE_DIAMETER * 1.5  # Horizontal spacing between nodes
         
         # If graph is directed, use topological levels
         if G.is_directed():
@@ -4560,19 +4681,16 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                 
                 # First pass: assign levels based on topological order
                 for node in nx.topological_sort(G):
-                    # Node level = max(predecessor levels) + 1
                     predecessors = list(G.predecessors(node))
                     if not predecessors:
-                        # Source nodes (inputs/DVs) start at level 0 (bottom)
                         levels[node] = 0
                     else:
                         levels[node] = max(levels[p] for p in predecessors) + 1
                 
-                # Second pass: ensure all sink nodes (no outgoing edges) are at max level
-                # These are the true QoIs/outputs
+                # Second pass: ensure all sink nodes are at max level
                 max_level = max(levels.values()) if levels else 0
                 for node in G.nodes():
-                    if G.out_degree(node) == 0:  # Sink node = true output
+                    if G.out_degree(node) == 0:
                         levels[node] = max_level
                 
                 # Organize nodes by level
@@ -4582,14 +4700,26 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                         nodes_by_level[level] = []
                     nodes_by_level[level].append(node)
                 
-                # Position nodes with generous spacing and minimize crossings
-                max_level = max(nodes_by_level.keys())
+                # Calculate widest level to determine aspect ratio
+                max_nodes_in_level = max(len(nodes) for nodes in nodes_by_level.values()) if nodes_by_level else 1
+                num_levels = len(nodes_by_level)
+                
+                # Total horizontal extent
+                total_width = (max_nodes_in_level - 1) * H_SPACING if max_nodes_in_level > 1 else H_SPACING
+                
+                # Make vertical spacing proportional to create good aspect ratio
+                # Target: roughly square-ish aspect ratio (height ~ width * 0.7-1.0)
+                if num_levels > 1:
+                    V_SPACING = max(NODE_DIAMETER * 2.0, total_width * 0.6 / (num_levels - 1))
+                else:
+                    V_SPACING = NODE_DIAMETER * 2.0
+                
+                max_level_num = max(nodes_by_level.keys()) if nodes_by_level else 0
                 
                 pos = {}
                 for level, nodes in nodes_by_level.items():
                     # Sort nodes to minimize crossings with previous level
                     if level > 0:
-                        # Calculate average position of predecessors for each node
                         node_scores = {}
                         for node in nodes:
                             preds = list(G.predecessors(node))
@@ -4598,17 +4728,15 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                                 node_scores[node] = avg_x
                             else:
                                 node_scores[node] = 0
-                        # Sort nodes by their predecessor average position
                         nodes = sorted(nodes, key=lambda n: node_scores.get(n, 0))
                     
-                    # Vertical position: bottom to top with 5x spacing
-                    y = (level / max(1, max_level)) * 5.0
+                    # Vertical position
+                    y = level * V_SPACING
                     
-                    # Horizontal spacing: generous spacing between nodes
+                    # Horizontal spacing
                     width = len(nodes)
                     for i, node in enumerate(nodes):
-                        # Center nodes and give generous horizontal spacing
-                        x = (i - (width - 1) / 2.0) * 1.2  # 1.2 spacing between nodes
+                        x = (i - (width - 1) / 2.0) * H_SPACING
                         pos[node] = (x, y)
                 
             except nx.NetworkXError:

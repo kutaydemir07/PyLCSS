@@ -1,21 +1,21 @@
-# Copyright (c) 2025 Kutay Demir.
+# Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 """
 CAD Nodes - All node implementations consolidated.
-
-Structure:
+Updated structure:
     nodes/
-    ├── primitives.py    # Box, Cylinder, Sphere
-    ├── operations.py    # Extrude, Revolve, Boolean, Fillet, etc.
-    ├── cutting.py       # Hole, Pocket, Cut operations
-    ├── patterns.py      # Linear, Circular, Grid patterns
-    ├── sketch.py        # Sketch operations
-    ├── simulation.py    # FEA, TopOpt, Material, Mesh
-    ├── advanced.py      # Sketch, Assembly, Analysis
-    ├── parametric.py    # Additional shapes, transforms
-    ├── io.py            # Export STEP/STL
-    └── values.py        # Number, Variable
+    ├── geometry.py      # Primitives (Box, Cylinder, etc.)
+    ├── sketcher.py      # Sketching (Line, Arc, Circle, etc.)
+    ├── modeling.py      # 3D Ops (Extrude, Revolve, Boolean, Fillet, Transform)
+    ├── surfacing.py     # Surfacing (Sweep, Loft, Helix)
+    ├── features.py      # Engineering features (Holes, Cuts)
+    ├── analysis.py      # Mass props, Bounding box
+    ├── assembly.py      # Assembly
+    ├── fem.py           # Simulation (FEA, TopOpt)
+    ├── patterns.py      # Patterns
+    ├── io.py            # IO
+    └── values.py        # Parameters
 """
 
 # Core base classes
@@ -23,126 +23,124 @@ from pylcss.cad.core.base_node import CadQueryNode, is_numeric, is_shape, resolv
 from pylcss.cad.core.registry import NODE_REGISTRY, register_node
 
 # =============================================================================
-# PRIMITIVES
+# GEOMETRY (Primitives)
 # =============================================================================
-from pylcss.cad.nodes.primitives import BoxNode, CylinderNode, SphereNode
-from pylcss.cad.nodes.parametric import ConeNode, TorusNode, WedgeNode, PyramidNode
+from pylcss.cad.nodes.geometry import (
+    BoxNode, CylinderNode, SphereNode, ConeNode, TorusNode, 
+    WedgeNode, PyramidNode
+)
 
 # =============================================================================
-# SKETCHING
+# SKETCHER
 # =============================================================================
-from pylcss.cad.nodes.advanced import SketchNode
-from pylcss.cad.nodes.parametric import SplineNode, EllipseNode
-from pylcss.cad.nodes.sketch import (
+from pylcss.cad.nodes.sketcher import (
+    SketchNode, SplineNode, EllipseNode,
     LineSketchNode, ArcSketchNode, ParametricCircleSketchNode, 
     ParametricRectangleSketchNode, PolygonSketchNode
 )
 
 # =============================================================================
-# 3D OPERATIONS
+# MODELING (3D Ops & Transforms)
 # =============================================================================
-from pylcss.cad.nodes.operations import (
-    ExtrudeNode, PocketNode, FilletNode, SelectFaceNode, 
-    CutExtrudeNode, BooleanNode, RevolveNode, CylinderCutNode
-)
-from pylcss.cad.nodes.parametric import (
-    SweepNode, LoftNode, HelixNode, ChamferNode, ShellNode
+from pylcss.cad.nodes.modeling import (
+    ExtrudeNode, RevolveNode, BooleanNode, FilletNode, 
+    ChamferNode, ShellNode, SelectFaceNode, OffsetNode,
+    TranslateNode, RotateNode, ScaleNode, MirrorNode,
+    CutExtrudeNode
 )
 
 # =============================================================================
-# CUTTING OPERATIONS
+# SURFACING
 # =============================================================================
-from pylcss.cad.nodes.cutting import (
+from pylcss.cad.nodes.surfacing import (
+    SweepNode, LoftNode, HelixNode
+)
+
+# =============================================================================
+# FEATURES (Cuts & Holes)
+# =============================================================================
+from pylcss.cad.nodes.features import (
+    PocketNode, CylinderCutNode,
     HoleAtCoordinatesNode, MultiHoleNode, RectangularCutNode, 
     SlotCutNode, ArrayHolesNode
 )
 
 # =============================================================================
-# MODIFICATIONS
+# PATTERNS (Advanced)
 # =============================================================================
-from pylcss.cad.nodes.parametric import OffsetNode
-
-# =============================================================================
-# TRANSFORMS
-# =============================================================================
-from pylcss.cad.nodes.parametric import TranslateNode, RotateNode, ScaleNode, MirrorNode
-
-# =============================================================================
-# PATTERNS
-# =============================================================================
-from pylcss.cad.nodes.parametric import LinearPatternNode, CircularPatternNode
-from pylcss.cad.nodes.patterns import RadialPatternNode, MirrorPatternNode, GridPatternNode
+from pylcss.cad.nodes.patterns import (
+    RadialPatternNode, MirrorPatternNode, GridPatternNode,
+    LinearPatternNode, CircularPatternNode
+)
 
 # =============================================================================
 # ASSEMBLY
 # =============================================================================
-from pylcss.cad.nodes.advanced import AssemblyNode
+from pylcss.cad.nodes.assembly import AssemblyNode
 
 # =============================================================================
 # ANALYSIS
 # =============================================================================
-from pylcss.cad.nodes.advanced import MassPropertiesNode, BoundingBoxNode
+from pylcss.cad.nodes.analysis import MassPropertiesNode, BoundingBoxNode
 
 # =============================================================================
-# SIMULATION (FEA & TopOpt)
+# FEM / SIMULATION
 # =============================================================================
-from pylcss.cad.nodes.simulation import (
+from pylcss.cad.nodes.fem import (
     MaterialNode, MeshNode, ConstraintNode, LoadNode, PressureLoadNode,
-    SolverNode, TopologyOptimizationNode
+    SolverNode, TopologyOptimizationNode, RemeshNode, SizeOptimizationNode, ShapeOptimizationNode
 )
 
 # =============================================================================
-# IO
+# IO & VALUES
 # =============================================================================
 from pylcss.cad.nodes.io import ExportStepNode, ExportStlNode
 from pylcss.cad.nodes.values import NumberNode, VariableNode
 
 # =============================================================================
-# ALL EXPORTS (58 nodes)
+# ALL EXPORTS
 # =============================================================================
 __all__ = [
     # Core
     "CadQueryNode", "NODE_REGISTRY", "register_node",
     "is_numeric", "is_shape", "resolve_numeric_input", "resolve_shape_input",
     
-    # Primitives (7)
+    # Geometry
     "BoxNode", "CylinderNode", "SphereNode", "ConeNode", "TorusNode", 
     "WedgeNode", "PyramidNode",
     
-    # Sketching (8)
+    # Sketcher
     "SketchNode", "SplineNode", "EllipseNode",
     "LineSketchNode", "ArcSketchNode", "ParametricCircleSketchNode",
     "ParametricRectangleSketchNode", "PolygonSketchNode",
     
-    # Operations (13)
-    "ExtrudeNode", "PocketNode", "FilletNode", "SelectFaceNode",
-    "CutExtrudeNode", "BooleanNode", "RevolveNode", "CylinderCutNode",
-    "ChamferNode", "ShellNode", "SweepNode", "LoftNode", "HelixNode",
+    # Modeling
+    "ExtrudeNode", "RevolveNode", "BooleanNode", "FilletNode", 
+    "ChamferNode", "ShellNode", "SelectFaceNode", "OffsetNode",
+    "TranslateNode", "RotateNode", "ScaleNode", "MirrorNode",
+    "LinearPatternNode", "CircularPatternNode",
     
-    # Cutting (5)
+    # Surfacing
+    "SweepNode", "LoftNode", "HelixNode",
+    
+    # Features
+    "PocketNode", "CutExtrudeNode", "CylinderCutNode",
     "HoleAtCoordinatesNode", "MultiHoleNode", "RectangularCutNode",
     "SlotCutNode", "ArrayHolesNode",
     
-    # Modifications (1)
-    "OffsetNode",
-    
-    # Transforms (4)
-    "TranslateNode", "RotateNode", "ScaleNode", "MirrorNode",
-    
-    # Patterns (5)
-    "LinearPatternNode", "CircularPatternNode", 
+    # Patterns
     "RadialPatternNode", "MirrorPatternNode", "GridPatternNode",
     
-    # Assembly (1)
+    # Assembly
     "AssemblyNode",
     
-    # Analysis (2)
+    # Analysis
     "MassPropertiesNode", "BoundingBoxNode",
     
-    # Simulation (7)
+    # FEM
     "MaterialNode", "MeshNode", "ConstraintNode", "LoadNode", "PressureLoadNode",
-    "SolverNode", "TopologyOptimizationNode",
+    "SolverNode", "TopologyOptimizationNode", "RemeshNode", "SizeOptimizationNode", "ShapeOptimizationNode",
     
-    # IO (4)
+    # IO / Values
     "ExportStepNode", "ExportStlNode", "NumberNode", "VariableNode",
 ]

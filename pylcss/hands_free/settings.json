@@ -1,0 +1,25 @@
+{
+  "head_tracking": {
+    "enabled": true,
+    "camera_index": 0,
+    "sensitivity_x": 1.0,
+    "sensitivity_y": 0.8,
+    "deadzone": 0.05,
+    "smoothing": 0.6,
+    "invert_x": false,
+    "invert_y": false,
+    "blink_threshold": 0.21,
+    "blink_frames": 3
+  },
+  "voice_control": {
+    "enabled": true,
+    "model_path": "d:\\kutAI\\models\\vosk-model-small-en-us-0.15",
+    "sample_rate": 16000,
+    "hotword": "hey computer",
+    "hotword_enabled": false,
+    "command_timeout": 5.0,
+    "feedback_enabled": true
+  },
+  "startup_enabled": false,
+  "overlay_enabled": true
+}
