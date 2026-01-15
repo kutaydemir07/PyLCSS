@@ -13,9 +13,14 @@ authors = [
     {name = "Kutay Demir"}
 ]
 dependencies = [
+    "numpy==2.2.6",
+    "opencv-python==4.12.0.88",
+    "vosk==0.3.45",
+    "pyaudio==0.2.14",
+    "pyautogui==0.9.54",
+    "mediapipe>=0.10.18",
     "PySide6==6.10.1",
     "NodeGraphQt==0.6.43",
-    "numpy==1.26.4",
     "scipy==1.13.1",
     "pandas==2.2.2",
     "pyqtgraph==0.14.0",
@@ -34,12 +39,7 @@ dependencies = [
     "netgen-mesher==6.2.2506",
     "scikit-fem==11.0.0",
     "meshio==5.3.5",
-    "scikit-image==0.26.0",
-    "opencv-python==4.12.0.88",
-    "mediapipe==0.10.18",
-    "vosk==0.3.45",
-    "pyaudio==0.2.14",
-    "pyautogui==0.9.54"
+    "scikit-image==0.26.0"
 ]
 
 [project.scripts]
