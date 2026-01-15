@@ -81,9 +81,39 @@ class HandsFreeConfig:
             with open(load_path, 'r') as f:
                 data = json.load(f)
             
+            # Helper to resolve model path
+            vc_data = data.get('voice_control', {})
+            if 'model_path' in vc_data:
+                model_path_str = vc_data['model_path']
+                model_path = Path(model_path_str)
+                
+                # Logic:
+                # 1. If absolute and exists, keep it.
+                # 2. If relative, try resolving against project root.
+                # 3. If still not found, fallback to default.
+                
+                resolved_path = model_path
+                if not model_path.is_absolute():
+                     project_root = MODELS_DIR.parent
+                     candidate = project_root / model_path
+                     if candidate.exists():
+                         resolved_path = candidate
+                     else:
+                         # Try resolving inside models dir implicitly
+                         candidate_in_models = MODELS_DIR / model_path
+                         if candidate_in_models.exists():
+                             resolved_path = candidate_in_models
+                
+                # If the path (absolute or resolved relative) doesn't exist, fallback
+                if not resolved_path.exists():
+                    logger.warning(f"Configured model path {resolved_path} not found. Falling back to default.")
+                    resolved_path = VOSK_MODEL_PATH
+                
+                vc_data['model_path'] = str(resolved_path)
+
             config = cls(
                 head_tracking=HeadTrackingConfig(**data.get('head_tracking', {})),
-                voice_control=VoiceControlConfig(**data.get('voice_control', {})),
+                voice_control=VoiceControlConfig(**vc_data),
                 startup_enabled=data.get('startup_enabled', False),
                 overlay_enabled=data.get('overlay_enabled', True),
             )
