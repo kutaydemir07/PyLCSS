@@ -274,3 +274,38 @@ class EllipseNode(CadQueryNode):
         y = resolve_numeric_input(self.get_input('center_y'), self.get_property('center_y'))
         
         return sketch.moveTo(float(x), float(y)).ellipse(float(xr), float(yr))
+
+
+class PolylineNode(CadQueryNode):
+    """Creates a polyline through points (closed)."""
+    __identifier__ = 'com.cad.polyline'
+    NODE_NAME = 'Polyline'
+
+    def __init__(self):
+        super(PolylineNode, self).__init__()
+        self.add_input('sketch', color=(100, 200, 255))
+        self.add_output('shape', color=(100, 200, 255))
+        
+        self.create_property('points', '[(0,0), (5,5), (5,0)]', widget_type='string')
+        self.create_property('closed', True, widget_type='bool')
+
+    def run(self):
+        sketch = resolve_shape_input(self.get_input('sketch'))
+        if sketch is None:
+            sketch = cq.Workplane("XY")
+        
+        points_str = self.get_property('points')
+        closed = self.get_property('closed')
+        
+        try:
+            points = ast.literal_eval(points_str)
+            if not isinstance(points, list) or len(points) < 2:
+                return sketch
+                
+            res = sketch.polyline(points)
+            if closed:
+                return res.close()
+            return res
+        except Exception as e:
+            self.set_error(f"Polyline error: {e}")
+            return sketch

@@ -40,6 +40,36 @@ class ExtrudeNode(CadQueryNode):
             return shape
 
 
+class TwistedExtrudeNode(CadQueryNode):
+    """Twist extrudes a 2D shape."""
+    __identifier__ = 'com.cad.twisted_extrude'
+    NODE_NAME = 'Twisted Extrude'
+
+    def __init__(self):
+        super(TwistedExtrudeNode, self).__init__()
+        self.add_input('shape', color=(100, 255, 100))
+        self.add_input('distance', color=(180, 180, 0))
+        self.add_input('angle', color=(180, 180, 0))
+        self.add_output('shape', color=(100, 255, 100))
+        
+        self.create_property('distance', 10.0, widget_type='float')
+        self.create_property('angle', 45.0, widget_type='float')
+
+    def run(self):
+        shape = resolve_shape_input(self.get_input('shape'))
+        distance = resolve_numeric_input(self.get_input('distance'), self.get_property('distance'))
+        angle = resolve_numeric_input(self.get_input('angle'), self.get_property('angle'))
+        
+        if shape is None:
+            return None
+        
+        try:
+            return shape.twistExtrude(float(distance), float(angle))
+        except Exception as e:
+            self.set_error(f"Twist Extrude error: {e}")
+            return shape
+
+
 class RevolveNode(CadQueryNode):
     """Revolve a sketch around an axis."""
     __identifier__ = 'com.cad.revolve'

@@ -12,7 +12,7 @@ from pylcss.cad.nodes import (
     WedgeNode, PyramidNode,
     
     # Sketching
-    SketchNode, SplineNode, EllipseNode,
+    SketchNode, SplineNode, EllipseNode, PolylineNode,
     LineSketchNode, ArcSketchNode, ParametricCircleSketchNode,
     ParametricRectangleSketchNode, PolygonSketchNode,
     
@@ -20,6 +20,7 @@ from pylcss.cad.nodes import (
     ExtrudeNode, PocketNode, FilletNode, SelectFaceNode,
     CutExtrudeNode, BooleanNode, RevolveNode, CylinderCutNode,
     ChamferNode, ShellNode, SweepNode, LoftNode, HelixNode,
+    TwistedExtrudeNode,
     
     # Cutting
     HoleAtCoordinatesNode, MultiHoleNode, RectangularCutNode,
@@ -68,6 +69,7 @@ NODE_CLASS_MAPPING = {
     'com.cad.sketch.rectangle': ParametricRectangleSketchNode,
     'com.cad.sketch.polygon': PolygonSketchNode,
     'com.cad.spline': SplineNode,
+    'com.cad.polyline': PolylineNode,
     'com.cad.ellipse': EllipseNode,
 
     # 3D Operations (13)
@@ -76,6 +78,7 @@ NODE_CLASS_MAPPING = {
     'com.cad.sweep': SweepNode,
     'com.cad.loft': LoftNode,
     'com.cad.helix': HelixNode,
+    'com.cad.twisted_extrude': TwistedExtrudeNode,
     'com.cad.pocket': PocketNode,
     'com.cad.cut_extrude': CutExtrudeNode,
     'com.cad.cylinder_cut': CylinderCutNode,

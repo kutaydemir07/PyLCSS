@@ -34,7 +34,7 @@ from pylcss.cad.nodes.geometry import (
 # SKETCHER
 # =============================================================================
 from pylcss.cad.nodes.sketcher import (
-    SketchNode, SplineNode, EllipseNode,
+    SketchNode, SplineNode, EllipseNode, PolylineNode,
     LineSketchNode, ArcSketchNode, ParametricCircleSketchNode, 
     ParametricRectangleSketchNode, PolygonSketchNode
 )
@@ -46,7 +46,7 @@ from pylcss.cad.nodes.modeling import (
     ExtrudeNode, RevolveNode, BooleanNode, FilletNode, 
     ChamferNode, ShellNode, SelectFaceNode, OffsetNode,
     TranslateNode, RotateNode, ScaleNode, MirrorNode,
-    CutExtrudeNode
+    CutExtrudeNode, TwistedExtrudeNode
 )
 
 # =============================================================================
@@ -110,7 +110,7 @@ __all__ = [
     "WedgeNode", "PyramidNode",
     
     # Sketcher
-    "SketchNode", "SplineNode", "EllipseNode",
+    "SketchNode", "SplineNode", "EllipseNode", "PolylineNode",
     "LineSketchNode", "ArcSketchNode", "ParametricCircleSketchNode",
     "ParametricRectangleSketchNode", "PolygonSketchNode",
     
@@ -118,7 +118,7 @@ __all__ = [
     "ExtrudeNode", "RevolveNode", "BooleanNode", "FilletNode", 
     "ChamferNode", "ShellNode", "SelectFaceNode", "OffsetNode",
     "TranslateNode", "RotateNode", "ScaleNode", "MirrorNode",
-    "LinearPatternNode", "CircularPatternNode",
+    "LinearPatternNode", "CircularPatternNode", "TwistedExtrudeNode",
     
     # Surfacing
     "SweepNode", "LoftNode", "HelixNode",
