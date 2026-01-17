@@ -265,7 +265,7 @@ class ShellNode(CadQueryNode):
         super(ShellNode, self).__init__()
         self.add_input('shape', color=(100, 255, 100))
         # Optional: Face to remove (opening)
-        self.add_input('face_to_remove', label='Face(s) to Remove', color=(100, 200, 255)) 
+        self.add_input('face_to_remove', color=(100, 200, 255)) 
         self.add_output('shape', color=(100, 255, 100))
         self.create_property('thickness', -2.0, widget_type='float') # Negative for inward shell
 

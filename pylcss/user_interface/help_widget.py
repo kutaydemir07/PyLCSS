@@ -472,7 +472,7 @@ class HelpWidget(QtWidgets.QWidget):
 
         <h3>License & Copyright</h3>
         <p>Licensed under the PolyForm Shield License 1.0.0.</p>
-        <p>Copyright © 2025 Kutay Demir. All rights reserved.</p>
+        <p>Copyright © 2026 Kutay Demir. All rights reserved.</p>
 
         <p><i>Developed for advanced engineering research and industrial applications.</i></p>
         """

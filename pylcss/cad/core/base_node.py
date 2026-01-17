@@ -66,13 +66,10 @@ def resolve_any_input(port):
         try:
             node = port.connected_ports()[0].node()
             res = getattr(node, '_last_result', None)
-            print(f"[resolve_any DEBUG] port={port.name()}, upstream_node={node.__class__.__name__}, _last_result type={type(res).__name__}, is_none={res is None}")
             if res is None:
                 res = node.run()
-                print(f"[resolve_any DEBUG] Called run(), result type={type(res).__name__}")
             return res
-        except Exception as e:
-            print(f"[resolve_any DEBUG] Exception: {e}")
+        except Exception:
             pass
     return None
 

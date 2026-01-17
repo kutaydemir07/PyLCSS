@@ -64,7 +64,7 @@ class LoftNode(CadQueryNode):
             if shape is not None:
                 profiles.append(shape)
 
-        print(f"LoftNode: Collected {len(profiles)} profiles")
+
         
         if len(profiles) < 2:
             return profiles[0] if profiles else None
@@ -93,28 +93,21 @@ class LoftNode(CadQueryNode):
                     wire = val
                     
                 wires_with_pos.append((z_pos, wire))
-                print(f"LoftNode: Profile {i} at Z={z_pos}, type={type(val).__name__}")
 
             # Sort by Z position for proper loft ordering
             wires_with_pos.sort(key=lambda x: x[0])
             wires = [w for _, w in wires_with_pos]
             
-            print(f"LoftNode: Attempting makeLoft with {len(wires)} wires")
-
             # Create Solid using makeLoft (creates solid if wires are closed)
             lid = cq.Solid.makeLoft(wires, ruled=ruled)
-            print(f"LoftNode: makeLoft succeeded")
             return cq.Workplane(obj=lid)
 
         except Exception as e:
-            print(f"LoftNode: Solid makeLoft failed: {e}")
             # Fallback for open wires / surfaces
             try:
                 lid = cq.Shell.makeLoft(wires, ruled=ruled)
-                print(f"LoftNode: Shell makeLoft succeeded")
                 return cq.Workplane(obj=lid)
             except Exception as e2:
-                print(f"LoftNode: Shell makeLoft also failed: {e2}")
                 self.set_error(f"Loft failed: {e}")
                 return profiles[0] if profiles else None
 

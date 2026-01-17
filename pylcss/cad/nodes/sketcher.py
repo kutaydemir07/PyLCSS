@@ -156,14 +156,14 @@ class ParametricRectangleSketchNode(CadQueryNode):
         self.add_input('sketch', color=(100, 200, 255))
         self.add_input('x', color=(180, 180, 0))
         self.add_input('y', color=(180, 180, 0))
-        self.add_input('width', color=(180, 180, 0))
-        self.add_input('height', color=(180, 180, 0))
+        self.add_input('rect_width', color=(180, 180, 0))
+        self.add_input('rect_height', color=(180, 180, 0))
         self.add_output('shape', color=(100, 200, 255))
 
         self.create_property('x', 0.0, widget_type='float')
         self.create_property('y', 0.0, widget_type='float')
-        self.create_property('width', 10.0, widget_type='float')
-        self.create_property('height', 10.0, widget_type='float')
+        self.create_property('rect_width', 10.0, widget_type='float')
+        self.create_property('rect_height', 10.0, widget_type='float')
 
     def run(self):
         sketch = resolve_shape_input(self.get_input('sketch'))
@@ -172,8 +172,8 @@ class ParametricRectangleSketchNode(CadQueryNode):
 
         x = resolve_numeric_input(self.get_input('x'), self.get_property('x'))
         y = resolve_numeric_input(self.get_input('y'), self.get_property('y'))
-        w = resolve_numeric_input(self.get_input('width'), self.get_property('width'))
-        h = resolve_numeric_input(self.get_input('height'), self.get_property('height'))
+        w = resolve_numeric_input(self.get_input('rect_width'), self.get_property('rect_width'))
+        h = resolve_numeric_input(self.get_input('rect_height'), self.get_property('rect_height'))
 
         try:
             return sketch.moveTo(float(x), float(y)).rect(float(w), float(h))

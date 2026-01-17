@@ -489,7 +489,7 @@ class PropertiesPanel(QtWidgets.QWidget):
             props = all_props.get('custom', {})
         except:
             props = {}
-        print(f"[Inspector DEBUG] Node: {node.__class__.__name__}, custom props: {list(props.keys())}")
+        # print(f"[Inspector DEBUG] Node: {node.__class__.__name__}, custom props: {list(props.keys())}")
         
         if not props:
             lbl = QtWidgets.QLabel("No editable properties")
@@ -818,6 +818,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         self.undo_stack = []
         self.redo_stack = []
         self.current_file = None
+        self._is_loading = False  # Flag to prevent auto-execution during load
         
         # Initialize worker as None
         self.worker = None
@@ -944,7 +945,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         
         self.toolbar.addSeparator()
         self.auto_update_cb = QtWidgets.QCheckBox("Auto-Update")
-        self.auto_update_cb.setChecked(False)
+        self.auto_update_cb.setChecked(True)
         self.auto_update_cb.setToolTip("Automatically execute graph when properties change")
         self.toolbar.addWidget(self.auto_update_cb)
     
@@ -980,6 +981,11 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
             self.timeline.add_event(f"Added {label} node")
             self.statusBar().showMessage(f"✓ Created {label}")
+
+            # Auto-execute if enabled (for immediate visualization)
+            if hasattr(self, 'auto_update_cb') and self.auto_update_cb.isChecked():
+                self._execute_graph()
+
         except Exception as e:
             self.statusBar().showMessage(f"✗ Error: {e}")
             print(f"Node creation error: {e}")
@@ -1022,6 +1028,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
     def _on_graph_property_changed(self, node, prop_name, prop_value):
         """Handle property changes from the graph (including widgets on nodes)."""
+        if self._is_loading:
+            return
+
         # Mark node as dirty so it re-executes
         setattr(node, '_dirty', True)
 
@@ -1036,13 +1045,12 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             if cached_result is not None and isinstance(cached_result, dict):
                 # Update the visualization_mode in the cached result
                 cached_result['visualization_mode'] = prop_value
-                print(f"[GUI Debug] Updated cached visualization_mode to: {prop_value}")
                 
                 # Re-render with updated visualization mode
                 try:
                     self.viewer.render_simulation(cached_result)
-                except Exception as e:
-                    print(f"[GUI Debug] Re-render failed: {e}")
+                except Exception:
+                    pass
                 
                 # Don't mark as dirty for visualization-only changes
                 setattr(node, '_dirty', False)
@@ -1054,6 +1062,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             
     def _on_connection_changed(self, port_in, port_out):
         """Handle connection changes (connect/disconnect)."""
+        if self._is_loading:
+            return
+
         # Mark both nodes as dirty
         if port_in:
             node = port_in.node()
@@ -1130,7 +1141,20 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 if target_node is None:
                     last = getattr(self, '_last_rendered_node', None)
                     if last:
-                        target_node = last
+                        res = results.get(last, getattr(last, '_last_result', None))
+                        if is_renderable(res):
+                            target_node = last
+
+                # Fallback: find any node with a renderable result (prefer last in results)
+                if target_node is None and results:
+                    for node, res in reversed(list(results.items())):
+                        if is_renderable(res):
+                            target_node = node
+                            break
+                
+
+
+
 
                 # Render
                 if target_node:
@@ -1138,21 +1162,19 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                     # Get result from the results dict or the node cache
                     geom = results.get(target_node, getattr(target_node, '_last_result', None))
                     
-                    print(f"[GUI Debug] Rendering node: {target_node.name()}, Result type: {type(geom)}")
-
                     if isinstance(geom, dict) and ('mesh' in geom or 'displacement' in geom):
-                        print("[GUI Debug] Rendering Simulation")
+                        self.statusBar().showMessage(f"Rendering Simulation: {target_node.name()}")
                         self.viewer.render_simulation(geom)
                     elif hasattr(geom, 'p') and hasattr(geom, 't'):
                         # Direct Mesh object from skfem
-                        print("[GUI Debug] Rendering skfem Mesh")
+                        self.statusBar().showMessage(f"Rendering Mesh: {target_node.name()}")
                         self.viewer.render_simulation(geom)
                     elif self._is_2d_sketch(geom):
                         # 2D sketch - render as polylines
-                        print("[GUI Debug] Rendering 2D Sketch")
+                        self.statusBar().showMessage(f"Rendering 2D Sketch: {target_node.name()}")
                         self.viewer.render_sketch(geom)
                     else:
-                        print("[GUI Debug] Rendering Shape (Tessellation)")
+                        self.statusBar().showMessage(f"Rendering 3D Shape: {target_node.name()}")
                         self.viewer.render_shape(geom)
                 else:
                     self.viewer.clear()
@@ -1163,15 +1185,30 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             self.result_mutex.unlock()
 
     def _is_2d_sketch(self, obj):
-        """Check if object is a 2D sketch (has wires)."""
+        """Check if object is a 2D sketch (has pending wires but no solid geometry)."""
         if obj is None:
             return False
-        # Check for pending wires (2D sketch)
-        # We prioritize this: if wires are pending, we visualize them as a sketch
+        
+        # Primary check: pending wires indicate unextruded 2D sketch
         if hasattr(obj, 'ctx') and hasattr(obj.ctx, 'pendingWires'):
             if obj.ctx.pendingWires:
+                # Additional check: make sure it doesn't also have a solid
+                # (some operations leave wires pending even after creating solid)
+                try:
+                    shape = obj
+                    if hasattr(obj, 'val'):
+                        shape = obj.val()
+                    # If it has faces, it's a 3D solid, not a 2D sketch
+                    if hasattr(shape, 'Faces'):
+                        faces = shape.Faces()
+                        if faces and len(faces) > 0:
+                            return False
+                except:
+                    pass
                 return True
+        
         return False
+
 
     def _on_execution_error(self, error_msg):
         """Called if background thread fails."""
@@ -1562,6 +1599,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
     def _new_project(self):
         """Create a new project."""
         self.graph.clear_session()
+        self.viewer.clear()
         self.current_file = None
         self.timeline.add_event("New project created")
         self.statusBar().showMessage("New project")
@@ -1575,7 +1613,11 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             try:
                 # Load and deserialize using NodeGraphQt's built-in session manager
                 # load_session handles clearing the session and reading the file
-                self.graph.load_session(fname)
+                self._is_loading = True
+                try:
+                    self.graph.load_session(fname)
+                finally:
+                    self._is_loading = False
                 
                 self.current_file = fname
                 self.timeline.add_event(f"Opened project: {fname}")
@@ -1671,12 +1713,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
     def _show_about(self):
         """Show about dialog."""
         QtWidgets.QMessageBox.information(
-            self, "About",
-            "Professional CAD Software\n"
-            "Version 1.0\n\n"
-            "A full-featured, Simulink-style parametric CAD system\n"
-            "with sketches, constraints, assembly, analysis, and simulation.\n\n"
-            "© 2025 Kutay Demir"
+            self, "About"
         )
     
     def _execute_graph(self, skip_simulation=False):

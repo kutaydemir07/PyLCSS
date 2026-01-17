@@ -298,7 +298,7 @@ def mma_update(n, itr, xval, xmin, xmax, xold1, xold2, f0val, df0dx,
         xnew = np.minimum(xnew, beta)
         
         # Check volume constraint
-        vol_constraint = np.sum(dfdx * xnew) + fval
+        vol_constraint = np.sum(dfdx * (xnew - xval)) + fval
         
         if vol_constraint > 0:
             l1 = lmid
@@ -657,7 +657,7 @@ class ConstraintNode(CadQueryNode):
         disp_z = float(self.get_property('displacement_z'))
         
         # Debug logging
-        print(f"[ConstraintNode DEBUG] type={constraint_type}, mesh={mesh is not None}, target_wp={target_wp}")
+
 
         if mesh is None:
             return None
@@ -682,7 +682,7 @@ class ConstraintNode(CadQueryNode):
         # If no face input provided, use fallback string condition
         if target_wp is None:
             if not fallback_condition:
-                print("[ConstraintNode DEBUG] No target_face and no fallback condition - returning None")
+
                 return None
             return {
                 'type': constraint_type.lower().replace(' ', '_'),
@@ -703,7 +703,7 @@ class ConstraintNode(CadQueryNode):
                     return None
                 face_obj = face_objs[0]
             
-            print(f"[ConstraintNode DEBUG] type={constraint_type}, face={type(face_obj).__name__}")
+
             return {
                 'type': constraint_type.lower().replace(' ', '_'),
                 'geometry': face_obj,
@@ -767,7 +767,7 @@ class LoadNode(CadQueryNode):
         fallback_condition = self.get_property('condition')
         
         # Debug logging
-        print(f"[LoadNode DEBUG] mesh={mesh is not None}, target_wp={target_wp}, fallback='{fallback_condition}'")
+
 
         if mesh is None:
             return None
@@ -775,7 +775,7 @@ class LoadNode(CadQueryNode):
         # If no face input provided, use fallback string condition
         if target_wp is None:
             if not fallback_condition:
-                print("[LoadNode DEBUG] No target_face and no fallback condition - returning None")
+
                 return None
             return {
                 'type': 'force',
@@ -795,7 +795,7 @@ class LoadNode(CadQueryNode):
                     return None
                 face_obj = face_objs[0]
             
-            print(f"[LoadNode DEBUG] Extracted face_obj: {type(face_obj).__name__}")
+
             bb = face_obj.BoundingBox()
             tol = 1e-3
 
@@ -1835,79 +1835,98 @@ class RemeshNode(CadQueryNode):
     
     def _remesh_via_solid(self, vertices, faces, element_size):
         """Create volumetric mesh by first creating a solid from surface."""
+        # Performance guard: Sewing thousands of faces is extremely slow.
+        # If mesh is large, skip this method and fallback to direct meshing.
+        if len(faces) > 2000:
+            logger.info(f"RemeshNode: Mesh too complex for solid conversion ({len(faces)} faces > 2000). Skipping to direct meshing.")
+            return None, None
+            
+        mesh = None
+        solid = None
+        
+        # Helper to create solid from faces
         try:
             import cadquery as cq
             from OCP.BRepBuilderAPI import BRepBuilderAPI_Sewing, BRepBuilderAPI_MakeSolid
             from OCP.BRep import BRep_Builder
-            from OCP.TopoDS import TopoDS_Shell, TopoDS_Compound
+            from OCP.TopoDS import TopoDS_Shell, TopoDS_Compound, TopoDS_Solid
             from OCP.BRepMesh import BRepMesh_IncrementalMesh
             from OCP.gp import gp_Pnt
             from OCP.BRepBuilderAPI import BRepBuilderAPI_MakePolygon, BRepBuilderAPI_MakeFace
-            from OCP.ShapeFix import ShapeFix_Shape, ShapeFix_Solid
+            from OCP.ShapeFix import ShapeFix_Solid, ShapeFix_Shell
+            
+            logger.info("RemeshNode: Attempting surface sewing to create solid...")
             
             # Build shell from triangular faces
-            sew = BRepBuilderAPI_Sewing(1e-3)  # tolerance
+            sew = BRepBuilderAPI_Sewing(1e-4)  # Tighter tolerance
             
             for face in faces:
                 try:
                     # Get triangle vertices
-                    p0 = gp_Pnt(float(vertices[face[0], 0]), 
-                               float(vertices[face[0], 1]), 
-                               float(vertices[face[0], 2]))
-                    p1 = gp_Pnt(float(vertices[face[1], 0]), 
-                               float(vertices[face[1], 1]), 
-                               float(vertices[face[1], 2]))
-                    p2 = gp_Pnt(float(vertices[face[2], 0]), 
-                               float(vertices[face[2], 1]), 
-                               float(vertices[face[2], 2]))
+                    pts = [gp_Pnt(float(vertices[idx, 0]), 
+                                  float(vertices[idx, 1]), 
+                                  float(vertices[idx, 2])) for idx in face]
                     
                     # Create triangular face
-                    poly = BRepBuilderAPI_MakePolygon(p0, p1, p2, True)
-                    if poly.IsDone():
-                        wire = poly.Wire()
-                        face_builder = BRepBuilderAPI_MakeFace(wire, True)
-                        if face_builder.IsDone():
-                            sew.Add(face_builder.Face())
+                    poly = BRepBuilderAPI_MakePolygon(pts[0], pts[1], pts[2], True)
+                    if not poly.IsDone(): continue
+                        
+                    wire = poly.Wire()
+                    face_builder = BRepBuilderAPI_MakeFace(wire, True)
+                    if face_builder.IsDone():
+                        sew.Add(face_builder.Face())
                 except Exception:
                     continue
             
             sew.Perform()
-            shell = sew.SewedShape()
+            sewed_shape = sew.SewedShape()
             
-            # Try to create solid
-            try:
-                solid_builder = BRepBuilderAPI_MakeSolid()
-                solid_builder.Add(TopoDS_Shell(shell))
-                if solid_builder.IsDone():
-                    solid = solid_builder.Solid()
-                    
-                    # Fix solid
-                    fixer = ShapeFix_Solid(solid)
-                    fixer.Perform()
-                    fixed_solid = fixer.Solid()
-                    
-                    # Create CadQuery workplane
-                    cq_solid = cq.Workplane().add(cq.Shape(fixed_solid))
-                    
-                    # Mesh with Netgen
-                    if OCCGeometry is not None:
-                        geo = OCCGeometry(fixed_solid)
+            # Check if we have a shell
+            if sewed_shape.ShapeType() == 0: # TopAbs_COMPOUND
+                # Try to extract shells
+                pass 
+                
+            # Try to fix shell
+            fixer = ShapeFix_Shell(TopoDS_Shell(sewed_shape))
+            fixer.Perform()
+            shell = fixer.Shell()
+            
+            # Make solid
+            solid_builder = BRepBuilderAPI_MakeSolid()
+            solid_builder.Add(shell)
+            
+            if solid_builder.IsDone():
+                occ_solid = solid_builder.Solid()
+                
+                # Fix solid orientation/volume
+                fixer_sol = ShapeFix_Solid(occ_solid)
+                fixer_sol.Perform()
+                occ_solid = fixer_sol.Solid()
+                
+                solid = cq.Workplane().add(cq.Shape(occ_solid))
+                
+                # Mesh with Netgen if available
+                if OCCGeometry is not None:
+                    try:
+                        geo = OCCGeometry(occ_solid)
                         ngmesh = geo.GenerateMesh(maxh=element_size)
                         
-                        # Write to temp file and read with skfem
+                        # Export/Import cycle for skfem
                         with tempfile.NamedTemporaryFile(suffix='.msh', delete=False) as f:
                             ngmesh.Export(f.name, 'Gmsh2 Format')
+                            f.close()
                             mesh = skfem.MeshTet.load(f.name)
                             os.unlink(f.name)
-                            return mesh, cq_solid
-                    
-            except Exception as e:
-                logger.debug(f"RemeshNode: Solid creation failed: {e}")
-            
+                            
+                    except Exception as e:
+                        logger.warning(f"RemeshNode: Netgen meshing failed: {e}")
+            else:
+                logger.warning("RemeshNode: Failed to close shell into solid")
+                
         except Exception as e:
-            logger.debug(f"RemeshNode: Via-solid method failed: {e}")
+            logger.warning(f"RemeshNode: Solid creation failed: {e}")
         
-        return None, None
+        return mesh, solid
     
     def _remesh_direct(self, vertices, faces, element_size):
         """Direct tetrahedral meshing using scipy Delaunay."""
@@ -1919,7 +1938,7 @@ class RemeshNode(CadQueryNode):
             tri = Delaunay(vertices)
             
             # Filter tetrahedra to keep only those inside the surface
-            # Use point-in-mesh test based on face normals
+            # Use point-in-mesh test based on face normals + KDTree
             centroids = vertices[tri.simplices].mean(axis=1)
             
             # Simple inside test: keep tetrahedra whose centroids are near original surface
@@ -1927,18 +1946,46 @@ class RemeshNode(CadQueryNode):
             face_centers = vertices[faces].mean(axis=1)
             tree = cKDTree(face_centers)
             
-            # For each tetrahedron centroid, find if it's roughly inside
-            distances, _ = tree.query(centroids)
+            # For each tetrahedron centroid, find distance to nearest face center
+            distances, indices = tree.query(centroids)
             
-            # Estimate typical edge length
+            # Estimate typical edge length from sample faces
             edge_lengths = []
             for face in faces[:min(100, len(faces))]:
-                for i in range(3):
-                    edge_lengths.append(np.linalg.norm(vertices[face[i]] - vertices[face[(i+1)%3]]))
+                pts = vertices[face]
+                vals = [np.linalg.norm(pts[i] - pts[(i+1)%3]) for i in range(3)]
+                edge_lengths.extend(vals)
             avg_edge = np.mean(edge_lengths) if edge_lengths else element_size
             
-            # Keep tetrahedra within reasonable distance
-            valid_mask = distances < avg_edge * 2
+            # Heuristic: keep tets that are "close enough" to the surface shell
+            # Ideally we would do a winding number check, but that's expensive in pure python/scipy
+            # A threshold of avg_edge * 1.5 usually keeps the bulk without too many outliers
+            # Also, check if centroid is "behind" the nearest face (dot product of normal)
+            
+            valid_mask = np.zeros(len(centroids), dtype=bool)
+            
+            # Precompute face normals
+            v0 = vertices[faces[:, 0]]
+            v1 = vertices[faces[:, 1]]
+            v2 = vertices[faces[:, 2]]
+            normals = np.cross(v1 - v0, v2 - v0)
+            norms = np.linalg.norm(normals, axis=1, keepdims=True) + 1e-10
+            normals /= norms
+            
+            for i, (dist, idx) in enumerate(zip(distances, indices)):
+                if dist > avg_edge * 3.0: # Too far, definitely outside
+                    continue
+                
+                # Check direction (is centroid 'inside' relative to nearest face?)
+                # Vector from face center to centroid
+                vec = centroids[i] - face_centers[idx]
+                val = np.dot(vec, normals[idx])
+                
+                # If dot product is negative, it's on the 'back' side of the face (inside)
+                # Or if it's very close (within tolerance)
+                if val < 0.1 * avg_edge: 
+                    valid_mask[i] = True
+            
             valid_simplices = tri.simplices[valid_mask]
             
             if len(valid_simplices) > 0:
@@ -2198,14 +2245,41 @@ class SizeOptimizationNode(CadQueryNode):
         }
     
     def _get_upstream_shape_node(self):
-        """Get the upstream parametric shape node."""
+        """Get the upstream parametric shape node by traversing graph."""
         try:
+            # Start search from 'shape' input
             port = self.get_input('shape')
-            if port:
-                connected = port.connected_ports()
-                if connected:
-                    return connected[0].node()
-        except:
+            if not port: return None
+            
+            queue = [port]
+            visited = set()
+            
+            while queue:
+                curr_port = queue.pop(0)
+                connected = curr_port.connected_ports()
+                
+                for cp in connected:
+                    node = cp.node()
+                    if node in visited: continue
+                    visited.add(node)
+                    
+                    # Check if this node has the properties we want to optimize
+                    # A robust way is to check if it has the parameters listed in 'parameters' property
+                    # But we don't know them yet.
+                    # Heuristic: If it has custom properties and is not a simulation node.
+                    # Simple heuristic: Skip MeshNode, MaterialNode, etc.
+                    
+                    node_type = getattr(node, 'NODE_NAME', '')
+                    if node_type in ['Mesh', 'Material', 'Filter', 'Remesh Surface']:
+                        # Traverse upstream inputs of this node
+                        for input_port in node.inputs().values():
+                             queue.append(input_port)
+                    else:
+                        # Found a candidate node (e.g. Box, Cylinder, Script)
+                        return node
+                        
+        except Exception as e:
+            logger.debug(f"SizeOpt: Upstream search failed: {e}")
             pass
         return None
     
@@ -2456,7 +2530,16 @@ class ShapeOptimizationNode(CadQueryNode):
         current_points = mesh.p.copy()
         
         # Find boundary nodes
-        boundary_facets = mesh.facets_satisfying(lambda x: True)  # All exterior facets
+        # Use topology: boundary facets are those connected to only one element
+        # mesh.f2t is (2, N_facets). -1 indicates no neighbor.
+        f2t = mesh.f2t
+        if f2t.shape[0] == 2:
+            # Standard skfem
+            boundary_facets = np.where(f2t[1, :] == -1)[0]
+        else:
+            # Fallback (very old skfem?)
+            boundary_facets = mesh.facets_satisfying(lambda x: True)
+            
         boundary_nodes = np.unique(mesh.facets[:, boundary_facets].flatten())
         
         # Find fixed boundary nodes (from constraints)
@@ -2534,16 +2617,70 @@ class ShapeOptimizationNode(CadQueryNode):
             )
             
             # Update boundary node positions
-            for i, node_idx in enumerate(moveable_nodes):
-                # Move in normal direction based on sensitivity
-                move = -step_size * sensitivities[i] * normals[i]
+            # Fix broadcasting: sens (N,) * normals (N,3) needs sens (N,1)
+            move = -step_size * sensitivities[:, np.newaxis] * normals
+            
+            # Simple line search / backtracking to prevent inverted elements
+            alpha = 1.0
+            for backtrack in range(5):
+                trial_points = current_points.copy()
+                for i, node_idx in enumerate(moveable_nodes):
+                     if i < len(move):
+                        trial_points[:, node_idx] += alpha * move[i]
                 
-                # Limit maximum displacement
-                move_mag = np.linalg.norm(move)
-                if move_mag > max_disp:
-                    move = move * max_disp / move_mag
+                # Check mesh quality (Jacobian)
+                trial_mesh = skfem.MeshTet(trial_points, mesh.t)
+                quality_ok = True
                 
-                current_points[:, node_idx] += move
+                try:
+                    # Calculate element volumes (signed)
+                    # Skfem doesn't expose jacobian directly easily on mesh object, 
+                    # but element volumes < 0 means inversion.
+                    mapping = skfem.mapping.MappingAffine(trial_mesh)
+                    # evaluating determinant at quadrature points?
+                    # Simpler: use element_finder or base geometry approach.
+                    # Or just check if mapping.detJ is positive? 
+                    # MappingAffine calculates J based on vertices.
+                    
+                    # detJ is roughly 6 * Volume for Tet
+                    # Let's use internal method if available or verify volumes.
+                    # For Tet mesh, mesh.element_volumes is available in newer skfem?
+                    # No, but we can compute it.
+                    
+                    # Manual volume check:
+                    # V = 1/6 * det([x1-x0, x2-x0, x3-x0])
+                    # Vectorized:
+                    p = trial_points
+                    t = mesh.t
+                    v0 = p[:, t[0, :]]
+                    v1 = p[:, t[1, :]]
+                    v2 = p[:, t[2, :]]
+                    v3 = p[:, t[3, :]]
+                    
+                    # Edge vectors
+                    e1 = v1 - v0
+                    e2 = v2 - v0
+                    e3 = v3 - v0
+                    
+                    # Mixed product
+                    cross = np.cross(e1, e2, axis=0)
+                    vols = np.sum(cross * e3, axis=0) / 6.0
+                    
+                    min_vol = np.min(vols)
+                    if min_vol <= 1e-9:
+                        logger.warning(f"ShapeOpt: Mesh inversion detected (min vol {min_vol:.2e}). Backtracking...")
+                        quality_ok = False
+                except Exception:
+                     pass
+                
+                if quality_ok:
+                    current_points = trial_points
+                    break
+                else:
+                    alpha *= 0.5
+            else:
+                 logger.warning("ShapeOpt: Step failed quality check completely. Stopping.")
+                 break
             
             # Volume preservation
             if preserve_volume:

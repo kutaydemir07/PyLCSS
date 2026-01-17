@@ -94,40 +94,73 @@ class CQ3DViewer(QtWidgets.QWidget):
         # Try to extract edges from the sketch
         edges = []
         try:
-            print(f"[Viewer] Rendering Sketch: {sketch}")
-            # CadQuery Workplane with pending wires
+            # Method 1: CadQuery Workplane with pending wires
             if hasattr(sketch, 'ctx') and hasattr(sketch.ctx, 'pendingWires'):
                 try:
                     wires = sketch.ctx.pendingWires
-                    print(f"[Viewer] Found {len(wires)} pending wires")
-                except Exception as e:
-                    print(f"[Viewer] Error accessing pending wires: {e}")
-                    wires = [] # Ensure wires is defined even on error
-                if wires:
-                    # edges = [] # This line is now redundant as edges is initialized to [] above
-                    for wire in wires:
-                        if hasattr(wire, 'Edges'):
-                            edges.extend(wire.Edges())
+                    if wires:
+                        for wire in wires:
+                            if hasattr(wire, 'Edges'):
+                                edges.extend(wire.Edges())
+                except Exception:
+                    pass
             
-            # Fallback: try to get edges directly
+            # Method 2: Try to get edges directly from the unwrapped shape
+            if not edges:
+                shape = sketch
+                if hasattr(sketch, 'val'):
+                    try:
+                        shape = sketch.val()
+                    except:
+                        pass
+                
+                # Check for Edges() method directly on the shape
+                if hasattr(shape, 'Edges'):
+                    try:
+                        edge_list = shape.Edges()
+                        if edge_list:
+                            edges = edge_list
+                    except Exception:
+                        pass
+            
+            # Method 3: Try the CadQuery .edges() API
             if not edges and hasattr(sketch, 'edges'):
                 try:
                     edge_objects = sketch.edges().vals()
                     if edge_objects:
                         edges = edge_objects
-                except:
+                except Exception:
                     pass
             
-            # Fallback: try _edges attribute
+            # Method 4: Check for wires on the shape
+            if not edges:
+                shape = sketch
+                if hasattr(sketch, 'val'):
+                    try:
+                        shape = sketch.val()
+                    except:
+                        pass
+                        
+                if hasattr(shape, 'Wires'):
+                    try:
+                        wires = shape.Wires()
+                        for wire in wires:
+                            if hasattr(wire, 'Edges'):
+                                edges.extend(wire.Edges())
+                    except Exception:
+                        pass
+            
+            # Method 5: Try _edges attribute (fallback)
             if not edges and hasattr(sketch, '_edges'):
                 edges = sketch._edges
                 
-        except Exception as e:
-            print(f"Sketch edge extraction failed: {e}")
+        except Exception:
             return
             
         if not edges:
             return
+
+
             
         # Create VTK points and lines
         points = vtk.vtkPoints()
@@ -137,44 +170,71 @@ class CQ3DViewer(QtWidgets.QWidget):
         
         for edge in edges:
             try:
-                # Discretize the edge into points
+                pts_extracted = []
+                
+                # Method 1: CadQuery edge discretization (if available)
                 if hasattr(edge, 'discretize'):
-                    # CadQuery edge discretization
-                    pts = edge.discretize(5)  # 5 divisions
-                    
-                    if len(pts) >= 2:
-                        start_id = point_id
-                        for pt in pts:
-                            if hasattr(pt, 'x'):
-                                points.InsertNextPoint(pt.x, pt.y, pt.z if hasattr(pt, 'z') else 0)
-                            else:
-                                points.InsertNextPoint(pt[0], pt[1], pt[2] if len(pt) > 2 else 0)
-                            point_id += 1
+                    try:
+                        pts_extracted = edge.discretize(20)
+                    except Exception:
+                        pass
+                
+                # Method 2: Use OCCT curve sampling (for circles, arcs, splines)
+                if not pts_extracted and hasattr(edge, 'wrapped'):
+                    try:
+                        from OCP.BRepAdaptor import BRepAdaptor_Curve
+                        from OCP.GCPnts import GCPnts_UniformAbscissa
                         
-                        # Create polyline from these points
-                        for i in range(start_id, point_id - 1):
-                            line = vtk.vtkLine()
-                            line.GetPointIds().SetId(0, i)
-                            line.GetPointIds().SetId(1, i + 1)
-                            lines.InsertNextCell(line)
-                            
-                elif hasattr(edge, 'startPoint') and hasattr(edge, 'endPoint'):
-                    # Simple edge with start/end
+                        curve = BRepAdaptor_Curve(edge.wrapped)
+                        # Sample 30 points along the edge
+                        sampler = GCPnts_UniformAbscissa(curve, 30)
+                        
+                        if sampler.NbPoints() > 0:
+                            pts_extracted = []
+                            for i in range(1, sampler.NbPoints() + 1):
+                                p = curve.Value(sampler.Parameter(i))
+                                pts_extracted.append((p.X(), p.Y(), p.Z()))
+                    except Exception:
+                        pass
+                
+                # Method 3: Simple start/end for straight lines
+                if not pts_extracted and hasattr(edge, 'startPoint') and hasattr(edge, 'endPoint'):
                     sp = edge.startPoint()
                     ep = edge.endPoint()
+                    # Check if start != end (not a closed curve with only 2 points)
+                    if abs(sp.x - ep.x) > 1e-6 or abs(sp.y - ep.y) > 1e-6 or abs(sp.z - ep.z) > 1e-6:
+                        pts_extracted = [(sp.x, sp.y, sp.z), (ep.x, ep.y, ep.z)]
+                
+                # Add points to VTK
+                if pts_extracted and len(pts_extracted) >= 2:
+                    start_id = point_id
+                    for pt in pts_extracted:
+                        if hasattr(pt, 'x'):
+                            points.InsertNextPoint(pt.x, pt.y, pt.z if hasattr(pt, 'z') else 0)
+                        else:
+                            points.InsertNextPoint(pt[0], pt[1], pt[2] if len(pt) > 2 else 0)
+                        point_id += 1
                     
-                    points.InsertNextPoint(sp.x, sp.y, sp.z if hasattr(sp, 'z') else 0)
-                    points.InsertNextPoint(ep.x, ep.y, ep.z if hasattr(ep, 'z') else 0)
+                    # Create polyline from these points
+                    for i in range(start_id, point_id - 1):
+                        line = vtk.vtkLine()
+                        line.GetPointIds().SetId(0, i)
+                        line.GetPointIds().SetId(1, i + 1)
+                        lines.InsertNextCell(line)
                     
-                    line = vtk.vtkLine()
-                    line.GetPointIds().SetId(0, point_id)
-                    line.GetPointIds().SetId(1, point_id + 1)
-                    lines.InsertNextCell(line)
-                    point_id += 2
-                    
-            except Exception as e:
-                print(f"Edge processing error: {e}")
+                    # Close the loop for circular edges
+                    edge_type = edge.geomType() if hasattr(edge, 'geomType') else ''
+                    if edge_type in ('CIRCLE', 'ELLIPSE', 'BSPLINE') and len(pts_extracted) > 2:
+                        # Connect last point to first
+                        line = vtk.vtkLine()
+                        line.GetPointIds().SetId(0, point_id - 1)
+                        line.GetPointIds().SetId(1, start_id)
+                        lines.InsertNextCell(line)
+                        
+            except Exception:
+                pass
                 continue
+
         
         if point_id == 0:
             return  # No points extracted
@@ -228,9 +288,8 @@ class CQ3DViewer(QtWidgets.QWidget):
         if hasattr(shape, 'toCompound'):
             try:
                 topo_shape = shape.toCompound()
-                print(f"Viewer: Converted assembly to compound for rendering")
-            except Exception as e:
-                print(f"Viewer: Error converting assembly to compound: {e}")
+            except Exception:
+                pass
                 return
 
         # If it's a wrapper Workplane with .val(), try to unwrap
@@ -276,22 +335,28 @@ class CQ3DViewer(QtWidgets.QWidget):
 
         # Safety check: ensure it's a valid shape
         if not hasattr(topo_shape, 'tessellate'):
-            # unable to render non-shape objects silently skip
-            # Avoid noisy prints; use timeline or logs from the caller for visibility
+            # Unable to tessellate - try as 2D sketch instead
+            self.render_sketch(shape)
             return
 
         # 3. Tessellate (convert curved CAD surfaces to triangles for viewing)
         try:
-            # high quality meshing options
-            # CadQuery's tessellate may return different structures depending on CQ version
-            triangulation = topo_shape.tessellate(tolerance=0.01, angularTolerance=0.1)
+            # Optimize meshing for performance - tolerance 0.1 is good balance
+            triangulation = topo_shape.tessellate(tolerance=0.1, angularTolerance=0.2)
             if isinstance(triangulation, dict):
                 verts = triangulation.get('vertices') or triangulation.get('verts')
                 triangles = triangulation.get('triangles') or triangulation.get('faces')
             else:
                 verts, triangles = triangulation[0], triangulation[1]
         except Exception as e:
-            # skip rendering if tessellation fails
+            # Tessellation failed - try as 2D sketch instead
+            self.render_sketch(shape)
+            return
+
+        # Check if tessellation produced any geometry
+        if not verts or len(verts) == 0:
+            # No vertices - this is likely 2D geometry, try render_sketch
+            self.render_sketch(shape)
             return
 
         # 4. Create VTK Data
@@ -318,6 +383,7 @@ class CQ3DViewer(QtWidgets.QWidget):
         normals.SetInputData(poly_data)
         normals.Update()
 
+
         # 5. Mapper and Actor
         mapper = vtk.vtkPolyDataMapper()
         mapper.SetInputConnection(normals.GetOutputPort())
@@ -336,7 +402,33 @@ class CQ3DViewer(QtWidgets.QWidget):
         
         # Reset camera to fit object
         self.renderer.ResetCamera()
+        
+        # Ensure we are in a 3D view (switch from 2D top-down if needed)
+        # self._ensure_3d_view()
+        
         self.vtkWidget.GetRenderWindow().Render()
+
+    def _ensure_3d_view(self):
+        """Switch to isometric view if currently looking strictly top-down (2D mode)."""
+        camera = self.renderer.GetActiveCamera()
+        pos = camera.GetPosition()
+        focal = camera.GetFocalPoint()
+        
+        # Check if looking strictly down Z axis (x ~ 0, y ~ 0 relative to focal)
+        # render_sketch sets x=0, y=0 exactly.
+        if abs(pos[0] - focal[0]) < 1e-5 and abs(pos[1] - focal[1]) < 1e-5:
+            # We are in top-down mode. Switch to Isometric.
+            # Keep the zoom level (distance) roughly similar
+            dist = np.linalg.norm(np.array(pos) - np.array(focal))
+            
+            # Iso view: from (dist, dist, dist) looking at focal
+            # Normalize to maintain distance
+            iso_vec = np.array([1.0, -1.0, 1.0]) # Standard CAD iso view usually front-right-top
+            iso_vec = iso_vec / np.linalg.norm(iso_vec) * dist
+            
+            camera.SetPosition(focal[0] + iso_vec[0], focal[1] + iso_vec[1], focal[2] + iso_vec[2])
+            camera.SetViewUp(0, 0, 1)
+            self.renderer.ResetCamera()
 
     def _add_arrow(self, start, vector, color=(1, 1, 0), scale=1.0):
         """Add a 3D arrow to the scene representing a vector."""
@@ -455,11 +547,7 @@ class CQ3DViewer(QtWidgets.QWidget):
         
         if mesh is None:
             return
-        
-        # DEBUG: Log what data we received
-        print(f"[Viewer DEBUG] visualization_mode: {visualization_mode}")
-        print(f"[Viewer DEBUG] density present: {density is not None}, len: {len(density) if density is not None else 0}")
-        print(f"[Viewer DEBUG] stress present: {stress is not None}, len: {len(stress) if stress is not None else 0}")
+
 
         # 2. Create VTK Unstructured Grid
         points = vtk.vtkPoints()
@@ -626,18 +714,13 @@ class CQ3DViewer(QtWidgets.QWidget):
 
         # If we have density (TopOpt), we might still want to color by Stress!
         if density is not None and stress is not None and visualization_mode == 'Von Mises Stress':
-            print("[Viewer DEBUG] Entering Von Mises Stress visualization block for TopOpt")
             # Configure mapper to use point data scalars (VonMises) instead of cell data (Density)
             # The threshold filter should have passed point arrays through (if SetPassPointArrays was called)
             
             # Get the current mapper input and try to set active scalars
             mapper_input = mapper.GetInput()
-            print(f"[Viewer DEBUG] mapper_input: {mapper_input}, has point data: {mapper_input.GetPointData() if mapper_input else None}")
             if mapper_input is not None and mapper_input.GetPointData() is not None:
                 pd = mapper_input.GetPointData()
-                print(f"[Viewer DEBUG] Point data arrays: {pd.GetNumberOfArrays()}")
-                for i in range(pd.GetNumberOfArrays()):
-                    print(f"[Viewer DEBUG]   Array {i}: {pd.GetArrayName(i)}")
                 # Set VonMises as the active scalar array for coloring
                 mapper_input.GetPointData().SetActiveScalars("VonMises")
             
