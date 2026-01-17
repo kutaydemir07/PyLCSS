@@ -72,7 +72,7 @@ PyLCSS implements the **Solution Space** approach for robust design. Instead of 
 ```bash
 # 1. Clone the repository
 git clone <repository-url>
-cd pylowcodesolutionspace
+cd pylcss
 
 # 2. Create and activate a virtual environment (Recommended)
 python -m venv venv
