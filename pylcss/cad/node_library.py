@@ -44,7 +44,7 @@ from pylcss.cad.nodes import (
     
     # Simulation
     MaterialNode, MeshNode, ConstraintNode, LoadNode, PressureLoadNode,
-    SolverNode, TopologyOptimizationNode, RemeshNode, SizeOptimizationNode, ShapeOptimizationNode,
+    SolverNode, TopologyOptimizationNode,
     
     # IO
     ExportStepNode, ExportStlNode, NumberNode, VariableNode,
@@ -126,9 +126,6 @@ NODE_CLASS_MAPPING = {
     'com.cad.sim.pressure_load': PressureLoadNode,
     'com.cad.sim.solver': SolverNode,
     'com.cad.sim.topopt': TopologyOptimizationNode,
-    'com.cad.sim.remesh': RemeshNode,
-    'com.cad.sim.sizeopt': SizeOptimizationNode,
-    'com.cad.sim.shapeopt': ShapeOptimizationNode,
 
     # IO (4)
     'com.cad.number': NumberNode,

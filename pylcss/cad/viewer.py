@@ -147,6 +147,8 @@ class CQ3DViewer(QtWidgets.QWidget):
                         for wire in wires:
                             if hasattr(wire, 'Edges'):
                                 edges.extend(wire.Edges())
+                        if edges:
+                            pass
                     except Exception:
                         pass
             
@@ -159,8 +161,6 @@ class CQ3DViewer(QtWidgets.QWidget):
             
         if not edges:
             return
-
-
             
         # Create VTK points and lines
         points = vtk.vtkPoints()
@@ -172,28 +172,27 @@ class CQ3DViewer(QtWidgets.QWidget):
             try:
                 pts_extracted = []
                 
-                # Method 1: CadQuery edge discretization (if available)
-                if hasattr(edge, 'discretize'):
-                    try:
-                        pts_extracted = edge.discretize(20)
-                    except Exception:
-                        pass
-                
-                # Method 2: Use OCCT curve sampling (for circles, arcs, splines)
-                if not pts_extracted and hasattr(edge, 'wrapped'):
+                # Method 1: Use OCCT curve sampling (best for circles, arcs, splines)
+                if hasattr(edge, 'wrapped'):
                     try:
                         from OCP.BRepAdaptor import BRepAdaptor_Curve
                         from OCP.GCPnts import GCPnts_UniformAbscissa
                         
                         curve = BRepAdaptor_Curve(edge.wrapped)
-                        # Sample 30 points along the edge
+                        # Sample 30 points along the edge for smooth curves
                         sampler = GCPnts_UniformAbscissa(curve, 30)
                         
                         if sampler.NbPoints() > 0:
-                            pts_extracted = []
                             for i in range(1, sampler.NbPoints() + 1):
                                 p = curve.Value(sampler.Parameter(i))
                                 pts_extracted.append((p.X(), p.Y(), p.Z()))
+                    except Exception:
+                        pass
+                
+                # Method 2: CadQuery edge discretization (if OCCT didn't work)
+                if not pts_extracted and hasattr(edge, 'discretize'):
+                    try:
+                        pts_extracted = edge.discretize(30)  # More points for smooth curves
                     except Exception:
                         pass
                 
@@ -222,19 +221,20 @@ class CQ3DViewer(QtWidgets.QWidget):
                         line.GetPointIds().SetId(1, i + 1)
                         lines.InsertNextCell(line)
                     
-                    # Close the loop for circular edges
-                    edge_type = edge.geomType() if hasattr(edge, 'geomType') else ''
-                    if edge_type in ('CIRCLE', 'ELLIPSE', 'BSPLINE') and len(pts_extracted) > 2:
-                        # Connect last point to first
-                        line = vtk.vtkLine()
-                        line.GetPointIds().SetId(0, point_id - 1)
-                        line.GetPointIds().SetId(1, start_id)
-                        lines.InsertNextCell(line)
+                    # Check if this is a closed curve (circle, ellipse) and close it
+                    if len(pts_extracted) > 2:
+                        first_pt = pts_extracted[0]
+                        last_pt = pts_extracted[-1]
+                        if hasattr(first_pt, 'x'):
+                            dist = abs(first_pt.x - last_pt.x) + abs(first_pt.y - last_pt.y)
+                        else:
+                            dist = abs(first_pt[0] - last_pt[0]) + abs(first_pt[1] - last_pt[1])
                         
+                        # If first and last points are close, it's likely a closed curve - don't add extra line
+                        # The curve is already visually closed
+                    
             except Exception:
-                pass
                 continue
-
         
         if point_id == 0:
             return  # No points extracted
@@ -289,7 +289,6 @@ class CQ3DViewer(QtWidgets.QWidget):
             try:
                 topo_shape = shape.toCompound()
             except Exception:
-                pass
                 return
 
         # If it's a wrapper Workplane with .val(), try to unwrap
@@ -341,7 +340,7 @@ class CQ3DViewer(QtWidgets.QWidget):
 
         # 3. Tessellate (convert curved CAD surfaces to triangles for viewing)
         try:
-            # Optimize meshing for performance - tolerance 0.1 is good balance
+            # Fast rendering with coarser tessellation (0.1 tolerance)
             triangulation = topo_shape.tessellate(tolerance=0.1, angularTolerance=0.2)
             if isinstance(triangulation, dict):
                 verts = triangulation.get('vertices') or triangulation.get('verts')
@@ -383,7 +382,6 @@ class CQ3DViewer(QtWidgets.QWidget):
         normals.SetInputData(poly_data)
         normals.Update()
 
-
         # 5. Mapper and Actor
         mapper = vtk.vtkPolyDataMapper()
         mapper.SetInputConnection(normals.GetOutputPort())
@@ -402,33 +400,7 @@ class CQ3DViewer(QtWidgets.QWidget):
         
         # Reset camera to fit object
         self.renderer.ResetCamera()
-        
-        # Ensure we are in a 3D view (switch from 2D top-down if needed)
-        # self._ensure_3d_view()
-        
         self.vtkWidget.GetRenderWindow().Render()
-
-    def _ensure_3d_view(self):
-        """Switch to isometric view if currently looking strictly top-down (2D mode)."""
-        camera = self.renderer.GetActiveCamera()
-        pos = camera.GetPosition()
-        focal = camera.GetFocalPoint()
-        
-        # Check if looking strictly down Z axis (x ~ 0, y ~ 0 relative to focal)
-        # render_sketch sets x=0, y=0 exactly.
-        if abs(pos[0] - focal[0]) < 1e-5 and abs(pos[1] - focal[1]) < 1e-5:
-            # We are in top-down mode. Switch to Isometric.
-            # Keep the zoom level (distance) roughly similar
-            dist = np.linalg.norm(np.array(pos) - np.array(focal))
-            
-            # Iso view: from (dist, dist, dist) looking at focal
-            # Normalize to maintain distance
-            iso_vec = np.array([1.0, -1.0, 1.0]) # Standard CAD iso view usually front-right-top
-            iso_vec = iso_vec / np.linalg.norm(iso_vec) * dist
-            
-            camera.SetPosition(focal[0] + iso_vec[0], focal[1] + iso_vec[1], focal[2] + iso_vec[2])
-            camera.SetViewUp(0, 0, 1)
-            self.renderer.ResetCamera()
 
     def _add_arrow(self, start, vector, color=(1, 1, 0), scale=1.0):
         """Add a 3D arrow to the scene representing a vector."""
@@ -720,9 +692,9 @@ class CQ3DViewer(QtWidgets.QWidget):
             # Get the current mapper input and try to set active scalars
             mapper_input = mapper.GetInput()
             if mapper_input is not None and mapper_input.GetPointData() is not None:
-                pd = mapper_input.GetPointData()
                 # Set VonMises as the active scalar array for coloring
                 mapper_input.GetPointData().SetActiveScalars("VonMises")
+
             
             # Tell mapper to use point data for coloring, not cell data
             mapper.SetScalarModeToUsePointData()

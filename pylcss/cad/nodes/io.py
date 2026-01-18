@@ -16,14 +16,12 @@ class ExportStepNode(CadQueryNode):
 
     def run(self):
         shape = self.get_input_shape('shape')
-        print(f"ExportStepNode: Input shape is {type(shape)}")
         
         if shape:
             fname = self.get_property('filename')
             if not fname.endswith(".step"):
                 fname += ".step"
             
-            print(f"ExportStepNode: Attempting to save to {fname}")
             try:
                 # Convert Workplane to solid if needed
                 if hasattr(shape, 'val'):
@@ -40,13 +38,9 @@ class ExportStepNode(CadQueryNode):
                         shape_to_export.save(fname)
                     else:
                         raise
-                print(f"✓ SUCCESS: Saved {fname}")
                 return True
-            except Exception as e:
-                print(f"✗ Export Error: {e}")
+            except Exception:
                 return False
-        else:
-            print("ExportStepNode: No shape connected or shape is None")
         return False
 
 
@@ -88,10 +82,8 @@ class ExportStlNode(CadQueryNode):
         if shape is None:
             shape = self.get_input_shape('shape')
         
-        print(f"ExportStlNode: Input type is {type(shape)}")
         
         if shape is None:
-            print("ExportStlNode: No input connected or input is None")
             return False
             
         fname = self.get_property('filename')
@@ -108,11 +100,8 @@ class ExportStlNode(CadQueryNode):
                 density = np.asarray(shape['density'])
                 cutoff = float(shape.get('density_cutoff', 0.3))
                 
-                print(f"ExportStlNode: TopOpt mesh detected. Extracting surface with cutoff={cutoff}")
-                vertices, faces = self._extract_thresholded_surface(mesh, density, cutoff)
                 
-                if vertices is not None:
-                    print(f"ExportStlNode: Extracted {len(faces)} surface triangles from thresholded mesh")
+                vertices, faces = self._extract_thresholded_surface(mesh, density, cutoff)
             
             # Case 2: Direct mesh dict with vertices/faces (e.g., from recovered_shape output)
             elif isinstance(shape, dict):
@@ -148,31 +137,23 @@ class ExportStlNode(CadQueryNode):
             
             # Case 4: Use CadQuery exporter as fallback
             if vertices is None:
-                print("ExportStlNode: Using CadQuery native exporter")
                 if hasattr(shape, 'val'):
                     shape_to_export = shape.val()
                 else:
                     shape_to_export = shape
                 cq.exporters.export(shape_to_export, fname)
-                print(f"✓ SUCCESS: Saved {fname} (via CadQuery)")
                 return True
             
             # Apply mesh smoothing for organic shapes (if enabled and we have mesh data)
             smoothing_iters = int(self.get_property('smoothing'))
             if smoothing_iters > 0 and vertices is not None and len(faces) > 0:
-                print(f"ExportStlNode: Applying Taubin smoothing ({smoothing_iters} iterations)...")
                 vertices = self._taubin_smooth(vertices, faces, smoothing_iters)
-                print(f"ExportStlNode: Smoothing complete")
             
             # Write binary STL using raw NumPy (no numpy-stl dependency)
             self._write_binary_stl(fname, vertices, faces)
-            print(f"✓ SUCCESS: Saved mesh to {fname} ({len(faces)} triangles)")
             return True
             
-        except Exception as e:
-            import traceback
-            print(f"✗ Export Error: {e}")
-            traceback.print_exc()
+        except Exception:
             return False
     
     def _extract_thresholded_surface(self, mesh, density, cutoff):
@@ -198,10 +179,8 @@ class ExportStlNode(CadQueryNode):
         n_kept = kept_tets.shape[1]
         
         if n_kept == 0:
-            print("ExportStlNode: No tetrahedra pass the density threshold!")
             return None, None
         
-        print(f"ExportStlNode: {n_kept} tetrahedra pass threshold (out of {tets.shape[1]})")
         
         # Extract all faces from kept tetrahedra
         # Each tet has 4 triangular faces: (0,1,2), (0,1,3), (0,2,3), (1,2,3)
@@ -224,7 +203,6 @@ class ExportStlNode(CadQueryNode):
         face_counts = Counter(all_faces)
         boundary_faces = [face for face, count in face_counts.items() if count == 1]
         
-        print(f"ExportStlNode: {len(boundary_faces)} boundary triangles extracted")
         
         if len(boundary_faces) == 0:
             return None, None

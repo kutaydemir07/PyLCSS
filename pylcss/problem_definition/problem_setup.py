@@ -107,9 +107,7 @@ class XRayProblem:
             try:
                 res = self.system_model(**row_input)
                 results_list.append(res)
-            except Exception as e:
-                # Log error but continue
-                # print(f"Error at sample {i}: {e}") # Optional: Uncomment for debugging
+            except Exception:
                 results_list.append({})
                 
         # Aggregate results
@@ -164,10 +162,10 @@ class XRayProblem:
                 y_matrix[j, :] = val
             return y_matrix
 
-        except Exception as e:
+        except Exception:
             # --- Attempt 2: Smart Fallback (Loop Execution) ---
             # This handles models with 'if' statements that can't handle numpy arrays
-            # print(f"Vectorized evaluation failed ({e}). Falling back to serial execution.")
+            
             
             y_matrix = np.zeros((len(qoi_names), N))
             

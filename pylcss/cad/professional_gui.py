@@ -285,6 +285,54 @@ class PropertiesPanel(QtWidgets.QWidget):
         
         group_v.setLayout(layout_v)
         self.props_layout.addWidget(group_v)
+        
+        # 5. ADVANCED SETTINGS (NEW)
+        group_adv = QtWidgets.QGroupBox("Advanced Settings")
+        layout_adv = QtWidgets.QFormLayout()
+        
+        # Filter Radius
+        spin_filter = QtWidgets.QDoubleSpinBox()
+        spin_filter.setRange(0.0, 50.0)
+        spin_filter.setDecimals(2)
+        spin_filter.setSingleStep(0.5)
+        spin_filter.setValue(float(node.get_property('filter_radius') or 1.5))
+        spin_filter.valueChanged.connect(lambda v: self.update_property('filter_radius', v))
+        layout_adv.addRow("Filter Radius:", spin_filter)
+        
+        # Convergence Tol
+        spin_tol = QtWidgets.QDoubleSpinBox()
+        spin_tol.setRange(0.001, 1.0)
+        spin_tol.setDecimals(3)
+        spin_tol.setSingleStep(0.005)
+        spin_tol.setValue(float(node.get_property('convergence_tol') or 0.01))
+        spin_tol.valueChanged.connect(lambda v: self.update_property('convergence_tol', v))
+        layout_adv.addRow("Convergence Tol:", spin_tol)
+        
+        # Move Limit
+        spin_move = QtWidgets.QDoubleSpinBox()
+        spin_move.setRange(0.01, 1.0)
+        spin_move.setDecimals(2)
+        spin_move.setSingleStep(0.05)
+        spin_move.setValue(float(node.get_property('move_limit') or 0.2))
+        spin_move.valueChanged.connect(lambda v: self.update_property('move_limit', v))
+        layout_adv.addRow("Move Limit:", spin_move)
+        
+        # Update Scheme
+        combo_scheme = QtWidgets.QComboBox()
+        combo_scheme.addItems(['MMA', 'OC'])
+        combo_scheme.setCurrentText(str(node.get_property('update_scheme') or 'MMA'))
+        combo_scheme.currentTextChanged.connect(lambda v: self.update_property('update_scheme', v))
+        layout_adv.addRow("Update Scheme:", combo_scheme)
+        
+        # Filter Type
+        combo_filter = QtWidgets.QComboBox()
+        combo_filter.addItems(['density', 'sensitivity'])
+        combo_filter.setCurrentText(str(node.get_property('filter_type') or 'density'))
+        combo_filter.currentTextChanged.connect(lambda v: self.update_property('filter_type', v))
+        layout_adv.addRow("Filter Type:", combo_filter)
+        
+        group_adv.setLayout(layout_adv)
+        self.props_layout.addWidget(group_adv)
     
     def _build_primitive_ui(self, node):
         """UI for Primitive nodes (Box, Cylinder, Sphere, etc.)."""
@@ -489,7 +537,6 @@ class PropertiesPanel(QtWidgets.QWidget):
             props = all_props.get('custom', {})
         except:
             props = {}
-        # print(f"[Inspector DEBUG] Node: {node.__class__.__name__}, custom props: {list(props.keys())}")
         
         if not props:
             lbl = QtWidgets.QLabel("No editable properties")
@@ -537,8 +584,8 @@ class PropertiesPanel(QtWidgets.QWidget):
                         pw = node._BaseNode__property_widget.get(name, {})
                         if isinstance(pw, dict) and pw.get('widget_type') == 'combo':
                             combo_items = pw.get('items', [])
-            except Exception as e:
-                print(f"[Inspector] Widget info error for {name}: {e}")
+            except Exception:
+                pass
             
             # ALSO check if value looks like it could be from a known combo list
             # This is a heuristic fallback for common patterns
@@ -601,8 +648,8 @@ class PropertiesPanel(QtWidgets.QWidget):
                 try:
                     self.property_changed.emit(self.current_node, prop_name, old, value)
                 except Exception: pass
-            except Exception as e:
-                print(f"Property update error: {e}")
+            except Exception:
+                pass
 
 
 class TimelinePanel(QtWidgets.QWidget):
@@ -732,9 +779,6 @@ class LibraryPanel(QtWidgets.QWidget):
             "Simulation - Solve & Optimize": [
                 ("Solver", "com.cad.sim.solver", "Run FEA solver"),
                 ("Topology Opt", "com.cad.sim.topopt", "Optimize topology (SIMP)"),
-                ("Remesh Surface", "com.cad.sim.remesh", "Recover geometry from TopOpt"),
-                ("Shape Opt", "com.cad.sim.shapeopt", "Optimize shape"),
-                ("Size Opt", "com.cad.sim.sizeopt", "Optimize parameters"),
             ],
 
             # ═══════════════════════════════════════════════════════════════
@@ -818,10 +862,12 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         self.undo_stack = []
         self.redo_stack = []
         self.current_file = None
-        self._is_loading = False  # Flag to prevent auto-execution during load
         
         # Initialize worker as None
         self.worker = None
+        
+        # Loading state flag to suppress events during project load
+        self._is_loading = False
         
         # Add mutex for thread safety
         self.result_mutex = QtCore.QMutex()
@@ -851,8 +897,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         for node_class in NODE_CLASS_MAPPING.values():
             try:
                 self.graph.register_node(node_class)
-            except Exception as e:
-                print(f"Warning: Could not register {node_class.__name__}: {e}")
+            except Exception:
+                pass
     
     def _create_ui(self):
         """Create the main UI layout with 3D Viewer."""
@@ -945,8 +991,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         
         self.toolbar.addSeparator()
         self.auto_update_cb = QtWidgets.QCheckBox("Auto-Update")
-        self.auto_update_cb.setChecked(True)
-        self.auto_update_cb.setToolTip("Automatically execute graph when properties change")
+        self.auto_update_cb.setChecked(True)  # Default ON for CAD rendering
+        self.auto_update_cb.setToolTip("Automatically execute graph when properties change (skips FEA/TopOpt)")
         self.toolbar.addWidget(self.auto_update_cb)
     
     def _spawn_node(self, node_id, label, x=None, y=None):
@@ -981,14 +1027,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
             self.timeline.add_event(f"Added {label} node")
             self.statusBar().showMessage(f"✓ Created {label}")
-
-            # Auto-execute if enabled (for immediate visualization)
-            if hasattr(self, 'auto_update_cb') and self.auto_update_cb.isChecked():
-                self._execute_graph()
-
         except Exception as e:
             self.statusBar().showMessage(f"✗ Error: {e}")
-            print(f"Node creation error: {e}")
     
     def _on_node_selected(self, node):
         """Handle node selection."""
@@ -1028,9 +1068,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
     def _on_graph_property_changed(self, node, prop_name, prop_value):
         """Handle property changes from the graph (including widgets on nodes)."""
-        if self._is_loading:
-            return
-
         # Mark node as dirty so it re-executes
         setattr(node, '_dirty', True)
 
@@ -1056,15 +1093,16 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 setattr(node, '_dirty', False)
                 return
             
-        # Auto-update if enabled
+        # Auto-update if enabled (skip simulation nodes for performance)
         if hasattr(self, 'auto_update_cb') and self.auto_update_cb.isChecked():
-            self._execute_graph()
+            self._execute_graph(skip_simulation=True)
             
     def _on_connection_changed(self, port_in, port_out):
         """Handle connection changes (connect/disconnect)."""
+        # Skip events during project loading to prevent spam
         if self._is_loading:
             return
-
+            
         # Mark both nodes as dirty
         if port_in:
             node = port_in.node()
@@ -1074,7 +1112,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             setattr(node, '_dirty', True)
             
         self.timeline.add_event("Connection changed")
-        self._execute_graph()
+        # Auto-execute with skip_simulation for fast CAD preview
+        if hasattr(self, 'auto_update_cb') and self.auto_update_cb.isChecked():
+            self._execute_graph(skip_simulation=True)
 
     def eventFilter(self, source, event):
         """Handle drag/drop events on the graph widget to spawn nodes at drop location."""
@@ -1095,8 +1135,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                         self._spawn_node(node_id, label, x=pos.x(), y=pos.y())
                         event.accept()
                         return True
-        except Exception as e:
-            print(f"Drag/drop error: {e}")
+        except Exception:
+            pass
         return super(ProfessionalCadApp, self).eventFilter(source, event)
 
     def _on_execution_finished(self, results):
@@ -1141,74 +1181,42 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 if target_node is None:
                     last = getattr(self, '_last_rendered_node', None)
                     if last:
-                        res = results.get(last, getattr(last, '_last_result', None))
-                        if is_renderable(res):
-                            target_node = last
-
-                # Fallback: find any node with a renderable result (prefer last in results)
-                if target_node is None and results:
-                    for node, res in reversed(list(results.items())):
-                        if is_renderable(res):
-                            target_node = node
-                            break
-                
-
-
-
+                        target_node = last
 
                 # Render
                 if target_node:
                     self._last_rendered_node = target_node
                     # Get result from the results dict or the node cache
                     geom = results.get(target_node, getattr(target_node, '_last_result', None))
-                    
+
                     if isinstance(geom, dict) and ('mesh' in geom or 'displacement' in geom):
-                        self.statusBar().showMessage(f"Rendering Simulation: {target_node.name()}")
                         self.viewer.render_simulation(geom)
                     elif hasattr(geom, 'p') and hasattr(geom, 't'):
                         # Direct Mesh object from skfem
-                        self.statusBar().showMessage(f"Rendering Mesh: {target_node.name()}")
                         self.viewer.render_simulation(geom)
                     elif self._is_2d_sketch(geom):
                         # 2D sketch - render as polylines
-                        self.statusBar().showMessage(f"Rendering 2D Sketch: {target_node.name()}")
                         self.viewer.render_sketch(geom)
                     else:
-                        self.statusBar().showMessage(f"Rendering 3D Shape: {target_node.name()}")
                         self.viewer.render_shape(geom)
                 else:
                     self.viewer.clear()
 
-            except Exception as e:
-                print(f"Visualization update error: {e}")
+            except Exception:
+                pass
         finally:
             self.result_mutex.unlock()
 
     def _is_2d_sketch(self, obj):
-        """Check if object is a 2D sketch (has pending wires but no solid geometry)."""
+        """Check if object is a 2D sketch (has wires)."""
         if obj is None:
             return False
-        
-        # Primary check: pending wires indicate unextruded 2D sketch
+        # Check for pending wires (2D sketch)
+        # We prioritize this: if wires are pending, we visualize them as a sketch
         if hasattr(obj, 'ctx') and hasattr(obj.ctx, 'pendingWires'):
             if obj.ctx.pendingWires:
-                # Additional check: make sure it doesn't also have a solid
-                # (some operations leave wires pending even after creating solid)
-                try:
-                    shape = obj
-                    if hasattr(obj, 'val'):
-                        shape = obj.val()
-                    # If it has faces, it's a 3D solid, not a 2D sketch
-                    if hasattr(shape, 'Faces'):
-                        faces = shape.Faces()
-                        if faces and len(faces) > 0:
-                            return False
-                except:
-                    pass
                 return True
-        
         return False
-
 
     def _on_execution_error(self, error_msg):
         """Called if background thread fails."""
@@ -1224,8 +1232,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             try:
                 self.properties.current_node.set_property(prop_name, value)
                 self.timeline.add_event(f"Updated {prop_name} = {value}")
-            except Exception as e:
-                print(f"Property update error: {e}")
+            except Exception:
+                pass
     
     def _undo(self):
         """Undo last action."""
@@ -1275,8 +1283,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 self.timeline.add_event(f"Undid property {prop} on {getattr(node,'name','node')}")
             else:
                 self.timeline.add_event('Unknown undo action')
-        except Exception as e:
-            print(f"Undo failed: {e}")
+        except Exception:
+            pass
         self.statusBar().showMessage("Undo")
     
     def _redo(self):
@@ -1317,8 +1325,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 self.timeline.add_event(f"Redid property {prop} on {getattr(node,'name','node')}")
             else:
                 self.timeline.add_event('Unknown redo action')
-        except Exception as e:
-            print(f"Redo failed: {e}")
+        except Exception:
+            pass
         self.statusBar().showMessage("Redo")
     
     def _delete_selected(self):
@@ -1599,7 +1607,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
     def _new_project(self):
         """Create a new project."""
         self.graph.clear_session()
-        self.viewer.clear()
         self.current_file = None
         self.timeline.add_event("New project created")
         self.statusBar().showMessage("New project")
@@ -1610,14 +1617,18 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             self, "Open Project", "", "CAD Projects (*.cad);;All Files (*)"
         )
         if fname:
+            # Disable auto-update and set loading flag to suppress events
+            was_auto_update_enabled = self.auto_update_cb.isChecked()
+            self.auto_update_cb.setChecked(False)
+            self._is_loading = True
+            
             try:
                 # Load and deserialize using NodeGraphQt's built-in session manager
                 # load_session handles clearing the session and reading the file
-                self._is_loading = True
-                try:
-                    self.graph.load_session(fname)
-                finally:
-                    self._is_loading = False
+                self.graph.load_session(fname)
+                
+                # Done loading - clear flag
+                self._is_loading = False
                 
                 self.current_file = fname
                 self.timeline.add_event(f"Opened project: {fname}")
@@ -1625,9 +1636,14 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 
                 # Execute to restore view (but skip heavy simulation)
                 self._execute_graph(skip_simulation=True)
+                
+                # Re-enable auto-update after loading is complete
+                self.auto_update_cb.setChecked(True)
             except Exception as e:
+                self._is_loading = False
                 QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open project: {e}")
-                print(f"Open error details: {e}")
+                # Restore auto-update state on error
+                self.auto_update_cb.setChecked(was_auto_update_enabled)
     
     def _get_node_class(self, class_name):
         """Get node class by name."""
@@ -1667,16 +1683,16 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                             self.viewer.render_shape(cached_result)
                         self.statusBar().showMessage(f"✓ Updated {prop_name} display")
                         return  # Skip full graph execution
-                    except Exception as e:
-                        print(f"Visualization-only update failed: {e}")
+                    except Exception:
+                        pass
                         # Fall through to full execution if re-render fails
             
             # Auto-execute if enabled (for non-visualization properties)
             if hasattr(self, 'auto_update_cb') and self.auto_update_cb.isChecked():
                 self._execute_graph()
                 
-        except Exception as e:
-            print(f"Property change record error: {e}")
+        except Exception:
+            pass
     
     def _save_project(self):
         """Save current project."""
@@ -1696,7 +1712,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"Saved: {self.current_file}")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to save project: {e}")
-            print(f"Save error details: {e}")
     
     def _save_as_project(self):
         """Save project with a new name."""
@@ -1713,7 +1728,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
     def _show_about(self):
         """Show about dialog."""
         QtWidgets.QMessageBox.information(
-            self, "About"
+            self, "About",
         )
     
     def _execute_graph(self, skip_simulation=False):
@@ -1768,8 +1783,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             from PySide6.QtWidgets import QApplication
             QApplication.processEvents()
             
-        except Exception as e:
-            print(f"Real-time viz error: {e}")
+        except Exception:
+            pass
 
 
 def main():
@@ -1797,7 +1812,7 @@ def main():
     except RuntimeError as e:
         # Suppress NodeGraphQt internal errors
         if "layout direction not valid" in str(e):
-            print(f"(NodeGraphQt internal warning - continuing anyway)")
+            pass
             sys.exit(0)
         else:
             raise

@@ -44,11 +44,10 @@ def resolve_shape_input(port):
             # Use cached result if available
             res = getattr(node, '_last_result', None)
             if res is None:
-                # print(f"DEBUG: resolve_shape_input calling run() on {node.name()}")
                 res = node.run()
             
-            # print(f"DEBUG: resolve_shape_input result type: {type(res)}")
             if is_shape(res):
+
                 return res
             elif isinstance(res, dict) and 'shape' in res:
                 return res['shape']

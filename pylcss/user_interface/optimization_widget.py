@@ -808,8 +808,8 @@ class OptimizationWidget(QtWidgets.QWidget):
         try:
             with open(file_path, 'w') as f:
                 json.dump(data, f, indent=4)
-        except Exception as e:
-            print(f"Error saving optimization setup: {e}")
+        except Exception:
+            pass
 
     def load_from_folder(self, folder_path: str):
         """
@@ -840,8 +840,8 @@ class OptimizationWidget(QtWidgets.QWidget):
             if "settings" in data:
                 self._apply_settings_to_ui(data["settings"])
 
-        except Exception as e:
-            print(f"Error loading optimization setup: {e}")
+        except Exception:
+            pass
 
     def _apply_settings_to_ui(self, settings):
         # Apply solver settings to the UI

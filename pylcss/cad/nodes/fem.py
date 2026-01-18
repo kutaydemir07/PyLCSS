@@ -414,17 +414,15 @@ def shape_recovery(mesh, densities, cutoff, smoothing_iterations=3, resolution=1
                     
                     verts, faces = verts_filtered, faces_remapped
                     
-            except Exception as e:
-                print(f"Component filtering failed: {e}")
+            except Exception:
+                pass
                 # Continue with unfiltered mesh
 
         return verts, faces
 
     except ImportError:
-        print("Shape recovery requires scikit-image. Install with: pip install scikit-image")
         return None, None
-    except Exception as e:
-        print(f"Shape recovery failed: {e}")
+    except Exception:
         return None, None
 
 def lam_lame(E, nu):
@@ -519,7 +517,7 @@ class MeshNode(CadQueryNode):
 
     def run(self):
         if OCCGeometry is None:
-            print("Error: 'netgen-occ' is not installed.")
+            self.set_error("Netgen-occ is not installed")
             return None
 
         shape = self.get_input_shape('shape')
@@ -539,8 +537,7 @@ class MeshNode(CadQueryNode):
         if hasattr(shape, 'toCompound'):
             try:
                 shape = shape.toCompound()
-            except Exception as e:
-                print(f"MeshNode: Error converting assembly to compound: {e}")
+            except Exception:
                 return None
 
         # Optimized temporary file handling for performance
@@ -585,8 +582,8 @@ class MeshNode(CadQueryNode):
                                 if hasattr(face, 'hashCode'):
                                     # Set finer mesh size on specific faces
                                     geo.SetFaceMaxH(face.hashCode(), refinement_size)
-                        except Exception as e:
-                            print(f"MeshNode: Local refinement setup failed: {e}")
+                        except Exception:
+                            pass
                     
                     # 3. Generate Mesh
                     # maxh controls the global element size
@@ -599,8 +596,7 @@ class MeshNode(CadQueryNode):
                 # 5. Load into skfem
                 mesh = Mesh.load(msh_path)
                 
-            except Exception as e:
-                print(f"Meshing failed: {e}")
+            except Exception:
                 return None
                 
             finally:
@@ -613,8 +609,7 @@ class MeshNode(CadQueryNode):
                 except OSError:
                     pass  # Ignore cleanup errors
         
-        except Exception as e:
-            print(f"MeshNode: Temporary file creation failed: {e}")
+        except Exception:
             return None
         
         return mesh
@@ -989,8 +984,7 @@ class SolverNode(CadQueryNode):
             else:
                 fixed_dofs = np.array([], dtype=int)
                 
-        except Exception as e:
-            print(f"Error processing constraint: {e}")
+        except Exception:
             fixed_dofs = np.array([], dtype=int)
 
         # 5. Apply Loads
@@ -1114,16 +1108,15 @@ class SolverNode(CadQueryNode):
                         f[dof_y] += fy_per_node
                         f[dof_z] += fz_per_node
                         
-        except Exception as e:
-            print(f"Load application error: {e}")
+        except Exception:
+            pass
 
         # 6. Solve
         try:
             with suppress_output():
                 u = solve(*condense(K, f, D=fixed_dofs))
             logger.info(f"FEA Solve Complete. Max Displacement: {np.max(np.abs(u)):.6e}")
-        except Exception as e:
-            print(f"Solver failed: {e}")
+        except Exception:
             return None
 
         # 7. Calculate Von Mises Stress
@@ -1184,8 +1177,7 @@ class SolverNode(CadQueryNode):
             stress = np.abs(stress)
             logger.info(f"Stress Calc Complete. Max Stress: {np.max(stress):.6e}")
             
-        except Exception as e:
-            print(f"Stress calculation failed: {e}")
+        except Exception:
             stress = None
 
         return {
@@ -1210,8 +1202,8 @@ class TopologyOptimizationNode(CadQueryNode):
         self.add_output('optimized_mesh', color=(200, 100, 200))
         self.add_output('recovered_shape', color=(100, 255, 100))
         self.create_property('vol_frac', 0.4, widget_type='float')
-        self.create_property('iterations', 15, widget_type='int')
-        self.create_property('filter_radius', 1.5, widget_type='float')
+        self.create_property('iterations', 50, widget_type='int')  # Reasonable default
+        self.create_property('filter_radius', 3.0, widget_type='float')  # Should be 2-3x element size
         self.create_property('density_cutoff', 0.3, widget_type='float')
         self.create_property('shape_recovery', True, widget_type='bool')
         self.create_property('visualization', 'Density', widget_type='combo', items=['Density', 'Von Mises Stress'])
@@ -1223,7 +1215,7 @@ class TopologyOptimizationNode(CadQueryNode):
         self.create_property('penal', 3.0, widget_type='float')  # SIMP penalization exponent
         self.create_property('move_limit', 0.2, widget_type='float')  # Max density change per iteration
         self.create_property('min_density', 0.001, widget_type='float')  # Minimum element density
-        self.create_property('convergence_tol', 0.01, widget_type='float')  # Convergence threshold
+        self.create_property('convergence_tol', 0.02, widget_type='float')  # Convergence threshold
         self.create_property('recovery_resolution', 100, widget_type='int')  # Grid resolution for shape recovery
         self.create_property('smoothing_iterations', 3, widget_type='int')  # Gaussian smoothing passes
         # NEW: Filter type and update scheme selection
@@ -1392,8 +1384,7 @@ class TopologyOptimizationNode(CadQueryNode):
                 for i in range(0, len(fixed_nodes), step):
                     idx = fixed_nodes[i]
                     debug_constraints.append({'pos': mesh.p[:, idx].tolist()})
-                    
-                print(f"[TopOpt] Fixed {len(fixed_nodes)} nodes, {len(fixed_dofs)} DOFs")
+                
                 
             elif 'condition' in constraint:
                 # Legacy condition-based constraint
@@ -1416,8 +1407,7 @@ class TopologyOptimizationNode(CadQueryNode):
                     debug_constraints.append({'pos': mesh.p[:, idx].tolist()})
             else:
                 fixed_dofs = np.array([], dtype=int)
-        except Exception as e:
-            print(f"Error parsing constraint: {e}")
+        except Exception:
             fixed_dofs = np.array([], dtype=int)
 
         # Assemble Load Vector f
@@ -1448,8 +1438,8 @@ class TopologyOptimizationNode(CadQueryNode):
                         'start': mesh.p[:, idx].tolist(),
                         'vector': load_vec # Use total force vector for visualization direction/magnitude
                     })
-        except Exception as e:
-            print(f"Load application error: {e}")
+        except Exception:
+            pass
 
 
         # Stiffness Form with Density Penalization
@@ -1532,6 +1522,10 @@ class TopologyOptimizationNode(CadQueryNode):
         mu_interp = basis0.interpolate(mu_field)
         
         for loop in range(max_iter):
+            # Track consecutive convergence (require 3 consecutive low-change iterations)
+            if loop == 0:
+                consecutive_converged = 0
+
             # 1. Apply Density Filter (if enabled)
             densities_phys = densities
             weight_sums = None
@@ -1563,8 +1557,8 @@ class TopologyOptimizationNode(CadQueryNode):
                 # We catch exceptions to prevent UI errors from crashing the solver
                 try:
                     progress_callback(mesh, densities_phys, loop, max_iter)
-                except Exception as cb_err:
-                    print(f"Callback error: {cb_err}")
+                except Exception:
+                    pass
             
             # 2. FE Analysis (using physical densities)
             rho_interp = basis0.interpolate(densities_phys)
@@ -1669,8 +1663,14 @@ class TopologyOptimizationNode(CadQueryNode):
             
             logger.info(f"Iter {loop}: Change {change:.4f}, Vol {np.sum(densities*volumes)/total_vol:.2f}")
             
+            # Check convergence with consecutive iteration requirement
             if change < conv_tol:
-                break
+                consecutive_converged += 1
+                if consecutive_converged >= 3:
+                    logger.info(f"TopOpt: Converged after {loop + 1} iterations (3 consecutive low-change iterations)")
+                    break
+            else:
+                consecutive_converged = 0
         
         # Calculate final stress for visualization if requested
         stress = None
