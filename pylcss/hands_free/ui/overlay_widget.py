@@ -99,12 +99,16 @@ class OverlayWidget(QWidget):
     def paintEvent(self, event) -> None:
         """Paint the semi-transparent background."""
         painter = QPainter(self)
+        if not painter.isActive():
+            return
+
         painter.setRenderHint(QPainter.Antialiasing)
         
         # Draw rounded rectangle background
         painter.setBrush(QBrush(QColor(30, 30, 30, 200)))
         painter.setPen(QPen(QColor(60, 60, 60, 200), 1))
         painter.drawRoundedRect(self.rect(), 10, 10)
+        painter.end()
         
     def set_active(self, active: bool) -> None:
         """Set the active state."""

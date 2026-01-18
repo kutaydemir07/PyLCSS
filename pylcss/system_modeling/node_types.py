@@ -244,6 +244,8 @@ class CodeEditor(QtWidgets.QPlainTextEdit):
 
     def line_number_area_paint_event(self, event: QtGui.QPaintEvent) -> None:
         painter = QtGui.QPainter(self.line_number_area)
+        if not painter.isActive():
+            return
         painter.fillRect(event.rect(), QColor("#333333"))
         block = self.firstVisibleBlock()
         block_number = block.blockNumber()
