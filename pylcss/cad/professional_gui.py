@@ -331,6 +331,21 @@ class PropertiesPanel(QtWidgets.QWidget):
         combo_filter.currentTextChanged.connect(lambda v: self.update_property('filter_type', v))
         layout_adv.addRow("Filter Type:", combo_filter)
         
+        # Recovery Resolution
+        spin_res = QtWidgets.QSpinBox()
+        spin_res.setRange(10, 500)
+        spin_res.setSingleStep(10)
+        spin_res.setValue(int(node.get_property('recovery_resolution') or 50))
+        spin_res.valueChanged.connect(lambda v: self.update_property('recovery_resolution', v))
+        layout_adv.addRow("Resolution:", spin_res)
+        
+        # Smoothing Iterations
+        spin_smooth = QtWidgets.QSpinBox()
+        spin_smooth.setRange(0, 50)
+        spin_smooth.setValue(int(node.get_property('smoothing_iterations') or 3))
+        spin_smooth.valueChanged.connect(lambda v: self.update_property('smoothing_iterations', v))
+        layout_adv.addRow("Smoothing Set:", spin_smooth)
+        
         group_adv.setLayout(layout_adv)
         self.props_layout.addWidget(group_adv)
     
