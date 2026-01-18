@@ -64,7 +64,31 @@ class TwistedExtrudeNode(CadQueryNode):
             return None
         
         try:
-            return shape.twistExtrude(float(distance), float(angle))
+            # IMPORTANT: CadQuery operations like twistExtrude consume pendingWires.
+            # If we operate on the input 'shape' directly, we mutate the upstream node's result!
+            # Next time we run (e.g. changing angle), 'shape' has no wires left.
+            # FIX: Create a fresh Workplane with the same context and stack/wires
+            
+            # Helper to clone the workplane state safely
+            if hasattr(shape, 'newObject'):
+                # newObject creates a new current workplane with the same stack
+                # but we actually need to ensure pendingWires are preserved/copied
+                # Best way is to rely on CQ's immutability behavior if handled right,
+                # but twistExtrude might be destructive to the context.
+                
+                # Copying the context is safest for these context-sensitive ops
+                import copy
+                safe_shape = copy.copy(shape)
+                # Deep copy of context might be needed if pendingWires is a list ref
+                if hasattr(shape, 'ctx'):
+                    safe_shape.ctx = copy.copy(shape.ctx)
+                    if hasattr(shape.ctx, 'pendingWires'):
+                        safe_shape.ctx.pendingWires = list(shape.ctx.pendingWires)
+            else:
+                safe_shape = shape
+
+            res = safe_shape.twistExtrude(float(distance), float(angle))
+            return res
         except Exception as e:
             self.set_error(f"Twist Extrude error: {e}")
             return shape

@@ -122,6 +122,7 @@ def execute_graph(graph_or_nodes, skip_simulation=False, **kwargs):
 
         can_skip = (current_input_hash == last_input_hash and
                    cached_result is not None and
+                   not getattr(n, '_dirty', False) and
                    not getattr(n, '_force_execute', False))
 
         if can_skip:

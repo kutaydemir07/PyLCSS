@@ -605,6 +605,7 @@ class PropertiesPanel(QtWidgets.QWidget):
             # ALSO check if value looks like it could be from a known combo list
             # This is a heuristic fallback for common patterns
             known_combos = {
+                'operation': ['Union', 'Cut', 'Intersect'],
                 'preset': ['Custom', 'Steel (Structural)', 'Steel (Stainless 304)', 
                           'Aluminum 6061-T6', 'Aluminum 7075-T6', 'Titanium Ti-6Al-4V',
                           'Copper (Annealed)', 'Brass', 'Cast Iron (Gray)', 'Magnesium AZ31',
@@ -745,6 +746,7 @@ class LibraryPanel(QtWidgets.QWidget):
             ],
             "Part Design - Create": [
                 ("Extrude", "com.cad.extrude", "Extrude 2D sketch to 3D"),
+                ("Twisted Extrude", "com.cad.twisted_extrude", "Extrude with helical twist"),
                 ("Revolve", "com.cad.revolve", "Revolve sketch around axis"),
                 ("Sweep", "com.cad.sweep", "Sweep profile along path"),
                 ("Loft", "com.cad.loft", "Loft between profiles"),
@@ -1223,11 +1225,26 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             self.result_mutex.unlock()
 
     def _is_2d_sketch(self, obj):
-        """Check if object is a 2D sketch (has wires)."""
+        """Check if object is a 2D sketch (has wires but NO solids)."""
         if obj is None:
             return False
-        # Check for pending wires (2D sketch)
-        # We prioritize this: if wires are pending, we visualize them as a sketch
+        
+        # First check if this has solids - if so, it's a 3D shape, NOT a sketch
+        try:
+            # CadQuery Workplane with solids
+            if hasattr(obj, 'val'):
+                val = obj.val()
+                # Check for solid or compound
+                if hasattr(val, 'Solids') and val.Solids():
+                    return False  # Has solids = 3D shape
+            # Or direct solid
+            if hasattr(obj, 'Solids') and obj.Solids():
+                return False  # Has solids = 3D shape
+        except Exception:
+            pass
+        
+        # Now check for pending wires (2D sketch)
+        # Only treat as sketch if there are wires but no solids
         if hasattr(obj, 'ctx') and hasattr(obj.ctx, 'pendingWires'):
             if obj.ctx.pendingWires:
                 return True
@@ -1678,6 +1695,10 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         try:
             self._push_undo({'type': 'prop_change', 'node': node, 'prop': prop_name, 'old': old, 'new': new})
             self.timeline.add_event(f"Property changed: {prop_name} = {new} ({getattr(node,'name','')})")
+            
+            # IMPORTANT: When a property changes, the modified node should be rendered
+            # Store it as last_rendered_node so _on_execution_finished renders the right node
+            self._last_rendered_node = node
             
             # OPTIMIZATION: Check if this is a visualization-only property change
             # These properties don't need a re-run, just a re-render
