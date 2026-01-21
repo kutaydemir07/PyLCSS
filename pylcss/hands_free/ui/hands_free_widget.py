@@ -20,6 +20,7 @@ from PySide6.QtCore import Qt, QTimer, Slot
 
 from pylcss.hands_free.hands_free_manager import HandsFreeManager
 from pylcss.hands_free.config import HandsFreeConfig
+from pylcss.hands_free.ui.llm_settings_widget import LLMSettingsWidget
 
 logger = logging.getLogger(__name__)
 
@@ -75,12 +76,14 @@ class HandsFreeWidget(QWidget):
         controls_layout.addWidget(self._create_main_controls())
         controls_layout.addWidget(self._create_status_group())
         controls_layout.addWidget(self._create_voice_control_group())
+        controls_layout.addWidget(self._create_voice_control_group())
+        controls_layout.addWidget(self._create_llm_settings_group())  # LLM Settings
         controls_layout.addWidget(self._create_command_log_group())
         controls_layout.addStretch()
         
         scroll.setWidget(controls_widget)
         main_layout.addWidget(scroll)
-        
+
     def _create_status_group(self) -> QGroupBox:
         """Create the status display group."""
         group = QGroupBox("Status")
@@ -193,6 +196,92 @@ class HandsFreeWidget(QWidget):
         layout.addWidget(self.partial_label)
         
         return group
+    
+    def _create_llm_settings_group(self) -> QGroupBox:
+        """Create LLM settings group with quick settings and full config button."""
+        group = QGroupBox("🤖 LLM Assistant Settings")
+        layout = QVBoxLayout(group)
+        
+        # Quick settings widget (collapsed by default)
+        self.llm_settings = LLMSettingsWidget(self.config.llm_control)
+        self.llm_settings.settings_changed.connect(self._on_llm_settings_changed)
+        self.llm_settings.provider_connected.connect(self._on_provider_connected)
+        layout.addWidget(self.llm_settings)
+        
+        # Button row
+        btn_layout = QHBoxLayout()
+        
+        # Full settings button
+        full_settings_btn = QPushButton("⚙️ Full Settings...")
+        full_settings_btn.setToolTip("Open comprehensive LLM configuration dialog")
+        full_settings_btn.clicked.connect(self._open_llm_config_dialog)
+        full_settings_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3a5a7a;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #4a6a8a;
+            }
+        """)
+        btn_layout.addWidget(full_settings_btn)
+        
+        layout.addLayout(btn_layout)
+        
+        return group
+    
+    @Slot()
+    def _open_llm_config_dialog(self) -> None:
+        """Open the full LLM configuration dialog."""
+        from pylcss.hands_free.ui.llm_config_dialog import LLMConfigDialog
+        dialog = LLMConfigDialog(self)
+        dialog.settings_saved.connect(self._on_llm_config_saved)
+        dialog.exec()
+    
+    @Slot()
+    def _on_llm_config_saved(self) -> None:
+        """Handle LLM config dialog save."""
+        # Reload config from file (config dialog saved to file)
+        from pylcss.hands_free.config import HandsFreeConfig
+        new_config = HandsFreeConfig.load()
+        self.config = new_config
+        
+        # Update the inline LLM settings widget to reflect new config
+        self.llm_settings.config = new_config.llm_control
+        self.llm_settings._load_current_config()
+        
+        self._log_command("✓ LLM settings updated")
+        
+        # Re-initialize manager's provider with new config
+        self.manager.update_config(new_config)
+    
+    @Slot()
+    def _open_llm_chat_dialog(self) -> None:
+        """Open the LLM chat dialog."""
+        from pylcss.hands_free.ui.llm_chat_dialog import LLMChatDialog
+        if not hasattr(self, '_chat_dialog') or self._chat_dialog is None:
+            # Pass the manager's command dispatcher
+            dispatcher = None
+            if hasattr(self.manager, '_command_dispatcher'):
+                dispatcher = self.manager._command_dispatcher
+            self._chat_dialog = LLMChatDialog(command_dispatcher=dispatcher, parent=self)
+        self._chat_dialog.show()
+        self._chat_dialog.raise_()
+    
+    @Slot()
+    def _on_llm_settings_changed(self) -> None:
+        """Handle LLM settings change."""
+        # Update the manager's config
+        self.config.llm_control = self.llm_settings.get_config()
+        self._save_timer.start()
+    
+    @Slot(str)
+    def _on_provider_connected(self, provider: str) -> None:
+        """Handle successful provider connection."""
+        self._log_command(f"✓ LLM connected: {provider}")
+        # Notify manager of new provider
+        if hasattr(self.manager, 'set_llm_provider'):
+            self.manager.set_llm_provider(self.llm_settings.get_current_provider())
         
     def _create_command_log_group(self) -> QGroupBox:
         """Create command log group."""
@@ -225,6 +314,9 @@ class HandsFreeWidget(QWidget):
         self.manager.command_recognized.connect(self._on_command_recognized)
         self.manager.partial_text.connect(self._on_partial_text)
         self.manager.error_occurred.connect(self._on_error)
+        # Connect agentic progress
+        if hasattr(self.manager, 'agentic_progress'):
+            self.manager.agentic_progress.connect(self._on_agentic_progress)
         
     # --- Slots ---
     
@@ -262,8 +354,16 @@ class HandsFreeWidget(QWidget):
         
     @Slot()
     def _do_save_config(self) -> None:
-        """Actually save the config after debounce delay."""
-        self.manager.update_config(self.config)
+        """Actually save the configuration to disk (debounced)."""
+        try:
+            self.config.save()
+            self._log_command("✓ Settings saved")
+            logger.info("Hands-free config saved")
+            # Also update the manager with the new config
+            self.manager.update_config(self.config)
+        except Exception as e:
+            logger.error(f"Failed to save config: {e}")
+            self._log_command(f"❌ Save failed: {e}")
             
     @Slot(bool)
     def _on_dictation_toggled(self, enabled: bool) -> None:
@@ -296,6 +396,13 @@ class HandsFreeWidget(QWidget):
         self._log_command(f"❌ Error: {error}")
         self.status_label.setText(f"Error: {error}")
         self.status_label.setStyleSheet("color: #ff6b6b;")
+        
+    @Slot(str)
+    def _on_agentic_progress(self, message: str) -> None:
+        """Handle agentic progress update."""
+        # Update chat dialog if visible
+        if hasattr(self, '_chat_dialog') and self._chat_dialog and self._chat_dialog.isVisible():
+            self._chat_dialog.add_agent_thought(message)
         
     def _check_voice_model(self) -> None:
         """Check if voice model is available."""

@@ -163,6 +163,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self.voice_control_action.toggled.connect(self._toggle_voice_control)
         self.file_menu.addAction(self.voice_control_action)
         
+        # Chat with AI Action (added per user request)
+        self.chat_action = QtGui.QAction(
+            qta.icon('fa5s.comments'), "Chat with AI", self
+        )
+        self.chat_action.setShortcut("Ctrl+Shift+C")
+        self.chat_action.setToolTip("Open AI Assistant Chat (Ctrl+Shift+C)")
+        self.chat_action.triggered.connect(self._open_llm_chat)
+        self.file_menu.addAction(self.chat_action)
+        
+        # LLM Settings action
+        self.llm_settings_action = QtGui.QAction(
+            qta.icon('fa5s.robot'), "LLM Assistant Settings...", self
+        )
+        self.llm_settings_action.setShortcut("Ctrl+Shift+L")
+        self.llm_settings_action.setToolTip(
+            "Configure LLM providers, API keys, and models (Ctrl+Shift+L)"
+        )
+        self.llm_settings_action.triggered.connect(self._open_llm_settings)
+        self.file_menu.addAction(self.llm_settings_action)
+        
         # Create overlay widget for visual feedback
         self.hands_free_overlay = OverlayWidget(self)
         self.hands_free_overlay.hide()
@@ -177,6 +197,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.hands_free_manager.partial_text.connect(
             self.hands_free_overlay.show_partial
         )
+        
+        # Initialize in background to not block startup
+        QtCore.QTimer.singleShot(1000, self.hands_free_manager.initialize)
     
     def _toggle_voice_control(self, checked: bool) -> None:
         """Toggle voice control on/off."""
@@ -198,6 +221,26 @@ class MainWindow(QtWidgets.QMainWindow):
             self.voice_control_action.setText("Voice Control")
             self.hands_free_overlay.hide()
             self.statusBar().showMessage("Voice control disabled", 2000)
+            
+    def _open_llm_chat(self) -> None:
+        """Open the LLM chat dialog."""
+        from pylcss.hands_free.ui.llm_chat_dialog import LLMChatDialog
+        if not hasattr(self, '_llm_chat_dialog') or self._llm_chat_dialog is None:
+            # Pass the manager's command dispatcher so the chat can execute actions
+            dispatcher = self.hands_free_manager.command_dispatcher
+            self._llm_chat_dialog = LLMChatDialog(command_dispatcher=dispatcher, parent=self)
+        self._llm_chat_dialog.show()
+        self._llm_chat_dialog.raise_()
+    
+    def _open_llm_settings(self) -> None:
+        """Open the LLM configuration dialog."""
+        from pylcss.hands_free.ui.llm_config_dialog import LLMConfigDialog
+        dialog = LLMConfigDialog(self)
+        if dialog.exec():
+            # Reload manager's provider after settings change
+            self.hands_free_manager.update_config(self.hands_free_manager.get_config())
+            self.statusBar().showMessage("LLM settings updated", 3000)
+
 
     def on_tab_changed(self, index: int) -> None:
         """Refresh node list when switching to Surrogate Tab and outputs for Sensitivity Tab."""

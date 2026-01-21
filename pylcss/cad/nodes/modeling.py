@@ -193,7 +193,7 @@ class BooleanNode(CadQueryNode):
         super(BooleanNode, self).__init__()
         self.add_input('shape_a', color=(100, 255, 100))
         self.add_input('shape_b', color=(100, 255, 100))
-        self.add_output('result', color=(100, 255, 100))
+        self.add_output('shape', color=(100, 255, 100))
         
         self.create_property('operation', 'Union', widget_type='combo',
                              items=['Union', 'Cut', 'Intersect'])

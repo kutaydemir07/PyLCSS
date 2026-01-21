@@ -313,15 +313,22 @@ class HelpWidget(QtWidgets.QWidget):
         <h2>Voice Assistant (Hands-Free Control)</h2>
 
         <h3>Overview</h3>
-        <p>PyLCSS includes an offline Voice Assistant powered by Vosk for hands-free control.
-        You can navigate tabs, execute commands, create CAD nodes, and run simulations using voice commands.</p>
+        <p>PyLCSS includes an offline Voice Assistant powered by <b>Faster-Whisper</b> for hands-free control.
+        It offers high-accuracy, real-time speech recognition running entirely on your local machine.</p>
 
         <h3>Setup Requirements</h3>
         <ol>
-        <li><b>Download Vosk Model:</b> Download <code>vosk-model-small-en-us-0.15</code> from
-            <a href="https://alphacephei.com/vosk/models">alphacephei.com/vosk/models</a></li>
-        <li><b>Extract to Models folder:</b> Place in <code>pylcss/models/vosk-model-small-en-us-0.15/</code></li>
-        <li><b>Enable Voice Control:</b> Toggle "Voice Control" in the Hands-Free menu</li>
+        <li><b>Enable Voice Control:</b> Toggle "Voice Control" in the Hands-Free menu.</li>
+        <li><b>First Run:</b> The AI model (Whisper Base) will be downloaded automatically (approx 140MB).</li>
+        </ol>
+
+        <h3>🤖 LLM Intelligence</h3>
+        <p>PyLCSS features a powerful LLM execution engine that can build systems for you.</p>
+        <ol>
+        <li><b>Activation:</b> Simply say your request (e.g., <i>"Create a red box"</i>) or ask a question.</li>
+        <li><b>Providers:</b> Configure your preferred AI provider (OpenAI, Claude, Gemini, GPT@RUB) in the Settings panel.</li>
+        <li><b>Capabilities:</b> The AI understands the full PyLCSS node library and can construct complex graphs, answer engineering questions, and control the UI.</li>
+        <li><b>Privacy:</b> Securely encrypts your API keys locally.</li>
         </ol>
 
         <h3>Mouse Actions</h3>

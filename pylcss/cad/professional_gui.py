@@ -866,6 +866,10 @@ class LibraryPanel(QtWidgets.QWidget):
         drag.exec(QtCore.Qt.CopyAction)
 
 
+# Lazy imports to avoid circular dependency with hands_free module
+# These are imported at runtime inside __init__ instead of at module level
+
+
 class ProfessionalCadApp(QtWidgets.QMainWindow):
     """Main Application Window (formerly CADWidget)."""
     
@@ -892,6 +896,11 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         # Create graph
         self.graph = NodeGraph()
         self._register_nodes()
+        
+        # Initialize Command Dispatcher for LLM actions (lazy import to avoid circular)
+        from pylcss.hands_free.command_dispatcher import CommandDispatcher
+        self.command_dispatcher = CommandDispatcher(main_window=self)
+        self.llm_chat_dialog = None
         
         # Connect graph signals
         self.graph.property_changed.connect(self._on_graph_property_changed)
@@ -1006,6 +1015,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         self.toolbar.addAction("✓ Validate", self._validate_model)
         self.toolbar.addAction("📊 Report", self._generate_report)
         
+
         self.toolbar.addSeparator()
         self.auto_update_cb = QtWidgets.QCheckBox("Auto-Update")
         self.auto_update_cb.setChecked(True)  # Default ON for CAD rendering
@@ -1798,6 +1808,12 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         # Connect optimization step for real-time visualization
         self.worker.optimization_step.connect(self._on_optimization_step)
         self.worker.start()
+
+    @QtCore.Slot(bool)
+    @QtCore.Slot()  # Allow calling without arguments (default=False)
+    def execute_graph(self, skip_simulation=False):
+        """Public alias for _execute_graph, allowed to be called by external agents."""
+        self._execute_graph(skip_simulation)
     
     def _on_optimization_step(self, mesh, densities, step, total):
         """Update the 3D viewer with current optimization state (real-time viz)."""

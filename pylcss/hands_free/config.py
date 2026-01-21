@@ -16,9 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Default paths
 HANDS_FREE_DIR = Path(__file__).parent
-MODELS_DIR = HANDS_FREE_DIR.parent.parent / "models"
-VOSK_MODEL_NAME = "vosk-model-small-en-us-0.15"
-VOSK_MODEL_PATH = MODELS_DIR / VOSK_MODEL_NAME
+models_dir = HANDS_FREE_DIR.parent.parent / "models"
 CONFIG_FILE = HANDS_FREE_DIR / "settings.json"
 
 
@@ -41,12 +39,79 @@ class HeadTrackingConfig:
 class VoiceControlConfig:
     """Configuration for voice control system."""
     enabled: bool = True
-    model_path: str = str(VOSK_MODEL_PATH)
+    model_path: str = "base.en"
     sample_rate: int = 16000
     hotword: str = "hey computer"  # Wake word
     hotword_enabled: bool = False  # Always listen by default
     command_timeout: float = 5.0  # Seconds to wait for command after hotword
     feedback_enabled: bool = True  # Audio feedback on command recognition
+    confirm_actions: bool = False  # Require voice confirmation for actions
+    input_device_index: Optional[int] = None  # Specific audio input device index
+
+
+@dataclass
+class LLMControlConfig:
+    """Configuration for LLM assistant control with multi-provider support."""
+    enabled: bool = True
+    
+    # Provider selection: openai, anthropic, google, gptrub
+    provider: str = "gptrub"
+    
+    # Encrypted API keys (stored encrypted in settings.json)
+    openai_api_key: str = ""
+    anthropic_api_key: str = ""
+    google_api_key: str = ""
+    gptrub_api_key: str = ""
+    
+    # GPT@RUB specific
+    gptrub_api_url: str = "https://gpt.ruhr-uni-bochum.de/external/v1"
+    
+    # Legacy field for backwards compatibility
+    access_token: str = ""
+    api_url: str = "https://gpt.ruhr-uni-bochum.de/external/v1"
+    
+    # Model selection (per provider, use selected_model for active)
+    selected_model: str = ""
+    model: str = "gpt-4.1-2025-04-14"  # Legacy
+    
+    # Generation settings
+    auto_execute: bool = False  # Require confirmation before executing actions
+    max_tokens: int = 1000
+    temperature: float = 0.7
+    
+    # Memory settings (hidden but functional)
+    memory_enabled: bool = True
+    max_memory_messages: int = 20  # Context window for LLM
+    
+    # Agentic AI settings
+    agentic_mode: bool = True  # Use multi-agent system (Planner → Executor → Critic)
+    use_critic_agent: bool = True  # Enable critic for validation
+    validate_design_intent: bool = True  # Critic validates design intent, not just geometry
+    max_retries: int = 3  # Max retry attempts for self-correction
+    auto_save_workflows: bool = True  # Auto-save successful multi-step operations
+    
+    def get_api_key_for_provider(self, provider: str = "") -> str:
+        """Get the API key for a specific provider."""
+        provider = provider or self.provider
+        key_map = {
+            "openai": self.openai_api_key,
+            "anthropic": self.anthropic_api_key,
+            "google": self.google_api_key,
+            "gptrub": self.gptrub_api_key or self.access_token,
+        }
+        return key_map.get(provider, "")
+    
+    def set_api_key_for_provider(self, provider: str, key: str) -> None:
+        """Set the API key for a specific provider."""
+        if provider == "openai":
+            self.openai_api_key = key
+        elif provider == "anthropic":
+            self.anthropic_api_key = key
+        elif provider == "google":
+            self.google_api_key = key
+        elif provider == "gptrub":
+            self.gptrub_api_key = key
+            self.access_token = key  # Backwards compatibility
     
 
 @dataclass
@@ -54,6 +119,7 @@ class HandsFreeConfig:
     """Main configuration container for hands-free system."""
     head_tracking: HeadTrackingConfig = field(default_factory=HeadTrackingConfig)
     voice_control: VoiceControlConfig = field(default_factory=VoiceControlConfig)
+    llm_control: LLMControlConfig = field(default_factory=LLMControlConfig)
     
     # General settings
     startup_enabled: bool = False  # Auto-start on PyLCSS launch
@@ -78,7 +144,7 @@ class HandsFreeConfig:
             return cls()
         
         try:
-            with open(load_path, 'r') as f:
+            with open(load_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
             # Helper to resolve model path
@@ -94,26 +160,27 @@ class HandsFreeConfig:
                 
                 resolved_path = model_path
                 if not model_path.is_absolute():
-                     project_root = MODELS_DIR.parent
+                     project_root = models_dir.parent
                      candidate = project_root / model_path
                      if candidate.exists():
                          resolved_path = candidate
                      else:
                          # Try resolving inside models dir implicitly
-                         candidate_in_models = MODELS_DIR / model_path
+                         candidate_in_models = models_dir / model_path
                          if candidate_in_models.exists():
                              resolved_path = candidate_in_models
                 
-                # If the path (absolute or resolved relative) doesn't exist, fallback
-                if not resolved_path.exists():
-                    logger.warning(f"Configured model path {resolved_path} not found. Falling back to default.")
-                    resolved_path = VOSK_MODEL_PATH
-                
+                # If the path (absolute or resolved relative) doesn't exist, we just keep it string
+                # Faster-Whisper handles download or finding it.
                 vc_data['model_path'] = str(resolved_path)
+
+            # Load LLM config
+            llm_data = data.get('llm_control', {})
 
             config = cls(
                 head_tracking=HeadTrackingConfig(**data.get('head_tracking', {})),
                 voice_control=VoiceControlConfig(**vc_data),
+                llm_control=LLMControlConfig(**llm_data),
                 startup_enabled=data.get('startup_enabled', False),
                 overlay_enabled=data.get('overlay_enabled', True),
             )
@@ -345,6 +412,18 @@ VOICE_COMMANDS: Dict[str, Dict] = {
     # Dictation mode
     "start dictation": {"action": "control", "command": "start_dictation"},
     "stop dictation": {"action": "control", "command": "stop_dictation"},
+    
+    # LLM Assistant - Voice-First Mode
+    "hey assistant": {"action": "control", "command": "llm_mode"},
+    "assistant": {"action": "control", "command": "llm_mode"},
+    "ai": {"action": "control", "command": "llm_mode"},
+    "confirm": {"action": "control", "command": "llm_confirm"},
+    "execute": {"action": "control", "command": "llm_confirm"},
+    "yes": {"action": "control", "command": "llm_confirm"},
+    "cancel": {"action": "control", "command": "llm_cancel"},
+    "abort": {"action": "control", "command": "llm_cancel"},
+    "no": {"action": "control", "command": "llm_cancel"},
+    "exit assistant": {"action": "control", "command": "llm_exit"},
     
     # Window control
     "minimize": {"action": "window", "command": "minimize"},

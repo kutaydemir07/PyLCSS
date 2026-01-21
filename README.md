@@ -59,6 +59,13 @@ PyLCSS implements the **Solution Space** approach for robust design. Instead of 
 * **Non-Blocking UI:** Heavy computations run in background threads with signal throttling to ensure the GUI remains responsive at 60 FPS.
 * **Crash Protection:** Robust error handling and race-condition prevention using Mutex locks.
 
+### 🤖 LLM-Powered Voice Assistant
+* **Natural Language Control:** Speak naturally to control the UI (e.g., "Zoom in", "Go to properties").
+* **AI Coding Assistant:** Ask the LLM to generate complex systems (e.g., "Create a helical gear").
+* **Local Speed:** Uses **Faster-Whisper** for real-time local speech recognition.
+* **Privacy-First:** Supports multiple LLM providers (OpenAI, Claude, Gemini, GPT@RUB) with optional localized execution.
+* **Hands-Free:** Full voice command suite for when your hands are busy with hardware or VR.
+
 ---
 
 ## 📦 Installation
