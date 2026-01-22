@@ -4,12 +4,13 @@
 """
 Multi-Provider LLM Client Abstraction.
 
-Supports OpenAI (ChatGPT), Anthropic (Claude), Google (Gemini), and GPT@RUB.
+Supports OpenAI (ChatGPT), Anthropic (Claude), and Google (Gemini).
 """
 
 import json
 import logging
 import threading
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Callable, Any
@@ -17,6 +18,11 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
 logger = logging.getLogger(__name__)
+
+# Rate limit retry configuration
+RATE_LIMIT_MAX_RETRIES = 5
+RATE_LIMIT_BASE_DELAY = 2.0  # seconds
+RATE_LIMIT_MAX_DELAY = 60.0  # max wait time in seconds
 
 
 @dataclass
@@ -156,7 +162,7 @@ class OpenAIProvider(LLMProvider):
     ]
     
     def _make_request(self, endpoint: str, data: Optional[Dict] = None) -> Dict:
-        """Make an HTTP request to OpenAI API."""
+        """Make an HTTP request to OpenAI API with rate limit retry."""
         if not self.api_key:
             raise AuthenticationError("OpenAI API key not set.")
             
@@ -166,28 +172,36 @@ class OpenAIProvider(LLMProvider):
             "Content-Type": "application/json",
         }
         
-        try:
-            if data:
-                body = json.dumps(data).encode('utf-8')
-                request = Request(url, data=body, headers=headers, method='POST')
-            else:
-                request = Request(url, headers=headers, method='GET')
-            
-            with urlopen(request, timeout=60) as response:
-                return json.loads(response.read().decode('utf-8'))
+        for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):
+            try:
+                if data:
+                    body = json.dumps(data).encode('utf-8')
+                    request = Request(url, data=body, headers=headers, method='POST')
+                else:
+                    request = Request(url, headers=headers, method='GET')
                 
-        except HTTPError as e:
-            if e.code == 401:
-                raise AuthenticationError("Invalid OpenAI API key.")
-            elif e.code == 429:
-                raise RateLimitError("OpenAI rate limit exceeded.")
-            else:
-                error_body = e.read().decode('utf-8') if e.readable() else str(e)
-                raise LLMProviderError(f"OpenAI API error ({e.code}): {error_body}")
-        except URLError as e:
-            raise NetworkError(f"Network error: {e.reason}")
-        except Exception as e:
-            raise LLMProviderError(f"Unexpected error: {e}")
+                with urlopen(request, timeout=60) as response:
+                    return json.loads(response.read().decode('utf-8'))
+                    
+            except HTTPError as e:
+                if e.code == 401:
+                    raise AuthenticationError("Invalid OpenAI API key.")
+                elif e.code == 429:
+                    if attempt < RATE_LIMIT_MAX_RETRIES:
+                        delay = min(RATE_LIMIT_BASE_DELAY * (2 ** attempt), RATE_LIMIT_MAX_DELAY)
+                        logger.warning(f"Rate limit hit, waiting {delay:.1f}s before retry ({attempt + 1}/{RATE_LIMIT_MAX_RETRIES})...")
+                        time.sleep(delay)
+                        continue
+                    raise RateLimitError(f"OpenAI rate limit exceeded after {RATE_LIMIT_MAX_RETRIES} retries.")
+                else:
+                    error_body = e.read().decode('utf-8') if e.readable() else str(e)
+                    raise LLMProviderError(f"OpenAI API error ({e.code}): {error_body}")
+            except URLError as e:
+                raise NetworkError(f"Network error: {e.reason}")
+            except Exception as e:
+                raise LLMProviderError(f"Unexpected error: {e}")
+        
+        raise RateLimitError("OpenAI rate limit exceeded after retries.")
     
     def get_models(self) -> List[ModelInfo]:
         """Get available OpenAI models."""
@@ -249,7 +263,7 @@ class AnthropicProvider(LLMProvider):
     ]
     
     def _make_request(self, endpoint: str, data: Optional[Dict] = None) -> Dict:
-        """Make an HTTP request to Anthropic API."""
+        """Make an HTTP request to Anthropic API with rate limit retry."""
         if not self.api_key:
             raise AuthenticationError("Anthropic API key not set.")
             
@@ -260,28 +274,36 @@ class AnthropicProvider(LLMProvider):
             "Content-Type": "application/json",
         }
         
-        try:
-            if data:
-                body = json.dumps(data).encode('utf-8')
-                request = Request(url, data=body, headers=headers, method='POST')
-            else:
-                request = Request(url, headers=headers, method='GET')
-            
-            with urlopen(request, timeout=60) as response:
-                return json.loads(response.read().decode('utf-8'))
+        for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):
+            try:
+                if data:
+                    body = json.dumps(data).encode('utf-8')
+                    request = Request(url, data=body, headers=headers, method='POST')
+                else:
+                    request = Request(url, headers=headers, method='GET')
                 
-        except HTTPError as e:
-            if e.code == 401:
-                raise AuthenticationError("Invalid Anthropic API key.")
-            elif e.code == 429:
-                raise RateLimitError("Anthropic rate limit exceeded.")
-            else:
-                error_body = e.read().decode('utf-8') if e.readable() else str(e)
-                raise LLMProviderError(f"Anthropic API error ({e.code}): {error_body}")
-        except URLError as e:
-            raise NetworkError(f"Network error: {e.reason}")
-        except Exception as e:
-            raise LLMProviderError(f"Unexpected error: {e}")
+                with urlopen(request, timeout=60) as response:
+                    return json.loads(response.read().decode('utf-8'))
+                    
+            except HTTPError as e:
+                if e.code == 401:
+                    raise AuthenticationError("Invalid Anthropic API key.")
+                elif e.code == 429:
+                    if attempt < RATE_LIMIT_MAX_RETRIES:
+                        delay = min(RATE_LIMIT_BASE_DELAY * (2 ** attempt), RATE_LIMIT_MAX_DELAY)
+                        logger.warning(f"Rate limit hit, waiting {delay:.1f}s before retry ({attempt + 1}/{RATE_LIMIT_MAX_RETRIES})...")
+                        time.sleep(delay)
+                        continue
+                    raise RateLimitError(f"Anthropic rate limit exceeded after {RATE_LIMIT_MAX_RETRIES} retries.")
+                else:
+                    error_body = e.read().decode('utf-8') if e.readable() else str(e)
+                    raise LLMProviderError(f"Anthropic API error ({e.code}): {error_body}")
+            except URLError as e:
+                raise NetworkError(f"Network error: {e.reason}")
+            except Exception as e:
+                raise LLMProviderError(f"Unexpected error: {e}")
+        
+        raise RateLimitError("Anthropic rate limit exceeded after retries.")
     
     def get_models(self) -> List[ModelInfo]:
         """Get available Claude models."""
@@ -349,13 +371,16 @@ class GoogleProvider(LLMProvider):
     API_URL = "https://generativelanguage.googleapis.com/v1beta"
     
     DEFAULT_MODELS = [
-        ModelInfo(id="gemini-1.5-pro", name="Gemini 1.5 Pro", provider="google", max_context_length=1000000),
-        ModelInfo(id="gemini-1.5-flash", name="Gemini 1.5 Flash", provider="google", max_context_length=1000000),
-        ModelInfo(id="gemini-1.0-pro", name="Gemini 1.0 Pro", provider="google", max_context_length=32000),
+        ModelInfo(id="gemini-2.5-flash-lite", name="Gemini 2.5 Flash Lite", provider="google", max_context_length=1000000),
+        ModelInfo(id="gemini-3-flash", name="Gemini 3 Flash", provider="google", max_context_length=1000000),
+        ModelInfo(id="gemini-2.5-flash", name="Gemini 2.5 Flash", provider="google", max_context_length=1000000),
     ]
     
+    # Fallback order when a model hits rate limit
+    FALLBACK_MODELS = ["gemini-2.5-flash-lite", "gemini-3-flash", "gemini-2.5-flash"]
+    
     def _make_request(self, endpoint: str, data: Optional[Dict] = None, method: str = "POST") -> Dict:
-        """Make an HTTP request to Google AI API."""
+        """Make an HTTP request to Google AI API with rate limit retry."""
         if not self.api_key:
             raise AuthenticationError("Google API key not set.")
             
@@ -364,28 +389,41 @@ class GoogleProvider(LLMProvider):
             "Content-Type": "application/json",
         }
         
-        try:
-            if data:
-                body = json.dumps(data).encode('utf-8')
-                request = Request(url, data=body, headers=headers, method=method)
-            else:
-                request = Request(url, headers=headers, method='GET')
-            
-            with urlopen(request, timeout=60) as response:
-                return json.loads(response.read().decode('utf-8'))
+        last_error = None
+        for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):
+            try:
+                if data:
+                    body = json.dumps(data).encode('utf-8')
+                    request = Request(url, data=body, headers=headers, method=method)
+                else:
+                    request = Request(url, headers=headers, method='GET')
                 
-        except HTTPError as e:
-            if e.code == 401 or e.code == 403:
-                raise AuthenticationError("Invalid Google API key.")
-            elif e.code == 429:
-                raise RateLimitError("Google rate limit exceeded.")
-            else:
-                error_body = e.read().decode('utf-8') if e.readable() else str(e)
-                raise LLMProviderError(f"Google API error ({e.code}): {error_body}")
-        except URLError as e:
-            raise NetworkError(f"Network error: {e.reason}")
-        except Exception as e:
-            raise LLMProviderError(f"Unexpected error: {e}")
+                with urlopen(request, timeout=60) as response:
+                    return json.loads(response.read().decode('utf-8'))
+                    
+            except HTTPError as e:
+                if e.code == 401 or e.code == 403:
+                    raise AuthenticationError("Invalid Google API key.")
+                elif e.code == 429:
+                    # Rate limit - retry with exponential backoff
+                    if attempt < RATE_LIMIT_MAX_RETRIES:
+                        delay = min(RATE_LIMIT_BASE_DELAY * (2 ** attempt), RATE_LIMIT_MAX_DELAY)
+                        logger.warning(f"Rate limit hit, waiting {delay:.1f}s before retry ({attempt + 1}/{RATE_LIMIT_MAX_RETRIES})...")
+                        time.sleep(delay)
+                        last_error = e
+                        continue
+                    else:
+                        raise RateLimitError(f"Google rate limit exceeded after {RATE_LIMIT_MAX_RETRIES} retries.")
+                else:
+                    error_body = e.read().decode('utf-8') if e.readable() else str(e)
+                    raise LLMProviderError(f"Google API error ({e.code}): {error_body}")
+            except URLError as e:
+                raise NetworkError(f"Network error: {e.reason}")
+            except Exception as e:
+                raise LLMProviderError(f"Unexpected error: {e}")
+        
+        # Should not reach here, but just in case
+        raise RateLimitError("Google rate limit exceeded after retries.")
     
     def get_models(self) -> List[ModelInfo]:
         """Get available Gemini models from API."""
@@ -439,11 +477,11 @@ class GoogleProvider(LLMProvider):
     def chat(
         self,
         user_message: str,
-        model: str = "gemini-1.5-flash",
+        model: str = "gemini-2.5-flash-lite",
         system_prompt: Optional[str] = None,
         **kwargs
     ) -> ChatCompletion:
-        """Send a chat message to Gemini."""
+        """Send a chat message to Gemini with automatic model fallback on rate limit."""
         if system_prompt:
             self.set_system_prompt(system_prompt)
         
@@ -474,149 +512,53 @@ class GoogleProvider(LLMProvider):
         if system_instruction:
             data["systemInstruction"] = {"parts": [{"text": system_instruction}]}
         
-        model_name = model or "gemini-1.5-flash"
-        response = self._make_request(f"/models/{model_name}:generateContent", data)
+        # Build list of models to try: requested model first, then fallbacks
+        model_name = model or "gemini-2.5-flash-lite"
+        models_to_try = [model_name]
+        for fallback in self.FALLBACK_MODELS:
+            if fallback not in models_to_try:
+                models_to_try.append(fallback)
         
-        # Extract content from Gemini response
-        candidates = response.get("candidates", [])
-        content = ""
-        if candidates:
-            parts = candidates[0].get("content", {}).get("parts", [])
-            for part in parts:
-                content += part.get("text", "")
-        
-        self._messages.append(Message(role="assistant", content=content))
-        
-        return ChatCompletion(
-            content=content,
-            model=model_name,
-            provider="google",
-            usage=response.get("usageMetadata", {}),
-            finish_reason=candidates[0].get("finishReason", "STOP") if candidates else "stop",
-        )
-
-
-class GPTRubProvider(LLMProvider):
-    """GPT@RUB provider (university API)."""
-    
-    name = "gptrub"
-    display_name = "GPT@RUB"
-    DEFAULT_API_URL = "https://gpt.ruhr-uni-bochum.de/external/v1"
-    
-    # Default models in case API call fails
-    DEFAULT_MODELS = [
-        ModelInfo(id="gpt-4.1-2025-04-14", name="GPT-4.1 (Latest)", provider="gptrub", max_context_length=128000),
-        ModelInfo(id="gpt-4o", name="GPT-4o", provider="gptrub", max_context_length=128000),
-        ModelInfo(id="gpt-4o-mini", name="GPT-4o Mini", provider="gptrub", max_context_length=128000),
-        ModelInfo(id="gpt-4-turbo", name="GPT-4 Turbo", provider="gptrub", max_context_length=128000),
-        ModelInfo(id="o1-mini", name="o1 Mini", provider="gptrub", max_context_length=128000),
-    ]
-    
-    def __init__(self, api_key: str = "", api_url: str = ""):
-        super().__init__(api_key)
-        self.api_url = (api_url or self.DEFAULT_API_URL).rstrip('/')
-    
-    def _make_request(self, endpoint: str, data: Optional[Dict] = None) -> Dict:
-        """Make an HTTP request to GPT@RUB API."""
-        if not self.api_key:
-            raise AuthenticationError("GPT@RUB access token not set.")
-            
-        url = f"{self.api_url}{endpoint}"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        
-        logger.debug(f"GPT@RUB request to: {url}")
-        
-        try:
-            if data:
-                body = json.dumps(data).encode('utf-8')
-                request = Request(url, data=body, headers=headers, method='POST')
-            else:
-                request = Request(url, headers=headers, method='GET')
-            
-            # Short timeout - fail fast if network unreachable (Increased to 30s for VPN)
-            with urlopen(request, timeout=30) as response:
-                return json.loads(response.read().decode('utf-8'))
+        last_error = None
+        for try_model in models_to_try:
+            try:
+                response = self._make_request(f"/models/{try_model}:generateContent", data)
                 
-        except HTTPError as e:
-            if e.code == 401:
-                raise AuthenticationError("Invalid GPT@RUB access token.")
-            elif e.code == 429:
-                raise RateLimitError("GPT@RUB rate limit exceeded (60 req/min).")
-            else:
-                error_body = e.read().decode('utf-8') if e.readable() else str(e)
-                raise LLMProviderError(f"GPT@RUB API error ({e.code}): {error_body}")
-        except URLError as e:
-            raise NetworkError(f"Network error: {e.reason}\nMake sure you are connected to RUB network or VPN.")
-        except Exception as e:
-            raise LLMProviderError(f"Unexpected error: {e}")
-    
-    def get_models(self) -> List[ModelInfo]:
-        """Get available GPT@RUB models."""
-        try:
-            response = self._make_request("/models")
-            models = []
-            
-            # API returns a list, or dict with data key
-            model_list = response if isinstance(response, list) else response.get("data", [])
-            
-            for model_data in model_list:
-                models.append(ModelInfo(
-                    id=model_data.get("id") or model_data.get("name", ""),
-                    name=model_data.get("name", model_data.get("id", "")),
-                    provider="gptrub",
-                    max_context_length=model_data.get("max_context_length", 4096),
-                ))
-            
-            if models:
-                return models
-        except Exception as e:
-            logger.warning(f"Failed to fetch GPT@RUB models: {e}")
+                # Extract content from Gemini response
+                candidates = response.get("candidates", [])
+                content = ""
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    for part in parts:
+                        content += part.get("text", "")
+                
+                self._messages.append(Message(role="assistant", content=content))
+                
+                if try_model != model_name:
+                    logger.info(f"Successfully fell back to model: {try_model}")
+                
+                return ChatCompletion(
+                    content=content,
+                    model=try_model,
+                    provider="google",
+                    usage=response.get("usageMetadata", {}),
+                    finish_reason=candidates[0].get("finishReason", "STOP") if candidates else "stop",
+                )
+                
+            except RateLimitError as e:
+                logger.warning(f"Model {try_model} rate limited, trying fallback...")
+                last_error = e
+                continue
+            except LLMProviderError as e:
+                # For non-rate-limit errors, don't try fallback
+                raise
         
-        # Return default models if API call fails
-        logger.info("Using default GPT@RUB model list")
-        return self.DEFAULT_MODELS.copy()
-    
-    def chat(
-        self,
-        user_message: str,
-        model: str = "gpt-4.1-2025-04-14",
-        system_prompt: Optional[str] = None,
-        **kwargs
-    ) -> ChatCompletion:
-        """Send a chat message to GPT@RUB."""
-        if system_prompt:
-            self.set_system_prompt(system_prompt)
-            
-        self._messages.append(Message(role="user", content=user_message))
-        
-        messages = [{"role": m.role, "content": m.content} for m in self._messages]
-        
-        data = {
-            "model": model or "gpt-4.1-2025-04-14",
-            "messages": messages,
-            "stream": False,  # Explicitly disable streaming
-            "temperature": kwargs.get("temperature", self.temperature),
-            "max_completion_tokens": kwargs.get("max_tokens", self.max_tokens),
-        }
-        
-        response = self._make_request("/chat/completions", data)
-        
-        choice = response.get("choices", [{}])[0]
-        message = choice.get("message", {})
-        content = message.get("content", "")
-        
-        self._messages.append(Message(role="assistant", content=content))
-        
-        return ChatCompletion(
-            content=content,
-            model=response.get("model", model),
-            provider="gptrub",
-            usage=response.get("usage", {}),
-            finish_reason=choice.get("finish_reason", "stop"),
-        )
+        # All models failed
+        # Remove the user message since we couldn't get a response
+        if self._messages and self._messages[-1].role == "user":
+            self._messages.pop()
+        raise RateLimitError(f"All models rate limited. Last error: {last_error}")
+
 
 
 # Provider registry
@@ -624,14 +566,12 @@ PROVIDERS: Dict[str, type] = {
     "openai": OpenAIProvider,
     "anthropic": AnthropicProvider,
     "google": GoogleProvider,
-    "gptrub": GPTRubProvider,
 }
 
 PROVIDER_DISPLAY_NAMES = {
     "openai": "OpenAI (ChatGPT)",
     "anthropic": "Anthropic (Claude)",
     "google": "Google (Gemini)",
-    "gptrub": "GPT@RUB",
 }
 
 
@@ -645,3 +585,4 @@ def get_provider(name: str, api_key: str = "", **kwargs) -> LLMProvider:
 def get_available_providers() -> List[str]:
     """Get list of available provider names."""
     return list(PROVIDERS.keys())
+

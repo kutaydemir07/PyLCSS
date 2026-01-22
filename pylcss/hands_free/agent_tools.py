@@ -13,6 +13,7 @@ Each tool has:
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 import logging
+from .tools.gear_tools import create_helical_gear
 
 if TYPE_CHECKING:
     from .command_dispatcher import CommandDispatcher
@@ -203,6 +204,22 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
             ToolParameter("filename", "string", "Output filename (optional)", required=False),
         ],
         handler=lambda data: command_dispatcher._cad_export(sync=True),
+        category="cad",
+    ))
+
+    registry.register(Tool(
+        name="create_helical_gear",
+        description="Create a helical gear (or spur gear). Generates a full CAD graph with correct tooth profile. Use this when asked for a 'gear' or 'gearbox'.",
+        parameters=[
+            ToolParameter("module", "number", "Gear module (size scaler). Default 1.0", required=False, default=1.0),
+            ToolParameter("teeth", "number", "Number of teeth. Default 20", required=False, default=20),
+            ToolParameter("width", "number", "Gear width. Default 10.0", required=False, default=10.0),
+            ToolParameter("helix_angle", "number", "Helix angle in degrees. 0 for spur gear. Default 20.0", required=False, default=20.0),
+            ToolParameter("pressure_angle", "number", "Pressure angle. Default 20.0", required=False, default=20.0),
+            ToolParameter("center_x", "number", "X Position center. Default 0.0", required=False, default=0.0),
+            ToolParameter("center_y", "number", "Y Position center. Default 0.0", required=False, default=0.0),
+        ],
+        handler=lambda data: command_dispatcher._build_node_graph(create_helical_gear(**data), sync=True),
         category="cad",
     ))
     

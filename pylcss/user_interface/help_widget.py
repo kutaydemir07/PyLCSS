@@ -326,7 +326,7 @@ class HelpWidget(QtWidgets.QWidget):
         <p>PyLCSS features a powerful LLM execution engine that can build systems for you.</p>
         <ol>
         <li><b>Activation:</b> Simply say your request (e.g., <i>"Create a red box"</i>) or ask a question.</li>
-        <li><b>Providers:</b> Configure your preferred AI provider (OpenAI, Claude, Gemini, GPT@RUB) in the Settings panel.</li>
+        <li><b>Providers:</b> Configure your preferred AI provider (OpenAI, Claude, Gemini) in the Settings panel.</li>
         <li><b>Capabilities:</b> The AI understands the full PyLCSS node library and can construct complex graphs, answer engineering questions, and control the UI.</li>
         <li><b>Privacy:</b> Securely encrypts your API keys locally.</li>
         </ol>

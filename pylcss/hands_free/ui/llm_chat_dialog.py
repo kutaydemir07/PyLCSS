@@ -277,7 +277,7 @@ class LLMChatDialog(QDialog):
     - Chat interface with message history
     - Thinking indicator while waiting for LLM
     - Action preview with confirmation
-    - Multi-provider support (OpenAI, Claude, Gemini, GPT@RUB)
+    - Multi-provider support (OpenAI, Claude, Gemini)
     - Model selection
     """
     
@@ -287,6 +287,8 @@ class LLMChatDialog(QDialog):
     # Internal signals for thread safety
     response_received = Signal(object)  # ChatCompletion
     error_occurred = Signal(Exception)
+    connection_success = Signal(object)  # (LLMProvider, List[ModelInfo])
+    connection_failed = Signal(str)  # Error message
     
     def __init__(
         self,
@@ -524,6 +526,8 @@ class LLMChatDialog(QDialog):
         # Check thread safety connections
         self.response_received.connect(self._process_response)
         self.error_occurred.connect(self._handle_error)
+        self.connection_success.connect(self._on_connection_success)
+        self.connection_failed.connect(self._on_connection_failed)
         
         
     def set_token(self, token: str):
@@ -544,51 +548,80 @@ class LLMChatDialog(QDialog):
         if not api_key:
             self._set_status("Please enter your API key", error=True)
             return
-            
+        
+        # Disable UI during connection
+        self.connect_btn.setEnabled(False)
+        self.connect_btn.setText("Connecting...")
         self._set_status("Connecting...")
         logger.info(f"LLM Dialog: Testing connection to {provider_name}...")
         
-        # Create provider and test connection
+        # Run connection in background thread
+        import threading
+        thread = threading.Thread(
+            target=self._connect_worker,
+            args=(provider_name, api_key),
+            daemon=True
+        )
+        thread.start()
+    
+    def _connect_worker(self, provider_name: str, api_key: str):
+        """Background worker for connection (runs in separate thread)."""
         try:
-            kwargs = {}
-            if provider_name == "gptrub":
-                kwargs["api_url"] = self._config.llm_control.gptrub_api_url
+            kwargs = {}            
+            provider = get_provider(provider_name, api_key, **kwargs)
             
-            self._provider = get_provider(provider_name, api_key, **kwargs)
-            
-            # Get models
-            models = self._provider.get_models()
+            # Get models (this is the slow network call)
+            models = provider.get_models()
             logger.info(f"LLM Dialog: Received {len(models)} models")
             
-            self.model_combo.clear()
-            for model in models:
-                display_name = model.name
-                self.model_combo.addItem(display_name, model.id)
-            
-            # Select first model or previously selected
-            if self.model_combo.count() > 0:
-                self.model_combo.setCurrentIndex(0)
-                
-            # Set system prompt
-            self._provider.set_system_prompt(self.interpreter.get_system_prompt())
-            
-            # Save encrypted API key to config
-            encrypted_key = self._secure_storage.encrypt(api_key)
-            self._config.llm_control.set_api_key_for_provider(provider_name, encrypted_key)
-            self._config.llm_control.provider = provider_name
-            self._config.save()
-                    
-            self._set_status(f"Connected! {len(models)} models available")
-            self.connect_btn.setText("✓ Connected")
-            self.connect_btn.setStyleSheet("background-color: #4a7a4a;")
-            logger.info("LLM Dialog: Connection successful")
+            # Emit success signal back to main thread
+            self.connection_success.emit((provider, models, provider_name, api_key))
             
         except LLMProviderError as e:
             logger.error(f"LLM Dialog: Connection failed: {e}")
-            self._set_status(str(e), error=True)
+            self.connection_failed.emit(str(e))
         except Exception as e:
             logger.error(f"LLM Dialog: Connection failed: {e}")
-            self._set_status(f"Error: {str(e)[:50]}", error=True)
+            self.connection_failed.emit(f"Error: {str(e)[:50]}")
+    
+    @Slot(object)
+    def _on_connection_success(self, result: tuple):
+        """Handle successful connection (called in main thread)."""
+        provider, models, provider_name, api_key = result
+        
+        self._provider = provider
+        
+        self.model_combo.clear()
+        for model in models:
+            display_name = model.name
+            self.model_combo.addItem(display_name, model.id)
+        
+        # Select first model or previously selected
+        if self.model_combo.count() > 0:
+            self.model_combo.setCurrentIndex(0)
+            
+        # Set system prompt
+        self._provider.set_system_prompt(self.interpreter.get_system_prompt())
+        
+        # Save encrypted API key to config
+        encrypted_key = self._secure_storage.encrypt(api_key)
+        self._config.llm_control.set_api_key_for_provider(provider_name, encrypted_key)
+        self._config.llm_control.provider = provider_name
+        self._config.save()
+                
+        self._set_status(f"Connected! {len(models)} models available")
+        self.connect_btn.setEnabled(True)
+        self.connect_btn.setText("✓ Connected")
+        self.connect_btn.setStyleSheet("background-color: #4a7a4a;")
+        logger.info("LLM Dialog: Connection successful")
+    
+    @Slot(str)
+    def _on_connection_failed(self, error_message: str):
+        """Handle failed connection (called in main thread)."""
+        self._set_status(error_message, error=True)
+        self.connect_btn.setEnabled(True)
+        self.connect_btn.setText("Connect")
+        self.connect_btn.setStyleSheet("")
             
     @Slot()
     def _on_send_clicked(self):

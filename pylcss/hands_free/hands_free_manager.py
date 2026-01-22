@@ -339,8 +339,6 @@ class HandsFreeManager(QObject):
         
         try:
             kwargs = {}
-            if provider_name == "gptrub":
-                kwargs["api_url"] = llm_config.gptrub_api_url
             
             self._llm_provider = get_provider(provider_name, api_key, **kwargs)
             self._llm_provider.temperature = llm_config.temperature

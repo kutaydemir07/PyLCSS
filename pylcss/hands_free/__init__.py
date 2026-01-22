@@ -6,7 +6,7 @@ Hands-Free Control System for PyLCSS.
 
 This module provides hands-free control capabilities using:
 - Offline speech recognition via Vosk for voice commands
-- LLM-powered assistant via GPT@RUB API for intelligent graph building
+- LLM-powered assistant for intelligent graph building
 - System control via PyAutoGUI for mouse/keyboard simulation
 
 Note: Camera-based head tracking has been removed.

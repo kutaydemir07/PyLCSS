@@ -1,0 +1,375 @@
+{
+    "variables": [
+        {
+            "name": "T_m",
+            "unit": "N*m",
+            "min": 1000.0,
+            "max": 4000.0,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "b_1",
+            "unit": "m",
+            "min": 0.01,
+            "max": 0.12,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "b_2",
+            "unit": "m",
+            "min": 0.01,
+            "max": 0.12,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "b_3",
+            "unit": "m",
+            "min": 0.01,
+            "max": 0.12,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "b_4",
+            "unit": "m",
+            "min": 0.01,
+            "max": 0.12,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "beta_1",
+            "unit": "grad",
+            "min": 0.0,
+            "max": 30.0,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "beta_2",
+            "unit": "grad",
+            "min": 0.0,
+            "max": 30.0,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "d_Ta",
+            "unit": "m",
+            "min": 0.65,
+            "max": 0.85,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "d_Tn",
+            "unit": "m",
+            "min": 0.8,
+            "max": 1.0,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "d_sh1",
+            "unit": "m",
+            "min": 0.02,
+            "max": 0.5,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "d_sh2",
+            "unit": "m",
+            "min": 0.02,
+            "max": 0.5,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "d_sh3",
+            "unit": "m",
+            "min": 0.02,
+            "max": 0.5,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "l_1",
+            "unit": "m",
+            "min": 0.05,
+            "max": 1.0,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "l_2",
+            "unit": "m",
+            "min": 0.05,
+            "max": 1.0,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "m_n1",
+            "unit": "m",
+            "min": 0.001,
+            "max": 0.016,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "m_n2",
+            "unit": "m",
+            "min": 0.001,
+            "max": 0.016,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "n_m",
+            "unit": "1/s",
+            "min": 0.0,
+            "max": 150.0,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "s_1",
+            "unit": "m",
+            "min": 0.01,
+            "max": 0.4,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "s_2",
+            "unit": "m",
+            "min": 0.01,
+            "max": 0.4,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "sigma_Flim",
+            "unit": "N/m^2",
+            "min": 300000000.0,
+            "max": 600000000.0,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "theta_1",
+            "unit": "grad",
+            "min": -100.0,
+            "max": 100.0,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "theta_2",
+            "unit": "grad",
+            "min": -100.0,
+            "max": 100.0,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "x_G",
+            "unit": "m",
+            "min": 0.005,
+            "max": 0.2,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "x_L",
+            "unit": "m",
+            "min": 0.005,
+            "max": 0.2,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "z_1",
+            "unit": "-",
+            "min": 10.0,
+            "max": 200.0,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "z_2",
+            "unit": "-",
+            "min": 10.0,
+            "max": 200.0,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "z_3",
+            "unit": "-",
+            "min": 10.0,
+            "max": 200.0,
+            "type": "continuous",
+            "granularity": 1.0
+        },
+        {
+            "name": "z_4",
+            "unit": "-",
+            "min": 10.0,
+            "max": 200.0,
+            "type": "continuous",
+            "granularity": 1.0
+        }
+    ],
+    "objectives": [],
+    "constraints": [
+        {
+            "name": "L_1",
+            "unit": "-",
+            "min": 0.0,
+            "max": 0.3,
+            "minimize": false,
+            "maximize": false,
+            "weight": 1.0
+        },
+        {
+            "name": "L_2",
+            "unit": "-",
+            "min": 0.0,
+            "max": 0.3,
+            "minimize": false,
+            "maximize": false,
+            "weight": 1.0
+        },
+        {
+            "name": "S_F1",
+            "unit": "-",
+            "min": 1.0,
+            "max": 1.6,
+            "minimize": false,
+            "maximize": false,
+            "weight": 1.0
+        },
+        {
+            "name": "S_F2",
+            "unit": "-",
+            "min": 1.0,
+            "max": 1.6,
+            "minimize": false,
+            "maximize": false,
+            "weight": 1.0
+        },
+        {
+            "name": "S_F3",
+            "unit": "-",
+            "min": 1.0,
+            "max": 1.6,
+            "minimize": false,
+            "maximize": false,
+            "weight": 1.0
+        },
+        {
+            "name": "S_F4",
+            "unit": "-",
+            "min": 1.0,
+            "max": 1.6,
+            "minimize": false,
+            "maximize": false,
+            "weight": 1.0
+        },
+        {
+            "name": "W_1",
+            "unit": "-",
+            "min": 1.0,
+            "max": Infinity,
+            "minimize": false,
+            "maximize": false,
+            "weight": 1.0
+        },
+        {
+            "name": "W_2",
+            "unit": "-",
+            "min": 1.0,
+            "max": Infinity,
+            "minimize": false,
+            "maximize": false,
+            "weight": 1.0
+        },
+        {
+            "name": "W_3",
+            "unit": "-",
+            "min": 6.0,
+            "max": 8.0,
+            "minimize": false,
+            "maximize": false,
+            "weight": 1.0
+        },
+        {
+            "name": "a_x",
+            "unit": "m",
+            "min": 0.0,
+            "max": 1.0,
+            "minimize": false,
+            "maximize": false,
+            "weight": 1.0
+        },
+        {
+            "name": "a_z",
+            "unit": "m",
+            "min": -1.0,
+            "max": 1.0,
+            "minimize": false,
+            "maximize": false,
+            "weight": 1.0
+        },
+        {
+            "name": "s_H",
+            "unit": "m",
+            "min": 0.05,
+            "max": 1.0,
+            "minimize": false,
+            "maximize": false,
+            "weight": 1.0
+        },
+        {
+            "name": "sigma_Fzul",
+            "unit": "N/m^2",
+            "min": 310000000.0,
+            "max": 525000000.0,
+            "minimize": false,
+            "maximize": false,
+            "weight": 1.0
+        },
+        {
+            "name": "v_fzg",
+            "unit": "m/s",
+            "min": 22.0,
+            "max": 83.0,
+            "minimize": false,
+            "maximize": false,
+            "weight": 1.0
+        }
+    ],
+    "settings": {
+        "maxiter": 5000,
+        "tol": 0.0001,
+        "atol": 1e-08,
+        "scaling": true,
+        "objective_scale": 1.0,
+        "maxfun": 15000,
+        "popsize": 15,
+        "mutation": [
+            0.5,
+            1.0
+        ],
+        "recombination": 0.7,
+        "strategy": "best1bin",
+        "optimizer_name": "NGOpt",
+        "num_workers": 1,
+        "method": "SLSQP"
+    }
+}

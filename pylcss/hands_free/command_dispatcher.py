@@ -537,25 +537,56 @@ class CommandDispatcher:
                     return
                     
                 try:
-                    # 1. Check for Enum/Combo mismatch (Case Insensitive Fix)
+                    # 0. Property Name Normalization (Case Insensitive)
+                    # Find the actual property name if it exists
+                    actual_prop_name = prop_name
+                    node_props = node.properties()
+                    if prop_name not in node_props:
+                        for p in node_props:
+                            if p.lower() == prop_name.lower():
+                                actual_prop_name = p
+                                break
+                    
+                    # 1. Value Normalization (Enum/Combo mismatch & Synonyms)
                     ENUM_MAP = {
-                        "operation": ["Union", "Cut", "Intersect"],
-                        "selector_type": ["Direction", "NearestToPoint", "Index", "Largest Area", "Tag"],
+                        "operation": {
+                            "targets": ["Union", "Cut", "Intersect"],
+                            "synonyms": {
+                                "difference": "Cut", "subtract": "Cut", "subtraction": "Cut", 
+                                "add": "Union", "addition": "Union", 
+                                "intersection": "Intersect"
+                            }
+                        },
+                        "selector_type": {
+                            "targets": ["Direction", "NearestToPoint", "Index", "Largest Area", "Tag"],
+                             "synonyms": {}
+                        },
                     }
                     
                     final_val = prop_val
-                    if prop_name in ENUM_MAP and isinstance(prop_val, str):
-                        options = ENUM_MAP[prop_name]
-                        for opt in options:
-                            if opt.lower() == prop_val.lower():
+                    
+                    if actual_prop_name in ENUM_MAP and isinstance(prop_val, str):
+                        config = ENUM_MAP[actual_prop_name]
+                        val_lower = prop_val.lower()
+                        
+                        # Check direct match (case-insensitive)
+                        found = False
+                        for opt in config["targets"]:
+                            if opt.lower() == val_lower:
                                 final_val = opt
+                                found = True
                                 break
+                        
+                        # Check synonyms
+                        if not found and val_lower in config["synonyms"]:
+                            final_val = config["synonyms"][val_lower]
                     
                     # 2. Try Setting Property
-                    if prop_name in node.properties():
-                        node.set_property(prop_name, final_val)
+                    if actual_prop_name in node_props:
+                        node.set_property(actual_prop_name, final_val)
                     else:
                         # 3. Property Missing -> Check for Port Mismatch (Auto-fix)
+                        # Use the original prop_name for checking input ports as they might differ
                         input_port = node.get_input(prop_name)
                         if input_port and isinstance(prop_val, str):
                             logger.info(f"Auto-fixing LLM error: Converting property '{prop_name}'='{prop_val}' to connection")

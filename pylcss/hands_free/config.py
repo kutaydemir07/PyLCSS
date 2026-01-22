@@ -54,25 +54,17 @@ class LLMControlConfig:
     """Configuration for LLM assistant control with multi-provider support."""
     enabled: bool = True
     
-    # Provider selection: openai, anthropic, google, gptrub
-    provider: str = "gptrub"
+    # Provider selection: openai, anthropic, google
+    provider: str = "google"
     
     # Encrypted API keys (stored encrypted in settings.json)
     openai_api_key: str = ""
     anthropic_api_key: str = ""
     google_api_key: str = ""
-    gptrub_api_key: str = ""
-    
-    # GPT@RUB specific
-    gptrub_api_url: str = "https://gpt.ruhr-uni-bochum.de/external/v1"
-    
-    # Legacy field for backwards compatibility
-    access_token: str = ""
-    api_url: str = "https://gpt.ruhr-uni-bochum.de/external/v1"
     
     # Model selection (per provider, use selected_model for active)
     selected_model: str = ""
-    model: str = "gpt-4.1-2025-04-14"  # Legacy
+    model: str = "gemini-2.5-flash-lite"  # Updated default
     
     # Generation settings
     auto_execute: bool = False  # Require confirmation before executing actions
@@ -97,7 +89,6 @@ class LLMControlConfig:
             "openai": self.openai_api_key,
             "anthropic": self.anthropic_api_key,
             "google": self.google_api_key,
-            "gptrub": self.gptrub_api_key or self.access_token,
         }
         return key_map.get(provider, "")
     
@@ -109,9 +100,6 @@ class LLMControlConfig:
             self.anthropic_api_key = key
         elif provider == "google":
             self.google_api_key = key
-        elif provider == "gptrub":
-            self.gptrub_api_key = key
-            self.access_token = key  # Backwards compatibility
     
 
 @dataclass
@@ -176,7 +164,20 @@ class HandsFreeConfig:
 
             # Load LLM config
             llm_data = data.get('llm_control', {})
-
+            
+            # Validate provider - ensure it is one of the supported ones
+            valid_providers = ['openai', 'anthropic', 'google']
+            loaded_provider = llm_data.get('provider', 'google')
+            if loaded_provider not in valid_providers:
+                llm_data['provider'] = 'google'
+            
+            # Generic filtering of unknown keys to prevent __init__ errors
+            valid_keys = set(LLMControlConfig.__dataclass_fields__.keys())
+            keys_to_remove = [k for k in llm_data.keys() if k not in valid_keys]
+            
+            for k in keys_to_remove:
+                del llm_data[k]
+            
             config = cls(
                 head_tracking=HeadTrackingConfig(**data.get('head_tracking', {})),
                 voice_control=VoiceControlConfig(**vc_data),

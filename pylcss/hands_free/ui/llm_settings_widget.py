@@ -50,7 +50,7 @@ class LLMSettingsWidget(QWidget):
     LLM Settings panel for the voice control popup.
     
     Features:
-    - Provider dropdown (OpenAI, Claude, Gemini, GPT@RUB)
+    - Provider dropdown (OpenAI, Claude, Gemini)
     - API key input with encryption
     - Model dropdown (dynamically populated)
     - Temperature and max tokens controls
@@ -379,8 +379,7 @@ class LLMSettingsWidget(QWidget):
         # Create provider
         try:
             kwargs = {}
-            if provider_name == "gptrub":
-                kwargs["api_url"] = self.config.gptrub_api_url
+
             
             self._current_provider = get_provider(provider_name, api_key, **kwargs)
             
@@ -509,8 +508,7 @@ class LLMSettingsWidget(QWidget):
         
         try:
             kwargs = {}
-            if provider_name == "gptrub":
-                kwargs["api_url"] = self.config.gptrub_api_url
+
             
             self._current_provider = get_provider(provider_name, api_key, **kwargs)
             self._current_provider.temperature = self.config.temperature

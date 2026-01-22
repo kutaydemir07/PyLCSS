@@ -1,0 +1,5497 @@
+{
+  "product_name": "Two-Stage Gearbox (Modular)",
+  "systems": [
+    {
+      "name": "01_Geometry_M0001",
+      "graph": {
+        "graph": {
+          "layout_direction": 0,
+          "acyclic": true,
+          "pipe_collision": false,
+          "pipe_slicing": true,
+          "pipe_style": 1,
+          "accept_connection_types": "{}",
+          "reject_connection_types": "{}"
+        },
+        "nodes": {
+          "0x207057c1eb0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -294.8423997003421,
+              -33.00864191781041
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_1",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x207057c2690": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              150.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_2",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x207057c2db0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_3",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -295.7631463882954,
+              300.00000000000006
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_3",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_3",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x207057c81a0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_4",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              450.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_4",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_4",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x207057c8a10": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "m_n1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 221.171875,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              600.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "m_n1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "m_n1",
+              "unit": "m",
+              "min": "0.001",
+              "max": "0.016"
+            }
+          },
+          "0x207057c94c0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "m_n2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 221.171875,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              750.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "m_n2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "m_n2",
+              "unit": "m",
+              "min": "0.001",
+              "max": "0.016"
+            }
+          },
+          "0x207057c2780": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "beta_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 227.0,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              900.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "beta_1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "beta_1",
+              "unit": "grad",
+              "min": "0",
+              "max": "30"
+            }
+          },
+          "0x207057caa20": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "beta_2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 227.0,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              1050.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "beta_2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "beta_2",
+              "unit": "grad",
+              "min": "0",
+              "max": "30"
+            }
+          },
+          "0x207057cb3e0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "theta_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 230.484375,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              1253.2167160812323
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "theta_1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "theta_1",
+              "unit": "grad",
+              "min": "-100",
+              "max": "100"
+            }
+          },
+          "0x207057cbb30": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "theta_2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 230.484375,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              1472.6940954095076
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "theta_2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "theta_2",
+              "unit": "grad",
+              "min": "-100",
+              "max": "100"
+            }
+          },
+          "0x207057d0230": {
+            "type_": "com.pfd.custom_block.CustomBlockNode",
+            "icon": null,
+            "name": "block_0x228104d2710",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 458.296875,
+            "height": 552.0,
+            "pos": [
+              300.0,
+              600.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "z_1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "z_2",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "z_3",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "z_4",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "m_n1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "m_n2",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "beta_1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "beta_2",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "theta_1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "theta_2",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [
+              {
+                "name": "a_z",
+                "multi_connection": true,
+                "display_name": true
+              },
+              {
+                "name": "a_x",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "func_name": "block_0x228104d2710",
+              "num_inputs": "10",
+              "num_outputs": "2",
+              "surrogate_controls": false,
+              "surrogate_model_path": "",
+              "use_surrogate": false,
+              "surrogate_status": "Not Trained",
+              "surrogate_train_trigger": 0.0,
+              "code_content": "import numpy as np\n# Helper\ndef cosd(x): return np.cos(np.deg2rad(x))\ndef sind(x): return np.sin(np.deg2rad(x))\n\n# Discretization\nz_1 = np.floor(z_1)\nz_2 = np.floor(z_2)\nz_3 = np.floor(z_3)\nz_4 = np.floor(z_4)\nm_n1 = np.floor(2000 * m_n1) / 2000\nm_n2 = np.floor(2000 * m_n2) / 2000\n\nd_1 = z_1 * m_n1 / cosd(beta_1)\nd_2 = z_2 * m_n1 / cosd(beta_1)\nd_3 = z_3 * m_n2 / cosd(beta_2)\nd_4 = z_4 * m_n2 / cosd(beta_2)\n\n# FIX: Corrected assignment from a_z to a_x for the horizontal component\na_x = cosd(theta_1) * (d_1 + d_2) / 2 + cosd(theta_2) * (d_3 + d_4) / 2\na_z = sind(theta_1) * (d_1 + d_2) / 2 + sind(theta_2) * (d_3 + d_4) / 2"
+            }
+          },
+          "0x207057d2150": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "a_x",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.203125,
+            "height": 331.5,
+            "pos": [
+              907.0,
+              237.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "a_x",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "a_x",
+              "unit": "m",
+              "req_min": "0",
+              "req_max": "1",
+              "minimize": false,
+              "maximize": false
+            }
+          },
+          "0x207057d2ea0": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "a_z",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.125,
+            "height": 331.5,
+            "pos": [
+              900.0,
+              600.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "a_z",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "a_z",
+              "unit": "m",
+              "req_min": "-1",
+              "req_max": "1",
+              "minimize": false,
+              "maximize": false
+            }
+          }
+        },
+        "connections": [
+          {
+            "out": [
+              "0x207057c1eb0",
+              "z_1"
+            ],
+            "in": [
+              "0x207057d0230",
+              "z_1"
+            ]
+          },
+          {
+            "out": [
+              "0x207057c2690",
+              "z_2"
+            ],
+            "in": [
+              "0x207057d0230",
+              "z_2"
+            ]
+          },
+          {
+            "out": [
+              "0x207057c2db0",
+              "z_3"
+            ],
+            "in": [
+              "0x207057d0230",
+              "z_3"
+            ]
+          },
+          {
+            "out": [
+              "0x207057c81a0",
+              "z_4"
+            ],
+            "in": [
+              "0x207057d0230",
+              "z_4"
+            ]
+          },
+          {
+            "out": [
+              "0x207057c8a10",
+              "m_n1"
+            ],
+            "in": [
+              "0x207057d0230",
+              "m_n1"
+            ]
+          },
+          {
+            "out": [
+              "0x207057c94c0",
+              "m_n2"
+            ],
+            "in": [
+              "0x207057d0230",
+              "m_n2"
+            ]
+          },
+          {
+            "out": [
+              "0x207057c2780",
+              "beta_1"
+            ],
+            "in": [
+              "0x207057d0230",
+              "beta_1"
+            ]
+          },
+          {
+            "out": [
+              "0x207057caa20",
+              "beta_2"
+            ],
+            "in": [
+              "0x207057d0230",
+              "beta_2"
+            ]
+          },
+          {
+            "out": [
+              "0x207057cb3e0",
+              "theta_1"
+            ],
+            "in": [
+              "0x207057d0230",
+              "theta_1"
+            ]
+          },
+          {
+            "out": [
+              "0x207057cbb30",
+              "theta_2"
+            ],
+            "in": [
+              "0x207057d0230",
+              "theta_2"
+            ]
+          },
+          {
+            "out": [
+              "0x207057d0230",
+              "a_z"
+            ],
+            "in": [
+              "0x207057d2ea0",
+              "a_z"
+            ]
+          },
+          {
+            "out": [
+              "0x207057d0230",
+              "a_x"
+            ],
+            "in": [
+              "0x207057d2150",
+              "a_x"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "02_Clearance_M0002",
+      "graph": {
+        "graph": {
+          "layout_direction": 0,
+          "acyclic": true,
+          "pipe_collision": false,
+          "pipe_slicing": true,
+          "pipe_style": 1,
+          "accept_connection_types": "{}",
+          "reject_connection_types": "{}"
+        },
+        "nodes": {
+          "0x207057d0080": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "d_Ta",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 216.140625,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              0.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "d_Ta",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "d_Ta",
+              "unit": "m",
+              "min": "0.65",
+              "max": "0.85"
+            }
+          },
+          "0x2070576cad0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              100.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_1",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x207057c3c20": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              200.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_2",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x207057cba40": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_3",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              300.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_3",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_3",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x20705765eb0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_4",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              400.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_4",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_4",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x20705766cc0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "beta_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 227.0,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              500.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "beta_1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "beta_1",
+              "unit": "grad",
+              "min": "0",
+              "max": "30"
+            }
+          },
+          "0x207242ad3a0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "beta_2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 227.0,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              600.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "beta_2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "beta_2",
+              "unit": "grad",
+              "min": "0",
+              "max": "30"
+            }
+          },
+          "0x207242ace30": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "theta_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 230.484375,
+            "height": 249.60000000000002,
+            "pos": [
+              -483.5626457984124,
+              564.9503391625964
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "theta_1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "theta_1",
+              "unit": "grad",
+              "min": "-100",
+              "max": "100"
+            }
+          },
+          "0x207242ac860": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "theta_2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 230.484375,
+            "height": 249.60000000000002,
+            "pos": [
+              -459.9617341957594,
+              691.1735742766556
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "theta_2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "theta_2",
+              "unit": "grad",
+              "min": "-100",
+              "max": "100"
+            }
+          },
+          "0x207057ca810": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "x_L",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 209.78125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              900.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "x_L",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "x_L",
+              "unit": "m",
+              "min": "0.005",
+              "max": "0.2"
+            }
+          },
+          "0x207242ad820": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "x_G",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 212.140625,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              1000.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "x_G",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "x_G",
+              "unit": "m",
+              "min": "0.005",
+              "max": "0.2"
+            }
+          },
+          "0x207242adee0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "m_n1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 221.171875,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              1100.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "m_n1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "m_n1",
+              "unit": "m",
+              "min": "0.001",
+              "max": "0.016"
+            }
+          },
+          "0x207242ae600": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "m_n2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 221.171875,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              1200.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "m_n2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "m_n2",
+              "unit": "m",
+              "min": "0.001",
+              "max": "0.016"
+            }
+          },
+          "0x207242aef60": {
+            "type_": "com.pfd.custom_block.CustomBlockNode",
+            "icon": null,
+            "name": "block_0x228169f42d0",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 455.8125,
+            "height": 552.0,
+            "pos": [
+              300.0,
+              500.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "d_Ta",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "z_1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "z_2",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "z_3",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "z_4",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "beta_1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "beta_2",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "theta_1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "theta_2",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "x_L",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "x_G",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "m_n1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "m_n2",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [
+              {
+                "name": "s_H",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "func_name": "block_0x228169f42d0",
+              "num_inputs": "13",
+              "num_outputs": "1",
+              "surrogate_controls": false,
+              "surrogate_model_path": "",
+              "use_surrogate": false,
+              "surrogate_status": "Not Trained",
+              "surrogate_train_trigger": 0.0,
+              "code_content": "import numpy as np\ndef cosd(x): return np.cos(np.deg2rad(x))\ndef sind(x): return np.sin(np.deg2rad(x))\n\n# Discretization\nz_1 = np.floor(z_1)\nz_2 = np.floor(z_2)\nz_3 = np.floor(z_3)\nz_4 = np.floor(z_4)\nm_n1 = np.floor(2000 * m_n1) / 2000\nm_n2 = np.floor(2000 * m_n2) / 2000\n\nd_1 = z_1 * m_n1 / cosd(beta_1)\nd_2 = z_2 * m_n1 / cosd(beta_1)\nd_3 = z_3 * m_n2 / cosd(beta_2)\nd_4 = z_4 * m_n2 / cosd(beta_2)\n\nh_a1 = m_n1\nh_a2 = m_n2\n\nval1 = -d_1/2 - h_a1\nval2 = sind(theta_1)*(d_1+d_2)/2 - d_2/2 - h_a1\nval3 = sind(theta_1)*(d_1+d_2)/2 - d_3/2 - h_a2\nval4 = (sind(theta_1)*(d_1+d_2)/2 + sind(theta_2)*(d_3+d_4)/2) - d_4/2 - h_a2\n\nDDAUL = np.minimum(np.minimum(val1, val2), np.minimum(val3, val4))\nBoden = -(sind(theta_1)*(d_1+d_2)/2 + sind(theta_2)*(d_3+d_4) - d_Ta/2)\nh_Um = -DDAUL + x_L + x_G\ns_H = Boden - h_Um"
+            }
+          },
+          "0x207242afa40": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "s_H",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 212.015625,
+            "height": 331.5,
+            "pos": [
+              900.0,
+              500.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "s_H",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "s_H",
+              "unit": "m",
+              "req_min": "0.05",
+              "req_max": "1",
+              "minimize": false,
+              "maximize": false
+            }
+          }
+        },
+        "connections": [
+          {
+            "out": [
+              "0x207057d0080",
+              "d_Ta"
+            ],
+            "in": [
+              "0x207242aef60",
+              "d_Ta"
+            ]
+          },
+          {
+            "out": [
+              "0x2070576cad0",
+              "z_1"
+            ],
+            "in": [
+              "0x207242aef60",
+              "z_1"
+            ]
+          },
+          {
+            "out": [
+              "0x207057c3c20",
+              "z_2"
+            ],
+            "in": [
+              "0x207242aef60",
+              "z_2"
+            ]
+          },
+          {
+            "out": [
+              "0x207057cba40",
+              "z_3"
+            ],
+            "in": [
+              "0x207242aef60",
+              "z_3"
+            ]
+          },
+          {
+            "out": [
+              "0x20705765eb0",
+              "z_4"
+            ],
+            "in": [
+              "0x207242aef60",
+              "z_4"
+            ]
+          },
+          {
+            "out": [
+              "0x20705766cc0",
+              "beta_1"
+            ],
+            "in": [
+              "0x207242aef60",
+              "beta_1"
+            ]
+          },
+          {
+            "out": [
+              "0x207242ad3a0",
+              "beta_2"
+            ],
+            "in": [
+              "0x207242aef60",
+              "beta_2"
+            ]
+          },
+          {
+            "out": [
+              "0x207242ace30",
+              "theta_1"
+            ],
+            "in": [
+              "0x207242aef60",
+              "theta_1"
+            ]
+          },
+          {
+            "out": [
+              "0x207242ac860",
+              "theta_2"
+            ],
+            "in": [
+              "0x207242aef60",
+              "theta_2"
+            ]
+          },
+          {
+            "out": [
+              "0x207057ca810",
+              "x_L"
+            ],
+            "in": [
+              "0x207242aef60",
+              "x_L"
+            ]
+          },
+          {
+            "out": [
+              "0x207242ad820",
+              "x_G"
+            ],
+            "in": [
+              "0x207242aef60",
+              "x_G"
+            ]
+          },
+          {
+            "out": [
+              "0x207242adee0",
+              "m_n1"
+            ],
+            "in": [
+              "0x207242aef60",
+              "m_n1"
+            ]
+          },
+          {
+            "out": [
+              "0x207242ae600",
+              "m_n2"
+            ],
+            "in": [
+              "0x207242aef60",
+              "m_n2"
+            ]
+          },
+          {
+            "out": [
+              "0x207242aef60",
+              "s_H"
+            ],
+            "in": [
+              "0x207242afa40",
+              "s_H"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "03_Kinematics_M0003",
+      "graph": {
+        "graph": {
+          "layout_direction": 0,
+          "acyclic": true,
+          "pipe_collision": false,
+          "pipe_slicing": true,
+          "pipe_style": 1,
+          "accept_connection_types": "{}",
+          "reject_connection_types": "{}"
+        },
+        "nodes": {
+          "0x207242ad5b0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "n_m",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 215.25,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              0.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "n_m",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "n_m",
+              "unit": "1/s",
+              "min": "0",
+              "max": "150"
+            }
+          },
+          "0x20705711a00": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              100.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_1",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x20724361f10": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              200.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_2",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x207243617f0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_3",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              300.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_3",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_3",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x20724368050": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_4",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              400.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_4",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_4",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x207243685c0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "d_Tn",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 217.046875,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              500.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "d_Tn",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "d_Tn",
+              "unit": "m",
+              "min": "0.8",
+              "max": "1.0"
+            }
+          },
+          "0x207243608f0": {
+            "type_": "com.pfd.custom_block.CustomBlockNode",
+            "icon": null,
+            "name": "block_0x228169f4f50",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 452.78125,
+            "height": 552.0,
+            "pos": [
+              300.0,
+              250.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "n_m",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "z_1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "z_2",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "z_3",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "z_4",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "d_Tn",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [
+              {
+                "name": "v_fzg",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "func_name": "block_0x228169f4f50",
+              "num_inputs": "6",
+              "num_outputs": "1",
+              "surrogate_controls": false,
+              "surrogate_model_path": "",
+              "use_surrogate": false,
+              "surrogate_status": "Not Trained",
+              "surrogate_train_trigger": 0.0,
+              "code_content": "import numpy as np\n# Discretization\nz_1 = np.floor(z_1)\nz_2 = np.floor(z_2)\nz_3 = np.floor(z_3)\nz_4 = np.floor(z_4)\n\ni_ratio = (z_2 * z_4) / (z_1 * z_3)\nv_fzg = np.pi * n_m * d_Tn / i_ratio"
+            }
+          },
+          "0x20724362840": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "v_fzg",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 219.703125,
+            "height": 331.5,
+            "pos": [
+              900.0,
+              250.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "v_fzg",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "v_fzg",
+              "unit": "m/s",
+              "req_min": "22",
+              "req_max": "83",
+              "minimize": false,
+              "maximize": false
+            }
+          }
+        },
+        "connections": [
+          {
+            "out": [
+              "0x207242ad5b0",
+              "n_m"
+            ],
+            "in": [
+              "0x207243608f0",
+              "n_m"
+            ]
+          },
+          {
+            "out": [
+              "0x20705711a00",
+              "z_1"
+            ],
+            "in": [
+              "0x207243608f0",
+              "z_1"
+            ]
+          },
+          {
+            "out": [
+              "0x20724361f10",
+              "z_2"
+            ],
+            "in": [
+              "0x207243608f0",
+              "z_2"
+            ]
+          },
+          {
+            "out": [
+              "0x207243617f0",
+              "z_3"
+            ],
+            "in": [
+              "0x207243608f0",
+              "z_3"
+            ]
+          },
+          {
+            "out": [
+              "0x20724368050",
+              "z_4"
+            ],
+            "in": [
+              "0x207243608f0",
+              "z_4"
+            ]
+          },
+          {
+            "out": [
+              "0x207243685c0",
+              "d_Tn"
+            ],
+            "in": [
+              "0x207243608f0",
+              "d_Tn"
+            ]
+          },
+          {
+            "out": [
+              "0x207243608f0",
+              "v_fzg"
+            ],
+            "in": [
+              "0x20724362840",
+              "v_fzg"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "04_Construction_M0004",
+      "graph": {
+        "graph": {
+          "layout_direction": 0,
+          "acyclic": true,
+          "pipe_collision": false,
+          "pipe_slicing": true,
+          "pipe_style": 1,
+          "accept_connection_types": "{}",
+          "reject_connection_types": "{}"
+        },
+        "nodes": {
+          "0x2070574a4b0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              0.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_1",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x207057c1dc0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_3",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              100.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_3",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_3",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x2072436ae40": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_4",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              200.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_4",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_4",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x207242af890": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "m_n1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 221.171875,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              300.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "m_n1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "m_n1",
+              "unit": "m",
+              "min": "0.001",
+              "max": "0.016"
+            }
+          },
+          "0x207052a25a0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "m_n2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 221.171875,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              400.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "m_n2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "m_n2",
+              "unit": "m",
+              "min": "0.001",
+              "max": "0.016"
+            }
+          },
+          "0x2072436ba40": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "beta_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 227.0,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              500.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "beta_1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "beta_1",
+              "unit": "grad",
+              "min": "0",
+              "max": "30"
+            }
+          },
+          "0x2072436bf20": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "beta_2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 227.0,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              600.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "beta_2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "beta_2",
+              "unit": "grad",
+              "min": "0",
+              "max": "30"
+            }
+          },
+          "0x207243704a0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "d_sh1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 222.828125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              700.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "d_sh1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "d_sh1",
+              "unit": "m",
+              "min": "0.02",
+              "max": "0.5"
+            }
+          },
+          "0x20705711850": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "d_sh2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 222.828125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              800.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "d_sh2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "d_sh2",
+              "unit": "m",
+              "min": "0.02",
+              "max": "0.5"
+            }
+          },
+          "0x20724370cb0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "d_sh3",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 222.828125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              900.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "d_sh3",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "d_sh3",
+              "unit": "m",
+              "min": "0.02",
+              "max": "0.5"
+            }
+          },
+          "0x207243711c0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "s_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 210.140625,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              1000.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "s_1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "s_1",
+              "unit": "m",
+              "min": "0.01",
+              "max": "0.4"
+            }
+          },
+          "0x20724371610": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "s_2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 210.140625,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              1100.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "s_2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "s_2",
+              "unit": "m",
+              "min": "0.01",
+              "max": "0.4"
+            }
+          },
+          "0x20724371a00": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "l_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 208.140625,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              1200.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "l_1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "l_1",
+              "unit": "m",
+              "min": "0.05",
+              "max": "1.0"
+            }
+          },
+          "0x20724371eb0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "l_2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 208.140625,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              1300.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "l_2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "l_2",
+              "unit": "m",
+              "min": "0.05",
+              "max": "1.0"
+            }
+          },
+          "0x207243723c0": {
+            "type_": "com.pfd.custom_block.CustomBlockNode",
+            "icon": null,
+            "name": "block_0x228169f6350",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 455.265625,
+            "height": 552.0,
+            "pos": [
+              300.0,
+              600.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "z_1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "z_3",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "z_4",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "m_n1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "m_n2",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "beta_1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "beta_2",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "d_sh1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "d_sh2",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "d_sh3",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "s_1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "s_2",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "l_1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "l_2",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [
+              {
+                "name": "W_2",
+                "multi_connection": true,
+                "display_name": true
+              },
+              {
+                "name": "W_3",
+                "multi_connection": true,
+                "display_name": true
+              },
+              {
+                "name": "L_1",
+                "multi_connection": true,
+                "display_name": true
+              },
+              {
+                "name": "L_2",
+                "multi_connection": true,
+                "display_name": true
+              },
+              {
+                "name": "W_1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "func_name": "block_0x228169f6350",
+              "num_inputs": "14",
+              "num_outputs": "5",
+              "surrogate_controls": false,
+              "surrogate_model_path": "",
+              "use_surrogate": false,
+              "surrogate_status": "Not Trained",
+              "surrogate_train_trigger": 0.0,
+              "code_content": "import numpy as np\ndef cosd(x): return np.cos(np.deg2rad(x))\n\n# Discretization\nz_1 = np.floor(z_1)\nz_3 = np.floor(z_3)\nz_4 = np.floor(z_4)\nm_n1 = np.floor(2000 * m_n1) / 2000\nm_n2 = np.floor(2000 * m_n2) / 2000\n\nd_1 = z_1 * m_n1 / cosd(beta_1)\nd_3 = z_3 * m_n2 / cosd(beta_2)\nd_4 = z_4 * m_n2 / cosd(beta_2)\n\nW_1 = (0.8 * d_sh1 + 2.5 * m_n1) / (d_1 - d_sh1)\nW_2 = (0.8 * d_sh2 + 2.5 * m_n2) / (d_3 - d_sh2)\nW_3 = d_4 / d_sh3\nL_1 = s_1 / l_1\nL_2 = s_2 / l_2"
+            }
+          },
+          "0x20724368b30": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "W_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 215.75,
+            "height": 331.5,
+            "pos": [
+              891.0,
+              -51.99913721490793
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "W_1",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "W_1",
+              "unit": "-",
+              "req_min": "1",
+              "req_max": "inf",
+              "minimize": false,
+              "maximize": false
+            }
+          },
+          "0x2070574b440": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "W_2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 215.75,
+            "height": 331.5,
+            "pos": [
+              892.0,
+              268.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "W_2",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "W_2",
+              "unit": "-",
+              "req_min": "1",
+              "req_max": "inf",
+              "minimize": false,
+              "maximize": false
+            }
+          },
+          "0x207243781d0": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "W_3",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 215.75,
+            "height": 331.5,
+            "pos": [
+              900.0,
+              600.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "W_3",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "W_3",
+              "unit": "-",
+              "req_min": "6",
+              "req_max": "8",
+              "minimize": false,
+              "maximize": false
+            }
+          },
+          "0x20724378830": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "L_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 210.65625,
+            "height": 331.5,
+            "pos": [
+              912.0,
+              956.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "L_1",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "L_1",
+              "unit": "-",
+              "req_min": "0",
+              "req_max": "0.3",
+              "minimize": false,
+              "maximize": false
+            }
+          },
+          "0x20724378b90": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "L_2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 210.65625,
+            "height": 331.5,
+            "pos": [
+              902.0,
+              1322.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "L_2",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "L_2",
+              "unit": "-",
+              "req_min": "0",
+              "req_max": "0.3",
+              "minimize": false,
+              "maximize": false
+            }
+          }
+        },
+        "connections": [
+          {
+            "out": [
+              "0x2070574a4b0",
+              "z_1"
+            ],
+            "in": [
+              "0x207243723c0",
+              "z_1"
+            ]
+          },
+          {
+            "out": [
+              "0x207057c1dc0",
+              "z_3"
+            ],
+            "in": [
+              "0x207243723c0",
+              "z_3"
+            ]
+          },
+          {
+            "out": [
+              "0x2072436ae40",
+              "z_4"
+            ],
+            "in": [
+              "0x207243723c0",
+              "z_4"
+            ]
+          },
+          {
+            "out": [
+              "0x207242af890",
+              "m_n1"
+            ],
+            "in": [
+              "0x207243723c0",
+              "m_n1"
+            ]
+          },
+          {
+            "out": [
+              "0x207052a25a0",
+              "m_n2"
+            ],
+            "in": [
+              "0x207243723c0",
+              "m_n2"
+            ]
+          },
+          {
+            "out": [
+              "0x2072436ba40",
+              "beta_1"
+            ],
+            "in": [
+              "0x207243723c0",
+              "beta_1"
+            ]
+          },
+          {
+            "out": [
+              "0x2072436bf20",
+              "beta_2"
+            ],
+            "in": [
+              "0x207243723c0",
+              "beta_2"
+            ]
+          },
+          {
+            "out": [
+              "0x207243704a0",
+              "d_sh1"
+            ],
+            "in": [
+              "0x207243723c0",
+              "d_sh1"
+            ]
+          },
+          {
+            "out": [
+              "0x20705711850",
+              "d_sh2"
+            ],
+            "in": [
+              "0x207243723c0",
+              "d_sh2"
+            ]
+          },
+          {
+            "out": [
+              "0x20724370cb0",
+              "d_sh3"
+            ],
+            "in": [
+              "0x207243723c0",
+              "d_sh3"
+            ]
+          },
+          {
+            "out": [
+              "0x207243711c0",
+              "s_1"
+            ],
+            "in": [
+              "0x207243723c0",
+              "s_1"
+            ]
+          },
+          {
+            "out": [
+              "0x20724371610",
+              "s_2"
+            ],
+            "in": [
+              "0x207243723c0",
+              "s_2"
+            ]
+          },
+          {
+            "out": [
+              "0x20724371a00",
+              "l_1"
+            ],
+            "in": [
+              "0x207243723c0",
+              "l_1"
+            ]
+          },
+          {
+            "out": [
+              "0x20724371eb0",
+              "l_2"
+            ],
+            "in": [
+              "0x207243723c0",
+              "l_2"
+            ]
+          },
+          {
+            "out": [
+              "0x207243723c0",
+              "W_2"
+            ],
+            "in": [
+              "0x2070574b440",
+              "W_2"
+            ]
+          },
+          {
+            "out": [
+              "0x207243723c0",
+              "W_3"
+            ],
+            "in": [
+              "0x207243781d0",
+              "W_3"
+            ]
+          },
+          {
+            "out": [
+              "0x207243723c0",
+              "L_1"
+            ],
+            "in": [
+              "0x20724378830",
+              "L_1"
+            ]
+          },
+          {
+            "out": [
+              "0x207243723c0",
+              "L_2"
+            ],
+            "in": [
+              "0x20724378b90",
+              "L_2"
+            ]
+          },
+          {
+            "out": [
+              "0x207243723c0",
+              "W_1"
+            ],
+            "in": [
+              "0x20724368b30",
+              "W_1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "05_Safety_M0005",
+      "graph": {
+        "graph": {
+          "layout_direction": 0,
+          "acyclic": true,
+          "pipe_collision": false,
+          "pipe_slicing": true,
+          "pipe_style": 1,
+          "accept_connection_types": "{}",
+          "reject_connection_types": "{}"
+        },
+        "nodes": {
+          "0x207057cbaa0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              0.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_1",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x20724368fb0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              80.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_2",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x20724379250": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_3",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              160.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_3",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_3",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x2072437a150": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "z_4",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.453125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              240.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "z_4",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "z_4",
+              "unit": "-",
+              "min": "10",
+              "max": "200"
+            }
+          },
+          "0x2072437af90": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "m_n1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 221.171875,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              320.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "m_n1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "m_n1",
+              "unit": "m",
+              "min": "0.001",
+              "max": "0.016"
+            }
+          },
+          "0x207242ad790": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "m_n2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 221.171875,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              400.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "m_n2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "m_n2",
+              "unit": "m",
+              "min": "0.001",
+              "max": "0.016"
+            }
+          },
+          "0x2072437b590": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "beta_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 227.0,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              480.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "beta_1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "beta_1",
+              "unit": "grad",
+              "min": "0",
+              "max": "30"
+            }
+          },
+          "0x20724360aa0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "beta_2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 227.0,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              560.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "beta_2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "beta_2",
+              "unit": "grad",
+              "min": "0",
+              "max": "30"
+            }
+          },
+          "0x2072437bec0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "b_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 211.9375,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              640.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "b_1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "b_1",
+              "unit": "m",
+              "min": "0.01",
+              "max": "0.12"
+            }
+          },
+          "0x20724368290": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "b_2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 211.9375,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              720.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "b_2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "b_2",
+              "unit": "m",
+              "min": "0.01",
+              "max": "0.12"
+            }
+          },
+          "0x20724379c40": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "b_3",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 211.9375,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              800.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "b_3",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "b_3",
+              "unit": "m",
+              "min": "0.01",
+              "max": "0.12"
+            }
+          },
+          "0x207243808c0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "b_4",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 211.9375,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              880.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "b_4",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "b_4",
+              "unit": "m",
+              "min": "0.01",
+              "max": "0.12"
+            }
+          },
+          "0x20724380dd0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "T_m",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 214.78125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              960.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "T_m",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "T_m",
+              "unit": "N*m",
+              "min": "1000",
+              "max": "4000"
+            }
+          },
+          "0x20724381160": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "n_m",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 215.25,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              1040.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "n_m",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "n_m",
+              "unit": "1/s",
+              "min": "30",
+              "max": "150"
+            }
+          },
+          "0x20724361b20": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "sigma_Flim",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 248.546875,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              1120.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "sigma_Flim",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "sigma_Flim",
+              "unit": "N/m^2",
+              "min": "300000000",
+              "max": "600000000"
+            }
+          },
+          "0x20724381b80": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "s_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.140625,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              1200.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "s_1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "s_1",
+              "unit": "m",
+              "min": "0.01",
+              "max": "0.4"
+            }
+          },
+          "0x207057447d0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "s_2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 210.140625,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              1280.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "s_2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "s_2",
+              "unit": "m",
+              "min": "0.01",
+              "max": "0.4"
+            }
+          },
+          "0x20724382510": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "l_1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 208.140625,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              1360.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "l_1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "l_1",
+              "unit": "m",
+              "min": "0.05",
+              "max": "1.0"
+            }
+          },
+          "0x207243828d0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "l_2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 208.140625,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              1440.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "l_2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "l_2",
+              "unit": "m",
+              "min": "0.05",
+              "max": "1.0"
+            }
+          },
+          "0x20724382b70": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "d_sh1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 222.828125,
+            "height": 249.60000000000002,
+            "pos": [
+              -300.0,
+              1587.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "d_sh1",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "d_sh1",
+              "unit": "m",
+              "min": "0.02",
+              "max": "0.5"
+            }
+          },
+          "0x20724382d20": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "d_sh2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 222.828125,
+            "height": 249.60000000000002,
+            "pos": [
+              -302.0,
+              1800.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "d_sh2",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "d_sh2",
+              "unit": "m",
+              "min": "0.02",
+              "max": "0.5"
+            }
+          },
+          "0x2072437b350": {
+            "type_": "com.pfd.custom_block.CustomBlockNode",
+            "icon": null,
+            "name": "block_0x22816c5c550",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 466.09375,
+            "height": 552.0,
+            "pos": [
+              301.6666133955089,
+              801.6666133955086
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "z_1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "z_2",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "z_3",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "z_4",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "m_n1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "beta_1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "m_n2",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "beta_2",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "b_1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "b_2",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "b_3",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "b_4",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "T_m",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "n_m",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "sigma_Flim",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "s_1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "s_2",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "l_1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "l_2",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "d_sh1",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "d_sh2",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [
+              {
+                "name": "S_F1",
+                "multi_connection": true,
+                "display_name": true
+              },
+              {
+                "name": "S_F2",
+                "multi_connection": true,
+                "display_name": true
+              },
+              {
+                "name": "S_F3",
+                "multi_connection": true,
+                "display_name": true
+              },
+              {
+                "name": "S_F4",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "func_name": "block_0x22816c5c550",
+              "num_inputs": "21",
+              "num_outputs": "4",
+              "surrogate_controls": false,
+              "surrogate_model_path": "",
+              "use_surrogate": false,
+              "surrogate_status": "Not Trained",
+              "surrogate_train_trigger": 0.0,
+              "code_content": "import numpy as np\ndef cosd(x): return np.cos(np.deg2rad(x))\ndef sind(x): return np.sin(np.deg2rad(x))\ndef tand(x): return np.tan(np.deg2rad(x))\ndef atand(x): return np.rad2deg(np.arctan(x))\n\n# 1. Discretization\nz_1_d = np.floor(z_1)\nz_2_d = np.floor(z_2)\nz_3_d = np.floor(z_3)\nz_4_d = np.floor(z_4)\nm_n1_d = np.floor(2000 * m_n1) / 2000\nm_n2_d = np.floor(2000 * m_n2) / 2000\n\nd_1 = z_1_d * m_n1_d / cosd(beta_1)\nd_2 = z_2_d * m_n1_d / cosd(beta_1)\nd_3 = z_3_d * m_n2_d / cosd(beta_2)\nd_4 = z_4_d * m_n2_d / cosd(beta_2)\n\n# Lists for iteration\nparams = [\n    {'z': z_1_d, 'd': 1000*d_1, 'm_n': 1000*m_n1_d, 'b': 1000*b_1, 'beta': beta_1, 'n': n_m, 'T': T_m, 'u': np.maximum(z_1_d,z_2_d)/np.minimum(z_1_d,z_2_d), 'd_fsh': 1000*d_1, 'l': 1000*l_1, 's': 1000*s_1, 'd_sh': 1000*d_sh1, 'K_str': 0.48},\n    {'z': z_2_d, 'd': 1000*d_2, 'm_n': 1000*m_n1_d, 'b': 1000*b_2, 'beta': beta_1, 'n': n_m*z_1_d/z_2_d, 'T': T_m*z_2_d/z_1_d, 'u': np.maximum(z_1_d,z_2_d)/np.minimum(z_1_d,z_2_d), 'd_fsh': 1000*d_1, 'l': 1000*l_1, 's': 1000*s_1, 'd_sh': 1000*d_sh1, 'K_str': 0.48},\n    {'z': z_3_d, 'd': 1000*d_3, 'm_n': 1000*m_n2_d, 'b': 1000*b_3, 'beta': beta_2, 'n': n_m*z_1_d/z_2_d, 'T': T_m*z_2_d/z_1_d, 'u': np.maximum(z_3_d,z_4_d)/np.minimum(z_3_d,z_4_d), 'd_fsh': 1000*d_3, 'l': 1000*l_2, 's': 1000*s_2, 'd_sh': 1000*d_sh2, 'K_str': -0.6},\n    {'z': z_4_d, 'd': 1000*d_4, 'm_n': 1000*m_n2_d, 'b': 1000*b_4, 'beta': beta_2, 'n': n_m*z_1_d*z_3_d/(z_2_d*z_4_d), 'T': T_m*z_4_d*z_2_d/(z_1_d*z_3_d), 'u': np.maximum(z_3_d,z_4_d)/np.minimum(z_3_d,z_4_d), 'd_fsh': 1000*d_3, 'l': 1000*l_2, 's': 1000*s_2, 'd_sh': 1000*d_sh2, 'K_str': -0.6}\n]\n\nS_F_results = []\n\nd_a_list = [p['d'] + 2*p['m_n'] for p in params]\nb_list = [1000*b_1, 1000*b_2, 1000*b_3, 1000*b_4]\n\nfor i, p in enumerate(params):\n    stage_idx = 0 if i < 2 else 2\n    b_min_val = np.minimum(params[stage_idx]['b'], params[stage_idx+1]['b'])\n    \n    alpha_n = 20.0\n    alpha_t = atand(tand(alpha_n)/cosd(p['beta']))\n    m_t = p['m_n'] / cosd(p['beta'])\n    \n    d_la, d_ra = d_a_list[stage_idx], d_a_list[stage_idx+1]\n    d_lb = params[stage_idx]['d'] * cosd(alpha_t)\n    d_rb = params[stage_idx+1]['d'] * cosd(alpha_t)\n    a_d = (params[stage_idx]['d'] + params[stage_idx+1]['d'])/2\n    \n    epsilon_alpha = (0.5*(np.sqrt(np.maximum(0, d_la**2 - d_lb**2)) + np.sqrt(np.maximum(0, d_ra**2 - d_rb**2))) - a_d*sind(alpha_t)) / (np.pi*m_t*cosd(alpha_t))\n    beta_b = atand(tand(p['beta']) * cosd(alpha_t))\n    epsilon_an = epsilon_alpha / (cosd(beta_b)**2)\n    Y_epsilon_val = 0.25 + 0.75 / epsilon_an\n\n    K_A = 1.0\n    K_1 = np.where(p['beta']==0, 9.6, 8.5)\n    K_2 = np.where(p['beta']==0, 0.0193, 0.0087)\n    v_t = (p['d']*1e-3)*np.pi*p['n']\n    K_3 = 0.01*p['z']*v_t*np.sqrt(p['u']**2/(1+p['u']**2))\n    \n    F_t = 2 * p['T'] / (p['d']*1e-3)\n    raw_load = K_A * F_t / b_min_val \n    Linien = np.maximum(raw_load, 100.0) \n\n    # FIX: Vectorized logic for K_Falpha\n    # If beta==0 use 1/Y_eps, else use eps_an. Then ensure >= 1.0.\n    K_Falpha_calc = np.where(p['beta'] == 0, 1.0 / Y_epsilon_val, epsilon_an)\n    K_Falpha_calc = np.maximum(K_Falpha_calc, 1.0)\n    \n    # Apply threshold: If raw_load < 100, use calculated K, else use 1.0\n    K_Falpha = np.where(raw_load < 100, K_Falpha_calc, 1.0)\n\n    K_V = 1 + ((K_1/Linien) + K_2) * K_3\n    \n    F_m_b = K_V * Linien\n    f_sh = 0.023 * F_m_b * (np.abs(0.7 + p['K_str']*(p['l']*p['s']/(p['d_fsh']**2))*(p['d']/p['d_sh'])**4)+0.3)*(b_min_val/p['d_fsh'])**2\n    f_ma = 0.5 * 4.16 * (b_min_val**0.14) * 1.32\n    F_bx = np.minimum(f_ma + 1.33*f_sh, 40.0)\n    y_b = np.minimum(0.15*F_bx, 6.0)\n    F_by = F_bx - y_b\n    \n    K_Hb = np.where(1+10*F_by/F_m_b > 2, 2*np.sqrt(10*F_by/F_m_b), 1+10*F_by/F_m_b)\n    \n    h = p['m_n'] + 1.25*p['m_n']\n    b_h = np.maximum(b_min_val/h, 3.0)\n    N_F = np.where(b_h>12, 1.0, b_h**2/(1+b_h+b_h**2))\n    K_Fb = K_Hb**N_F\n    \n    K_Fges = K_A * K_V * K_Falpha * K_Fb\n    \n    z_val = p['z']\n    conds = [\n        z_val < 18, (z_val >= 18) & (z_val < 19), (z_val >= 19) & (z_val < 20), (z_val >= 20) & (z_val < 23),\n        (z_val >= 23) & (z_val < 24), (z_val >= 24) & (z_val < 25), (z_val >= 25) & (z_val < 26), (z_val >= 26) & (z_val < 27),\n        (z_val >= 27) & (z_val < 28), (z_val >= 28) & (z_val < 29), (z_val >= 29) & (z_val < 30), (z_val >= 30) & (z_val < 35),\n        (z_val >= 35) & (z_val < 40), (z_val >= 40) & (z_val < 45), (z_val >= 45) & (z_val < 50), (z_val >= 50) & (z_val < 60),\n        (z_val >= 60) & (z_val < 70), (z_val >= 70) & (z_val < 80), (z_val >= 80) & (z_val < 90), (z_val >= 90) & (z_val < 100),\n        (z_val >= 100) & (z_val < 150), (z_val >= 150) & (z_val < 200), (z_val >= 200) & (z_val < 300), z_val >= 300\n    ]\n    choices = [\n        0.0004545455*(z_val-17)**3 - 0.0054545455*(z_val-17)**2 - 0.0450000000*(z_val-17) + 3.07000,\n        0.0109090909*(z_val-18)**3 - 0.0163636364*(z_val-18)**2 - 0.0545454545*(z_val-18) + 3.02000,\n        -0.0006993007*(z_val-19)**3 + 0.0052447552*(z_val-19)**2 - 0.0545454545*(z_val-19) + 2.96000,\n        -0.0000356125*(z_val-20)**3 + 0.0016025641*(z_val-20)**2 - 0.0461538462*(z_val-20) + 2.91000,\n        0.0033333333*(z_val-23)**3 - 0.0008333333*(z_val-23)**2 - 0.0375000000*(z_val-23) + 2.78500,\n        -0.0083333333*(z_val-24)**3 + 0.0125000000*(z_val-24)**2 - 0.0291666667*(z_val-24) + 2.75000,\n        0.0116666667*(z_val-25)**3 - 0.0175000000*(z_val-25)**2 - 0.0291666667*(z_val-25) + 2.72500,\n        -0.0064393939*(z_val-26)**3 + 0.0106060606*(z_val-26)**2 - 0.0291666667*(z_val-26) + 2.69000,\n        0.0087272727*(z_val-27)**3 - 0.0114545455*(z_val-27)**2 - 0.0272727273*(z_val-27) + 2.66500,\n        -0.0062222222*(z_val-28)**3 + 0.0102222222*(z_val-28)**2 - 0.0240000000*(z_val-28) + 2.63500,\n        0.0072649573*(z_val-29)**3 - 0.0100427350*(z_val-29)**2 - 0.0222222222*(z_val-29) + 2.61500,\n        -0.0001143059*(z_val-30)**3 + 0.0014740937*(z_val-30)**2 - 0.0205128205*(z_val-30) + 2.59000,\n        0.0000407524*(z_val-35)**3 + 0.0000652038*(z_val-35)**2 - 0.0143448276*(z_val-35) + 2.51000,\n        -0.0000442781*(z_val-40)**3 + 0.0005486631*(z_val-40)**2 - 0.0106363636*(z_val-40) + 2.44500,\n        0.0000485449*(z_val-45)**3 - 0.0001486068*(z_val-45)**2 - 0.0084705882*(z_val-45) + 2.40000,\n        -0.0000076023*(z_val-50)**3 + 0.0002076023*(z_val-50)**2 - 0.0063157895*(z_val-50) + 2.36000,\n        0.0000047863*(z_val-60)**3 - 0.0000034188*(z_val-60)**2 - 0.0044444444*(z_val-60) + 2.31000,\n        -0.0000029915*(z_val-70)**3 + 0.0000876068*(z_val-70)**2 - 0.0030769231*(z_val-70) + 2.27000,\n        0.0000006349*(z_val-80)**3 + 0.0000158730*(z_val-80)**2 - 0.0022222222*(z_val-80) + 2.24500,\n        -0.0000002845*(z_val-90)**3 + 0.0000242731*(z_val-90)**2 - 0.0017142857*(z_val-90) + 2.22500,\n        0.0000001197*(z_val-100)**3 - 0.0000017003*(z_val-100)**2 - 0.0013141593*(z_val-100) + 2.21000,\n        -0.0000000254*(z_val-150)**3 + 0.0000050051*(z_val-150)**2 - 0.0005866667*(z_val-150) + 2.15500,\n        -0.0000000077*(z_val-200)**3 + 0.0000015385*(z_val-200)**2 - 0.0002769231*(z_val-200) + 2.13500,\n        2.11500\n    ]\n    Y_Fa = np.select(conds, choices)\n    \n    Y_Sa = 1.18953896e-11*z_val**5 - 8.187897728e-09*z_val**4 + 2.131257126e-06*z_val**3 - 0.0002670834517*z_val**2 + 0.01868886897*z_val + 1.31463999\n    \n    Y_beta = 1.0 - (b_min_val*sind(p['beta'])/(np.pi*p['m_n'])) * np.minimum(p['beta'], 30.0)/120.0\n    \n    sigma_F0 = F_t * Y_Fa * Y_Sa * Y_epsilon_val * Y_beta / (b_list[i] * p['m_n'])\n    sigma_F = sigma_F0 * K_Fges\n    \n    Y_X = np.where(p['m_n']<5, 1.0, np.where(p['m_n']>25, 0.8, 1-0.01*(p['m_n']-5)))\n    sigma_FG = 2 * (1e-6*sigma_Flim) * 1.0 * Y_X\n    \n    S_F_results.append(sigma_FG / sigma_F)\n\nS_F1, S_F2, S_F3, S_F4 = S_F_results"
+            }
+          },
+          "0x2072436a840": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "S_F1",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 216.6875,
+            "height": 331.5,
+            "pos": [
+              1189.0,
+              94.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "S_F1",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "S_F1",
+              "unit": "-",
+              "req_min": "1",
+              "req_max": "1.6",
+              "minimize": false,
+              "maximize": false
+            }
+          },
+          "0x20724369790": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "S_F2",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 216.6875,
+            "height": 331.5,
+            "pos": [
+              1197.0,
+              437.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "S_F2",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "S_F2",
+              "unit": "-",
+              "req_min": "1",
+              "req_max": "1.6",
+              "minimize": false,
+              "maximize": false
+            }
+          },
+          "0x2070576f800": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "S_F3",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 216.6875,
+            "height": 331.5,
+            "pos": [
+              1200.0,
+              800.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "S_F3",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "S_F3",
+              "unit": "-",
+              "req_min": "1",
+              "req_max": "1.6",
+              "minimize": false,
+              "maximize": false
+            }
+          },
+          "0x207057ddd00": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "S_F4",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 216.6875,
+            "height": 331.5,
+            "pos": [
+              1184.0,
+              1151.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "S_F4",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "S_F4",
+              "unit": "-",
+              "req_min": "1",
+              "req_max": "1.6",
+              "minimize": false,
+              "maximize": false
+            }
+          }
+        },
+        "connections": [
+          {
+            "out": [
+              "0x207057cbaa0",
+              "z_1"
+            ],
+            "in": [
+              "0x2072437b350",
+              "z_1"
+            ]
+          },
+          {
+            "out": [
+              "0x20724368fb0",
+              "z_2"
+            ],
+            "in": [
+              "0x2072437b350",
+              "z_2"
+            ]
+          },
+          {
+            "out": [
+              "0x20724379250",
+              "z_3"
+            ],
+            "in": [
+              "0x2072437b350",
+              "z_3"
+            ]
+          },
+          {
+            "out": [
+              "0x2072437a150",
+              "z_4"
+            ],
+            "in": [
+              "0x2072437b350",
+              "z_4"
+            ]
+          },
+          {
+            "out": [
+              "0x2072437af90",
+              "m_n1"
+            ],
+            "in": [
+              "0x2072437b350",
+              "m_n1"
+            ]
+          },
+          {
+            "out": [
+              "0x207242ad790",
+              "m_n2"
+            ],
+            "in": [
+              "0x2072437b350",
+              "m_n2"
+            ]
+          },
+          {
+            "out": [
+              "0x2072437b590",
+              "beta_1"
+            ],
+            "in": [
+              "0x2072437b350",
+              "beta_1"
+            ]
+          },
+          {
+            "out": [
+              "0x20724360aa0",
+              "beta_2"
+            ],
+            "in": [
+              "0x2072437b350",
+              "beta_2"
+            ]
+          },
+          {
+            "out": [
+              "0x2072437bec0",
+              "b_1"
+            ],
+            "in": [
+              "0x2072437b350",
+              "b_1"
+            ]
+          },
+          {
+            "out": [
+              "0x20724368290",
+              "b_2"
+            ],
+            "in": [
+              "0x2072437b350",
+              "b_2"
+            ]
+          },
+          {
+            "out": [
+              "0x20724379c40",
+              "b_3"
+            ],
+            "in": [
+              "0x2072437b350",
+              "b_3"
+            ]
+          },
+          {
+            "out": [
+              "0x207243808c0",
+              "b_4"
+            ],
+            "in": [
+              "0x2072437b350",
+              "b_4"
+            ]
+          },
+          {
+            "out": [
+              "0x20724380dd0",
+              "T_m"
+            ],
+            "in": [
+              "0x2072437b350",
+              "T_m"
+            ]
+          },
+          {
+            "out": [
+              "0x20724381160",
+              "n_m"
+            ],
+            "in": [
+              "0x2072437b350",
+              "n_m"
+            ]
+          },
+          {
+            "out": [
+              "0x20724361b20",
+              "sigma_Flim"
+            ],
+            "in": [
+              "0x2072437b350",
+              "sigma_Flim"
+            ]
+          },
+          {
+            "out": [
+              "0x20724381b80",
+              "s_1"
+            ],
+            "in": [
+              "0x2072437b350",
+              "s_1"
+            ]
+          },
+          {
+            "out": [
+              "0x207057447d0",
+              "s_2"
+            ],
+            "in": [
+              "0x2072437b350",
+              "s_2"
+            ]
+          },
+          {
+            "out": [
+              "0x20724382510",
+              "l_1"
+            ],
+            "in": [
+              "0x2072437b350",
+              "l_1"
+            ]
+          },
+          {
+            "out": [
+              "0x207243828d0",
+              "l_2"
+            ],
+            "in": [
+              "0x2072437b350",
+              "l_2"
+            ]
+          },
+          {
+            "out": [
+              "0x20724382b70",
+              "d_sh1"
+            ],
+            "in": [
+              "0x2072437b350",
+              "d_sh1"
+            ]
+          },
+          {
+            "out": [
+              "0x20724382d20",
+              "d_sh2"
+            ],
+            "in": [
+              "0x2072437b350",
+              "d_sh2"
+            ]
+          },
+          {
+            "out": [
+              "0x2072437b350",
+              "S_F1"
+            ],
+            "in": [
+              "0x2072436a840",
+              "S_F1"
+            ]
+          },
+          {
+            "out": [
+              "0x2072437b350",
+              "S_F2"
+            ],
+            "in": [
+              "0x20724369790",
+              "S_F2"
+            ]
+          },
+          {
+            "out": [
+              "0x2072437b350",
+              "S_F3"
+            ],
+            "in": [
+              "0x2070576f800",
+              "S_F3"
+            ]
+          },
+          {
+            "out": [
+              "0x2072437b350",
+              "S_F4"
+            ],
+            "in": [
+              "0x207057ddd00",
+              "S_F4"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "06_Strength_M0006",
+      "graph": {
+        "graph": {
+          "layout_direction": 0,
+          "acyclic": true,
+          "pipe_collision": false,
+          "pipe_slicing": true,
+          "pipe_style": 1,
+          "accept_connection_types": "{}",
+          "reject_connection_types": "{}"
+        },
+        "nodes": {
+          "0x2072436b320": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "sigma_Flim",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 248.546875,
+            "height": 249.60000000000002,
+            "pos": [
+              -216.0,
+              -2.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "sigma_Flim",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "sigma_Flim",
+              "unit": "N/m^2",
+              "min": "200000000",
+              "max": "500000000"
+            }
+          },
+          "0x207242ad0a0": {
+            "type_": "com.pfd.custom_block.CustomBlockNode",
+            "icon": null,
+            "name": "block_0x22816c5ccd0",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 466.09375,
+            "height": 552.0,
+            "pos": [
+              300.0,
+              0.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "sigma_Flim",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [
+              {
+                "name": "sigma_Fzul",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "func_name": "block_0x22816c5ccd0",
+              "num_inputs": "1",
+              "num_outputs": "1",
+              "surrogate_controls": false,
+              "surrogate_model_path": "",
+              "use_surrogate": false,
+              "surrogate_status": "Not Trained",
+              "surrogate_train_trigger": 0.0,
+              "code_content": "sigma_Fzul = sigma_Flim"
+            }
+          },
+          "0x207057641d0": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "sigma_Fzul",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 247.609375,
+            "height": 331.5,
+            "pos": [
+              900.0,
+              0.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "sigma_Fzul",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "sigma_Fzul",
+              "unit": "N/m^2",
+              "req_min": "310000000",
+              "req_max": "525000000",
+              "minimize": false,
+              "maximize": false
+            }
+          }
+        },
+        "connections": [
+          {
+            "out": [
+              "0x2072436b320",
+              "sigma_Flim"
+            ],
+            "in": [
+              "0x207242ad0a0",
+              "sigma_Flim"
+            ]
+          },
+          {
+            "out": [
+              "0x207242ad0a0",
+              "sigma_Fzul"
+            ],
+            "in": [
+              "0x207057641d0",
+              "sigma_Fzul"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

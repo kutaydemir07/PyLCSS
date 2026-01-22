@@ -96,17 +96,15 @@ class LLMConfigDialog(QDialog):
         if load_btn:
             load_btn.setEnabled(False)
         
-        # Get API URL for GPT@RUB
+
+        
+        # Prepare kwargs for provider
         kwargs = {}
-        if provider_name == "gptrub":
-            url_input = group.findChild(QLineEdit, f"{provider_name}_url")
-            if url_input:
-                kwargs["api_url"] = url_input.text()
-                logger.info(f"Using custom URL for gptrub: {kwargs['api_url']}")
         
         def load_in_thread():
             try:
-                provider = get_provider(provider_name, api_key, **kwargs)
+                # No extra kwargs needed for standard providers
+                provider = get_provider(provider_name, api_key)
                 models = provider.get_models()
                 
                 # Update UI from main thread using Signal (thread-safe)
@@ -240,16 +238,10 @@ class LLMConfigDialog(QDialog):
             ki.setEchoMode(QLineEdit.Normal if checked else QLineEdit.Password))
         layout.addWidget(show_btn, 0, 2)
         
-        # API URL (only for GPT@RUB)
-        if provider_name == "gptrub":
-            layout.addWidget(QLabel("API URL:"), 1, 0)
-            url_input = QLineEdit()
-            url_input.setText("https://gpt.ruhr-uni-bochum.de/external/v1")
-            url_input.setObjectName(f"{provider_name}_url")
-            layout.addWidget(url_input, 1, 1, 1, 2)
+
         
         # Model selection
-        row = 2 if provider_name == "gptrub" else 1
+        row = 1
         layout.addWidget(QLabel("Model:"), row, 0)
         model_combo = QComboBox()
         model_combo.setObjectName(f"{provider_name}_model")
@@ -382,8 +374,7 @@ class LLMConfigDialog(QDialog):
         icons = {
             "openai": "🟢",
             "anthropic": "🟠", 
-            "google": "🔵",
-            "gptrub": "🟣"
+            "google": "🔵"
         }
         return icons.get(provider_name, "⚪")
     
@@ -412,11 +403,7 @@ class LLMConfigDialog(QDialog):
                     except:
                         key_input.setText(encrypted_key)
             
-            # Load URL for GPT@RUB
-            if provider_name == "gptrub":
-                url_input = group.findChild(QLineEdit, f"{provider_name}_url")
-                if url_input:
-                    url_input.setText(llm.gptrub_api_url)
+
         
         # Generation settings
         self.temp_slider.setValue(int(llm.temperature * 100))
@@ -536,11 +523,7 @@ class LLMConfigDialog(QDialog):
                 else:
                     llm.set_api_key_for_provider(provider_name, "")
             
-            # Save URL for GPT@RUB
-            if provider_name == "gptrub":
-                url_input = group.findChild(QLineEdit, f"{provider_name}_url")
-                if url_input:
-                    llm.gptrub_api_url = url_input.text()
+
             
             # Save selected model
             model_combo = group.findChild(QComboBox, f"{provider_name}_model")
