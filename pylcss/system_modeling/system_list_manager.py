@@ -10,7 +10,7 @@ including creation, deletion, renaming, and switching between systems.
 
 from PySide6 import QtWidgets, QtCore
 from NodeGraphQt import NodeGraph
-from .node_types import CustomBlockNode, InputNode, OutputNode, IntermediateNode
+from pylcss.user_interface.system_modeling.system_node_types import CustomBlockNode, InputNode, OutputNode, IntermediateNode
 
 class SystemManager(QtCore.QObject):
     """

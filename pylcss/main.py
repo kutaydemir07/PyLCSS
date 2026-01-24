@@ -49,7 +49,7 @@ setup_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Apply patches and import main window
-from pylcss.user_interface import qt_patches
+from pylcss.user_interface.common import qt_patches
 from pylcss.user_interface.main_application_window import MainWindow
 
 

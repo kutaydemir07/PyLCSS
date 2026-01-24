@@ -6,7 +6,7 @@ Central registry for all System Modeling nodes.
 Maps node identifiers (com.pfd.*) to their Python classes.
 """
 
-from pylcss.system_modeling.node_types import (
+from pylcss.user_interface.system_modeling.system_node_types import (
     InputNode,
     OutputNode,
     IntermediateNode,

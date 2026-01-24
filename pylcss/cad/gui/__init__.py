@@ -4,19 +4,6 @@
 """
 CAD GUI Components - Professional CAD Interface.
 
-Exports:
-- ProfessionalCadApp: Main application window
-- CQ3DViewer: VTK-based 3D viewer
-- PropertiesPanel, TimelinePanel, LibraryPanel: UI panels
+Note: GUI components should be imported from pylcss.user_interface.cad 
+to avoid circular dependencies with the cad engine.
 """
-
-# Main application window - import from the existing file
-from pylcss.cad.professional_gui import ProfessionalCadApp
-
-# 3D Viewer
-from pylcss.cad.viewer import CQ3DViewer
-
-__all__ = [
-    'ProfessionalCadApp',
-    'CQ3DViewer',
-]

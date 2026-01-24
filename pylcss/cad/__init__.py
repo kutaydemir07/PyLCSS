@@ -19,5 +19,4 @@ __version__ = "1.0.0"
 __author__ = "Kutay Demir"
 
 # Convenience imports for common usage
-from pylcss.cad.gui import ProfessionalCadApp, CQ3DViewer
 from pylcss.cad.node_library import NODE_CLASS_MAPPING, NODE_NAME_MAPPING

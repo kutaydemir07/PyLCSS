@@ -220,10 +220,19 @@ def setup_logging(level: int = DEFAULT_LOG_LEVEL,
         level: Logging level (logging.DEBUG, INFO, WARNING, ERROR, CRITICAL)
         log_file: Optional path to log file
     """
-    handlers = [logging.StreamHandler()]
+    handlers = []
     
+    # 1. Stream Handler with encoding safety
+    stream_handler = logging.StreamHandler()
+    handlers.append(stream_handler)
+    
+    # 2. File Handler with UTF-8 support
     if log_file:
-        handlers.append(logging.FileHandler(log_file))
+        try:
+            file_handler = logging.FileHandler(log_file, encoding='utf-8', errors='replace')
+            handlers.append(file_handler)
+        except Exception as e:
+            print(f"Warning: Could not initialize file logging: {e}")
     
     logging.basicConfig(
         level=level,

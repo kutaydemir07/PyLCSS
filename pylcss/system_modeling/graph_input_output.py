@@ -117,7 +117,7 @@ def load_graph_from_file(widget, path):
             
             # This fixes an issue where loaded graphs might have single-connection outputs
             # Also sync port names with var_name property
-            from .node_types import InputNode, OutputNode
+            from pylcss.user_interface.system_modeling.system_node_types import InputNode, OutputNode
             
             for node in graph.all_nodes():
                 for port in node.output_ports():

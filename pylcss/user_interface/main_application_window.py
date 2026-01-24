@@ -12,25 +12,25 @@ space analysis, optimization, and surrogate training.
 from PySide6 import QtWidgets, QtCore, QtGui
 import qtawesome as qta
 
-from pylcss.system_modeling.editor import ModelingWidget
+from pylcss.user_interface.system_modeling import ModelingWidget
 from pylcss.system_modeling.system_model import SystemModel
 from pylcss.system_modeling.model_merge import validate_merge_connections
 from pylcss.system_modeling.graph_validation import validate_graph
-from pylcss.solution_space.solution_space_interface import SolutionSpaceWidget
-from pylcss.user_interface.optimization_widget import OptimizationWidget
-from pylcss.user_interface.theme_manager import apply_professional_theme
+from pylcss.user_interface.solution_space import SolutionSpaceWidget
+from pylcss.user_interface.optimization import OptimizationWidget
+from pylcss.user_interface.common import apply_professional_theme
 
 # --- NEW IMPORTS ---
-from pylcss.surrogate_modeling.surrogate_interface import SurrogateTrainingWidget
-from pylcss.user_interface.sensitivity_widget import SensitivityAnalysisWidget
-from pylcss.user_interface.help_widget import HelpWidget
+from pylcss.user_interface.surrogate import SurrogateTrainingWidget
+from pylcss.user_interface.sensitivity import SensitivityAnalysisWidget
+from pylcss.user_interface.help import HelpWidget
 
 # --- NEW IMPORT ---
-from pylcss.cad.professional_gui import ProfessionalCadApp  # Import the widget
+from pylcss.user_interface.cad import ProfessionalCadApp  # Import the widget
 
 # --- HANDS-FREE IMPORTS ---
-from pylcss.hands_free import HandsFreeManager
-from pylcss.hands_free.ui import OverlayWidget
+from pylcss.assistant_systems import AssistantManager, AssistantConfig
+from pylcss.user_interface.assistant import OverlayWidget
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -140,13 +140,13 @@ class MainWindow(QtWidgets.QMainWindow):
         # Style the TabWidget specifically for main navigation
         self.tabs.setIconSize(QtCore.QSize(20, 20))
         
-        # --- HANDS-FREE CONTROL SETUP ---
-        self._setup_hands_free()
+        # --- ASSISTANT CONTROL SETUP ---
+        self._setup_assistant_systems()
 
-    def _setup_hands_free(self) -> None:
-        """Initialize hands-free control system (voice control only)."""
-        # Create hands-free manager
-        self.hands_free_manager = HandsFreeManager(main_window=self)
+    def _setup_assistant_systems(self) -> None:
+        """Initialize assistant systems (voice + LLM)."""
+        # Create assistant manager
+        self.assistant_manager = AssistantManager(main_window=self)
         
         # Add Voice Control option to File menu (simple, near Save/Load)
         self.file_menu.addSeparator()
@@ -188,27 +188,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self.hands_free_overlay.hide()
         
         # Connect manager signals to overlay
-        self.hands_free_manager.status_changed.connect(
-            lambda s: self.hands_free_overlay.set_active(self.hands_free_manager.is_running())
+        self.assistant_manager.status_changed.connect(
+            lambda s: self.hands_free_overlay.set_active(self.assistant_manager.is_running())
         )
-        self.hands_free_manager.command_recognized.connect(
+        self.assistant_manager.command_recognized.connect(
             self.hands_free_overlay.show_command
         )
-        self.hands_free_manager.partial_text.connect(
+        self.assistant_manager.partial_text.connect(
             self.hands_free_overlay.show_partial
         )
         
         # Initialize in background to not block startup
-        QtCore.QTimer.singleShot(1000, self.hands_free_manager.initialize)
+        QtCore.QTimer.singleShot(1000, self.assistant_manager.initialize)
     
     def _toggle_voice_control(self, checked: bool) -> None:
         """Toggle voice control on/off."""
         if checked:
-            if self.hands_free_manager.start():
+            if self.assistant_manager.start():
                 self.voice_control_action.setIcon(qta.icon('fa5s.microphone', color='green'))
                 self.voice_control_action.setText("Voice Control (ON)")
                 # Show overlay for feedback
-                if self.hands_free_manager.get_config().overlay_enabled:
+                if self.assistant_manager.get_config().overlay_enabled:
                     self.hands_free_overlay.position_in_corner("top-right")
                     self.hands_free_overlay.show()
                 self.statusBar().showMessage("Voice control enabled - say commands to control the app", 3000)
@@ -216,7 +216,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.voice_control_action.setChecked(False)
                 self.statusBar().showMessage("Failed to start voice control - check microphone", 5000)
         else:
-            self.hands_free_manager.stop()
+            self.assistant_manager.stop()
             self.voice_control_action.setIcon(qta.icon('fa5s.microphone'))
             self.voice_control_action.setText("Voice Control")
             self.hands_free_overlay.hide()
@@ -224,21 +224,25 @@ class MainWindow(QtWidgets.QMainWindow):
             
     def _open_llm_chat(self) -> None:
         """Open the LLM chat dialog."""
-        from pylcss.hands_free.ui.llm_chat_dialog import LLMChatDialog
+        from pylcss.user_interface.assistant import LLMChatDialog
         if not hasattr(self, '_llm_chat_dialog') or self._llm_chat_dialog is None:
             # Pass the manager's command dispatcher so the chat can execute actions
-            dispatcher = self.hands_free_manager.command_dispatcher
-            self._llm_chat_dialog = LLMChatDialog(command_dispatcher=dispatcher, parent=self)
+            dispatcher = self.assistant_manager.command_dispatcher
+            self._llm_chat_dialog = LLMChatDialog(
+                command_dispatcher=dispatcher,
+                assistant_manager=self.assistant_manager,
+                parent=self
+            )
         self._llm_chat_dialog.show()
         self._llm_chat_dialog.raise_()
     
     def _open_llm_settings(self) -> None:
         """Open the LLM configuration dialog."""
-        from pylcss.hands_free.ui.llm_config_dialog import LLMConfigDialog
+        from pylcss.user_interface.assistant import LLMConfigDialog
         dialog = LLMConfigDialog(self)
         if dialog.exec():
             # Reload manager's provider after settings change
-            self.hands_free_manager.update_config(self.hands_free_manager.get_config())
+            self.assistant_manager.update_config(self.assistant_manager.get_config())
             self.statusBar().showMessage("LLM settings updated", 3000)
 
 

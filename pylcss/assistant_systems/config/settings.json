@@ -1,0 +1,48 @@
+{
+  "head_tracking": {
+    "enabled": false,
+    "camera_index": 0,
+    "sensitivity_x": 1.0,
+    "sensitivity_y": 0.8,
+    "deadzone": 0.03,
+    "smoothing": 0.5,
+    "invert_x": false,
+    "invert_y": false,
+    "blink_threshold": 0.21,
+    "blink_frames": 3
+  },
+  "voice_control": {
+    "enabled": true,
+    "model_path": "base.en",
+    "sample_rate": 16000,
+    "hotword": "hey computer",
+    "hotword_enabled": false,
+    "command_timeout": 5.0,
+    "feedback_enabled": true,
+    "confirm_actions": false,
+    "input_device_index": null
+  },
+  "llm_control": {
+    "enabled": true,
+    "provider": "local",
+    "openai_api_key": "",
+    "anthropic_api_key": "",
+    "google_api_key": "",
+    "local_api_key": "",
+    "local_api_url": "http://localhost:1234/v1",
+    "selected_model": "openai/gpt-oss-20b",
+    "model": "openai/gpt-oss-20b",
+    "auto_execute": false,
+    "max_tokens": 2000,
+    "temperature": 0.7,
+    "memory_enabled": true,
+    "max_memory_messages": 20,
+    "agentic_mode": true,
+    "use_critic_agent": true,
+    "validate_design_intent": true,
+    "max_retries": 3,
+    "auto_save_workflows": true
+  },
+  "startup_enabled": false,
+  "overlay_enabled": true
+}
