@@ -4,7 +4,7 @@
 
 ![PyLCSS Banner](pylcss/user_interface/icon.png)
 
-**🚀 Source-Available Engineering Simulation & Optimization Platform**
+**Source-Available Engineering Simulation & Optimization Platform**
 
 *Visual Modeling • CAD and FEM • Solution Space Exploration • AI-Powered Surrogates • Multi-Objective Optimization*
 
@@ -16,7 +16,7 @@
 
 ---
 
-## 🎯 Overview
+## Overview
 
 **PyLCSS** (Python Low-Code System Solutions) is a high-performance engineering platform designed to bridge the gap between intuitive visual design and rigorous mathematical analysis.
 
@@ -24,7 +24,7 @@ It enables engineers to model complex systems using a node-based interface, expl
 
 ---
 
-## 🔬 Scientific Foundation: Solution Spaces
+## Scientific Foundation: Solution Spaces
 
 PyLCSS implements the **Solution Space** approach for robust design. Instead of seeking a single optimal point (which may be sensitive to manufacturing tolerances), PyLCSS identifies **box-shaped regions** of valid designs. This allows for decoupled development of subsystems in complex engineering projects.
 
@@ -34,32 +34,32 @@ PyLCSS implements the **Solution Space** approach for robust design. Instead of 
 
 ---
 
-## ✨ Key Features
+## Key Features
 
-### 🏗️ Visual Modeling Environment
+### Visual Modeling Environment
 * **Node-Based Architecture:** Intuitive drag-and-drop interface powered by `NodeGraphQt`.
 * **Unit Intelligence:** Automatic dimensional analysis and compatibility checking via `Pint` ensures physical consistency.
 * **Python Integration:** Write custom logic blocks with full `NumPy` support.
 * **CAD Modeling:** Parametric 3D CAD design using `CadQuery` with node-based workflow.
 
-### 📊 Advanced Analysis Suite
+### Advanced Analysis Suite
 * **Monte Carlo Exploration:** Rapidly evaluate thousands of design variants using vectorized sampling.
 * **Solution Space Visualization:** Interactive 2D scatter plots, parallel coordinates, and feasibility maps.
 * **Global Sensitivity Analysis:** Variance-based Sobol indices (via `SALib`) to identify critical design drivers.
 * **FEM Simulation:** Finite element analysis with `scikit-fem` and `Netgen` meshing for structural analysis.
 
-### 🧠 AI & Optimization
+### AI & Optimization
 * **Surrogate Modeling:** Replace expensive simulations with fast approximations using **PyTorch** Neural Networks, Random Forests, or Gradient Boosting.
 * **Multi-Objective Optimization:** Generate Pareto fronts using state-of-the-art solvers:
     * **Gradient-Based:** SLSQP (SciPy)
     * **Gradient-Free:** Nevergrad, Differential Evolution, COBYLA
 
-### ⚡ Industrial-Grade Performance
+### Industrial-Grade Performance
 * **Vectorized Kernels:** Calculation engines are optimized with NumPy vectorization for maximum throughput.
 * **Non-Blocking UI:** Heavy computations run in background threads with signal throttling to ensure the GUI remains responsive at 60 FPS.
 * **Crash Protection:** Robust error handling and race-condition prevention using Mutex locks.
 
-### 🤖 LLM-Powered Voice Assistant
+### LLM-Powered Voice Assistant
 * **Natural Language Control:** Speak naturally to control the UI (e.g., "Zoom in", "Go to properties").
 * **AI Coding Assistant:** Ask the LLM to generate complex systems (e.g., "Create a helical gear").
 * **Local Speed:** Uses **Faster-Whisper** for real-time local speech recognition.
@@ -68,7 +68,7 @@ PyLCSS implements the **Solution Space** approach for robust design. Instead of 
 
 ---
 
-## 📦 Installation
+## Installation
 
 ### Prerequisites
 * **Python:** 3.8 or higher
@@ -95,7 +95,7 @@ pip install -r requirements.txt
 python scripts/main.py
 ```
 
-## 🚀 Quick Start Guide
+## Quick Start Guide
 
 **Launch the App:** Run `run_gui.bat` (Windows) or execute `python scripts/main.py`.
 
@@ -109,7 +109,7 @@ python scripts/main.py
 
 **Optimize:** Go to the Optimization tab, select objectives (e.g., Minimize Weight), and run the solver.
 
-## 📚 Tech Stack
+## Tech Stack
 
 PyLCSS is built on the shoulders of giants:
 
@@ -127,13 +127,13 @@ PyLCSS is built on the shoulders of giants:
 
 **CAD and FEM:** CadQuery, VTK, scikit-fem, Netgen, meshio
 
-## 📄 License
+## License
 
 PyLCSS is licensed under the **PolyForm Shield License 1.0.0**.
 
-**✅ Allowed:** Personal use, academic research, internal business use.
+**Allowed:** Personal use, academic research, internal business use.
 
-**❌ Restricted:** You cannot use this software to build a competing product or service.
+**Restricted:** You cannot use this software to build a competing product or service.
 
 See [LICENSE](LICENSE) for full details.
 
