@@ -643,20 +643,17 @@ class ConstraintNode(CadQueryNode):
     def run(self):
         mesh = self.get_input_value('mesh', None)
         target_wp = self.get_input_value('target_face', None)
-        fallback_condition = self.get_property('condition')
         constraint_type = self.get_property('constraint_type')
+        fallback_condition = self.get_property('condition')
         
         # Get displacement values
         disp_x = float(self.get_property('displacement_x'))
         disp_y = float(self.get_property('displacement_y'))
         disp_z = float(self.get_property('displacement_z'))
         
-        # Debug logging
-
-
         if mesh is None:
             return None
-
+        
         # Map constraint type to DOF constraints
         # 'fixed_dofs' indicates which DOFs (0=x, 1=y, 2=z) are fixed
         # 'free_dofs' indicates which DOFs are free (for roller/pinned)
@@ -677,7 +674,7 @@ class ConstraintNode(CadQueryNode):
         # If no face input provided, use fallback string condition
         if target_wp is None:
             if not fallback_condition:
-
+                self.set_error("No target face or condition")
                 return None
             return {
                 'type': constraint_type.lower().replace(' ', '_'),
@@ -698,7 +695,6 @@ class ConstraintNode(CadQueryNode):
                     return None
                 face_obj = face_objs[0]
             
-
             return {
                 'type': constraint_type.lower().replace(' ', '_'),
                 'geometry': face_obj,
@@ -1197,8 +1193,8 @@ class TopologyOptimizationNode(CadQueryNode):
         super().__init__()
         self.add_input('mesh', color=(200, 100, 200))
         self.add_input('material', color=(200, 200, 200))
-        self.add_input('constraints', color=(255, 100, 100))
-        self.add_input('loads', color=(255, 255, 0))
+        self.add_input('constraints', color=(255, 100, 100), multi_input=True)
+        self.add_input('loads', color=(255, 255, 0), multi_input=True)
         self.add_output('optimized_mesh', color=(200, 100, 200))
         self.add_output('recovered_shape', color=(100, 255, 100))
         self.create_property('vol_frac', 0.4, widget_type='float')
@@ -1232,10 +1228,27 @@ class TopologyOptimizationNode(CadQueryNode):
 
     def run(self, progress_callback=None):
         logger.info("TopOpt: Optimization started.")
+        
+        # Helper to flatten inputs for list validation
+        def flatten_initial(inputs):
+            flat = []
+            if not inputs: return flat
+            for item in inputs:
+                if isinstance(item, list):
+                    flat.extend(item)
+                elif item is not None:
+                    flat.append(item)
+            return flat
+
         mesh = self.get_input_value('mesh', None)
         material = self.get_input_value('material', None)
-        constraint = self.get_input_value('constraints', None)
-        load = self.get_input_value('loads', None)
+        
+        # Fetch lists and validate
+        raw_constraints = self.get_input_list('constraints')
+        constraints = flatten_initial(raw_constraints)
+        
+        raw_loads = self.get_input_list('loads')
+        loads = flatten_initial(raw_loads)
         
         # Resolve parametric inputs with fallbacks to properties
         vol_frac = self.get_input_value('vol_frac', 'vol_frac')
@@ -1262,8 +1275,8 @@ class TopologyOptimizationNode(CadQueryNode):
         recovery_res = self.get_property('recovery_resolution')
         smoothing_iter = self.get_property('smoothing_iterations')
         
-        if not (mesh and material and constraint and load):
-            logger.warning(f"TopOpt: Missing inputs! Mesh:{mesh is not None}, Mat:{material is not None}, Cons:{constraint is not None}, Load:{load is not None}")
+        if not (mesh and material and constraints and loads):
+            logger.warning(f"TopOpt: Missing inputs! Mesh:{mesh is not None}, Mat:{material is not None}, Cons:{len(constraints)} items, Load:{len(loads)} items")
             return None
 
         logger.info("TopOpt: Inputs confirmed. Setting up basis...")
@@ -1352,94 +1365,179 @@ class TopologyOptimizationNode(CadQueryNode):
         debug_constraints = []
         debug_loads = []
         
+        # Helper to flatten inputs
+        def flatten_inputs(inputs):
+            flat = []
+            if not inputs: return flat
+            for item in inputs:
+                if isinstance(item, list):
+                    flat.extend(item)
+                elif item is not None:
+                    flat.append(item)
+            return flat
+
+        # Get all constraints and loads
+        constraint_list = flatten_inputs(self.get_input_list('constraints'))
+        load_list = flatten_inputs(self.get_input_list('loads'))
+        
+        fixed_dofs = np.array([], dtype=int)
+        
+        # --- PROCESS CONSTRAINTS ---
         try:
-            if 'geometry' in constraint:
-                # New geometry-based constraint selection
-                face_shape = constraint['geometry']
-                node_coords = np.column_stack((x, y, z))
+            for c in constraint_list:
+                if not c: continue
                 
-                # Get bounding box for initial filtering
-                bb = face_shape.BoundingBox()
-                tolerance = 1e-3
-                xmin, xmax = bb.xmin - tolerance, bb.xmax + tolerance
-                ymin, ymax = bb.ymin - tolerance, bb.ymax + tolerance
-                zmin, zmax = bb.zmin - tolerance, bb.zmax + tolerance
+                fixed_dof_indices = c.get('fixed_dofs', [0, 1, 2])
                 
-                fixed_nodes = []
-                for i, coord in enumerate(node_coords):
-                    if (xmin <= coord[0] <= xmax and ymin <= coord[1] <= ymax and zmin <= coord[2] <= zmax):
-                        fixed_nodes.append(i)
-                
-                # Convert node indices to DOF indices
-                fixed_dofs = []
-                nodal_dofs = basis.nodal_dofs
-                for node_idx in fixed_nodes:
-                    for dof_idx in nodal_dofs[:, node_idx]:
-                        fixed_dofs.append(dof_idx)
-                
-                fixed_dofs = np.array(fixed_dofs, dtype=int)
-                
-                # Debug Viz: Sparse sampling of fixed nodes
-                step = max(1, len(fixed_nodes) // 50)
-                for i in range(0, len(fixed_nodes), step):
-                    idx = fixed_nodes[i]
-                    debug_constraints.append({'pos': mesh.p[:, idx].tolist()})
-                
-                
-            elif 'condition' in constraint:
-                # Legacy condition-based constraint
-                cond_str = constraint['condition']
-                def constraint_func(p):
-                    x, y, z = p
-                    return eval(cond_str, {'x': x, 'y': y, 'z': z, 'np': np})
+                if 'geometry' in c:
+                    # Geometry-based constraint selection
+                    face_shape = c['geometry']
+                    node_coords = np.column_stack((x, y, z))
                     
-                # We need node indices for visualization, but basis.get_dofs returns DOFs.
-                # Let's verify manually using the condition
-                mask = constraint_func(mesh.p)
-                fixed_nodes_indices = np.where(mask)[0]
-                
-                fixed_dofs = basis.get_dofs(constraint_func).all()
-                
-                # Debug Viz
-                step = max(1, len(fixed_nodes_indices) // 50)
-                for i in range(0, len(fixed_nodes_indices), step):
-                    idx = fixed_nodes_indices[i]
-                    debug_constraints.append({'pos': mesh.p[:, idx].tolist()})
-            else:
-                fixed_dofs = np.array([], dtype=int)
-        except Exception:
+                    # Bounding box filter
+                    bb = face_shape.BoundingBox()
+                    tolerance = 1e-3
+                    xmin, xmax = bb.xmin - tolerance, bb.xmax + tolerance
+                    ymin, ymax = bb.ymin - tolerance, bb.ymax + tolerance
+                    zmin, zmax = bb.zmin - tolerance, bb.zmax + tolerance
+                    
+                    fixed_nodes = []
+                    for i, coord in enumerate(node_coords):
+                        if (xmin <= coord[0] <= xmax and ymin <= coord[1] <= ymax and zmin <= coord[2] <= zmax):
+                            try:
+                                from cadquery import Vector
+                                point = Vector(coord[0], coord[1], coord[2])
+                                distance = face_shape.distanceTo(point)
+                                if distance <= tolerance:
+                                    fixed_nodes.append(i)
+                            except:
+                                fixed_nodes.append(i) # Fallback to BB
+                    
+                    # Convert to DOFs
+                    nodal_dofs = basis.nodal_dofs
+                    for node_idx in fixed_nodes:
+                        for dof_idx in fixed_dof_indices:
+                             fixed_dofs = np.union1d(fixed_dofs, [nodal_dofs[dof_idx, node_idx]])
+                    
+                    # Debug Viz (Sampled)
+                    step = max(1, len(fixed_nodes) // 50)
+                    for i in range(0, len(fixed_nodes), step):
+                        idx = fixed_nodes[i]
+                        debug_constraints.append({'pos': mesh.p[:, idx].tolist()})
+                        
+                elif 'condition' in c and c['condition']:
+                    # Legacy string condition
+                    cond_str = c['condition']
+                    try:
+                        def constraint_func(p):
+                            x, y, z = p
+                            return eval(cond_str, {'x': x, 'y': y, 'z': z, 'np': np})
+                        
+                        facet_dofs = basis.get_dofs(constraint_func)
+                        for dof_idx in fixed_dof_indices:
+                             fixed_dofs = np.union1d(fixed_dofs, facet_dofs.nodal[f'u^{dof_idx+1}'])
+                        
+                        # Debug Viz via mask
+                        mask = constraint_func(mesh.p)
+                        if isinstance(mask, np.ndarray):
+                            fixed_nodes_indices = np.where(mask)[0]
+                            step = max(1, len(fixed_nodes_indices) // 50)
+                            for i in range(0, len(fixed_nodes_indices), step):
+                                idx = fixed_nodes_indices[i]
+                                debug_constraints.append({'pos': mesh.p[:, idx].tolist()})
+                    except Exception as e:
+                        logger.warning(f"TopOpt: Constraint condition failed: {e}")
+
+            fixed_dofs = fixed_dofs.astype(int)
+
+        except Exception as e:
+            logger.warning(f"TopOpt: Constraint processing error: {e}")
             fixed_dofs = np.array([], dtype=int)
 
-        # Assemble Load Vector f
+
+        # --- PROCESS LOADS ---
         f = np.zeros(basis.N)
-        load_vec = load['vector']
-        load_cond = load['condition']
         
         try:
-            matching_nodes_indices = np.where(eval(load_cond, {'x': x, 'y': y, 'z': z, 'np': np}))[0]
-            n_load_nodes = len(matching_nodes_indices)
-            if n_load_nodes > 0:
-                fx, fy, fz = [val / n_load_nodes for val in load_vec]
-                nodal_dofs = basis.nodal_dofs
-                for node_idx in matching_nodes_indices:
-                    f[nodal_dofs[0, node_idx]] += fx
-                    f[nodal_dofs[1, node_idx]] += fy
-                    f[nodal_dofs[2, node_idx]] += fz
+            for l in load_list:
+                if not l: continue
                 
-                # Debug Viz: Sparse sampling of loaded nodes
-                # Use total force vector for visualization (easier to see) or nodal force?
-                # Nodal force is very small. Maybe use total load_vec as direction check.
-                # Let's pass the nodal vector but scaled up by node count or just unit vector * magnitude?
-                # The viewer draws arrows.
-                step = max(1, n_load_nodes // 20) # Max 20 arrows
-                for i in range(0, n_load_nodes, step):
-                    idx = matching_nodes_indices[i]
-                    debug_loads.append({
-                        'start': mesh.p[:, idx].tolist(),
-                        'vector': load_vec # Use total force vector for visualization direction/magnitude
-                    })
-        except Exception:
-            pass
+                vector = l.get('vector', [0, 0, 0])
+                load_type = l.get('type', 'force')
+                pressure = l.get('pressure', 0.0) # For pressure loads
+                
+                if 'geometry' in l:
+                    # Geometry-based load
+                    face_shape = l['geometry']
+                    node_coords = np.column_stack((x, y, z))
+                    
+                    # Bounding box filter
+                    bb = face_shape.BoundingBox()
+                    tolerance = 1e-3
+                    xmin, xmax = bb.xmin - tolerance, bb.xmax + tolerance
+                    ymin, ymax = bb.ymin - tolerance, bb.ymax + tolerance
+                    zmin, zmax = bb.zmin - tolerance, bb.zmax + tolerance
+                    
+                    load_nodes = []
+                    for i, coord in enumerate(node_coords):
+                        if (xmin <= coord[0] <= xmax and ymin <= coord[1] <= ymax and zmin <= coord[2] <= zmax):
+                            try:
+                                from cadquery import Vector
+                                point = Vector(coord[0], coord[1], coord[2])
+                                distance = face_shape.distanceTo(point)
+                                if distance <= tolerance:
+                                    load_nodes.append(i)
+                            except:
+                                load_nodes.append(i)
+                    
+                    if not load_nodes: continue
+                    
+                    n_nodes = len(load_nodes)
+                    nodal_dofs = basis.nodal_dofs
+                    
+                    # Distribute load (Simplified Point Load Distribution)
+                    fx, fy, fz = [v / n_nodes for v in vector]
+                    
+                    for node_idx in load_nodes:
+                         f[nodal_dofs[0, node_idx]] += fx
+                         f[nodal_dofs[1, node_idx]] += fy
+                         f[nodal_dofs[2, node_idx]] += fz
+                    
+                    # Debug Viz
+                    step = max(1, n_nodes // 20)
+                    for i in range(0, n_nodes, step):
+                        idx = load_nodes[i]
+                        debug_loads.append({
+                            'start': mesh.p[:, idx].tolist(),
+                            'vector': vector
+                        })
+                        
+                elif 'condition' in l and l['condition']:
+                    # Legacy string load
+                    load_cond = l['condition']
+                    try:
+                        matching_nodes_indices = np.where(eval(load_cond, {'x': x, 'y': y, 'z': z, 'np': np}))[0]
+                        n_load_nodes = len(matching_nodes_indices)
+                        if n_load_nodes > 0:
+                            fx, fy, fz = [val / n_load_nodes for val in vector]
+                            nodal_dofs = basis.nodal_dofs
+                            for node_idx in matching_nodes_indices:
+                                f[nodal_dofs[0, node_idx]] += fx
+                                f[nodal_dofs[1, node_idx]] += fy
+                                f[nodal_dofs[2, node_idx]] += fz
+                            
+                            step = max(1, n_load_nodes // 20)
+                            for i in range(0, n_load_nodes, step):
+                                idx = matching_nodes_indices[i]
+                                debug_loads.append({
+                                    'start': mesh.p[:, idx].tolist(),
+                                    'vector': vector
+                                })
+                    except Exception as e:
+                        logger.warning(f"TopOpt: Load condition failed: {e}")
+                        
+        except Exception as e:
+            logger.warning(f"TopOpt: Load processing error: {e}")
 
 
         # Stiffness Form with Density Penalization

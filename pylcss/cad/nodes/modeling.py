@@ -8,6 +8,9 @@ Modeling Nodes - 3D Operations and Transformations.
 import cadquery as cq
 from pylcss.cad.core.base_node import CadQueryNode, resolve_numeric_input, resolve_shape_input
 import math
+import logging
+
+logger = logging.getLogger(__name__)
 
 # ==========================================
 # 3D CREATION & BOOLS
@@ -543,16 +546,35 @@ class SelectFaceNode(CadQueryNode):
                 if not faces:
                     self.set_error("No faces found with selector")
                     return None
-                return {'workplane': face_selection.workplane(), 'face': faces[0]}
+                
+                try:
+                    wp = face_selection.workplane()
+                except Exception:
+                    # Creating a workplane from a curved face (e.g. cylinder) might fail
+                    wp = None
+                    
+                return {'workplane': wp, 'face': faces[0]}
 
             elif method == 'NearestToPoint':
                 pt = (self.get_property('near_x'), self.get_property('near_y'), self.get_property('near_z'))
-                face_selection = shape.faces(cq.NearestToPointSelector(pt))
+                try:
+                    face_selection = shape.faces(cq.NearestToPointSelector(pt))
+                except Exception:
+                     # Fallback to workplane if shape.faces fails
+                     face_selection = shape.workplane().faces(cq.NearestToPointSelector(pt))
+                
                 faces = face_selection.vals()
                 if not faces:
                     self.set_error("No faces found near point")
                     return None
-                return {'workplane': face_selection.workplane(), 'face': faces[0]}
+                
+                try:
+                    wp = face_selection.workplane()
+                except Exception:
+                    # Creating a workplane from a curved face (e.g. cylinder) might fail
+                    wp = None
+                    
+                return {'workplane': wp, 'face': faces[0]}
 
             elif method == 'Index':
                 idx = int(self.get_property('face_index'))

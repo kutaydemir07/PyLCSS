@@ -72,6 +72,22 @@ def resolve_any_input(port):
             pass
     return None
 
+def resolve_all_inputs(port):
+    """Resolve all connected inputs into a list."""
+    results = []
+    if port and port.connected_ports():
+        for cp in port.connected_ports():
+            try:
+                node = cp.node()
+                res = getattr(node, '_last_result', None)
+                if res is None:
+                    res = node.run()
+                if res is not None:
+                    results.append(res)
+            except Exception:
+                pass
+    return results
+
 class CadQueryNode(BaseNode):
     """Base node for all CAD operations."""
     __identifier__ = 'com.cad'
@@ -142,6 +158,16 @@ class CadQueryNode(BaseNode):
         
         fallback = self.get_property(prop_name) if prop_name else None
         return fallback
+
+    def get_input_list(self, port_name):
+        """
+        Helper to get a list of values from a multi-input port.
+        Returns a list of results from all connected nodes.
+        """
+        port = self.get_input(port_name)
+        if port:
+            return resolve_all_inputs(port)
+        return []
 
     def get_input_shape(self, port_name):
         """Helper to get a shape from an input port."""
