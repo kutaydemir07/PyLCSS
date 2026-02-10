@@ -98,6 +98,22 @@ from pylcss.cad.nodes.io import ExportStepNode, ExportStlNode
 from pylcss.cad.nodes.values import NumberNode, VariableNode
 
 # =============================================================================
+# ADVANCED NODES
+# =============================================================================
+from pylcss.cad.nodes.advanced import (
+    ImportStepNode, ImportStlNode, ThickenNode, SplitNode,
+    PipeNode, TextNode, MathExpressionNode,
+    MeasureDistanceNode, SurfaceAreaNode,
+)
+
+# =============================================================================
+# ADVANCED FEA (previously unregistered)
+# =============================================================================
+from pylcss.cad.nodes.fem import (
+    RemeshNode, SizeOptimizationNode, ShapeOptimizationNode,
+)
+
+# =============================================================================
 # ALL EXPORTS
 # =============================================================================
 __all__ = [
@@ -143,4 +159,12 @@ __all__ = [
     
     # IO / Values
     "ExportStepNode", "ExportStlNode", "NumberNode", "VariableNode",
+    
+    # Advanced
+    "ImportStepNode", "ImportStlNode", "ThickenNode", "SplitNode",
+    "PipeNode", "TextNode", "MathExpressionNode",
+    "MeasureDistanceNode", "SurfaceAreaNode",
+    
+    # Advanced FEA
+    "RemeshNode", "SizeOptimizationNode", "ShapeOptimizationNode",
 ]

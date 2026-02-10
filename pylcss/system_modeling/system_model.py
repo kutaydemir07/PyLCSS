@@ -179,7 +179,7 @@ class SystemModel:
             "import numpy as np",
             "import joblib",
             "from sklearn.preprocessing import StandardScaler",
-            "import math"
+            "import math",
         ]
 
         # 1. Write headers once

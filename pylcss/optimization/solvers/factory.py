@@ -3,6 +3,7 @@
 
 from .scipy_solver import ScipySolver
 from .global_opt import GlobalSolver
+from .pareto import ParetoSolver, MultiStartSolver
 
 def get_solver(method: str, settings: dict):
     """
@@ -15,6 +16,12 @@ def get_solver(method: str, settings: dict):
     
     if method in ['Nevergrad', 'Differential Evolution']:
         return GlobalSolver(settings)
+
+    if method == 'NSGA-II':
+        return ParetoSolver(settings)
+
+    if method == 'Multi-Start':
+        return MultiStartSolver(settings)
     
     # Default to ScipySolver (SLSQP) if unknown
     return ScipySolver(settings)

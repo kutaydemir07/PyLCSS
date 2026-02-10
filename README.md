@@ -6,11 +6,11 @@
 
 **Source-Available Engineering Simulation & Optimization Platform**
 
-*Visual Modeling • CAD and FEM • Solution Space Exploration • AI-Powered Surrogates • Multi-Objective Optimization*
+*Visual Modeling · Parametric CAD · Topology Optimisation · FEA · Solution Spaces · Sensitivity Analysis · Surrogate AI · Multi-Objective Optimization*
 
 [![License](https://img.shields.io/badge/License-PolyForm_Shield_1.0.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-green.svg)](https://www.python.org/)
-[![Status](https://img.shields.io/badge/Status-Production_Ready-orange.svg)]()
+[![Version](https://img.shields.io/badge/Version-2.0.0-orange.svg)]()
 
 </div>
 
@@ -18,123 +18,175 @@
 
 ## Overview
 
-**PyLCSS** (Python Low-Code System Solutions) is a high-performance engineering platform designed to bridge the gap between intuitive visual design and rigorous mathematical analysis.
+**PyLCSS** (Python Low-Code System Solutions) is a professional engineering design platform. It allows engineers to model complex multidisciplinary systems through a node-based visual interface, run parametric CAD and FEA simulations, explore high-dimensional **Solution Spaces**, and optimise designs using 7 different algorithms — all within a single desktop application.
 
-It enables engineers to model complex systems using a node-based interface, explore high-dimensional **Solution Spaces**, and optimize designs using industry-standard algorithms. Built for robustness, it features a crash-free multi-threaded architecture, vectorized computation kernels, and integrated AI capabilities.
+Built for real-world engineering workflows, PyLCSS features a crash-free multi-threaded architecture, vectorised computation kernels, comprehensive file I/O, and an integrated AI coding assistant.
 
 ---
 
-## Scientific Foundation: Solution Spaces
+## Scientific Foundation
 
-PyLCSS implements the **Solution Space** approach for robust design. Instead of seeking a single optimal point (which may be sensitive to manufacturing tolerances), PyLCSS identifies **box-shaped regions** of valid designs. This allows for decoupled development of subsystems in complex engineering projects.
+PyLCSS implements the **Solution Space** approach for robust design: instead of seeking a single optimal point (which may be sensitive to tolerances), it identifies **box-shaped regions** of valid designs, enabling decoupled subsystem development.
 
-> **Reference Algorithm:** > The solution space computation methods are based on:  
-> *Markus Zimmermann, Johannes Edler von Hoessle*, "Computing solution spaces for robust design", *International Journal for Numerical Methods in Engineering*, 2013.  
-> [DOI: 10.1002/nme.4450](https://doi.org/10.1002/nme.4450)
+> *Markus Zimmermann, Johannes Edler von Hoessle*, "Computing solution spaces for robust design", *Int. J. Numer. Meth. Engng.*, 2013. [DOI: 10.1002/nme.4450](https://doi.org/10.1002/nme.4450)
 
 ---
 
 ## Key Features
 
-### Visual Modeling Environment
-* **Node-Based Architecture:** Intuitive drag-and-drop interface powered by `NodeGraphQt`.
-* **Unit Intelligence:** Automatic dimensional analysis and compatibility checking via `Pint` ensures physical consistency.
-* **Python Integration:** Write custom logic blocks with full `NumPy` support.
-* **CAD Modeling:** Parametric 3D CAD design using `CadQuery` with node-based workflow.
+### Parametric CAD Environment
+- **50+ Node Types** — Primitives, Booleans, Fillets, Chamfers, Sweeps, Lofts, Shells, Patterns, Imports
+- **Topology Optimisation** — SIMP with MMA/OC solvers, density/sensitivity filtering, Heaviside projection, symmetry constraints, shape recovery with marching cubes, and **direct STL/OBJ export** of optimised shapes
+- **Advanced Nodes** — Thicken, Pipe, Split, Text emboss, Math Expression evaluator, Import STEP/STL
+- **Real-Time 3D Viewer** — VTK-based with density cutoff preview during optimisation
+- **Measurement** — Distance, surface area, and volume nodes
 
-### Advanced Analysis Suite
-* **Monte Carlo Exploration:** Rapidly evaluate thousands of design variants using vectorized sampling.
-* **Solution Space Visualization:** Interactive 2D scatter plots, parallel coordinates, and feasibility maps.
-* **Global Sensitivity Analysis:** Variance-based Sobol indices (via `SALib`) to identify critical design drivers.
-* **FEM Simulation:** Finite element analysis with `scikit-fem` and `Netgen` meshing for structural analysis.
+### Finite Element Analysis (FEA)
+- **scikit-fem** + **Netgen** meshing — Tetrahedral/triangular elements
+- **Linear Elasticity** — Displacement, von Mises stress, compliance
+- **FEA Results Nodes** — Stress extraction, displacement, reaction forces
+- **Remeshing** — Surface-to-solid conversion for topology-optimised shapes (up to 20 000 faces)
 
-### AI & Optimization
-* **Surrogate Modeling:** Replace expensive simulations with fast approximations using **PyTorch** Neural Networks, Random Forests, or Gradient Boosting.
-* **Multi-Objective Optimization:** Generate Pareto fronts using state-of-the-art solvers:
-    * **Gradient-Based:** SLSQP (SciPy)
-    * **Gradient-Free:** Nevergrad, Differential Evolution, COBYLA
+### Multi-Objective Optimisation (7 Solvers)
+| Algorithm | Type | Best For |
+|-----------|------|----------|
+| SLSQP | Gradient-based | Fast local optimisation with constraints |
+| COBYLA | Derivative-free | Noisy or non-differentiable models |
+| trust-constr | Interior point | Large-scale constrained problems |
+| Differential Evolution | Population-based | Global search, black-box functions |
+| Nevergrad | Meta-optimiser | Algorithm-agnostic global search |
+| **NSGA-II** | Multi-objective evolutionary | Pareto fronts with 2–5 objectives |
+| **Multi-Start** | Hybrid global+local | Avoiding local minima via LHS starts |
 
-### Industrial-Grade Performance
-* **Vectorized Kernels:** Calculation engines are optimized with NumPy vectorization for maximum throughput.
-* **Non-Blocking UI:** Heavy computations run in background threads with signal throttling to ensure the GUI remains responsive at 60 FPS.
-* **Crash Protection:** Robust error handling and race-condition prevention using Mutex locks.
+### Global Sensitivity Analysis (4 Methods)
+| Method | Indices | Use Case |
+|--------|---------|----------|
+| **Sobol** | S1, ST, S2 interaction | Variance decomposition |
+| **Morris** | μ, μ*, σ | Screening with few evaluations |
+| **FAST** | S1, ST | Fourier decomposition, fast convergence |
+| **Delta (DMIM)** | δ, S1 | Moment-independent, distribution-based |
+
+- Batch analysis across all outputs, convergence study, importance ranking (Critical / Important / Minor / Negligible)
+
+### Surrogate Modelling & Validation
+- **5 Algorithms** — MLP Neural Network (PyTorch), Random Forest, Gradient Boosting, Gaussian Process, SVR
+- **Cross-Validation** — K-Fold (2–20 folds) and Leave-One-Out
+- **Model Comparison** — Automated comparison of all 5 algorithms on same dataset
+- **Feature Importance** — Permutation-based and tree-based importance analysis
+- **Hyperparameter Optimisation** — Grid search and random search with built-in search spaces
+
+### Solution Space Exploration
+- **Monte Carlo Sampling** — Vectorised evaluation of thousands of design variants
+- **Visualisation** — 2D scatter, parallel coordinates, feasibility maps
+- **Product Family Analysis** — Common platform identification across product variants
+- **Step Analysis** — Iterative box-size refinement
+
+### Import / Export
+| Category | Formats |
+|----------|---------|
+| **CAD Import** | STEP, IGES, STL, OBJ, BREP, 3MF |
+| **CAD Export** | STEP, STL, OBJ, BREP, SVG, DXF |
+| **Data Import** | CSV, JSON, HDF5, Excel, MATLAB (.mat), Pickle |
+| **Data Export** | CSV, JSON, HDF5, Excel, MATLAB, Pickle + HTML / Markdown reports |
+| **Mesh** | VTK, VTU, Gmsh, Abaqus, Nastran, MED, XDMF |
+| **Project** | `.pylcss` archive (ZIP containing all graphs, settings, and results) |
+
+### Engineering Tools
+- **Expression Calculator** — Safe AST-based evaluator (sin, cos, sqrt, log, conditionals, variables)
+- **Unit Converter** — 1000+ units via pint (SI, Imperial, CGS)
 
 ### LLM-Powered Voice Assistant
-* **Natural Language Control:** Speak naturally to control the UI (e.g., "Zoom in", "Go to properties").
-* **AI Coding Assistant:** Ask the LLM to generate complex systems (e.g., "Create a helical gear").
-* **Local Speed:** Uses **Faster-Whisper** for real-time local speech recognition.
-* **Privacy-First:** Supports multiple LLM providers (OpenAI, Claude, Gemini, LM-Studio) with optional localized execution.
-* **Hands-Free:** Full voice command suite for when your hands are busy with hardware or VR.
+- **Natural Language Control** — "Zoom in", "Create a helical gear", "Go to properties"
+- **Local STT** — Faster-Whisper for real-time speech recognition
+- **Multi-Provider LLM** — OpenAI, Claude, Gemini, LM-Studio
+- **Privacy-First** — Optional fully local execution
 
 ---
 
 ## Installation
 
 ### Prerequisites
-* **Python:** 3.8 or higher
-* **OS:** Windows 10/11, macOS, or Linux
+- **Python** 3.8+
+- **OS** Windows 10/11 (macOS and Linux: experimental)
 
 ### Quick Install
 
 ```bash
-# 1. Clone the repository
+# Clone
 git clone <repository-url>
 cd pylcss
 
-# 2. Create and activate a virtual environment (Recommended)
-python -m venv venv
+# Virtual environment
+python -m venv .venv
 # Windows:
-venv\Scripts\activate
+.venv\Scripts\activate
 # Linux/Mac:
-source venv/bin/activate
+source .venv/bin/activate
 
-# 3. Install dependencies
+# Dependencies
 pip install -r requirements.txt
 
-# 4. Launch PyLCSS
+# Launch
 python scripts/main.py
 ```
 
-## Quick Start Guide
+Or on Windows: double-click `run_gui.bat`.
 
-**Launch the App:** Run `run_gui.bat` (Windows) or execute `python scripts/main.py`.
+---
 
-**Load a Model:** Navigate to `File > Open` and select `data/Gear Unit.json`.
+## Quick Start
 
-**Validate:** Click the "Validate" button to check for unit consistency and connection errors.
+1. **Launch** — `python scripts/main.py`
+2. **Load a Model** — `File → Open` → select `data/Gear Unit.json`
+3. **Validate** — Click "Validate" to check units and connections
+4. **Solution Space** — Switch to Solution Space tab → "Compute"
+5. **Visualise** — Plot Weight vs. Safety Factor
+6. **Optimise** — Go to Optimisation tab → select objectives → Run
 
-**Compute:** Switch to the Solution Space tab and click "Compute" to generate design samples.
+---
 
-**Visualize:** Use the "Plot Settings" to visualize trade-offs between Weight vs Safety Factor.
+## Architecture
 
-**Optimize:** Go to the Optimization tab, select objectives (e.g., Minimize Weight), and run the solver.
+```
+pylcss/
+├── cad/                  # Parametric CAD kernel (CadQuery + OCC)
+│   ├── nodes/            # 50+ node types (primitives, booleans, FEA, TopOpt)
+│   ├── engine.py         # Graph execution engine
+│   └── node_library.py   # Node registry
+├── optimization/         # 7 solvers (SciPy, Nevergrad, NSGA-II, Multi-Start)
+├── sensitivity/          # 4 methods (Sobol, Morris, FAST, Delta)
+├── solution_space/       # Monte Carlo, step analysis, product families
+├── surrogate_modeling/   # 5 ML algorithms + CV + HPO + feature importance
+├── io_manager/           # CAD/mesh/data/project I/O (15+ formats)
+├── system_modeling/      # Graph-based system model builder
+├── assistant_systems/    # LLM voice assistant & tools
+└── user_interface/       # PySide6 + VTK desktop application
+```
 
 ## Tech Stack
 
-PyLCSS is built on the shoulders of giants:
-
-**UI/UX:** PySide6, NodeGraphQt, QtAwesome
-
-**Computation:** NumPy, SciPy, Pandas
-
-**Visualization:** PyQtGraph
-
-**Machine Learning:** PyTorch, Scikit-learn
-
-**Optimization:** Nevergrad, SALib
-
-**Physics:** Pint
-
-**CAD and FEM:** CadQuery, VTK, scikit-fem, Netgen, meshio
+| Layer | Technologies |
+|-------|-------------|
+| **UI** | PySide6, NodeGraphQt, QtAwesome |
+| **CAD** | CadQuery, OpenCASCADE (OCP), VTK |
+| **FEA** | scikit-fem, Netgen, meshio |
+| **Computation** | NumPy, SciPy, Pandas |
+| **Visualisation** | VTK (3D), pyqtgraph (2D) |
+| **ML** | PyTorch, scikit-learn |
+| **Optimisation** | SciPy, Nevergrad, SALib |
+| **Units** | pint |
+| **Serialisation** | h5py, dill, joblib |
+| **AI Assistant** | Faster-Whisper, OpenAI, Edge-TTS |
 
 ## License
 
-PyLCSS is licensed under the **PolyForm Shield License 1.0.0**.
+Licensed under the **PolyForm Shield License 1.0.0**.
 
 **Allowed:** Personal use, academic research, internal business use.
-
 **Restricted:** You cannot use this software to build a competing product or service.
 
 See [LICENSE](LICENSE) for full details.
 
-<div align="center"> <sub>Copyright © 2026 Kutay Demir. All rights reserved.</sub> </div>
+<div align="center">
+<sub>Copyright © 2026 Kutay Demir. All rights reserved.</sub>
+</div>

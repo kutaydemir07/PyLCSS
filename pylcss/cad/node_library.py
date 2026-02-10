@@ -46,6 +46,14 @@ from pylcss.cad.nodes import (
     MaterialNode, MeshNode, ConstraintNode, LoadNode, PressureLoadNode,
     SolverNode, TopologyOptimizationNode,
     
+    # Advanced FEA
+    RemeshNode, SizeOptimizationNode, ShapeOptimizationNode,
+    
+    # Advanced CAD
+    ImportStepNode, ImportStlNode, ThickenNode, SplitNode,
+    PipeNode, TextNode, MathExpressionNode,
+    MeasureDistanceNode, SurfaceAreaNode,
+    
     # IO
     ExportStepNode, ExportStlNode, NumberNode, VariableNode,
 )
@@ -132,6 +140,24 @@ NODE_CLASS_MAPPING = {
     'com.cad.variable': VariableNode,
     'com.cad.export_step': ExportStepNode,
     'com.cad.export_stl': ExportStlNode,
+
+    # Advanced FEA (3)
+    'com.cad.sim.remesh': RemeshNode,
+    'com.cad.sim.sizeopt': SizeOptimizationNode,
+    'com.cad.sim.shapeopt': ShapeOptimizationNode,
+
+    # Import (2)
+    'com.cad.import_step': ImportStepNode,
+    'com.cad.import_stl': ImportStlNode,
+
+    # Advanced CAD (7)
+    'com.cad.thicken': ThickenNode,
+    'com.cad.split': SplitNode,
+    'com.cad.pipe': PipeNode,
+    'com.cad.text': TextNode,
+    'com.cad.math_expression': MathExpressionNode,
+    'com.cad.measure_distance': MeasureDistanceNode,
+    'com.cad.surface_area': SurfaceAreaNode,
 }
 
 # Mapping of Class Name -> Node Class (for legacy loading)

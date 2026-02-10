@@ -117,7 +117,17 @@ class SolverSettingsWidget(QtWidgets.QWidget):
             'recombination': 0.7,
             'strategy': 'best1bin',
             'optimizer_name': 'NGOpt',
-            'num_workers': 1
+            'num_workers': 1,
+            # NSGA-II defaults
+            'nsga_popsize': 100,
+            'nsga_generations': 200,
+            'nsga_crossover_prob': 0.9,
+            'nsga_mutation_prob': None,
+            'nsga_eta_c': 20.0,
+            'nsga_eta_m': 20.0,
+            # Multi-Start defaults
+            'ms_n_starts': 10,
+            'ms_local_solver': 'SLSQP'
         }
 
     def show_algorithm_info(self):
@@ -890,3 +900,25 @@ class OptimizationWidget(QtWidgets.QWidget):
         
         if 'num_workers' in settings:
             self.settings_widget.spin_ng_workers.setValue(int(settings['num_workers']))
+        
+        # NSGA-II settings
+        if 'nsga_popsize' in settings:
+            self.settings_widget.spin_nsga_pop.setValue(int(settings['nsga_popsize']))
+        if 'nsga_generations' in settings:
+            self.settings_widget.spin_nsga_gen.setValue(int(settings['nsga_generations']))
+        if 'nsga_crossover_prob' in settings:
+            self.settings_widget.spin_nsga_cx.setValue(float(settings['nsga_crossover_prob']))
+        if 'nsga_mutation_prob' in settings and settings['nsga_mutation_prob'] is not None:
+            self.settings_widget.spin_nsga_mut.setValue(float(settings['nsga_mutation_prob']))
+        if 'nsga_eta_c' in settings:
+            self.settings_widget.spin_nsga_eta_c.setValue(float(settings['nsga_eta_c']))
+        if 'nsga_eta_m' in settings:
+            self.settings_widget.spin_nsga_eta_m.setValue(float(settings['nsga_eta_m']))
+        
+        # Multi-Start settings
+        if 'ms_n_starts' in settings:
+            self.settings_widget.spin_ms_starts.setValue(int(settings['ms_n_starts']))
+        if 'ms_local_solver' in settings:
+            idx = self.settings_widget.combo_ms_solver.findText(settings['ms_local_solver'])
+            if idx >= 0:
+                self.settings_widget.combo_ms_solver.setCurrentIndex(idx)

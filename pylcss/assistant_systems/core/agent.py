@@ -28,6 +28,7 @@ class AgentRole(Enum):
     EXECUTOR = "executor"
     CRITIC = "critic"
     ORCHESTRATOR = "orchestrator"
+    SUPERVISOR = "supervisor"
 
 
 @dataclass
@@ -168,11 +169,15 @@ class BaseAgent(ABC):
         """Clear agent history."""
         self.history = []
         
-    def _call_llm_sync(self, message: str, system_prompt: str = "") -> str:
+    def _call_llm_sync(self, message: str, system_prompt: str = "",
+                        **kwargs) -> str:
         """Call the LLM provider synchronously."""
         try:
             prompt = system_prompt or self.system_prompt
-            result = self.llm.chat(message, system_prompt=prompt)
+            # Clear message history for agentic calls - each agent call should be fresh
+            # This prevents accumulation of messages from previous calls/memory
+            self.llm.clear_history()
+            result = self.llm.chat(message, system_prompt=prompt, **kwargs)
             return result.content
         except Exception as e:
             logger.error(f"LLM call failed: {e}")
@@ -315,6 +320,11 @@ class ReActLoop:
                         if critique.approved:
                             success = True
                             logger.info(f"ReAct: Step approved by critic")
+                        elif not current_call.parameters:
+                            # No-param tools (execute_cad, validate_model) that
+                            # succeeded cannot be meaningfully retried — approve.
+                            success = True
+                            logger.info(f"ReAct: Auto-approving no-param tool that succeeded")
                         else:
                             # Self-correct based on critique
                             logger.info(f"ReAct: Critic rejected - {critique.issues}")

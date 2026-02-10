@@ -341,6 +341,7 @@ class AssistantManager(QObject):
             kwargs = {}
             if provider_name == "local":
                 kwargs["local_api_url"] = llm_config.local_api_url
+                kwargs["selected_model"] = llm_config.selected_model or llm_config.model
             
             self._llm_provider = get_provider(provider_name, api_key, **kwargs)
             self._llm_provider.temperature = llm_config.temperature
@@ -376,12 +377,7 @@ class AssistantManager(QObject):
         if self._use_agentic_mode and provider and not self._agent_orchestrator:
             self._initialize_agentic_system()
         elif self._agent_orchestrator and provider:
-            # Just update the LLM provider in existing orchestrator
-            self._agent_orchestrator.llm = provider
-            self._agent_orchestrator.planner.llm = provider
-            self._agent_orchestrator.executor.llm = provider
-            if self._agent_orchestrator.critic:
-                self._agent_orchestrator.critic.llm = provider
+            self._agent_orchestrator.update_provider(provider)
     
     def _initialize_agentic_system(self) -> None:
         """Initialize the multi-agent system for agentic AI."""

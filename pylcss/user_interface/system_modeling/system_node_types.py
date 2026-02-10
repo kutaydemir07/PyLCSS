@@ -314,17 +314,19 @@ class CodeEditorDialog(QtWidgets.QDialog):
         
         # --- RIGHT: Sidebar ---
         sidebar = QtWidgets.QWidget()
-        sidebar.setFixedWidth(250)
+        sidebar.setFixedWidth(300)
         sidebar_layout = QtWidgets.QVBoxLayout(sidebar)
         
         sidebar_layout.addWidget(QtWidgets.QLabel("<b>Available Inputs:</b>"))
         self.input_var_list = QtWidgets.QListWidget()
         self.input_var_list.setToolTip("Double-click to insert variable")
+        self.input_var_list.setMaximumHeight(100)
         sidebar_layout.addWidget(self.input_var_list)
 
         sidebar_layout.addWidget(QtWidgets.QLabel("<b>Available Outputs:</b>"))
         self.output_var_list = QtWidgets.QListWidget()
         self.output_var_list.setToolTip("Double-click to insert variable")
+        self.output_var_list.setMaximumHeight(100)
         sidebar_layout.addWidget(self.output_var_list)
 
         if node:
@@ -374,18 +376,18 @@ class CodeEditorDialog(QtWidgets.QDialog):
             "# \n"
             "# LIBRARIES:\n"
             "# - numpy as np (pre-imported)\n"
+            "# - math module (pre-imported)\n"
             "# - Import others: import pandas as pd\n"
             "# - Available: pandas, sklearn, tensorflow, requests, opencv, etc.\n"
             "# \n"
             "# EXAMPLES:\n"
+            "#   # Simple math:\n"
+            "#   a_x = in_1 * 2 + np.sin(in_2)\n"
+            "# \n"
+            "#   # External data:\n"
             "#   import pandas as pd\n"
             "#   data = pd.read_csv('file.csv')\n"
-            "#   a_x = data['col'].mean() * z_1\n"
-            "#   a_z = np.sin(z_2)\n"
-            "# \n"
-            "# PACKAGING:\n"
-            "# - EXE includes all major scientific libraries\n"
-            "# - Users can import/use any bundled library\n"
+            "#   out_1 = data['col'].mean() * in_1\n"
         )
         QtWidgets.QMessageBox.information(self, "Function Block Help", help_text)
         

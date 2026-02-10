@@ -14,6 +14,7 @@ import joblib
 import pyqtgraph as pg
 import qtawesome as qta
 from pylcss.surrogate_modeling.training_engine import SurrogateTrainer, SKLEARN_AVAILABLE, TORCH_AVAILABLE
+from pylcss.surrogate_modeling.validation import CrossValidator, HyperparameterOptimizer, FeatureImportanceAnalyzer, ModelComparator
 from pylcss.system_modeling.model_builder import GraphBuilder
 import os
 import time
@@ -428,6 +429,54 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         self.data_table = QtWidgets.QTableWidget()
         data_layout.addWidget(self.data_table)
         self.tab_widget.addTab(self.data_tab, "Data Preview")
+
+        # Tab 4: Cross-Validation Results
+        self.cv_tab = QtWidgets.QWidget()
+        cv_layout = QtWidgets.QVBoxLayout(self.cv_tab)
+        self.cv_table = QtWidgets.QTableWidget()
+        self.cv_table.setColumnCount(5)
+        self.cv_table.setHorizontalHeaderLabels(["Model", "R² Mean", "R² Std", "RMSE Mean", "MAE Mean"])
+        self.cv_table.horizontalHeader().setStretchLastSection(True)
+        cv_layout.addWidget(self.cv_table)
+
+        cv_btn_layout = QtWidgets.QHBoxLayout()
+        self.btn_run_cv = QtWidgets.QPushButton(qta.icon('fa5s.crosshairs'), " Run Cross-Validation")
+        self.btn_run_cv.setToolTip("Evaluate current model with K-Fold cross-validation")
+        self.btn_run_cv.clicked.connect(self._run_cross_validation)
+        self.btn_run_cv.setEnabled(False)
+        cv_btn_layout.addWidget(self.btn_run_cv)
+
+        self.btn_compare = QtWidgets.QPushButton(qta.icon('fa5s.balance-scale'), " Compare All Models")
+        self.btn_compare.setToolTip("Compare all available algorithms on the current dataset")
+        self.btn_compare.clicked.connect(self._compare_models)
+        self.btn_compare.setEnabled(False)
+        cv_btn_layout.addWidget(self.btn_compare)
+
+        self.spin_cv_folds = QtWidgets.QSpinBox()
+        self.spin_cv_folds.setRange(2, 20)
+        self.spin_cv_folds.setValue(5)
+        self.spin_cv_folds.setPrefix("Folds: ")
+        cv_btn_layout.addWidget(self.spin_cv_folds)
+
+        cv_layout.addLayout(cv_btn_layout)
+        self.tab_widget.addTab(self.cv_tab, "Cross-Validation")
+
+        # Tab 5: Feature Importance
+        self.fi_tab = QtWidgets.QWidget()
+        fi_layout = QtWidgets.QVBoxLayout(self.fi_tab)
+        self.fi_plot = pg.PlotWidget(title="Feature Importance")
+        self.fi_plot.setBackground('w')
+        self.fi_plot.setLabel('left', 'Importance')
+        self.fi_plot.setLabel('bottom', 'Feature')
+        self.fi_plot.showGrid(x=True, y=True, alpha=0.3)
+        fi_layout.addWidget(self.fi_plot)
+
+        self.btn_feature_imp = QtWidgets.QPushButton(qta.icon('fa5s.sort-amount-down'), " Compute Feature Importance")
+        self.btn_feature_imp.setToolTip("Permutation-based feature importance analysis")
+        self.btn_feature_imp.clicked.connect(self._compute_feature_importance)
+        self.btn_feature_imp.setEnabled(False)
+        fi_layout.addWidget(self.btn_feature_imp)
+        self.tab_widget.addTab(self.fi_tab, "Feature Importance")
         
         viz_layout.addWidget(self.tab_widget)
         
@@ -867,6 +916,9 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         self.current_model = model
         self.current_metrics = metrics
         self.btn_save.setEnabled(True)
+        self.btn_run_cv.setEnabled(True)
+        self.btn_compare.setEnabled(True)
+        self.btn_feature_imp.setEnabled(True)
         self.progress.setValue(100)
         
         # --- FIX 1: Convert lists back to numpy arrays for plotting ---
@@ -1172,6 +1224,182 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
                 self.plot_widget.plot([mn, mx], [mn, mx], pen=pg.mkPen('r', width=2, style=QtCore.Qt.DashLine))
             
             self.plot_widget.setTitle(f"Parity Plot (Adaptive) - R² = {metrics['R2']:.4f}")
+
+    # ====================================================================
+    # Cross-Validation, Model Comparison, Feature Importance
+    # ====================================================================
+
+    def _run_cross_validation(self):
+        """Run K-fold cross-validation on the current dataset and model config."""
+        if not hasattr(self, 'X_train') or self.X_train is None:
+            QtWidgets.QMessageBox.warning(self, "No Data", "Generate or load data first.")
+            return
+
+        n_folds = self.spin_cv_folds.value()
+        model_type = self.combo_model.currentText()
+
+        self.lbl_metrics.setText(f"Running {n_folds}-fold CV for {model_type}...")
+        QtWidgets.QApplication.processEvents()
+
+        try:
+            cv = CrossValidator()
+
+            def factory():
+                return self._create_sklearn_model(model_type)
+
+            result = cv.kfold_cv(factory, self.X_train, self.y_train,
+                                 n_folds=n_folds, model_type=model_type)
+
+            self._display_cv_results([result])
+            self.lbl_metrics.setText(
+                f"CV Result: R² = {result.r2_mean:.4f} ± {result.r2_std:.4f}, "
+                f"RMSE = {result.rmse_mean:.4f}"
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "CV Failed", str(e))
+            self.lbl_metrics.setText("CV failed.")
+
+    def _compare_models(self):
+        """Compare all available model types on the current dataset."""
+        if not hasattr(self, 'X_train') or self.X_train is None:
+            QtWidgets.QMessageBox.warning(self, "No Data", "Generate or load data first.")
+            return
+
+        n_folds = self.spin_cv_folds.value()
+        self.lbl_metrics.setText("Comparing all model types...")
+        QtWidgets.QApplication.processEvents()
+
+        try:
+            comparator = ModelComparator()
+            factories = {}
+            for name in ['MLP Regressor', 'Random Forest', 'Gradient Boosting', 'Gaussian Process']:
+                try:
+                    def make_factory(n=name):
+                        return lambda: self._create_sklearn_model(n)
+                    factories[name] = make_factory()
+                except Exception:
+                    pass
+
+            results = comparator.compare_models(factories, self.X_train, self.y_train,
+                                                n_folds=n_folds)
+            self._display_cv_results(results)
+
+            if results:
+                best = results[0]
+                self.lbl_metrics.setText(
+                    f"Best: {best.model_type} (R² = {best.r2_mean:.4f} ± {best.r2_std:.4f})"
+                )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Comparison Failed", str(e))
+            self.lbl_metrics.setText("Model comparison failed.")
+
+    def _display_cv_results(self, results):
+        """Populate the CV results table."""
+        self.cv_table.setRowCount(len(results))
+        for i, r in enumerate(results):
+            self.cv_table.setItem(i, 0, QtWidgets.QTableWidgetItem(r.model_type))
+            self.cv_table.setItem(i, 1, QtWidgets.QTableWidgetItem(f"{r.r2_mean:.4f}"))
+            self.cv_table.setItem(i, 2, QtWidgets.QTableWidgetItem(f"{r.r2_std:.4f}"))
+            self.cv_table.setItem(i, 3, QtWidgets.QTableWidgetItem(f"{r.rmse_mean:.4f}"))
+            self.cv_table.setItem(i, 4, QtWidgets.QTableWidgetItem(f"{r.mae_mean:.4f}"))
+        self.cv_table.resizeColumnsToContents()
+        self.tab_widget.setCurrentWidget(self.cv_tab)
+
+    def _compute_feature_importance(self):
+        """Compute and display permutation feature importance."""
+        if not hasattr(self, 'current_model') or self.current_model is None:
+            QtWidgets.QMessageBox.warning(self, "No Model", "Train a model first.")
+            return
+        if not hasattr(self, 'X_test') or self.X_test is None:
+            QtWidgets.QMessageBox.warning(self, "No Data", "No test data available.")
+            return
+
+        self.lbl_metrics.setText("Computing feature importance...")
+        QtWidgets.QApplication.processEvents()
+
+        try:
+            feature_names = getattr(self, 'input_names', None) or \
+                           [f"X{i}" for i in range(self.X_test.shape[1])]
+
+            # Try tree-based importance first (fast)
+            fi_result = None
+            if hasattr(self.current_model, 'feature_importances_'):
+                fi_result = FeatureImportanceAnalyzer.tree_feature_importance(
+                    self.current_model, feature_names
+                )
+                imp_key = 'importances'
+            else:
+                fi_result = FeatureImportanceAnalyzer.permutation_importance(
+                    self.current_model, self.X_test, self.y_test,
+                    feature_names=feature_names, n_repeats=10
+                )
+                imp_key = 'importances_mean'
+
+            if 'error' in fi_result:
+                QtWidgets.QMessageBox.warning(self, "Error", fi_result['error'])
+                return
+
+            # Plot
+            self.fi_plot.clear()
+            names = fi_result.get('ranking', feature_names)
+            values = fi_result.get('ranking_values', fi_result.get(imp_key, []))
+            x = np.arange(len(names))
+
+            bars = pg.BarGraphItem(
+                x=x, height=values, width=0.6,
+                brush=pg.mkBrush('#27AE60'), pen=pg.mkPen('k', width=1)
+            )
+            self.fi_plot.addItem(bars)
+            ax = self.fi_plot.getAxis('bottom')
+            ax.setTicks([[(i, n) for i, n in enumerate(names)]])
+            self.fi_plot.setTitle("Feature Importance (Permutation)" if imp_key == 'importances_mean'
+                                  else "Feature Importance (Built-in)")
+
+            self.tab_widget.setCurrentWidget(self.fi_tab)
+            self.lbl_metrics.setText("Feature importance computed.")
+
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Feature Importance Failed", str(e))
+            self.lbl_metrics.setText("Feature importance failed.")
+
+    def _create_sklearn_model(self, model_type: str):
+        """Create an unfitted scikit-learn model based on type and current UI settings."""
+        from sklearn.neural_network import MLPRegressor
+        from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+        from sklearn.gaussian_process import GaussianProcessRegressor
+        from sklearn.gaussian_process.kernels import Matern, WhiteKernel, ConstantKernel
+
+        if model_type == 'MLP Regressor':
+            return MLPRegressor(
+                hidden_layer_sizes=(128, 64),
+                max_iter=1000,
+                early_stopping=True,
+                random_state=42
+            )
+        elif model_type == 'Random Forest':
+            return RandomForestRegressor(
+                n_estimators=200,
+                max_depth=None,
+                random_state=42,
+                n_jobs=-1
+            )
+        elif model_type == 'Gradient Boosting':
+            return GradientBoostingRegressor(
+                n_estimators=200,
+                max_depth=5,
+                learning_rate=0.1,
+                random_state=42
+            )
+        elif model_type in ('Gaussian Process', 'Gaussian Process (Kriging)'):
+            kernel = ConstantKernel() * Matern(nu=2.5) + WhiteKernel()
+            return GaussianProcessRegressor(
+                kernel=kernel,
+                n_restarts_optimizer=5,
+                random_state=42
+            )
+        else:
+            # Fallback to MLP
+            return MLPRegressor(hidden_layer_sizes=(128, 64), max_iter=1000, random_state=42)
 
     def save_to_folder(self, folder_path):
         """Save surrogate training settings to a folder."""

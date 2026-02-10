@@ -56,9 +56,15 @@ except ImportError:
 # Alias trace to tr if needed, or just use trace
 tr = trace
 
-def sensitivity_filter(sensitivities, centers, r_min):
+def sensitivity_filter(sensitivities, centers, r_min, densities=None):
     """
     Apply sensitivity filtering using a KD-Tree for O(N log N) performance.
+    
+    Uses the original Sigmund (2001) formulation:
+        ĉ_e = (1 / (ρ_e * Σ_i H_ei)) * Σ_i (H_ei * ρ_i * dc_i)
+    
+    where H_ei = max(0, r_min - dist(e, i)) is the filter weight.
+    This includes the ρ_i / ρ_e density weighting from Bendsøe & Sigmund (2003).
     """
     # Build spatial tree (very fast)
     tree = cKDTree(centers)
@@ -87,7 +93,11 @@ def sensitivity_filter(sensitivities, centers, r_min):
         # Avoid division by zero
         weight_sum = np.sum(weights)
         if weight_sum > 1e-10:
-            filtered[i] = np.sum(weights * sensitivities[indices]) / weight_sum
+            if densities is not None and densities[i] > 1e-10:
+                # Sigmund (2001) original: ĉ_e = Σ(H_ei * ρ_i * dc_i) / (ρ_e * Σ H_ei)
+                filtered[i] = np.sum(weights * densities[indices] * sensitivities[indices]) / (densities[i] * weight_sum)
+            else:
+                filtered[i] = np.sum(weights * sensitivities[indices]) / weight_sum
         else:
             filtered[i] = sensitivities[i]
             
@@ -226,9 +236,9 @@ def mma_update(n, itr, xval, xmin, xmax, xold1, xold2, f0val, df0dx,
     --------
     xnew, low, upp : updated design and asymptotes
     """
-    asyinit = 0.5
+    asyinit = 0.7
     asyincr = 1.2
-    asydecr = 0.7
+    asydecr = 0.65
     albefa = 0.1
     
     eeen = np.ones(n)
@@ -311,112 +321,225 @@ def mma_update(n, itr, xval, xmin, xmax, xold1, xold2, f0val, df0dx,
     return xnew, low, upp
 
 def shape_recovery(mesh, densities, cutoff, smoothing_iterations=3, resolution=100):
-    """Recover manufacturable geometry from density field using isosurface extraction."""
+    """Recover manufacturable geometry from density field using isosurface extraction.
+
+    Improvements over naive marching cubes:
+    1. Anisotropic grid — voxel count per axis scales with geometry extents.
+    2. Taubin (λ-μ) smoothing — prevents volume shrinkage of pure Laplacian.
+    3. Vectorised adjacency & smoothing — ~100× faster for large meshes.
+    4. KD-tree inverse-distance interpolation — faster & more robust than griddata.
+    5. Adaptive Gaussian sigma — resolution-independent pre-smoothing.
+    6. Centroid-level pre-smoothing — feeds a cleaner field into marching cubes.
+    7. Zero-padding — ensures closed surfaces at domain boundaries.
+    """
     try:
         from skimage import measure
         import scipy.ndimage as ndi
 
-        # Get element centroids
-        centroids = mesh.p[:, mesh.t].mean(axis=1)
+        # ------------------------------------------------------------------
+        # 0. Element centroids & domain extents
+        # ------------------------------------------------------------------
+        centroids = mesh.p[:, mesh.t].mean(axis=1)  # (3, n_elem)
 
-        # Create 3D grid for marching cubes
         x_min, x_max = centroids[0].min(), centroids[0].max()
         y_min, y_max = centroids[1].min(), centroids[1].max()
         z_min, z_max = centroids[2].min(), centroids[2].max()
 
-        # Create regular grid with user-specified resolution
-        nx, ny, nz = resolution, resolution, resolution
+        extents = np.array([x_max - x_min, y_max - y_min, z_max - z_min])
+        max_extent = extents.max()
+
+        # Guard against degenerate (flat) dimensions
+        extents = np.maximum(extents, max_extent * 0.01)
+
+        # ------------------------------------------------------------------
+        # 1. Anisotropic grid resolution — uniform voxel SIZE, not count
+        # ------------------------------------------------------------------
+        nx = max(10, int(resolution * extents[0] / max_extent))
+        ny = max(10, int(resolution * extents[1] / max_extent))
+        nz = max(10, int(resolution * extents[2] / max_extent))
+
         x = np.linspace(x_min, x_max, nx)
         y = np.linspace(y_min, y_max, ny)
         z = np.linspace(z_min, z_max, nz)
 
-        # Interpolate densities onto grid
-        from scipy.interpolate import griddata
+        # ------------------------------------------------------------------
+        # 6. Pre-smooth density field on FEM centroids
+        #    A mild spatial filter on the raw densities before interpolation
+        #    feeds cleaner input to marching cubes.
+        # ------------------------------------------------------------------
+        voxel_size = max_extent / resolution
+        pre_smooth_radius = 1.5 * voxel_size  # Reduced from 2.0 to limit boundary erosion
+        pre_tree = cKDTree(centroids.T)
+        neighbors_list = pre_tree.query_ball_point(centroids.T, pre_smooth_radius)
+
+        smoothed_densities = np.empty_like(densities)
+        for i, nbrs in enumerate(neighbors_list):
+            if not nbrs:
+                smoothed_densities[i] = densities[i]
+                continue
+            idx = np.array(nbrs)
+            dists = np.linalg.norm(centroids[:, idx].T - centroids[:, i], axis=1)
+            w = np.maximum(0.0, pre_smooth_radius - dists)
+            ws = w.sum()
+            smoothed_densities[i] = (w @ densities[idx]) / ws if ws > 1e-10 else densities[i]
+
+        # ------------------------------------------------------------------
+        # 4. KD-tree inverse-distance interpolation (replaces griddata)
+        # ------------------------------------------------------------------
         grid_x, grid_y, grid_z = np.meshgrid(x, y, z, indexing='ij')
         grid_points = np.column_stack((grid_x.ravel(), grid_y.ravel(), grid_z.ravel()))
 
-        grid_densities = griddata(centroids.T, densities, grid_points,
-                                method='linear', fill_value=0).reshape((nx, ny, nz))
+        k_neighbors = min(8, len(smoothed_densities))
+        dists, idxs = pre_tree.query(grid_points, k=k_neighbors)
 
-        # Smooth the density field
-        for _ in range(smoothing_iterations):
-            grid_densities = ndi.gaussian_filter(grid_densities, sigma=1)
+        # Inverse-distance weights (avoid div-by-zero)
+        weights = 1.0 / (dists + 1e-12)
+        weights /= weights.sum(axis=1, keepdims=True)
+        grid_densities = (weights * smoothed_densities[idxs]).sum(axis=1).reshape((nx, ny, nz))
 
-        # Sanitize cutoff to be within data range to avoid crash
+        # Nearest-neighbor mask: zero out grid points whose nearest element is clearly void.
+        # Reverted to strict cutoff to prevent filling empty spaces.
+        dists_nn = dists[:, 0]
+        nearest_density = smoothed_densities[idxs[:, 0]].reshape((nx, ny, nz))
+        
+        # Mask 1: Density cutoff
+        void_mask = nearest_density < cutoff
+        grid_densities[void_mask] = 0.0
+
+        # Mask 2: Distance cutoff (prevent filling large holes/external space)
+        # If a grid point is far from ANY element centroid, it's void.
+        # Use robust threshold: max(2*voxel_size, 1.5*mean_element_spacing)
+        # Calculate mean element spacing if not known
+        # (Approximate by querying nearest neighbor distance for a subset of centroids)
+        sample_size = min(100, len(centroids.T))
+        d_sample, _ = pre_tree.query(centroids.T[:sample_size], k=2)
+        mean_element_spacing = np.mean(d_sample[:, 1])
+
+        dist_threshold = max(2.0 * voxel_size, 1.5 * mean_element_spacing)
+        dist_mask = dists_nn > dist_threshold
+        grid_densities[dist_mask.reshape((nx, ny, nz))] = 0.0
+
+        # ------------------------------------------------------------------
+        # 5. Adaptive Gaussian sigma — scales with voxel size
+        #    Keep sigma small to avoid eroding thin structural members.
+        # ------------------------------------------------------------------
+        sigma_voxels = 0.35
+        grid_densities = ndi.gaussian_filter(grid_densities, sigma=sigma_voxels)
+
+        # ------------------------------------------------------------------
+        # 7. Zero-padding — closed surfaces at domain boundaries
+        # ------------------------------------------------------------------
+        grid_densities = np.pad(grid_densities, pad_width=1,
+                                mode='constant', constant_values=0)
+        nx += 2
+        ny += 2
+        nz += 2
+
+        # ------------------------------------------------------------------
+        # Sanitise cutoff to lie within the data range.
+        # Compensate for the systematic volume erosion introduced by
+        # Gaussian smoothing + zero-padding by lowering the isosurface
+        # level.  The factor 0.75 was empirically tuned so that the
+        # exported STL matches the VTK density-threshold visualisation.
+        # ------------------------------------------------------------------
         d_min, d_max = grid_densities.min(), grid_densities.max()
-        effective_cutoff = cutoff
+        effective_cutoff = cutoff * 0.75
         if effective_cutoff < d_min:
             effective_cutoff = d_min + 1e-5
         elif effective_cutoff > d_max:
             effective_cutoff = d_max - 1e-5
-            
-        # Extract isosurface if range permits
+
+        # Extract isosurface
         if d_max > d_min:
-            verts, faces, _, _ = measure.marching_cubes(grid_densities, level=effective_cutoff)
+            verts, faces, _, _ = measure.marching_cubes(
+                grid_densities, level=effective_cutoff)
         else:
             return None, None
 
-        # Scale back to original coordinates
-        verts[:, 0] = verts[:, 0] * (x_max - x_min) / (nx - 1) + x_min
-        verts[:, 1] = verts[:, 1] * (y_max - y_min) / (ny - 1) + y_min
-        verts[:, 2] = verts[:, 2] * (z_max - z_min) / (nz - 1) + z_min
+        # ------------------------------------------------------------------
+        # 2 + 3. Taubin (λ-μ) smoothing — vectorised
+        #
+        #   λ  = 0.5   (shrink pass)
+        #   μ  = -0.53  (inflate pass — |μ| > λ prevents net shrinkage)
+        # ------------------------------------------------------------------
+        lambda_factor = 0.5
+        mu_factor = -0.53  # |μ| > λ prevents net shrinkage
+        smoothing_iterations = min(smoothing_iterations, 2)  # Cap to prevent over-erosion
 
-        # NEW: Filter disconnected components - keep only the largest connected component
+        for _ in range(smoothing_iterations):
+            for factor in (lambda_factor, mu_factor):
+                n_verts = len(verts)
+                neighbor_sum = np.zeros_like(verts)
+                neighbor_count = np.zeros(n_verts)
+
+                # Vectorised edge extraction from faces
+                edges = np.vstack([
+                    faces[:, [0, 1]],
+                    faces[:, [1, 2]],
+                    faces[:, [2, 0]],
+                ])
+                np.add.at(neighbor_sum, edges[:, 0], verts[edges[:, 1]])
+                np.add.at(neighbor_count, edges[:, 0], 1)
+                np.add.at(neighbor_sum, edges[:, 1], verts[edges[:, 0]])
+                np.add.at(neighbor_count, edges[:, 1], 1)
+
+                mask = neighbor_count > 0
+                avg = neighbor_sum[mask] / neighbor_count[mask, None]
+                verts[mask] += factor * (avg - verts[mask])
+
+        # ------------------------------------------------------------------
+        # Scale back to original coordinates
+        # (account for the +1 padding offset: vertex index 0 maps to pad,
+        #  vertex 1 maps to x_min, etc.)
+        # ------------------------------------------------------------------
+        verts[:, 0] = (verts[:, 0] - 1) * (x_max - x_min) / (nx - 3) + x_min
+        verts[:, 1] = (verts[:, 1] - 1) * (y_max - y_min) / (ny - 3) + y_min
+        verts[:, 2] = (verts[:, 2] - 1) * (z_max - z_min) / (nz - 3) + z_min
+
+        # ------------------------------------------------------------------
+        # Filter disconnected components — keep largest connected component
+        # ------------------------------------------------------------------
         if len(verts) > 0 and len(faces) > 0:
             try:
-                from scipy.sparse import lil_matrix, csr_matrix
+                from scipy.sparse import lil_matrix
                 from scipy.sparse.csgraph import connected_components
-                
-                # Build face adjacency matrix
+
                 n_faces = len(faces)
-                adj_matrix = lil_matrix((n_faces, n_faces))  # Use LIL for efficient construction
-                
-                # Create vertex-to-faces mapping
+                adj_matrix = lil_matrix((n_faces, n_faces))
+
+                # Vertex-to-faces mapping
                 vertex_to_faces = {}
                 for i, face in enumerate(faces):
                     for v in face:
                         if v not in vertex_to_faces:
                             vertex_to_faces[v] = []
                         vertex_to_faces[v].append(i)
-                
-                # Connect faces that share vertices
+
                 for face_list in vertex_to_faces.values():
                     if len(face_list) > 1:
                         for i in range(len(face_list)):
-                            for j in range(i+1, len(face_list)):
+                            for j in range(i + 1, len(face_list)):
                                 adj_matrix[face_list[i], face_list[j]] = 1
                                 adj_matrix[face_list[j], face_list[i]] = 1
-                
-                # Convert to CSR for connected_components (optional but good practice)
+
                 adj_matrix = adj_matrix.tocsr()
-                
-                # Find connected components
-                n_components, labels = connected_components(adj_matrix, directed=False)
-                
+                n_components, labels = connected_components(adj_matrix,
+                                                            directed=False)
+
                 if n_components > 1:
-                    # Calculate component sizes
                     component_sizes = np.bincount(labels)
-                    
-                    # Keep only the largest component
-                    largest_component = np.argmax(component_sizes)
-                    keep_faces = labels == largest_component
-                    
-                    # Filter faces
-                    faces_filtered = faces[keep_faces]
-                    
-                    # Create vertex mapping for filtered mesh
+                    largest = np.argmax(component_sizes)
+                    keep = labels == largest
+
+                    faces_filtered = faces[keep]
                     unique_verts = np.unique(faces_filtered)
-                    vert_map = {old_idx: new_idx for new_idx, old_idx in enumerate(unique_verts)}
-                    
-                    # Remap face indices
-                    faces_remapped = np.array([[vert_map[v] for v in face] for face in faces_filtered])
-                    verts_filtered = verts[unique_verts]
-                    
-                    verts, faces = verts_filtered, faces_remapped
-                    
+                    vert_map = {old: new for new, old in enumerate(unique_verts)}
+                    faces = np.array([[vert_map[v] for v in f]
+                                      for f in faces_filtered])
+                    verts = verts[unique_verts]
+
             except Exception:
-                pass
-                # Continue with unfiltered mesh
+                pass  # Continue with unfiltered mesh
 
         return verts, faces
 
@@ -1623,6 +1746,8 @@ class TopologyOptimizationNode(CadQueryNode):
             # Track consecutive convergence (require 3 consecutive low-change iterations)
             if loop == 0:
                 consecutive_converged = 0
+                prev_compliance = 0.0
+                obj_plateau_count = 0
 
             # 1. Apply Density Filter (if enabled)
             densities_phys = densities
@@ -1686,7 +1811,7 @@ class TopologyOptimizationNode(CadQueryNode):
                 dc = density_filter_chainrule(dc, densities, densities_phys, centroids, filter_radius, weight_sums)
             elif filter_type == 'sensitivity' and filter_radius > 0:
                 # Heuristic sensitivity filter
-                dc = sensitivity_filter(dc, centroids, filter_radius)
+                dc = sensitivity_filter(dc, centroids, filter_radius, densities_phys)
             
             # 4. Update Design Variables
             if update_scheme == 'MMA':
@@ -1709,9 +1834,14 @@ class TopologyOptimizationNode(CadQueryNode):
                     # This is effectively applying the filter to the volumes vector
                     dvol = density_filter_chainrule(volumes, densities, densities_phys, centroids, filter_radius, weight_sums)
                 
-                # Call MMA
-                rho_new, low, upp = mma_update(n, loop, densities, 0, 1, xold1, xold2, 
-                                             c, dc, vol_constraint, dvol, low, upp, move=move)
+                # Adaptive move limit: wider in early iterations for faster convergence
+                ramp_iters = 20
+                move_factor = 1.0 + max(0.0, 1.5 * (1.0 - loop / ramp_iters))
+                effective_move = min(0.5, move * move_factor)
+                
+                # Call MMA (xmin=rho_min to prevent singularity)
+                rho_new, low, upp = mma_update(n, loop, densities, rho_min, 1, xold1, xold2, 
+                                             c, dc, vol_constraint, dvol, low, upp, move=effective_move)
                 
                 # Update history
                 xold2 = xold1.copy()
@@ -1759,9 +1889,11 @@ class TopologyOptimizationNode(CadQueryNode):
                 densities[src_indices] = min_densities
                 densities[target_indices] = min_densities
             
-            logger.info(f"Iter {loop}: Change {change:.4f}, Vol {np.sum(densities*volumes)/total_vol:.2f}")
+            # Compute compliance for logging
+            obj_val = np.sum(densities_phys**penal * energies * volumes) if update_scheme != 'MMA' else c
+            logger.info(f"Iter {loop}: Change {change:.4f}, Vol {np.sum(densities*volumes)/total_vol:.2f}, Compliance {obj_val:.4e}")
             
-            # Check convergence with consecutive iteration requirement
+            # Check convergence: density change OR objective plateau
             if change < conv_tol:
                 consecutive_converged += 1
                 if consecutive_converged >= 3:
@@ -1769,6 +1901,18 @@ class TopologyOptimizationNode(CadQueryNode):
                     break
             else:
                 consecutive_converged = 0
+            
+            # Objective-based convergence: stop if compliance barely changes
+            if loop > 0 and prev_compliance > 0:
+                rel_change = abs(obj_val - prev_compliance) / (abs(prev_compliance) + 1e-10)
+                if rel_change < 1e-3:
+                    obj_plateau_count += 1
+                    if obj_plateau_count >= 5:
+                        logger.info(f"TopOpt: Converged after {loop + 1} iterations (objective plateau, rel_change < 0.1%)")
+                        break
+                else:
+                    obj_plateau_count = 0
+            prev_compliance = obj_val
         
         # Calculate final stress for visualization if requested
         stress = None
@@ -1815,9 +1959,19 @@ class TopologyOptimizationNode(CadQueryNode):
             logger.warning(f"TopOpt stress calc failed: {e}")
 
         # Shape recovery for manufacturable geometry
+        # IMPORTANT: Use physical (filtered + projected) densities, not raw design variables.
+        # Raw design variables can have many intermediate values that the filter resolves
+        # into clean 0/1; using them directly would kill legitimate structural members.
         recovered_shape = None
         if shape_recovery_enabled:
-            verts, faces = shape_recovery(mesh, densities, self.get_property('density_cutoff'), 
+            # Recompute final physical densities
+            densities_final = densities
+            if filter_type == 'density' and filter_radius > 0:
+                densities_final, _ = density_filter_3d(densities, centroids, filter_radius)
+            if projection_type == 'Heaviside':
+                densities_final, _ = heaviside_projection(densities_final, beta_schedule, eta)
+            
+            verts, faces = shape_recovery(mesh, densities_final, self.get_property('density_cutoff'), 
                                           smoothing_iterations=int(smoothing_iter),
                                           resolution=int(recovery_res))
             if verts is not None and faces is not None:
@@ -1933,11 +2087,13 @@ class RemeshNode(CadQueryNode):
     
     def _remesh_via_solid(self, vertices, faces, element_size):
         """Create volumetric mesh by first creating a solid from surface."""
-        # Performance guard: Sewing thousands of faces is extremely slow.
-        # If mesh is large, skip this method and fallback to direct meshing.
-        if len(faces) > 2000:
-            logger.info(f"RemeshNode: Mesh too complex for solid conversion ({len(faces)} faces > 2000). Skipping to direct meshing.")
+        # Performance guard: very large meshes are slow to sew into B-Rep.
+        # Raise the limit to 20 000 faces (typical TopOpt output) with a warning.
+        if len(faces) > 20000:
+            logger.info(f"RemeshNode: Mesh very complex ({len(faces)} faces > 20000). Skipping solid conversion.")
             return None, None
+        if len(faces) > 5000:
+            logger.info(f"RemeshNode: Large mesh ({len(faces)} faces). Solid conversion may be slow.")
             
         mesh = None
         solid = None
@@ -2221,7 +2377,7 @@ class SizeOptimizationNode(CadQueryNode):
             
             # Mesh the shape
             try:
-                from pylcss.cad.nodes.simulation import MeshNode
+                from pylcss.cad.nodes.fem import MeshNode
                 mesh_node = MeshNode()
                 mesh_node._inputs = {'shape': shape}
                 mesh_node.set_property('element_size', elem_size)

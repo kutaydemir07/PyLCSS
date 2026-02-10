@@ -88,6 +88,35 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
         
         self.ng_widgets = [self.grp_ng_label, self.combo_ng_opt, self.edit_ng_workers]
 
+        # --- NSGA-II (Multi-Objective) ---
+        self.grp_nsga_label = QtWidgets.QLabel("<b>NSGA-II (Multi-Objective)</b>")
+        self.grp_nsga_label.setContentsMargins(0, 15, 0, 5)
+        self.form_layout.addRow(self.grp_nsga_label)
+
+        self.edit_nsga_popsize = self._add_input("Population Size:", "100")
+        self.edit_nsga_generations = self._add_input("Generations:", "200")
+        self.edit_nsga_crossover = self._add_input("Crossover Prob.:", "0.9")
+        self.edit_nsga_mutation = self._add_input("Mutation Prob.:", "")
+        self.edit_nsga_mutation.setPlaceholderText("auto (1/n_vars)")
+        self.edit_nsga_eta_c = self._add_input("SBX η (crossover):", "20.0")
+        self.edit_nsga_eta_m = self._add_input("Poly η (mutation):", "20.0")
+
+        self.nsga_widgets = [self.grp_nsga_label, self.edit_nsga_popsize,
+                             self.edit_nsga_generations, self.edit_nsga_crossover,
+                             self.edit_nsga_mutation, self.edit_nsga_eta_c, self.edit_nsga_eta_m]
+
+        # --- Multi-Start ---
+        self.grp_ms_label = QtWidgets.QLabel("<b>Multi-Start Global Search</b>")
+        self.grp_ms_label.setContentsMargins(0, 15, 0, 5)
+        self.form_layout.addRow(self.grp_ms_label)
+
+        self.edit_ms_starts = self._add_input("Number of Starts:", "10")
+        self.combo_ms_local = QtWidgets.QComboBox()
+        self.combo_ms_local.addItems(["SLSQP", "COBYLA", "trust-constr"])
+        self.form_layout.addRow("Local Solver:", self.combo_ms_local)
+
+        self.ms_widgets = [self.grp_ms_label, self.edit_ms_starts, self.combo_ms_local]
+
         scroll.setWidget(container)
         layout.addWidget(scroll)
 
@@ -106,6 +135,8 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
         # Hide everything specific first
         self._set_visible(self.de_widgets, False)
         self._set_visible(self.ng_widgets, False)
+        self._set_visible(self.nsga_widgets, False)
+        self._set_visible(self.ms_widgets, False)
         
         # Defaults for common
         common_visible = True
@@ -116,7 +147,6 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
 
         if method == 'Differential Evolution':
             self._set_visible(self.de_widgets, True)
-            # DE doesn't typically use 'tol' or 'maxfun' in the same way scipy does here
             self.form_layout.labelForField(self.edit_tol).setVisible(False)
             self.edit_tol.setVisible(False)
             self.form_layout.labelForField(self.edit_maxfun).setVisible(False)
@@ -126,6 +156,17 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
             self._set_visible(self.ng_widgets, True)
             self.form_layout.labelForField(self.edit_tol).setVisible(False)
             self.edit_tol.setVisible(False)
+
+        elif method == 'NSGA-II':
+            self._set_visible(self.nsga_widgets, True)
+            # NSGA-II uses generations, not maxiter/tol in the same way
+            self.form_layout.labelForField(self.edit_tol).setVisible(False)
+            self.edit_tol.setVisible(False)
+            self.form_layout.labelForField(self.edit_maxfun).setVisible(False)
+            self.edit_maxfun.setVisible(False)
+
+        elif method == 'Multi-Start':
+            self._set_visible(self.ms_widgets, True)
 
     def _set_visible(self, widgets, visible):
         for w in widgets:
@@ -156,6 +197,19 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
         self.combo_ng_opt.setCurrentText(s.get('optimizer_name', 'NGOpt'))
         self.edit_ng_workers.setText(str(s.get('num_workers', 1)))
 
+        # NSGA-II
+        self.edit_nsga_popsize.setText(str(s.get('nsga_popsize', 100)))
+        self.edit_nsga_generations.setText(str(s.get('nsga_generations', 200)))
+        self.edit_nsga_crossover.setText(str(s.get('nsga_crossover_prob', 0.9)))
+        mut_p = s.get('nsga_mutation_prob', None)
+        self.edit_nsga_mutation.setText(str(mut_p) if mut_p is not None else "")
+        self.edit_nsga_eta_c.setText(str(s.get('nsga_eta_c', 20.0)))
+        self.edit_nsga_eta_m.setText(str(s.get('nsga_eta_m', 20.0)))
+
+        # Multi-Start
+        self.edit_ms_starts.setText(str(s.get('ms_n_starts', 10)))
+        self.combo_ms_local.setCurrentText(s.get('ms_local_solver', 'SLSQP'))
+
     def get_settings(self):
         # Helper to parse safe float/int
         def to_f(txt, default):
@@ -177,5 +231,15 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
             'recombination': to_f(self.edit_recomb.text(), 0.7),
             'strategy': self.combo_de_strat.currentText(),
             'optimizer_name': self.combo_ng_opt.currentText(),
-            'num_workers': to_i(self.edit_ng_workers.text(), 1)
+            'num_workers': to_i(self.edit_ng_workers.text(), 1),
+            # NSGA-II
+            'nsga_popsize': to_i(self.edit_nsga_popsize.text(), 100),
+            'nsga_generations': to_i(self.edit_nsga_generations.text(), 200),
+            'nsga_crossover_prob': to_f(self.edit_nsga_crossover.text(), 0.9),
+            'nsga_mutation_prob': to_f(self.edit_nsga_mutation.text(), None) if self.edit_nsga_mutation.text().strip() else None,
+            'nsga_eta_c': to_f(self.edit_nsga_eta_c.text(), 20.0),
+            'nsga_eta_m': to_f(self.edit_nsga_eta_m.text(), 20.0),
+            # Multi-Start
+            'ms_n_starts': to_i(self.edit_ms_starts.text(), 10),
+            'ms_local_solver': self.combo_ms_local.currentText()
         }

@@ -348,7 +348,104 @@ class PropertiesPanel(QtWidgets.QWidget):
         
         group_adv.setLayout(layout_adv)
         self.props_layout.addWidget(group_adv)
-    
+
+        # 6. EXPORT RECOVERED SHAPE
+        group_exp = QtWidgets.QGroupBox("Export Recovered Shape")
+        layout_exp = QtWidgets.QVBoxLayout()
+
+        btn_export_stl = QtWidgets.QPushButton("Export to STL")
+        btn_export_stl.setToolTip("Export the topology-optimised recovered shape as an STL file")
+        btn_export_stl.clicked.connect(lambda: self._export_topopt_stl(node))
+        layout_exp.addWidget(btn_export_stl)
+
+        btn_export_obj = QtWidgets.QPushButton("Export to OBJ")
+        btn_export_obj.setToolTip("Export the topology-optimised recovered shape as a Wavefront OBJ")
+        btn_export_obj.clicked.connect(lambda: self._export_topopt_obj(node))
+        layout_exp.addWidget(btn_export_obj)
+
+        group_exp.setLayout(layout_exp)
+        self.props_layout.addWidget(group_exp)
+
+    # ──────────────────────────────────────────────────
+    # TopOpt direct mesh export (vertices / faces)
+    # ──────────────────────────────────────────────────
+    def _export_topopt_stl(self, node):
+        """Export recovered shape from topology optimisation as binary STL."""
+        result = getattr(node, '_last_result', None)
+        if not isinstance(result, dict) or 'recovered_shape' not in result or result['recovered_shape'] is None:
+            QtWidgets.QMessageBox.warning(self, "No Shape",
+                "Run topology optimisation first — no recovered shape available.")
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export STL", "", "STL Files (*.stl)")
+        if not path:
+            return
+        try:
+            import numpy as np
+            from stl import mesh as stl_mesh   # numpy-stl
+            verts = result['recovered_shape']['vertices']
+            faces = result['recovered_shape']['faces']
+            stl_obj = stl_mesh.Mesh(np.zeros(len(faces), dtype=stl_mesh.Mesh.dtype))
+            for i, f in enumerate(faces):
+                for j in range(3):
+                    stl_obj.vectors[i][j] = verts[f[j]]
+            stl_obj.save(path)
+            self.statusBar().showMessage(f"\u2713 Exported {len(faces)} triangles to {path}")
+        except ImportError:
+            # Fallback: raw binary STL without numpy-stl
+            self._write_binary_stl(path, result['recovered_shape'])
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Export Error", str(e))
+
+    def _export_topopt_obj(self, node):
+        """Export recovered shape as Wavefront OBJ."""
+        result = getattr(node, '_last_result', None)
+        if not isinstance(result, dict) or 'recovered_shape' not in result or result['recovered_shape'] is None:
+            QtWidgets.QMessageBox.warning(self, "No Shape",
+                "Run topology optimisation first — no recovered shape available.")
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export OBJ", "", "OBJ Files (*.obj)")
+        if not path:
+            return
+        try:
+            verts = result['recovered_shape']['vertices']
+            faces = result['recovered_shape']['faces']
+            with open(path, 'w') as f:
+                f.write("# PyLCSS TopOpt recovered shape\n")
+                for v in verts:
+                    f.write(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}\n")
+                for face in faces:
+                    f.write(f"f {face[0]+1} {face[1]+1} {face[2]+1}\n")
+            self.statusBar().showMessage(f"\u2713 Exported {len(faces)} faces to {path}")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Export Error", str(e))
+
+    def _write_binary_stl(self, path, shape_data):
+        """Write binary STL without numpy-stl dependency."""
+        import struct
+        import numpy as np
+        verts = shape_data['vertices']
+        faces = shape_data['faces']
+        with open(path, 'wb') as f:
+            f.write(b'\x00' * 80)  # header
+            f.write(struct.pack('<I', len(faces)))
+            for face in faces:
+                v0, v1, v2 = verts[face[0]], verts[face[1]], verts[face[2]]
+                # compute normal
+                e1 = np.array(v1) - np.array(v0)
+                e2 = np.array(v2) - np.array(v0)
+                n = np.cross(e1, e2)
+                norm = np.linalg.norm(n)
+                if norm > 0:
+                    n = n / norm
+                f.write(struct.pack('<3f', *n))
+                f.write(struct.pack('<3f', *v0))
+                f.write(struct.pack('<3f', *v1))
+                f.write(struct.pack('<3f', *v2))
+                f.write(struct.pack('<H', 0))
+        self.statusBar().showMessage(f"\u2713 Exported {len(faces)} triangles to {path}")
+
     def _build_primitive_ui(self, node):
         """UI for Primitive nodes (Box, Cylinder, Sphere, etc.)."""
         group = QtWidgets.QGroupBox("Dimensions")

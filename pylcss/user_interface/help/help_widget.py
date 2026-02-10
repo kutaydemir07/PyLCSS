@@ -464,17 +464,32 @@ class HelpWidget(QtWidgets.QWidget):
         about_text = """
         <h2>About PyLCSS</h2>
 
-        <h3> Engineering Platform</h3>
-        <p><b>Version 1.3.0</b></p>
-        <p>PyLCSS is a cutting-edge tool for system modeling, simulation, and optimization. It bridges the gap between visual design and advanced computational analysis.</p>
+        <h3>Engineering Design Optimization Platform</h3>
+        <p><b>Version 2.0.0</b></p>
+        <p>PyLCSS is a professional engineering platform for system modeling, parametric CAD, 
+        FEA simulation, multi-disciplinary optimization, sensitivity analysis, solution-space 
+        exploration, and surrogate modeling.</p>
 
         <h3>Core Technologies</h3>
         <ul>
-        <li><b>Python & PySide6:</b> Modern, responsive user interface.</li>
-        <li><b>NumPy & SciPy:</b> High-performance numerical computing.</li>
-        <li><b>PyTorch:</b> State-of-the-art deep learning capabilities.</li>
-        <li><b>Nevergrad:</b> Advanced gradient-free optimization.</li>
-        <li><b>SALib:</b> Global sensitivity analysis.</li>
+        <li><b>Python & PySide6:</b> Modern, responsive desktop UI with DPI awareness.</li>
+        <li><b>CadQuery & OpenCASCADE:</b> Parametric solid modeling and B-Rep CAD kernel.</li>
+        <li><b>scikit-fem & Netgen:</b> Finite Element Analysis and mesh generation.</li>
+        <li><b>NumPy, SciPy & scikit-learn:</b> High-performance computing and ML surrogates.</li>
+        <li><b>PyTorch:</b> Deep learning surrogate models (ConfigurableNet).</li>
+        <li><b>Nevergrad, NSGA-II & Multi-Start:</b> 7 optimization solvers (local, global, multi-objective).</li>
+        <li><b>SALib:</b> 4 sensitivity methods (Sobol, Morris, FAST, Delta/DMIM).</li>
+        <li><b>VTK & pyqtgraph:</b> 3D visualization and interactive 2D plotting.</li>
+        <li><b>pint:</b> Physical unit conversion across SI, Imperial, CGS systems.</li>
+        <li><b>meshio & h5py:</b> Multi-format mesh and HDF5 data I/O.</li>
+        </ul>
+
+        <h3>Key Capabilities</h3>
+        <ul>
+        <li>Node-based visual system modeling with 50+ CAD, math, and simulation nodes</li>
+        <li>Topology optimization (SIMP with MMA/OC, symmetry, Heaviside projection)</li>
+        <li>Cross-validation, hyperparameter optimization, and feature importance analysis</li>
+        <li>Each tab provides its own integrated import/export capabilities</li>
         </ul>
 
         <h3>License & Copyright</h3>

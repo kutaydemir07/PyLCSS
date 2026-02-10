@@ -569,9 +569,10 @@ class LocalProvider(LLMProvider):
     DEFAULT_API_URL = "http://localhost:1234/v1"
     DEFAULT_API_KEY = ""
     
-    def __init__(self, api_key: str = "", api_url: str = ""):
+    def __init__(self, api_key: str = "", api_url: str = "", selected_model: str = ""):
         super().__init__(api_key=api_key)
         self.api_url = api_url or self.DEFAULT_API_URL
+        self.selected_model = selected_model  # User's preferred model from config
     
     def _make_request(self, endpoint: str, data: Optional[Dict] = None) -> Dict:
         """Make an HTTP request to Local API with rate limit retry."""
@@ -607,6 +608,13 @@ class LocalProvider(LLMProvider):
                     raise RateLimitError(f"Local rate limit exceeded after {RATE_LIMIT_MAX_RETRIES} retries.")
                 else:
                     error_body = e.read().decode('utf-8') if e.readable() else str(e)
+                    # Log the request details for debugging 400 errors
+                    if e.code == 400 and data:
+                        logger.error(f"Local API 400 error - Request data: model={data.get('model')}, messages_count={len(data.get('messages', []))}")
+                        # Log first message role/length for debugging
+                        msgs = data.get('messages', [])
+                        for i, msg in enumerate(msgs):
+                            logger.error(f"  Message {i}: role={msg.get('role')}, content_len={len(msg.get('content', ''))}")
                     raise LLMProviderError(f"Local API error ({e.code}): {error_body}")
             except URLError as e:
                 raise NetworkError(f"Network error connecting to Local: {e.reason}")
@@ -619,25 +627,49 @@ class LocalProvider(LLMProvider):
         """Get available models from Local server."""
         try:
             response = self._make_request("/models")
+            logger.info(f"Local API models response type: {type(response)}")
+            if isinstance(response, list) and len(response) > 0:
+                 logger.info(f"First item sample: {response[0]}")
+            
             models = []
             
-            for model_data in response.get("data", []):
-                model_id = model_data.get("id", "")
-                models.append(ModelInfo(
-                    id=model_id,
-                    name=model_id,
-                    provider="local",
-                    max_context_length=model_data.get("context_length", 4096),
-                ))
+            # Handle diverse response formats
+            model_list = []
+            if isinstance(response, dict):
+                model_list = response.get("data", [])
+            elif isinstance(response, list):
+                model_list = response
             
-            if models:
-                return models
+            # Ensure model_list is actually a list
+            if not isinstance(model_list, list):
+                logger.warning(f"Unexpected model list format: {type(model_list)}")
+                model_list = []
+            
+            for model_item in model_list:
+                model_id = ""
+                context_length = 4096
                 
+                if isinstance(model_item, dict):
+                    # Check for 'id' OR 'name' (common in some custom APIs)
+                    model_id = model_item.get("id", model_item.get("name", ""))
+                    # Check for variations of context length
+                    context_length = model_item.get("context_length", 
+                                     model_item.get("max_context_length", 4096))
+                elif isinstance(model_item, str):
+                    model_id = model_item
+                
+                if model_id:
+                    models.append(ModelInfo(
+                        id=model_id,
+                        name=model_id,
+                        provider="local",
+                        max_context_length=context_length,
+                    ))
+            
+            return models
         except Exception as e:
-            logger.warning(f"Failed to fetch Local models: {e}")
-        
-        # Return empty list if no models found
-        return []
+            logger.error(f"Error parsing Local/RUB models: {e}")
+            raise
     
     def chat(
         self,
@@ -654,20 +686,30 @@ class LocalProvider(LLMProvider):
         
         messages = [{"role": m.role, "content": m.content} for m in self._messages]
         
-        # Get model from available models if not specified
+        # Get model: use specified > configured selected_model > first available
         if not model:
-            available_models = self.get_models()
-            if available_models:
-                model = available_models[0].id
+            if self.selected_model:
+                model = self.selected_model
+                logger.info(f"Local API: Using configured model: {model}")
             else:
-                raise LLMProviderError("No models available on Local server.")
+                available_models = self.get_models()
+                if available_models:
+                    model = available_models[0].id
+                    logger.info(f"Local API: No model specified, using first available: {model}")
+                else:
+                    raise LLMProviderError("No models available on Local server.")
+        else:
+            logger.info(f"Local API: Using specified model: {model}")
         
+        # Prepare request payload - minimal for RUB GPT / Azure OpenAI compatibility
+        # Some endpoints reject extra parameters, so only send model and messages
         data = {
             "model": model,
             "messages": messages,
-            "temperature": kwargs.get("temperature", self.temperature),
-            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
         }
+        
+        # Log the request for debugging
+        logger.debug(f"Local API request: model={model}, messages_count={len(messages)}")
         
         response = self._make_request("/chat/completions", data)
         
@@ -708,7 +750,11 @@ def get_provider(name: str, api_key: str = "", **kwargs) -> LLMProvider:
         raise ValueError(f"Unknown provider: {name}. Available: {list(PROVIDERS.keys())}")
     
     if name == "local":
-        return LocalProvider(api_key=api_key, api_url=kwargs.get("local_api_url", ""))
+        return LocalProvider(
+            api_key=api_key, 
+            api_url=kwargs.get("local_api_url", ""),
+            selected_model=kwargs.get("selected_model", "")
+        )
         
     return PROVIDERS[name](api_key=api_key, **kwargs)
 

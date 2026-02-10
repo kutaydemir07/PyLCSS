@@ -32,6 +32,12 @@ from pylcss.user_interface.cad import ProfessionalCadApp  # Import the widget
 from pylcss.assistant_systems import AssistantManager, AssistantConfig
 from pylcss.user_interface.assistant import OverlayWidget
 
+# --- I/O & MATH IMPORTS ---
+import os
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class MainWindow(QtWidgets.QMainWindow):
     """
@@ -330,7 +336,6 @@ class MainWindow(QtWidgets.QMainWindow):
             safe_name = re.sub(r'[<>:"/\\|?*]', '_', product_name)
             
             # Create project folder
-            import os
             folder_path = os.path.join(parent_folder, safe_name)
             os.makedirs(folder_path, exist_ok=True)
 
@@ -389,10 +394,4 @@ class MainWindow(QtWidgets.QMainWindow):
             
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Load Error", f"Failed to load project: {str(e)}")
-
-
-
-
-
-
 

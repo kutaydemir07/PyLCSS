@@ -299,7 +299,7 @@
       "subgraph_session": {},
       "custom": {
         "load_type": "Force",
-        "condition": "",
+        "condition": "(np.abs(x) < 2) & (np.abs(y) < 0.8) & (z > 29)",
         "force_x": -1000.0,
         "force_y": 0.0,
         "force_z": 0.0,
@@ -351,18 +351,18 @@
         "density_cutoff": 0.3,
         "shape_recovery": true,
         "visualization": "Density",
-        "symmetry_x": null,
-        "symmetry_y": null,
+        "symmetry_x": 0.0,
+        "symmetry_y": 0.0,
         "symmetry_z": null,
         "penal": 3.0,
         "move_limit": 0.2,
         "min_density": 0.001,
         "convergence_tol": 0.01,
-        "recovery_resolution": 50,
+        "recovery_resolution": 60,
         "smoothing_iterations": 3,
         "filter_type": "density",
         "update_scheme": "MMA",
-        "projection": "None",
+        "projection": "Heaviside",
         "heaviside_beta": 4.0,
         "heaviside_eta": 0.5,
         "continuation": true
@@ -407,16 +407,6 @@
       ],
       "in": [
         "0x1d13caf8cd0",
-        "target_face"
-      ]
-    },
-    {
-      "out": [
-        "0x1d14e29f710",
-        "workplane"
-      ],
-      "in": [
-        "0x1d14e2bca10",
         "target_face"
       ]
     },

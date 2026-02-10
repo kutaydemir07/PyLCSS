@@ -305,5 +305,23 @@ SOLVER_DESCRIPTIONS = {
         'speed': 'Very Slow',
         'robustness': 'Very High',
         'when_to_use': 'Use when solution space has many local minima. Guaranteed exploration.'
+    },
+    'NSGA-II': {
+        'name': 'Non-dominated Sorting Genetic Algorithm II',
+        'description': 'Multi-objective evolutionary optimizer producing Pareto-optimal fronts',
+        'best_for': 'Multi-objective problems with 2-5 conflicting objectives',
+        'supports_constraints': True,
+        'speed': 'Slow',
+        'robustness': 'Very High',
+        'when_to_use': 'Use when you have multiple competing objectives and need the full trade-off front.'
+    },
+    'Multi-Start': {
+        'name': 'Multi-Start Global Search',
+        'description': 'Runs a local optimizer from multiple random starting points (LHS)',
+        'best_for': 'Multi-modal problems where global optimum is desired',
+        'supports_constraints': True,
+        'speed': 'Medium',
+        'robustness': 'High',
+        'when_to_use': 'Use when you suspect multiple local minima but want to use a fast local solver.'
     }
 }

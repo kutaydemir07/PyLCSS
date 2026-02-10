@@ -1814,7 +1814,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         adg_tab_layout.addWidget(self.lbl_adg_info)
         
         self.right_tabs.addTab(self.adg_tab, "ADG")
-        
+
         # Connect tab change to update data table on demand
         self.right_tabs.currentChanged.connect(self.on_right_tab_changed)
 
@@ -1840,10 +1840,10 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
 
     def on_right_tab_changed(self, index: int):
         """Handle right panel tab changes."""
-        if self.right_tabs.tabText(index) == "Data Table":
+        tab_text = self.right_tabs.tabText(index)
+        if tab_text == "Data Table":
             self.update_data_table()
-        elif self.right_tabs.tabText(index) == "ADG":
-            # Refresh ADG system list when switching to ADG tab
+        elif tab_text == "ADG":
             if hasattr(self, 'refresh_adg_system_list'):
                 self.refresh_adg_system_list()
 
@@ -3407,46 +3407,6 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                 QtWidgets.QMessageBox.information(self, "Success", f"Successfully exported {len(df)} rows to {path}")
             except Exception as e:
                 QtWidgets.QMessageBox.critical(self, "Export Error", f"Failed to export: {e}")
-
-    def compute_product_family(self):
-        if not self.problem or not self.problem.requirement_sets:
-            QtWidgets.QMessageBox.warning(self, "Warning", "No variants defined.")
-            return
-        
-        try:
-            # Switch to product family mode
-            self.set_product_family_mode(True)
-            
-            # Get current bounds (ensure float type)
-            # dsl/dsu are the physical limits of the Design Space
-            dsl = np.array([dv['min'] for dv in self.problem.design_variables], dtype=float)
-            dsu = np.array([dv['max'] for dv in self.problem.design_variables], dtype=float)
-            
-            # l/u are the "current search box" limits. 
-            # For a fresh start, these should equal dsl/dsu (the full Design Space).
-            # They MUST match the number of Design Variables (DVs).
-            l = np.array([dv['min'] for dv in self.problem.design_variables], dtype=float)
-            u = np.array([dv['max'] for dv in self.problem.design_variables], dtype=float)
-            parameters = None  # Assuming no parameters for now
-            
-            # Get requirements (use default/base requirements)
-            reqL = np.array([q['min'] for q in self.problem.quantities_of_interest], dtype=float)
-            reqU = np.array([q['max'] for q in self.problem.quantities_of_interest], dtype=float)
-            weight = np.ones(len(dsl))  # Default weights
-            
-            from .computation_engine import compute_product_family_solutions
-            solver_type = self.family_solver_combo.currentData()
-            results = compute_product_family_solutions(self.problem, weight, dsl, dsu, l, u, reqU, reqL, parameters, solver_type)
-            
-            # Visualize results
-            self.plot_product_family(results)
-            
-            QtWidgets.QMessageBox.information(self, "Success", f"Computed {len(results)-1} variants and platform.")
-            
-        except Exception as e:
-            # If computation fails, return to normal mode
-            self.set_product_family_mode(False)
-            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to compute product family: {e}")
 
     def plot_product_family(self, results):
         """
