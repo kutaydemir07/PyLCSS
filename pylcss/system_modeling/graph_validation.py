@@ -223,42 +223,129 @@ def validate_graph(widget):
                     f"   Found in: {', '.join(locations)}"
                 )
 
-    # --- 4. Process Global Cycles (Inter-System) ---
-    GlobalG = nx.DiGraph()
-    # Add nodes (systems)
-    for s in system_definitions:
-        GlobalG.add_node(s['id'])
+    # --- 4. Process Global Cycles (Inter-System - Variable Level) ---
+    # We build a graph of VARIABLES, not systems, to allow for "broken loops"
+    # where a system depends on another but not for the specific variable involved in the loop.
     
-    # Add edges based on variable flow
-    # If System A outputs 'x' and System B inputs 'x', then A -> B
-    for s1 in system_definitions:
-        for s2 in system_definitions:
-            if s1['id'] == s2['id']:
-                continue
+    GlobalVarGraph = nx.DiGraph()
+    
+    # Helper to find internal connectivity (Input Var -> Output Var) for a system
+    def get_internal_reachability(sys_nodes):
+        """Returns a list of (input_var_name, output_var_name) tuples representing internal paths."""
+        G_internal = nx.DiGraph()
+        input_nodes = {}  # Map ID -> VarName
+        output_nodes = {} # Map ID -> VarName
+        
+        # Build internal graph
+        for n in sys_nodes:
+            G_internal.add_node(n.id)
+            var_name = n.get_property('var_name')
             
-            # Find common variables (Output of S1 matches Input of S2)
-            common_vars = s1['outputs'].intersection(s2['inputs'])
-            if common_vars:
-                # Add edge
-                GlobalG.add_edge(s1['id'], s2['id'])
-    
-    # Check for cycles in the System Graph
-    try:
-        cycles = list(nx.simple_cycles(GlobalG))
-        if cycles:
-            for cycle in cycles:
-                # cycle is a list of system IDs [0, 2, 1]
-                path_names = [system_definitions[nid]['name'] for nid in cycle]
-                # Format: SysA -> SysB -> SysA
-                path_str = " -> ".join(path_names) + " -> " + path_names[0]
-                errors.append(f"Global Circular Dependency detected between systems: {path_str}")
-    except Exception:
-        # Fallback if simple_cycles fails
+            if n.type_.startswith('com.pfd.input') and var_name:
+                input_nodes[n.id] = var_name
+            elif n.type_.startswith('com.pfd.output') and var_name:
+                output_nodes[n.id] = var_name
+                
+            for port in n.output_ports():
+                for cp in connected_ports(port): # Helper for safety
+                     target = cp.node()
+                     G_internal.add_edge(n.id, target.id)
+        
+        reachability = []
+        # Check path from every input to every output
+        for in_id, in_name in input_nodes.items():
+            # Optimize: Use descendants or single-source shortest path
+            try:
+                descendants = nx.descendants(G_internal, in_id)
+                for out_id, out_name in output_nodes.items():
+                    if out_id in descendants:
+                        reachability.append((in_name, out_name))
+            except Exception:
+                pass # Graph might be incomplete
+        return reachability
+
+    # Helper to safely get connected ports
+    def connected_ports(port):
         try:
-             nx.find_cycle(GlobalG)
-             errors.append("Global Circular Dependency detected between systems (complex loop).")
-        except nx.NetworkXNoCycle:
-             pass
+            return port.connected_ports()
+        except:
+            return []
+
+    # Build the Global Variable Graph
+    # Nodes: Strings formatted as "SysID:VarName:Type" (Type=IN/OUT)
+    
+    # 1. Add Internal Edges
+    for i, sys in enumerate(widget.system_manager.systems):
+        graph = sys['graph']
+        nodes = graph.all_nodes()
+        internal_edges = get_internal_reachability(nodes)
+        
+        for input_var, output_var in internal_edges:
+            # Edge: System Input -> System Output (Internal Flow)
+            u = f"{i}:{input_var}:IN"
+            v = f"{i}:{output_var}:OUT"
+            GlobalVarGraph.add_edge(u, v)
+
+    # 2. Add External Edges (Output of Sys A -> Input of Sys B)
+    # Registry of all system inputs and outputs
+    all_outputs = {} # Key: VarName, Value: List of SysID
+    all_inputs = {}  # Key: VarName, Value: List of SysID
+    
+    for i, sys in enumerate(widget.system_manager.systems):
+        for var in system_definitions[i]['outputs']:
+            if var not in all_outputs: all_outputs[var] = []
+            all_outputs[var].append(i)
+        for var in system_definitions[i]['inputs']:
+            if var not in all_inputs: all_inputs[var] = []
+            all_inputs[var].append(i)
+            
+    # Connect matching names
+    for var_name, source_sys_ids in all_outputs.items():
+        if var_name in all_inputs:
+            target_sys_ids = all_inputs[var_name]
+            for src_id in source_sys_ids:
+                for tgt_id in target_sys_ids:
+                    # Don't connect a system to itself externally (optional, but cleaner)
+                    if src_id == tgt_id:
+                        continue
+                        
+                    # Edge: Output of Source -> Input of Target
+                    u = f"{src_id}:{var_name}:OUT"
+                    v = f"{tgt_id}:{var_name}:IN"
+                    GlobalVarGraph.add_edge(u, v)
+
+    # 3. Check for Cycles
+    try:
+        cycles = list(nx.simple_cycles(GlobalVarGraph))
+        if cycles:
+            # We found a legitimate variable-level cycle
+            # Format the error message to be readable
+            # Cycle example: ['0:x:IN', '0:y:OUT', '1:y:IN', '1:z:OUT', '0:x:IN']
+            
+            error_details = []
+            for cycle in cycles:
+                path_str = " -> ".join(cycle)
+                error_details.append(f"Cycle: {path_str}")
+            
+            # Pick the first one for the main message
+            cycle_nodes = cycles[0]
+            # Convert node IDs back to readable names if possible
+            # Node format: "{i}:{var}:{type}"
+            readable_path = []
+            for node_str in cycle_nodes:
+                parts = node_str.split(':')
+                sys_id = int(parts[0])
+                var_name = parts[1]
+                sys_name = widget.system_manager.systems[sys_id]['name']
+                readable_path.append(f"[{sys_name}] {var_name}")
+            
+            readable_msg = " -> ".join(readable_path)
+            errors.append(f"Global Circular Dependency detected (Variable Level): {readable_msg} -> ...")
+            
+    except Exception as e:
+         # Fallback
+         print(f"Cycle check failed: {e}")
+         pass
 
     # Display results
     if errors:

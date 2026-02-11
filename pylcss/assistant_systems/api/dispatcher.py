@@ -579,6 +579,11 @@ class CommandDispatcher:
                     logger.error("CAD graph controller not found")
                     return
 
+                # Block graph property-changed / connection-changed signals
+                # during programmatic build to prevent auto-update from
+                # executing incomplete graphs.
+                graph.blockSignals(True)
+
                 created_info = []
                 id_to_node = {n.name(): n for n in graph.all_nodes()}
                 
@@ -676,6 +681,11 @@ class CommandDispatcher:
                 # Apply Layout
                 batch_nodes = [id_to_node[n.get("id")] for n in nodes_spec if n.get("id") in id_to_node]
                 self._apply_layout(batch_nodes, conns_spec, start_x, start_y)
+
+                # Set the last created node as the render target so the
+                # viewer shows the most recent geometry after execution.
+                if batch_nodes:
+                    cad_widget._last_rendered_node = batch_nodes[-1]
                 
                 logger.info(f"CAD Graph operation complete: {', '.join(created_info)}")
 
@@ -683,6 +693,10 @@ class CommandDispatcher:
                 logger.error(f"Failed to build CAD graph: {e}")
                 import traceback
                 traceback.print_exc()
+            finally:
+                # Always re-enable signals so normal UI interaction works
+                if graph:
+                    graph.blockSignals(False)
                 
         if sync:
             self._run_sync(run_tool)
@@ -1044,21 +1058,65 @@ class CommandDispatcher:
             logger.warning(f"Unknown CAD command: {command}")
     
     def _cad_execute(self, sync: bool = False) -> None:
-        """Execute/run the CAD graph."""
+        """Execute/run the CAD graph.
+
+        When *sync=True* (used by the agentic tool handler), the engine
+        is run **directly** on the main thread (via ``_run_sync``), the
+        node results are updated inline, and the 3D viewer is refreshed
+        immediately.  This avoids worker-thread signal-queueing issues
+        that caused the viewer to show stale or empty geometry.
+        """
         if not self.main_window or not hasattr(self.main_window, 'cad_widget'):
             logger.warning("CAD widget not found")
-            if sync: raise RuntimeError("CAD widget not found")
+            if sync:
+                raise RuntimeError("CAD widget not found")
             return
         widget = self.main_window.cad_widget
-        from PySide6.QtCore import QMetaObject, Qt
-        conn_type = Qt.BlockingQueuedConnection if sync else Qt.QueuedConnection
-        
-        if hasattr(widget, 'execute_graph'):
-            QMetaObject.invokeMethod(widget, "execute_graph", conn_type)
-            logger.info("Voice command: Executing CAD graph")
-        elif hasattr(widget, 'btn_execute'):
-            QMetaObject.invokeMethod(widget.btn_execute, "click", conn_type)
-            logger.info("Voice command: Running CAD")
+
+        if sync:
+            # ---- synchronous path (agentic system) ---------------------
+            def _run_engine_and_render():
+                # Wait for any previous async worker first
+                prev = getattr(widget, 'worker', None)
+                if prev and prev.isRunning():
+                    logger.info("Waiting for previous CAD worker to finish…")
+                    prev.wait()
+                    # Drain its queued _on_execution_finished so it doesn't
+                    # overwrite the render we're about to do.
+                    from PySide6.QtWidgets import QApplication
+                    QApplication.processEvents()
+
+                from pylcss.cad.engine import execute_graph
+                nodes = list(widget.graph.all_nodes())
+                results = execute_graph(nodes)
+
+                # Pick the render target (same logic as _on_execution_finished)
+                target = getattr(widget, '_last_rendered_node', None)
+                if target is None and nodes:
+                    target = nodes[-1]
+                geom = results.get(target, getattr(target, '_last_result', None)) if target else None
+
+                if geom is not None:
+                    widget._last_rendered_node = target
+                    if isinstance(geom, dict) and ('mesh' in geom or 'displacement' in geom):
+                        widget.viewer.render_simulation(geom)
+                    elif widget._is_2d_sketch(geom):
+                        widget.viewer.render_sketch(geom)
+                    else:
+                        widget.viewer.render_shape(geom)
+                logger.info("Voice command: Executing CAD graph (sync)")
+                return "CAD executed"
+
+            self._run_sync(_run_engine_and_render)
+        else:
+            # ---- async path (UI button / voice shortcut) ---------------
+            from PySide6.QtCore import QMetaObject, Qt
+            if hasattr(widget, 'execute_graph'):
+                QMetaObject.invokeMethod(widget, "execute_graph", Qt.QueuedConnection)
+                logger.info("Voice command: Executing CAD graph")
+            elif hasattr(widget, 'btn_execute'):
+                QMetaObject.invokeMethod(widget.btn_execute, "click", Qt.QueuedConnection)
+                logger.info("Voice command: Running CAD")
     
     def _cad_export(self, sync: bool = False) -> None:
         """Export the CAD model to STL."""

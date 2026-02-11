@@ -320,13 +320,11 @@ class CodeEditorDialog(QtWidgets.QDialog):
         sidebar_layout.addWidget(QtWidgets.QLabel("<b>Available Inputs:</b>"))
         self.input_var_list = QtWidgets.QListWidget()
         self.input_var_list.setToolTip("Double-click to insert variable")
-        self.input_var_list.setMaximumHeight(100)
         sidebar_layout.addWidget(self.input_var_list)
 
         sidebar_layout.addWidget(QtWidgets.QLabel("<b>Available Outputs:</b>"))
         self.output_var_list = QtWidgets.QListWidget()
         self.output_var_list.setToolTip("Double-click to insert variable")
-        self.output_var_list.setMaximumHeight(100)
         sidebar_layout.addWidget(self.output_var_list)
 
         if node:
@@ -345,7 +343,7 @@ class CodeEditorDialog(QtWidgets.QDialog):
         
     def insert_variable(self, item: QtWidgets.QListWidgetItem) -> None:
         var_name = item.text()
-        self.editor.insert(var_name)
+        self.editor.insertPlainText(var_name)
         self.editor.setFocus()
     
     def _refresh_var_list(self) -> None:

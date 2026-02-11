@@ -127,138 +127,21 @@ class SystemModel:
             model = models[0]
             return cls.from_code_string(model['name'], model['code'], model['inputs'], model['outputs'])
 
-        # Multiple models - need to merge them
-        import networkx as nx
-
-        # Collect all variables
-        all_inputs = {}
-        all_outputs = {}
-
-        for model in models:
-            for inp in model['inputs']:
-                name = inp['name']
-                if name not in all_inputs:
-                    all_inputs[name] = inp
-            for out in model['outputs']:
-                name = out['name']
-                if name not in all_outputs:
-                    all_outputs[name] = out
-
-        # Build dependency graph
-        G = nx.DiGraph()
-        for i in range(len(models)):
-            G.add_node(i)
-
-        for i, model_a in enumerate(models):
-            for inp in model_a['inputs']:
-                inp_name = inp['name']
-                for j, model_b in enumerate(models):
-                    if i != j:
-                        for out in model_b['outputs']:
-                            if inp_name == out['name']:
-                                G.add_edge(j, i)  # b provides input to a
-
-        # Topological sort for execution order
+        # Multiple models - delegate to robust merge logic
+        from pylcss.system_modeling.model_merge import create_merged_model
+        
         try:
-            order = list(nx.topological_sort(G))
-        except nx.NetworkXError:
-            raise ValueError("Circular dependency detected in models")
-
-        # Identify global inputs and outputs
-        input_names = set(all_inputs.keys())
-        output_names = set(all_outputs.keys())
-
-        global_inputs = sorted(list(input_names - output_names))
-        global_outputs = sorted(list(output_names - input_names))
-
-        if not global_outputs:
-            raise ValueError("No global outputs found (all outputs are used as inputs)")
-
-        # Generate merged code with deduplicated imports
-        common_imports = [
-            "import numpy as np",
-            "import joblib",
-            "from sklearn.preprocessing import StandardScaler",
-            "import math",
-        ]
-
-        # 1. Write headers once
-        code = "# Merged System Model\n"
-        for imp in common_imports:
-            code += f"{imp}\n"
-        code += "\n"
-
-        # 2. Add each model's code, stripping out the common imports to avoid duplication
-        for i, model in enumerate(models):
-            model_code = model['code']
-            lines = model_code.split('\n')
-
-            # Filter out lines that are just imports we already added
-            filtered_lines = []
-            for line in lines:
-                s_line = line.strip()
-                # Check if this line is in our common imports list
-                is_common = False
-                for imp in common_imports:
-                    if s_line == imp:
-                        is_common = True
-                        break
-                # Special check for numpy aliases if not exact match
-                if s_line.startswith("import numpy as"):
-                    is_common = True
-
-                if not is_common:
-                    filtered_lines.append(line)
-
-            # Reassemble
-            cleaned_code = "\n".join(filtered_lines)
-            code += f"# --- Model {i}: {model['name']} ---\n"
-            code += cleaned_code + "\n\n"
-
-        # Merged system_function
-        code += "def system_function(**kwargs):\n"
-
-        # Extract global inputs
-        for name in global_inputs:
-            code += f"    {name} = kwargs.get('{name}')\n"
-
-        code += "    intermediates = {}\n\n"
-
-        # Execute models in order to
-        for idx in order:
-            model = models[idx]
-            code += f"    # Execute model {idx} ({model['name']})\n"
-
-            # Build call arguments
-            call_args = []
-            for inp in model['inputs']:
-                name = inp['name']
-                if name in global_inputs:
-                    call_args.append(f"{name}={name}")
-                else:
-                    call_args.append(f"{name}=intermediates['{name}']")
-
-            call_str = ", ".join(call_args)
-            code += f"    outputs_{idx} = system_function_{idx}({call_str})\n"
-
-            # Store outputs in intermediates
-            for out in model['outputs']:
-                name = out['name']
-                code += f"    intermediates['{name}'] = outputs_{idx}['{name}']\n"
-
-            code += "\n"
-
-        # Return global outputs
-        code += "    return {\n"
-        for name in global_outputs:
-            code += f"        '{name}': intermediates['{name}'],\n"
-        code += "    }\n"
-
-        # Create merged inputs/outputs lists
-        merged_inputs = [all_inputs[name] for name in global_inputs]
-        merged_outputs = [all_outputs[name] for name in global_outputs]
-
-        return cls.from_code_string(merged_name, code, merged_inputs, merged_outputs)
+            merged_dict = create_merged_model(models)
+        except Exception as e:
+            logger.error(f"Merge failed: {e}")
+            raise e
+            
+        return cls.from_code_string(
+            merged_name,
+            merged_dict['code'],
+            merged_dict['inputs'],
+            merged_dict['outputs']
+        )
 
     def __call__(self, **kwargs: Any) -> Dict[str, Any]:
         """Call the system function with the given arguments."""

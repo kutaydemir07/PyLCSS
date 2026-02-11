@@ -297,6 +297,56 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
             if not valid_props:
                 continue
             props = node.get("properties", {})
+
+            # --- Remap commonly hallucinated property names ----------------
+            # The LLM frequently invents synonyms for real properties.
+            # Map them to the correct names BEFORE the stripping step.
+            _PROP_ALIASES: Dict[str, Dict[str, str]] = {
+                "com.cad.twisted_extrude": {
+                    "extrude_distance": "distance",
+                    "twist_angle": "angle",
+                    "helix_angle": "angle",
+                    "twist": "angle",
+                    "height": "distance",
+                    "length": "distance",
+                },
+                "com.cad.extrude": {
+                    "distance": "extrude_distance",
+                    "height": "extrude_distance",
+                    "length": "extrude_distance",
+                },
+                "com.cad.cut_extrude": {
+                    "extrude_distance": "distance",
+                    "height": "distance",
+                    "length": "distance",
+                    "depth": "distance",
+                },
+                "com.cad.chamfer": {
+                    "chamfer_distance": "distance",
+                    "size": "distance",
+                },
+                "com.cad.fillet": {
+                    "radius": "fillet_radius",
+                    "fillet_size": "fillet_radius",
+                },
+                "com.cad.revolve": {
+                    "revolve_angle": "angle",
+                    "rotation_angle": "angle",
+                },
+            }
+            alias_table = _PROP_ALIASES.get(ntype, {})
+            if alias_table:
+                remapped = []
+                for bad_name, good_name in alias_table.items():
+                    if bad_name in props and good_name not in props:
+                        props[good_name] = props.pop(bad_name)
+                        remapped.append(f"{bad_name}→{good_name}")
+                if remapped:
+                    logger.info(
+                        f"Remapped hallucinated props for {ntype}: "
+                        f"{', '.join(remapped)}"
+                    )
+
             bad = [k for k in props if k not in valid_props
                    and k not in ("center_x", "center_y", "center_z")]  # center_* common to all
             if bad:
