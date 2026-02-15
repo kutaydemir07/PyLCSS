@@ -95,6 +95,11 @@ QtAwesome bundles several third-party icon fonts. These assets are governed by t
 - **Source**: [https://github.com/danthedeckie/simpleeval](https://github.com/danthedeckie/simpleeval)
 - **Note**: A simple, safe single expression evaluator for Python.
 
+### openpyxl
+- **Copyright**: © 2010 Eric Gazoni, Charlie Clark
+- **License**: MIT
+- **Source**: [https://gitlab.com/openpyxl/openpyxl](https://gitlab.com/openpyxl/openpyxl)
+
 ### MIT License Text
 ```text
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
@@ -205,6 +210,11 @@ h5py serves as a Pythonic interface to the HDF5 library. The distribution includ
 - **Copyright**: © 2014-2026 Al Sweigart
 - **License**: BSD 3-Clause
 - **Source**: [https://github.com/asweigart/pyperclip](https://github.com/asweigart/pyperclip)
+
+### numpy-stl
+- **Copyright**: © 2013-2026 WoLpH (Rick van Hattem)
+- **License**: BSD 3-Clause
+- **Source**: [https://github.com/WoLpH/numpy-stl](https://github.com/WoLpH/numpy-stl)
 
 ### BSD 3-Clause License Text
 ```text

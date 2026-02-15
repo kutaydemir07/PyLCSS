@@ -45,7 +45,7 @@ dependencies = [
     "netgen-mesher==6.2.2506",
     "meshio==5.3.5",
     "scikit-image==0.26.0",
-    "numpy-stl>=3.0.0",
+    "numpy-stl==3.2.0",
 
     # Optimisation & Sensitivity
     "nevergrad==1.0.4",
@@ -63,21 +63,21 @@ dependencies = [
     "networkx==3.3",
 
     # I/O formats
-    "openpyxl>=3.1.0",
+    "openpyxl==3.1.5",
 
     # Voice assistant
     "faster-whisper==1.2.1",
-    "edge-tts==6.1.10",
-    "pydantic>=2.0.0",
+    "edge-tts==7.2.7",
+    "pydantic==2.12.5",
 
     # Utilities
-    "packaging>=21.0",
+    "packaging==26.0",
     "pyaudio==0.2.14",
     "pyautogui==0.9.54",
     "pygame==2.5.2",
-    "simpleeval>=1.0.0",
-    "pyperclip>=1.8.0",
-    "numba>=0.60.0",
+    "simpleeval==1.0.3",
+    "pyperclip==1.11.0",
+    "numba==0.63.1",
 ]
 
 [project.scripts]

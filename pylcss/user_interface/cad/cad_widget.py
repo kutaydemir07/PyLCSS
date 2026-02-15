@@ -893,6 +893,9 @@ class LibraryPanel(QtWidgets.QWidget):
             "Simulation - Solve & Optimize": [
                 ("Solver", "com.cad.sim.solver", "Run FEA solver"),
                 ("Topology Opt", "com.cad.sim.topopt", "Optimize topology (SIMP)"),
+                ("Size Opt", "com.cad.sim.sizeopt", "Optimize parametric dimensions"),
+                ("Shape Opt", "com.cad.sim.shapeopt", "Optimize boundary shape"),
+                ("Remesh Surface", "com.cad.sim.remesh", "Convert TopOpt surface to volume mesh"),
             ],
 
             # ═══════════════════════════════════════════════════════════════

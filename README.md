@@ -35,7 +35,7 @@ PyLCSS implements the **Solution Space** approach for robust design: instead of 
 ## Key Features
 
 ### Parametric CAD Environment
-- **50+ Node Types** — Primitives, Booleans, Fillets, Chamfers, Sweeps, Lofts, Shells, Patterns, Imports
+- **70+ Node Types** — Primitives, Booleans, Fillets, Chamfers, Sweeps, Lofts, Shells, Patterns, Imports
 - **Topology Optimisation** — SIMP with MMA/OC solvers, density/sensitivity filtering, Heaviside projection, symmetry constraints, shape recovery with marching cubes, and **direct STL/OBJ export** of optimised shapes
 - **Advanced Nodes** — Thicken, Pipe, Split, Text emboss, Math Expression evaluator, Import STEP/STL
 - **Real-Time 3D Viewer** — VTK-based with density cutoff preview during optimisation
@@ -81,19 +81,16 @@ PyLCSS implements the **Solution Space** approach for robust design: instead of 
 - **Product Family Analysis** — Common platform identification across product variants
 - **Step Analysis** — Iterative box-size refinement
 
-### Import / Export
+### Export Capabilities
 | Category | Formats |
 |----------|---------|
-| **CAD Import** | STEP, IGES, STL, OBJ, BREP, 3MF |
-| **CAD Export** | STEP, STL, OBJ, BREP, SVG, DXF |
-| **Data Import** | CSV, JSON, HDF5, Excel, MATLAB (.mat), Pickle |
-| **Data Export** | CSV, JSON, HDF5, Excel, MATLAB, Pickle + HTML / Markdown reports |
-| **Mesh** | VTK, VTU, Gmsh, Abaqus, Nastran, MED, XDMF |
-| **Project** | `.pylcss` archive (ZIP containing all graphs, settings, and results) |
+| **CAD Export** | STEP, STL, OBJ |
+| **Data Export** | CSV, Images (PNG, SVG, PDF) |
+| **Project** | Project Folder (JSON-based `.cad` files + data) |
 
-### Engineering Tools
-- **Expression Calculator** — Safe AST-based evaluator (sin, cos, sqrt, log, conditionals, variables)
-- **Unit Converter** — 1000+ units via pint (SI, Imperial, CGS)
+### Engineering Utilities
+- **Expression-Aware Inputs** — Safe AST-based evaluation (sin, cos, sqrt, log, variables) in input fields
+- **Unit-Aware Inputs** — Physical unit support via pint (SI, Imperial, CGS) in simulation nodes
 
 ### LLM-Powered Voice Assistant
 - **Natural Language Control** — "Zoom in", "Create a helical gear", "Go to properties"
