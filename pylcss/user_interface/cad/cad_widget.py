@@ -909,6 +909,8 @@ class LibraryPanel(QtWidgets.QWidget):
             "IO & Parameters": [
                 ("Number", "com.cad.number", "Numeric constant"),
                 ("Variable", "com.cad.variable", "Named variable"),
+                ("Import STEP", "com.cad.import_step", "Import a STEP/IGES CAD file"),
+                ("Import Mesh", "com.cad.import_stl", "Import an STL/OBJ mesh file"),
                 ("Export STEP", "com.cad.export_step", "Export to .step"),
                 ("Export STL", "com.cad.export_stl", "Export to .stl"),
             ],
@@ -1107,6 +1109,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         self.toolbar.addAction("New", self._new_project)
         self.toolbar.addAction("Open", self._open_project)
         self.toolbar.addAction("Save", self._save_project)
+        self.toolbar.addAction("Import CAD", self._import_cad)
         self.toolbar.addSeparator()
         self.toolbar.addAction("Undo", self._undo)
         self.toolbar.addAction("Redo", self._redo)
@@ -1154,8 +1157,36 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
             self.timeline.add_event(f"Added {label} node")
             self.statusBar().showMessage(f"✓ Created {label}")
+            return node
         except Exception as e:
             self.statusBar().showMessage(f"✗ Error: {e}")
+            return None
+            
+    def _import_cad(self):
+        """Prompt user for a CAD file, add an import node, and set its filepath."""
+        try:
+            from pylcss.io_manager.cad_io import CADImporter
+            filepath, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self, "Import CAD File", "", CADImporter.get_filter_string()
+            )
+            if not filepath:
+                return
+
+            ext = os.path.splitext(filepath)[1].lower()
+            if ext in (".step", ".stp", ".iges", ".igs", ".brep"):
+                node = self._spawn_node("com.cad.import_step", f"Import {ext.upper()[1:]}")
+                if node:
+                    node.set_property("filepath", filepath)
+                    self._execute_graph()
+            elif ext in (".stl", ".obj", ".3mf"):
+                node = self._spawn_node("com.cad.import_stl", f"Import {ext.upper()[1:]}")
+                if node:
+                    node.set_property("filepath", filepath)
+                    self._execute_graph()
+            else:
+                QtWidgets.QMessageBox.warning(self, "Unsupported Format", f"Format {ext} not supported for direct node importing.")
+        except Exception as e:
+            self.statusBar().showMessage(f"Error importing CAD: {e}") 
     
     def _on_node_selected(self, node):
         """Handle node selection."""
@@ -1818,6 +1849,13 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 # Check if the node has cached results (_last_result)
                 cached_result = getattr(node, '_last_result', None)
                 if cached_result is not None:
+                    # Update the cached dictionary so the renderer knows what to draw
+                    if isinstance(cached_result, dict):
+                        if prop_name == 'visualization':
+                            cached_result['visualization_mode'] = new
+                        elif prop_name == 'density_cutoff':
+                            cached_result['density_cutoff'] = new
+
                     # Just re-render with existing results instead of re-executing
                     try:
                         if isinstance(cached_result, dict) and ('mesh' in cached_result or 'displacement' in cached_result):

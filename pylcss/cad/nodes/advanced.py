@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 class ImportStepNode(CadQueryNode):
     """Import a STEP/IGES file as geometry."""
 
-    __identifier__ = "com.cad"
+    __identifier__ = "com.cad.import_step"
     NODE_NAME = "Import STEP"
 
     def __init__(self):
@@ -60,7 +60,7 @@ class ImportStepNode(CadQueryNode):
 class ImportStlNode(CadQueryNode):
     """Import an STL/OBJ mesh file."""
 
-    __identifier__ = "com.cad"
+    __identifier__ = "com.cad.import_stl"
     NODE_NAME = "Import STL"
 
     def __init__(self):

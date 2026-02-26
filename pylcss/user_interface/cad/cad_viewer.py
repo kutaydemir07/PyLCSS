@@ -649,6 +649,8 @@ class CQ3DViewer(QtWidgets.QWidget):
                 if max_val - min_val < 1e-10:
                     max_val = min_val + 1.0
                     
+                mapper.SetScalarModeToUsePointData()
+                mapper.SelectColorArray(scalars.GetName())
                 mapper.SetScalarRange(min_val, max_val)
                 
                 lut = vtk.vtkLookupTable()
@@ -660,7 +662,7 @@ class CQ3DViewer(QtWidgets.QWidget):
                 if scalar_name == "VonMises":
                     self._update_scalar_bar("Von Mises Stress (MPa)", min_val, max_val, lut)
                 elif scalar_name == "Displacement":
-                    self._update_scalar_bar("Displacement (mm)", min_val, max_val, lut)
+                    self._update_scalar_bar("Displacement", min_val, max_val, lut)
             
             # If no active scalars but we have stress data, set it up manually
             elif stress is not None and len(stress) > 0:
@@ -747,51 +749,9 @@ class CQ3DViewer(QtWidgets.QWidget):
                     self._add_cube_marker(const['pos'], color=(1, 0, 0), size=2.0)
             
             # 5. Recovered Shape (smooth marching-cubes surface)
-            recovered = data.get('recovered_shape')
-            if recovered is not None and isinstance(recovered, dict):
-                verts_r = recovered.get('vertices')
-                faces_r = recovered.get('faces')
-                if verts_r is not None and faces_r is not None and len(verts_r) > 0 and len(faces_r) > 0:
-                    # Build VTK polydata from marching-cubes surface
-                    rec_points = vtk.vtkPoints()
-                    for v in verts_r:
-                        rec_points.InsertNextPoint(float(v[0]), float(v[1]), float(v[2]))
-                    
-                    rec_polys = vtk.vtkCellArray()
-                    for f in faces_r:
-                        rec_polys.InsertNextCell(3)
-                        rec_polys.InsertCellPoint(int(f[0]))
-                        rec_polys.InsertCellPoint(int(f[1]))
-                        rec_polys.InsertCellPoint(int(f[2]))
-                    
-                    rec_pd = vtk.vtkPolyData()
-                    rec_pd.SetPoints(rec_points)
-                    rec_pd.SetPolys(rec_polys)
-                    
-                    # Smooth normals for a polished look
-                    rec_normals = vtk.vtkPolyDataNormals()
-                    rec_normals.SetInputData(rec_pd)
-                    rec_normals.SetFeatureAngle(60.0)
-                    rec_normals.Update()
-                    
-                    rec_mapper = vtk.vtkPolyDataMapper()
-                    rec_mapper.SetInputConnection(rec_normals.GetOutputPort())
-                    
-                    rec_actor = vtk.vtkActor()
-                    rec_actor.SetMapper(rec_mapper)
-                    rec_actor.GetProperty().SetColor(0.85, 0.85, 0.90)   # Light silver
-                    rec_actor.GetProperty().SetSpecular(0.6)
-                    rec_actor.GetProperty().SetSpecularPower(30)
-                    rec_actor.GetProperty().SetOpacity(0.85)
-                    rec_actor.GetProperty().SetRepresentationToSurface()
-                    rec_actor.GetProperty().EdgeVisibilityOff()
-                    
-                    self.renderer.AddActor(rec_actor)
-                    self.actors.append(rec_actor)
-                    
-                    # Hide the raw density mesh when recovered shape is available
-                    if self.current_actor is not None:
-                        self.current_actor.VisibilityOff()
+            # Disable rendering the marching cubes surface to allow raw VTK density/stress meshes to be visible.
+            # The recovered shape data remains in `data` for export tools.
+            pass
 
         self.renderer.ResetCamera()
         self.vtkWidget.GetRenderWindow().Render()

@@ -982,18 +982,30 @@ class SolverNode(CadQueryNode):
         super().__init__()
         self.add_input('mesh', color=(200, 100, 200))
         self.add_input('material', color=(200, 200, 200))
-        self.add_input('constraints', color=(255, 100, 100))
-        self.add_input('loads', color=(255, 255, 0))
+        self.add_input('constraints', color=(255, 100, 100), multi_input=True)
+        self.add_input('loads', color=(255, 255, 0), multi_input=True)
         self.add_output('results', color=(0, 255, 255))
         self.create_property('visualization', 'Von Mises Stress', widget_type='combo', items=['Von Mises Stress', 'Displacement'])
 
     def run(self):
         mesh = self.get_input_value('mesh', None)
         material = self.get_input_value('material', None)
-        constraint = self.get_input_value('constraints', None)
-        load = self.get_input_value('loads', None)
         
-        if not (mesh and material and constraint and load):
+        # Helper to flatten inputs
+        def flatten_inputs(inputs):
+            flat = []
+            if not inputs: return flat
+            for item in inputs:
+                if isinstance(item, list):
+                    flat.extend(item)
+                elif item is not None:
+                    flat.append(item)
+            return flat
+
+        constraints = flatten_inputs(self.get_input_list('constraints'))
+        loads = flatten_inputs(self.get_input_list('loads'))
+        
+        if not (mesh and material and constraints and loads):
             return None
 
         # 1. Define Element and Basis (Vector)
@@ -1031,144 +1043,206 @@ class SolverNode(CadQueryNode):
         # 4. Apply Boundary Conditions
         x, y, z = mesh.p
         
-        # Fixed Dofs
-        try:
-            if 'geometry' in constraint:
-                # NEW: Geometry-based constraint selection (more accurate)
-                face_shape = constraint['geometry']
-                
-                # Get node coordinates
-                node_coords = np.column_stack((x, y, z))
-                
-                # For each node, check if it's close to the face
-                # This is more accurate than bounding box approach
-                fixed_nodes = []
-                tolerance = 1e-3  # Distance tolerance
-                
-                # OPTIMIZATION: Calculate bounding box once outside the loop
-                bb = face_shape.BoundingBox()
-                xmin, xmax = bb.xmin - tolerance, bb.xmax + tolerance
-                ymin, ymax = bb.ymin - tolerance, bb.ymax + tolerance
-                zmin, zmax = bb.zmin - tolerance, bb.zmax + tolerance
-                
-                for i, coord in enumerate(node_coords):
-                    # Quick bounding box check (pure Python - very fast)
-                    if (xmin <= coord[0] <= xmax and
-                        ymin <= coord[1] <= ymax and
-                        zmin <= coord[2] <= zmax):
-                        
-                        # More precise check: distance to face
-                        # This requires OCC geometric distance calculation
-                        try:
-                            # Use CadQuery's distance calculation
-                            from cadquery import Vector
-                            point = Vector(coord[0], coord[1], coord[2])
-                            distance = face_shape.distanceTo(point)
-                            if distance <= tolerance:
-                                fixed_nodes.append(i)
-                        except:
-                            # Fallback: if distance calculation fails, use bounding box
-                            fixed_nodes.append(i)
-                
-                # Convert node indices to DOF indices
-                fixed_dofs = []
-                nodal_dofs = basis.nodal_dofs  # (3, N_nodes)
-                for node_idx in fixed_nodes:
-                    for dof_idx in nodal_dofs[:, node_idx]:
-                        fixed_dofs.append(dof_idx)
-                
-                fixed_dofs = np.array(fixed_dofs, dtype=int)
-                
-            elif 'condition' in constraint:
-                # LEGACY: String-based constraint (fallback)
-                cond_str = constraint['condition']
-                
-                # Secure evaluation using simpleeval
-                if simple_eval is not None:
-                    # Define allowed names and functions for safe evaluation
-                    names = {'x': x, 'y': y, 'z': z}
-                    functions = {'sin': np.sin, 'cos': np.cos, 'abs': np.abs, 'sqrt': np.sqrt}
+        fixed_dofs = np.array([], dtype=int)
+        
+        for constraint in constraints:
+            if not constraint: continue
+            
+            fixed_dof_indices = constraint.get('fixed_dofs', [0, 1, 2])
+            
+            try:
+                if 'geometry' in constraint:
+                    # NEW: Geometry-based constraint selection (more accurate)
+                    face_shape = constraint['geometry']
                     
-                    def constraint_func(p):
-                        x_val, y_val, z_val = p
-                        names.update({'x': x_val, 'y': y_val, 'z': z_val})
-                        return simple_eval(cond_str, names=names, functions=functions)
-                else:
-                    # Fallback to restricted eval if simpleeval not available
-                    def constraint_func(p):
-                        x_val, y_val, z_val = p
-                        return eval(cond_str, {'x': x_val, 'y': y_val, 'z': z_val, 'np': np})
-                
-                fixed_dofs = basis.get_dofs(constraint_func).all()
-            else:
-                fixed_dofs = np.array([], dtype=int)
-                
-        except Exception:
-            fixed_dofs = np.array([], dtype=int)
+                    # Get node coordinates
+                    node_coords = np.column_stack((x, y, z))
+                    
+                    # For each node, check if it's close to the face
+                    # This is more accurate than bounding box approach
+                    fixed_nodes = []
+                    tolerance = 1e-3  # Distance tolerance
+                    
+                    # OPTIMIZATION: Calculate bounding box once outside the loop
+                    bb = face_shape.BoundingBox()
+                    xmin, xmax = bb.xmin - tolerance, bb.xmax + tolerance
+                    ymin, ymax = bb.ymin - tolerance, bb.ymax + tolerance
+                    zmin, zmax = bb.zmin - tolerance, bb.zmax + tolerance
+                    
+                    for i, coord in enumerate(node_coords):
+                        # Quick bounding box check (pure Python - very fast)
+                        if (xmin <= coord[0] <= xmax and
+                            ymin <= coord[1] <= ymax and
+                            zmin <= coord[2] <= zmax):
+                            
+                            # More precise check: distance to face
+                            # This requires OCC geometric distance calculation
+                            try:
+                                # Use CadQuery's distance calculation
+                                from cadquery import Vector
+                                point = Vector(coord[0], coord[1], coord[2])
+                                distance = face_shape.distanceTo(point)
+                                if distance <= tolerance:
+                                    fixed_nodes.append(i)
+                            except:
+                                # Fallback: if distance calculation fails, use bounding box
+                                fixed_nodes.append(i)
+                    
+                    # Convert node indices to DOF indices
+                    current_fixed_dofs = []
+                    nodal_dofs = basis.nodal_dofs  # (3, N_nodes)
+                    for node_idx in fixed_nodes:
+                        for dof_idx in fixed_dof_indices:
+                             current_fixed_dofs.append(nodal_dofs[dof_idx, node_idx])
+                    
+                    if current_fixed_dofs:
+                        fixed_dofs = np.union1d(fixed_dofs, current_fixed_dofs)
+                    
+                elif 'condition' in constraint and constraint['condition']:
+                    # LEGACY: String-based constraint (fallback)
+                    cond_str = constraint['condition']
+                    
+                    # Secure evaluation using simpleeval
+                    if simple_eval is not None:
+                        # Define allowed names and functions for safe evaluation
+                        names = {'x': x, 'y': y, 'z': z}
+                        functions = {'sin': np.sin, 'cos': np.cos, 'abs': np.abs, 'sqrt': np.sqrt}
+                        
+                        def constraint_func(p):
+                            x_val, y_val, z_val = p
+                            names.update({'x': x_val, 'y': y_val, 'z': z_val})
+                            return simple_eval(cond_str, names=names, functions=functions)
+                    else:
+                        # Fallback to restricted eval if simpleeval not available
+                        def constraint_func(p):
+                            x_val, y_val, z_val = p
+                            return eval(cond_str, {'x': x_val, 'y': y_val, 'z': z_val, 'np': np})
+                    
+                    facet_dofs = basis.get_dofs(constraint_func)
+                    for dof_idx in fixed_dof_indices:
+                         fixed_dofs = np.union1d(fixed_dofs, facet_dofs.nodal[f'u^{dof_idx+1}'])
+                    
+            except Exception as e:
+                logger.warning(f"FEA Solver: Constraint processing error: {e}")
+
+        fixed_dofs = fixed_dofs.astype(int)
 
         # 5. Apply Loads
         f = np.zeros(basis.N)
         
         try:
-            if load['type'] == 'pressure':
-                # NEW: Handle pressure loads
-                face_shape = load['geometry']
-                pressure = load['pressure']
+            for load in loads:
+                if not load: continue
                 
-                # Get node coordinates
-                node_coords = np.column_stack((x, y, z))
-                
-                # Find nodes on the pressure face
-                pressure_nodes = []
-                tolerance = 1e-3
-                
-                # OPTIMIZATION: Pre-calculate bounding box for fallback
-                bb = face_shape.BoundingBox()
-                xmin, xmax = bb.xmin - tolerance, bb.xmax + tolerance
-                ymin, ymax = bb.ymin - tolerance, bb.ymax + tolerance
-                zmin, zmax = bb.zmin - tolerance, bb.zmax + tolerance
-                
-                for i, coord in enumerate(node_coords):
-                    try:
-                        from cadquery import Vector
-                        point = Vector(coord[0], coord[1], coord[2])
-                        distance = face_shape.distanceTo(point)
-                        if distance <= tolerance:
-                            pressure_nodes.append(i)
-                    except:
-                        # Fallback: use bounding box (pre-calculated - fast)
-                        if (xmin <= coord[0] <= xmax and
-                            ymin <= coord[1] <= ymax and
-                            zmin <= coord[2] <= zmax):
-                            pressure_nodes.append(i)
-                
-                if pressure_nodes:
-                    # Calculate pressure force on each node
-                    # For simplicity, distribute pressure evenly across face nodes
-                    # In reality, this should integrate pressure over face area
-                    n_pressure_nodes = len(pressure_nodes)
-                    face_area = face_shape.Area()
+                if load['type'] == 'pressure':
+                    # NEW: Handle pressure loads
+                    face_shape = load['geometry']
+                    pressure = load['pressure']
                     
-                    if face_area > 0:
-                        # Total force = pressure * area
-                        total_force = pressure * face_area
-                        # Distribute to nodes (simplified - should use shape functions)
-                        force_per_node = total_force / n_pressure_nodes
-                        
-                        # Get face normal for direction
+                    # Get node coordinates
+                    node_coords = np.column_stack((x, y, z))
+                    
+                    # Find nodes on the pressure face
+                    pressure_nodes = []
+                    tolerance = 1e-3
+                    
+                    # OPTIMIZATION: Pre-calculate bounding box for fallback
+                    bb = face_shape.BoundingBox()
+                    xmin, xmax = bb.xmin - tolerance, bb.xmax + tolerance
+                    ymin, ymax = bb.ymin - tolerance, bb.ymax + tolerance
+                    zmin, zmax = bb.zmin - tolerance, bb.zmax + tolerance
+                    
+                    for i, coord in enumerate(node_coords):
                         try:
-                            # Get normal vector of the face
-                            normal = face_shape.normalAt()
-                            fx_per_node = force_per_node * normal.x
-                            fy_per_node = force_per_node * normal.y
-                            fz_per_node = force_per_node * normal.z
+                            from cadquery import Vector
+                            point = Vector(coord[0], coord[1], coord[2])
+                            distance = face_shape.distanceTo(point)
+                            if distance <= tolerance:
+                                pressure_nodes.append(i)
                         except:
-                            # Fallback: assume normal pressure (outward)
-                            fx_per_node = fy_per_node = 0.0
-                            fz_per_node = force_per_node
+                            # Fallback: use bounding box (pre-calculated - fast)
+                            if (xmin <= coord[0] <= xmax and
+                                ymin <= coord[1] <= ymax and
+                                zmin <= coord[2] <= zmax):
+                                pressure_nodes.append(i)
+                    
+                    if pressure_nodes:
+                        # Calculate pressure force on each node
+                        # For simplicity, distribute pressure evenly across face nodes
+                        # In reality, this should integrate pressure over face area
+                        n_pressure_nodes = len(pressure_nodes)
+                        face_area = face_shape.Area()
+                        
+                        if face_area > 0:
+                            # Total force = pressure * area
+                            total_force = pressure * face_area
+                            # Distribute to nodes (simplified - should use shape functions)
+                            force_per_node = total_force / n_pressure_nodes
+                            
+                            # Get face normal for direction
+                            try:
+                                # Get normal vector of the face
+                                normal = face_shape.normalAt()
+                                fx_per_node = force_per_node * normal.x
+                                fy_per_node = force_per_node * normal.y
+                                fz_per_node = force_per_node * normal.z
+                            except:
+                                # Fallback: assume normal pressure (outward)
+                                fx_per_node = fy_per_node = 0.0
+                                fz_per_node = force_per_node
+                            
+                            nodal_dofs = basis.nodal_dofs
+                            for node_idx in pressure_nodes:
+                                dof_x = nodal_dofs[0, node_idx]
+                                dof_y = nodal_dofs[1, node_idx]
+                                dof_z = nodal_dofs[2, node_idx]
+                                
+                                f[dof_x] += fx_per_node
+                                f[dof_y] += fy_per_node
+                                f[dof_z] += fz_per_node
+                                
+                elif load['type'] == 'force':
+                    # LEGACY: Handle force loads
+                    load_vec = load['vector']
+                    load_cond = load['condition']
+                    
+                    # Secure evaluation using simpleeval
+                    if simple_eval is not None:
+                        # Use numpy broadcasting with simple_eval - evaluate condition for all points
+                        try:
+                            # Create arrays for vectorized evaluation
+                            x_arr = np.asarray(x)
+                            y_arr = np.asarray(y) 
+                            z_arr = np.asarray(z)
+                            
+                            # For simple conditions, try to evaluate vectorized
+                            # This is a compromise - for complex conditions, fall back to loop
+                            condition_results = []
+                            for i in range(len(x_arr)):
+                                names = {'x': float(x_arr[i]), 'y': float(y_arr[i]), 'z': float(z_arr[i])}
+                                functions = {'sin': np.sin, 'cos': np.cos, 'abs': abs, 'sqrt': np.sqrt}
+                                result = simple_eval(load_cond, names=names, functions=functions)
+                                condition_results.append(bool(result))
+                            
+                            matching_nodes_indices = np.where(condition_results)[0]
+                        except:
+                            # Fallback to old eval if simpleeval fails
+                            matching_nodes_indices = np.where(eval(load_cond, {'x': x, 'y': y, 'z': z, 'np': np}))[0]
+                    else:
+                        # Fallback to restricted eval if simpleeval not available
+                        matching_nodes_indices = np.where(eval(load_cond, {'x': x, 'y': y, 'z': z, 'np': np}))[0]
+                    
+                    n_load_nodes = len(matching_nodes_indices)
+                    
+                    if n_load_nodes > 0:
+                        # FIXED: Simple uniform load distribution (area weighting was causing issues)
+                        fx_total, fy_total, fz_total = load_vec
+                        fx_per_node = fx_total / n_load_nodes
+                        fy_per_node = fy_total / n_load_nodes
+                        fz_per_node = fz_total / n_load_nodes
                         
                         nodal_dofs = basis.nodal_dofs
-                        for node_idx in pressure_nodes:
+                        for node_idx in matching_nodes_indices:
                             dof_x = nodal_dofs[0, node_idx]
                             dof_y = nodal_dofs[1, node_idx]
                             dof_z = nodal_dofs[2, node_idx]
@@ -1177,56 +1251,6 @@ class SolverNode(CadQueryNode):
                             f[dof_y] += fy_per_node
                             f[dof_z] += fz_per_node
                             
-            elif load['type'] == 'force':
-                # LEGACY: Handle force loads
-                load_vec = load['vector']
-                load_cond = load['condition']
-                
-                # Secure evaluation using simpleeval
-                if simple_eval is not None:
-                    # Use numpy broadcasting with simple_eval - evaluate condition for all points
-                    try:
-                        # Create arrays for vectorized evaluation
-                        x_arr = np.asarray(x)
-                        y_arr = np.asarray(y) 
-                        z_arr = np.asarray(z)
-                        
-                        # For simple conditions, try to evaluate vectorized
-                        # This is a compromise - for complex conditions, fall back to loop
-                        condition_results = []
-                        for i in range(len(x_arr)):
-                            names = {'x': float(x_arr[i]), 'y': float(y_arr[i]), 'z': float(z_arr[i])}
-                            functions = {'sin': np.sin, 'cos': np.cos, 'abs': abs, 'sqrt': np.sqrt}
-                            result = simple_eval(load_cond, names=names, functions=functions)
-                            condition_results.append(bool(result))
-                        
-                        matching_nodes_indices = np.where(condition_results)[0]
-                    except:
-                        # Fallback to old eval if simpleeval fails
-                        matching_nodes_indices = np.where(eval(load_cond, {'x': x, 'y': y, 'z': z, 'np': np}))[0]
-                else:
-                    # Fallback to restricted eval if simpleeval not available
-                    matching_nodes_indices = np.where(eval(load_cond, {'x': x, 'y': y, 'z': z, 'np': np}))[0]
-                
-                n_load_nodes = len(matching_nodes_indices)
-                
-                if n_load_nodes > 0:
-                    # FIXED: Simple uniform load distribution (area weighting was causing issues)
-                    fx_total, fy_total, fz_total = load_vec
-                    fx_per_node = fx_total / n_load_nodes
-                    fy_per_node = fy_total / n_load_nodes
-                    fz_per_node = fz_total / n_load_nodes
-                    
-                    nodal_dofs = basis.nodal_dofs
-                    for node_idx in matching_nodes_indices:
-                        dof_x = nodal_dofs[0, node_idx]
-                        dof_y = nodal_dofs[1, node_idx]
-                        dof_z = nodal_dofs[2, node_idx]
-                        
-                        f[dof_x] += fx_per_node
-                        f[dof_y] += fy_per_node
-                        f[dof_z] += fz_per_node
-                        
         except Exception:
             pass
 
@@ -1299,9 +1323,21 @@ class SolverNode(CadQueryNode):
         except Exception:
             stress = None
 
+        # Build perfectly mapped displacement vector for the 3D Viewer (length 3*N_points)
+        try:
+            disp_3n = np.zeros((3, mesh.p.shape[1]))
+            nodal_dofs = basis.nodal_dofs
+            # nodal_dofs has shape (3, N_nodes), and mesh.p has shape (3, N_points). N_nodes <= N_points.
+            disp_3n[0, :] = u[nodal_dofs[0, :]]
+            disp_3n[1, :] = u[nodal_dofs[1, :]]
+            disp_3n[2, :] = u[nodal_dofs[2, :]]
+            displacement_flat = disp_3n.flatten(order='F')
+        except Exception:
+            displacement_flat = u # Fallback
+
         return {
             'mesh': mesh,
-            'displacement': u,
+            'displacement': displacement_flat,
             'stress': stress,
             'type': 'fea',
             'visualization_mode': self.get_property('visualization')
