@@ -698,8 +698,15 @@ class MeshNode(CadQueryNode):
                     # NEW: Apply local mesh refinement if specified
                     if refinement_faces is not None:
                         try:
-                            # refinement_faces should be a list of face geometries
-                            face_list = refinement_faces.vals() if hasattr(refinement_faces, 'vals') else [refinement_faces]
+                            # Handle SelectFaceNode dict format: {'workplane': ..., 'face': ..., 'faces': [...]}
+                            if isinstance(refinement_faces, dict):
+                                face_list = refinement_faces.get('faces', [])
+                                if not face_list and refinement_faces.get('face') is not None:
+                                    face_list = [refinement_faces['face']]
+                            elif hasattr(refinement_faces, 'vals'):
+                                face_list = refinement_faces.vals()
+                            else:
+                                face_list = [refinement_faces]
                             
                             for face in face_list:
                                 if hasattr(face, 'hashCode'):
@@ -717,9 +724,12 @@ class MeshNode(CadQueryNode):
                     ng_mesh.Export(msh_path, "Gmsh2 Format")
                 
                 # 5. Load into skfem
+                print("FEA Mesh: Loading into skfem...")
                 mesh = Mesh.load(msh_path)
+                print(f"FEA Mesh: Load complete. Nodes: {mesh.p.shape[1]}, Tets: {mesh.t.shape[1]}")
                 
-            except Exception:
+            except Exception as e:
+                print(f"FEA Mesh: ERROR loading mesh: {e}")
                 return None
                 
             finally:
@@ -769,13 +779,14 @@ class ConstraintNode(CadQueryNode):
         constraint_type = self.get_property('constraint_type')
         fallback_condition = self.get_property('condition')
         
+        if mesh is None:
+            print(f"DEBUG ConstraintNode ({self.NODE_NAME}): ABORTING - NO MESH")
+            return None
+            
         # Get displacement values
         disp_x = float(self.get_property('displacement_x'))
         disp_y = float(self.get_property('displacement_y'))
         disp_z = float(self.get_property('displacement_z'))
-        
-        if mesh is None:
-            return None
         
         # Map constraint type to DOF constraints
         # 'fixed_dofs' indicates which DOFs (0=x, 1=y, 2=z) are fixed
@@ -806,26 +817,28 @@ class ConstraintNode(CadQueryNode):
                 'displacement': constraint_info['displacement']
             }
 
-        # Extract face from SelectFaceNode dict format {'workplane': ..., 'face': ...}
+        # Extract faces from SelectFaceNode dict format {'workplane': ..., 'faces': [...]}
         try:
-            if isinstance(target_wp, dict) and 'face' in target_wp:
-                face_obj = target_wp['face']
+            if isinstance(target_wp, dict):
+                # Use 'faces' list if available, otherwise fallback to 'face'
+                face_objs = target_wp.get('faces', [target_wp.get('face')])
             else:
                 # Fallback: try to get vals from workplane (legacy support)
                 face_objs = target_wp.vals() if hasattr(target_wp, 'vals') else []
-                if not face_objs:
-                    self.set_error("No faces found in target face input")
-                    return None
-                face_obj = face_objs[0]
+            
+            if not face_objs or face_objs[0] is None:
+                self.set_error("No faces found in target face input")
+                return None
             
             return {
                 'type': constraint_type.lower().replace(' ', '_'),
-                'geometry': face_obj,
+                'geometries': face_objs,  # Pass the list of faces
                 'fixed_dofs': constraint_info['fixed_dofs'],
                 'displacement': constraint_info['displacement']
             }
 
         except Exception as e:
+            print(f"DEBUG ConstraintNode ({self.NODE_NAME}): ERROR during run: {e}")
             self.set_error(f"Constraint setup failed: {e}")
             return None
 
@@ -873,18 +886,16 @@ class LoadNode(CadQueryNode):
         mesh = self.get_input_value('mesh', None)
         target_wp = self.get_input_value('target_face', None)  # This is a Workplane object
 
+        if mesh is None:
+            print(f"DEBUG LoadNode ({self.NODE_NAME}): ABORTING - NO MESH")
+            return None
+
         # Resolve force inputs with fallback to properties
         fx = self.get_input_value('force_x', 'force_x')
         fy = self.get_input_value('force_y', 'force_y')
         fz = self.get_input_value('force_z', 'force_z')
 
         fallback_condition = self.get_property('condition')
-        
-        # Debug logging
-
-
-        if mesh is None:
-            return None
 
         # If no face input provided, use fallback string condition
         if target_wp is None:
@@ -897,35 +908,26 @@ class LoadNode(CadQueryNode):
                 'vector': [float(fx), float(fy), float(fz)]
             }
 
-        # Extract face from SelectFaceNode dict format {'workplane': ..., 'face': ...}
+        # Extract faces from SelectFaceNode dict format {'workplane': ..., 'faces': [...]}
         try:
-            if isinstance(target_wp, dict) and 'face' in target_wp:
-                face_obj = target_wp['face']
+            if isinstance(target_wp, dict):
+                face_objs = target_wp.get('faces', [target_wp.get('face')])
             else:
                 # Fallback: try to get vals from workplane (legacy support)
                 face_objs = target_wp.vals() if hasattr(target_wp, 'vals') else []
-                if not face_objs:
-                    self.set_error("No faces found in target face input")
-                    return None
-                face_obj = face_objs[0]
             
-
-            bb = face_obj.BoundingBox()
-            tol = 1e-3
-
-            # Create condition string that selects nodes within the face's bounding box
-            cond_str = (f"(x >= {bb.xmin - tol}) & (x <= {bb.xmax + tol}) & "
-                        f"(y >= {bb.ymin - tol}) & (y <= {bb.ymax + tol}) & "
-                        f"(z >= {bb.zmin - tol}) & (z <= {bb.zmax + tol})")
+            if not face_objs or face_objs[0] is None:
+                self.set_error("No faces found in target face input")
+                return None
 
             return {
                 'type': 'force',
-                'condition': cond_str,
+                'geometries': face_objs, # Pass actual geometries for precise node selection
                 'vector': [float(fx), float(fy), float(fz)]
             }
 
-        except Exception as e:
-            self.set_error(f"Load setup failed: {e}")
+        except Exception:
+            self.set_error("Load setup failed")
             return None
 
 
@@ -988,6 +990,7 @@ class SolverNode(CadQueryNode):
         self.create_property('visualization', 'Von Mises Stress', widget_type='combo', items=['Von Mises Stress', 'Displacement'])
 
     def run(self):
+        print("FEA Solver: Node 'run' called.")
         mesh = self.get_input_value('mesh', None)
         material = self.get_input_value('material', None)
         
@@ -1005,13 +1008,18 @@ class SolverNode(CadQueryNode):
         constraints = flatten_inputs(self.get_input_list('constraints'))
         loads = flatten_inputs(self.get_input_list('loads'))
         
+        print(f"FEA Solver: Inputs - Mesh: {mesh is not None}, Mat: {material is not None}, Constraints: {len(constraints)}, Loads: {len(loads)}")
+        
         if not (mesh and material and constraints and loads):
+            print("FEA Solver: Missing required inputs. Aborting.")
             return None
 
         # 1. Define Element and Basis (Vector)
         # CHANGE: Use P2 (Quadratic) elements for accuracy (prevents locking)
+        print("FEA Solver: Initializing P2 Basis (Quadratic)...")
         e = ElementVector(ElementTetP2())
         basis = Basis(mesh, e)
+        print(f"FEA Solver: Basis Initialized. Total DOFs: {basis.N}")
 
         # 2. Define Physics (Linear Elasticity)
         E_mat = material['E']
@@ -1038,7 +1046,9 @@ class SolverNode(CadQueryNode):
             return 2.0 * w['mu'] * ddot(E, D) + w['lam'] * tr(E) * tr(D)
 
         # 3. Assemble Stiffness Matrix
+        print(f"FEA Solver: Assembling Stiffness Matrix (DOF: {basis.N})...")
         K = stiffness.assemble(basis, lam=lam_interp, mu=mu_interp)
+        print("FEA Solver: Assembly Complete.")
 
         # 4. Apply Boundary Conditions
         x, y, z = mesh.p
@@ -1051,46 +1061,56 @@ class SolverNode(CadQueryNode):
             fixed_dof_indices = constraint.get('fixed_dofs', [0, 1, 2])
             
             try:
-                if 'geometry' in constraint:
-                    # NEW: Geometry-based constraint selection (more accurate)
-                    face_shape = constraint['geometry']
-                    
-                    # Get node coordinates
-                    node_coords = np.column_stack((x, y, z))
-                    
-                    # For each node, check if it's close to the face
-                    # This is more accurate than bounding box approach
+                # Handle geometry-based selection (either single 'geometry' or list 'geometries')
+                geoms = constraint.get('geometries', [constraint.get('geometry')])
+                geoms = [g for g in geoms if g is not None]
+                
+                if geoms:
+                    # Robust multi-geometry node selection
                     fixed_nodes = []
-                    tolerance = 1e-3  # Distance tolerance
+                    # Larger tolerance handles coarse/curved mesh discretisation
+                    tolerance = 1.5
                     
-                    # OPTIMIZATION: Calculate bounding box once outside the loop
-                    bb = face_shape.BoundingBox()
-                    xmin, xmax = bb.xmin - tolerance, bb.xmax + tolerance
-                    ymin, ymax = bb.ymin - tolerance, bb.ymax + tolerance
-                    zmin, zmax = bb.zmin - tolerance, bb.zmax + tolerance
+                    # 1. Pre-filter with combined bounding box
+                    bbox_list = [g.BoundingBox() for g in geoms]
+                    xmin = min(b.xmin for b in bbox_list) - tolerance
+                    xmax = max(b.xmax for b in bbox_list) + tolerance
+                    ymin = min(b.ymin for b in bbox_list) - tolerance
+                    ymax = max(b.ymax for b in bbox_list) + tolerance
+                    zmin = min(b.zmin for b in bbox_list) - tolerance
+                    zmax = max(b.zmax for b in bbox_list) + tolerance
                     
-                    for i, coord in enumerate(node_coords):
-                        # Quick bounding box check (pure Python - very fast)
-                        if (xmin <= coord[0] <= xmax and
-                            ymin <= coord[1] <= ymax and
-                            zmin <= coord[2] <= zmax):
-                            
-                            # More precise check: distance to face
-                            # This requires OCC geometric distance calculation
+                    in_bb = (x >= xmin) & (x <= xmax) & (y >= ymin) & (y <= ymax) & (z >= zmin) & (z <= zmax)
+                    candidate_indices = np.where(in_bb)[0]
+                    print(f"FEA Solver: Constraint candidates in BBox: {len(candidate_indices)}")
+                    
+                    from cadquery import Vector
+                    for i in candidate_indices:
+                        px, py, pz = float(x[i]), float(y[i]), float(z[i])
+                        point = Vector(px, py, pz)
+                        # Match if close to ANY of the face geometries
+                        for g in geoms:
+                            matched = False
                             try:
-                                # Use CadQuery's distance calculation
-                                from cadquery import Vector
-                                point = Vector(coord[0], coord[1], coord[2])
-                                distance = face_shape.distanceTo(point)
-                                if distance <= tolerance:
-                                    fixed_nodes.append(i)
-                            except:
-                                # Fallback: if distance calculation fails, use bounding box
+                                if g.distanceTo(point) <= tolerance:
+                                    matched = True
+                            except Exception:
+                                # Fallback: use per-face BBox check
+                                try:
+                                    bb = g.BoundingBox()
+                                    if (bb.xmin - tolerance <= px <= bb.xmax + tolerance and
+                                            bb.ymin - tolerance <= py <= bb.ymax + tolerance and
+                                            bb.zmin - tolerance <= pz <= bb.zmax + tolerance):
+                                        matched = True
+                                except Exception:
+                                    pass
+                            if matched:
                                 fixed_nodes.append(i)
+                                break
+                    print(f"FEA Solver: Constraint fixed nodes found: {len(fixed_nodes)}")
                     
-                    # Convert node indices to DOF indices
+                    nodal_dofs = basis.nodal_dofs
                     current_fixed_dofs = []
-                    nodal_dofs = basis.nodal_dofs  # (3, N_nodes)
                     for node_idx in fixed_nodes:
                         for dof_idx in fixed_dof_indices:
                              current_fixed_dofs.append(nodal_dofs[dof_idx, node_idx])
@@ -1202,64 +1222,106 @@ class SolverNode(CadQueryNode):
                                 f[dof_z] += fz_per_node
                                 
                 elif load['type'] == 'force':
-                    # LEGACY: Handle force loads
+                    # NEW: Support for geometry-based force selection
+                    geoms = load.get('geometries', [load.get('geometry')])
+                    geoms = [g for g in geoms if g is not None]
                     load_vec = load['vector']
-                    load_cond = load['condition']
                     
-                    # Secure evaluation using simpleeval
-                    if simple_eval is not None:
-                        # Use numpy broadcasting with simple_eval - evaluate condition for all points
-                        try:
-                            # Create arrays for vectorized evaluation
-                            x_arr = np.asarray(x)
-                            y_arr = np.asarray(y) 
-                            z_arr = np.asarray(z)
-                            
-                            # For simple conditions, try to evaluate vectorized
-                            # This is a compromise - for complex conditions, fall back to loop
-                            condition_results = []
-                            for i in range(len(x_arr)):
-                                names = {'x': float(x_arr[i]), 'y': float(y_arr[i]), 'z': float(z_arr[i])}
-                                functions = {'sin': np.sin, 'cos': np.cos, 'abs': abs, 'sqrt': np.sqrt}
-                                result = simple_eval(load_cond, names=names, functions=functions)
-                                condition_results.append(bool(result))
-                            
-                            matching_nodes_indices = np.where(condition_results)[0]
-                        except:
-                            # Fallback to old eval if simpleeval fails
+                    matching_nodes_indices = []
+                    
+                    if geoms:
+                        # Robust multi-geometry node selection
+                        tolerance = 1.5
+                        bbox_list = [g.BoundingBox() for g in geoms]
+                        xmin = min(b.xmin for b in bbox_list) - tolerance
+                        xmax = max(b.xmax for b in bbox_list) + tolerance
+                        ymin = min(b.ymin for b in bbox_list) - tolerance
+                        ymax = max(b.ymax for b in bbox_list) + tolerance
+                        zmin = min(b.zmin for b in bbox_list) - tolerance
+                        zmax = max(b.zmax for b in bbox_list) + tolerance
+                        
+                        in_bb = (x >= xmin) & (x <= xmax) & (y >= ymin) & (y <= ymax) & (z >= zmin) & (z <= zmax)
+                        candidate_indices = np.where(in_bb)[0]
+                        print(f"FEA Solver: Load candidates in BBox: {len(candidate_indices)}")
+                        
+                        from cadquery import Vector
+                        for i in candidate_indices:
+                            px, py, pz = float(x[i]), float(y[i]), float(z[i])
+                            point = Vector(px, py, pz)
+                            for g in geoms:
+                                matched = False
+                                try:
+                                    if g.distanceTo(point) <= tolerance:
+                                        matched = True
+                                except Exception:
+                                    # Fallback: use per-face BBox check
+                                    try:
+                                        bb = g.BoundingBox()
+                                        if (bb.xmin - tolerance <= px <= bb.xmax + tolerance and
+                                                bb.ymin - tolerance <= py <= bb.ymax + tolerance and
+                                                bb.zmin - tolerance <= pz <= bb.zmax + tolerance):
+                                            matched = True
+                                    except Exception:
+                                        pass
+                                if matched:
+                                    matching_nodes_indices.append(i)
+                                    break
+                        print(f"FEA Solver: Load matched nodes: {len(matching_nodes_indices)}")
+                    elif 'condition' in load and load['condition']:
+                        # LEGACY: Handle force loads via condition string
+                        load_cond = load['condition']
+                        # Secure evaluation using simpleeval
+                        if simple_eval is not None:
+                            try:
+                                x_arr, y_arr, z_arr = np.asarray(x), np.asarray(y), np.asarray(z)
+                                condition_results = []
+                                for i in range(len(x_arr)):
+                                    names = {'x': float(x_arr[i]), 'y': float(y_arr[i]), 'z': float(z_arr[i])}
+                                    functions = {'sin': np.sin, 'cos': np.cos, 'abs': abs, 'sqrt': np.sqrt}
+                                    result = simple_eval(load_cond, names=names, functions=functions)
+                                    condition_results.append(bool(result))
+                                matching_nodes_indices = np.where(condition_results)[0]
+                            except:
+                                matching_nodes_indices = np.where(eval(load_cond, {'x': x, 'y': y, 'z': z, 'np': np}))[0]
+                        else:
                             matching_nodes_indices = np.where(eval(load_cond, {'x': x, 'y': y, 'z': z, 'np': np}))[0]
-                    else:
-                        # Fallback to restricted eval if simpleeval not available
-                        matching_nodes_indices = np.where(eval(load_cond, {'x': x, 'y': y, 'z': z, 'np': np}))[0]
                     
                     n_load_nodes = len(matching_nodes_indices)
-                    
                     if n_load_nodes > 0:
-                        # FIXED: Simple uniform load distribution (area weighting was causing issues)
-                        fx_total, fy_total, fz_total = load_vec
-                        fx_per_node = fx_total / n_load_nodes
-                        fy_per_node = fy_total / n_load_nodes
-                        fz_per_node = fz_total / n_load_nodes
+                        n_orig_vertices = mesh.p.shape[1]
+                        corners = [idx for idx in matching_nodes_indices if idx < n_orig_vertices]
+                        mid_edges = [idx for idx in matching_nodes_indices if idx >= n_orig_vertices]
                         
+                        fx_total, fy_total, fz_total = load_vec
                         nodal_dofs = basis.nodal_dofs
-                        for node_idx in matching_nodes_indices:
-                            dof_x = nodal_dofs[0, node_idx]
-                            dof_y = nodal_dofs[1, node_idx]
-                            dof_z = nodal_dofs[2, node_idx]
+                        
+                        if mid_edges:
+                            # Quadratic mesh nodes detected on this face
+                            # Distribute force among mid-edge nodes (using consistently 1/3 weight each)
+                            # For a single face, there are 3 mid-edges. 3 * 1/3 = 1.
+                            w_nodes = mid_edges
+                            weight = 1.0 / len(mid_edges)
+                        else:
+                            # Linear mesh or only vertices found
+                            w_nodes = matching_nodes_indices
+                            weight = 1.0 / n_load_nodes
                             
-                            f[dof_x] += fx_per_node
-                            f[dof_y] += fy_per_node
-                            f[dof_z] += fz_per_node
+                        for node_idx in w_nodes:
+                            f[nodal_dofs[0, node_idx]] += fx_total * weight
+                            f[nodal_dofs[1, node_idx]] += fy_total * weight
+                            f[nodal_dofs[2, node_idx]] += fz_total * weight
                             
         except Exception:
             pass
 
         # 6. Solve
         try:
-            with suppress_output():
-                u = solve(*condense(K, f, D=fixed_dofs))
-            logger.info(f"FEA Solve Complete. Max Displacement: {np.max(np.abs(u)):.6e}")
-        except Exception:
+            print(f"FEA Solver: Starting Linear Solve (Fixed DOFs: {len(fixed_dofs)})...")
+            # Removed suppress_output to allow diagnostic visibility
+            u = solve(*condense(K, f, D=fixed_dofs))
+            print(f"FEA Solve Complete. Max Displacement: {np.max(np.abs(u)):.6e}")
+        except Exception as e:
+            print(f"FEA Solver: ERROR during solve: {e}")
             return None
 
         # 7. Calculate Von Mises Stress
@@ -1313,8 +1375,8 @@ class SolverNode(CadQueryNode):
                 lam=basis_p1.zeros() + lam_val
             )
             
-            with suppress_output():
-                stress = solve(M, b)
+            # Removed suppress_output
+            stress = solve(M, b)
             
             # Ensure stress is positive (numerical errors might make it slightly negative)
             stress = np.abs(stress)
@@ -1325,22 +1387,59 @@ class SolverNode(CadQueryNode):
 
         # Build perfectly mapped displacement vector for the 3D Viewer (length 3*N_points)
         try:
-            disp_3n = np.zeros((3, mesh.p.shape[1]))
+            n_points = mesh.p.shape[1]
+            disp_3n = np.zeros((3, n_points))
             nodal_dofs = basis.nodal_dofs
-            # nodal_dofs has shape (3, N_nodes), and mesh.p has shape (3, N_points). N_nodes <= N_points.
-            disp_3n[0, :] = u[nodal_dofs[0, :]]
-            disp_3n[1, :] = u[nodal_dofs[1, :]]
-            disp_3n[2, :] = u[nodal_dofs[2, :]]
+            
+            # Use only DOFs associated with existing mesh vertices for linear visualization
+            # nodal_dofs columns correspond to points in mesh.p
+            limit = min(nodal_dofs.shape[1], n_points)
+            disp_3n[0, :limit] = u[nodal_dofs[0, :limit]]
+            disp_3n[1, :limit] = u[nodal_dofs[1, :limit]]
+            disp_3n[2, :limit] = u[nodal_dofs[2, :limit]]
             displacement_flat = disp_3n.flatten(order='F')
         except Exception:
             displacement_flat = u # Fallback
+
+        # 8. Debug info for viewer (Show where loads/constraints are)
+        debug_loads = []
+        try:
+            # Resolve all inputs again to get the data for markers
+            all_loads = self.resolve_all_inputs('loads')
+            for load in all_loads:
+                if isinstance(load, dict) and 'geometry' in load:
+                    # Face center from bounding box
+                    bb = load['geometry'].BoundingBox()
+                    center = [(bb.xmin + bb.xmax)/2, (bb.ymin + bb.ymax)/2, (bb.zmin + bb.zmax)/2]
+                    vec = load.get('vector', [0, 0, 0])
+                    # Normalize for viz (10mm arrow)
+                    v_np = np.array(vec)
+                    mag = np.linalg.norm(v_np)
+                    if mag > 1e-9:
+                        viz_vec = (v_np / mag) * 10
+                        debug_loads.append({'start': center, 'vector': viz_vec.tolist()})
+        except Exception:
+            pass
+
+        debug_constraints = []
+        try:
+            all_consts = self.resolve_all_inputs('constraints')
+            for const in all_consts:
+                if isinstance(const, dict) and 'geometry' in const:
+                    bb = const['geometry'].BoundingBox()
+                    center = [(bb.xmin + bb.xmax)/2, (bb.ymin + bb.ymax)/2, (bb.zmin + bb.zmax)/2]
+                    debug_constraints.append({'pos': center})
+        except Exception:
+            pass
 
         return {
             'mesh': mesh,
             'displacement': displacement_flat,
             'stress': stress,
             'type': 'fea',
-            'visualization_mode': self.get_property('visualization')
+            'visualization_mode': self.get_property('visualization'),
+            'debug_loads': debug_loads,
+            'debug_constraints': debug_constraints
         }
 
 class TopologyOptimizationNode(CadQueryNode):
@@ -1548,29 +1647,46 @@ class TopologyOptimizationNode(CadQueryNode):
                 
                 fixed_dof_indices = c.get('fixed_dofs', [0, 1, 2])
                 
-                if 'geometry' in c:
-                    # Geometry-based constraint selection
-                    face_shape = c['geometry']
-                    node_coords = np.column_stack((x, y, z))
+                # Handle both 'geometries' (list, from SelectFaceNode) and legacy 'geometry' (single)
+                geoms = c.get('geometries', None)
+                if geoms is None and 'geometry' in c:
+                    geoms = [c['geometry']]
+                geoms = [g for g in (geoms or []) if g is not None]
+                
+                if geoms:
+                    tolerance = 1.5
+                    bbox_list = [g.BoundingBox() for g in geoms]
+                    xmin = min(b.xmin for b in bbox_list) - tolerance
+                    xmax = max(b.xmax for b in bbox_list) + tolerance
+                    ymin = min(b.ymin for b in bbox_list) - tolerance
+                    ymax = max(b.ymax for b in bbox_list) + tolerance
+                    zmin = min(b.zmin for b in bbox_list) - tolerance
+                    zmax = max(b.zmax for b in bbox_list) + tolerance
                     
-                    # Bounding box filter
-                    bb = face_shape.BoundingBox()
-                    tolerance = 1e-3
-                    xmin, xmax = bb.xmin - tolerance, bb.xmax + tolerance
-                    ymin, ymax = bb.ymin - tolerance, bb.ymax + tolerance
-                    zmin, zmax = bb.zmin - tolerance, bb.zmax + tolerance
-                    
+                    from cadquery import Vector
                     fixed_nodes = []
-                    for i, coord in enumerate(node_coords):
-                        if (xmin <= coord[0] <= xmax and ymin <= coord[1] <= ymax and zmin <= coord[2] <= zmax):
+                    for i in range(len(x)):
+                        px, py, pz = float(x[i]), float(y[i]), float(z[i])
+                        if not (xmin <= px <= xmax and ymin <= py <= ymax and zmin <= pz <= zmax):
+                            continue
+                        point = Vector(px, py, pz)
+                        for g in geoms:
+                            matched = False
                             try:
-                                from cadquery import Vector
-                                point = Vector(coord[0], coord[1], coord[2])
-                                distance = face_shape.distanceTo(point)
-                                if distance <= tolerance:
-                                    fixed_nodes.append(i)
-                            except:
-                                fixed_nodes.append(i) # Fallback to BB
+                                if g.distanceTo(point) <= tolerance:
+                                    matched = True
+                            except Exception:
+                                try:
+                                    bb = g.BoundingBox()
+                                    if (bb.xmin - tolerance <= px <= bb.xmax + tolerance and
+                                            bb.ymin - tolerance <= py <= bb.ymax + tolerance and
+                                            bb.zmin - tolerance <= pz <= bb.zmax + tolerance):
+                                        matched = True
+                                except Exception:
+                                    pass
+                            if matched:
+                                fixed_nodes.append(i)
+                                break
                     
                     # Convert to DOFs
                     nodal_dofs = basis.nodal_dofs
@@ -1625,38 +1741,52 @@ class TopologyOptimizationNode(CadQueryNode):
                 load_type = l.get('type', 'force')
                 pressure = l.get('pressure', 0.0) # For pressure loads
                 
-                if 'geometry' in l:
-                    # Geometry-based load
-                    face_shape = l['geometry']
-                    node_coords = np.column_stack((x, y, z))
+                # Handle both 'geometries' (list, from LoadNode) and legacy 'geometry' (single)
+                geoms = l.get('geometries', None)
+                if geoms is None and 'geometry' in l:
+                    geoms = [l['geometry']]
+                geoms = [g for g in (geoms or []) if g is not None]
+                
+                if geoms:
+                    tolerance = 1.5
+                    bbox_list = [g.BoundingBox() for g in geoms]
+                    xmin = min(b.xmin for b in bbox_list) - tolerance
+                    xmax = max(b.xmax for b in bbox_list) + tolerance
+                    ymin = min(b.ymin for b in bbox_list) - tolerance
+                    ymax = max(b.ymax for b in bbox_list) + tolerance
+                    zmin = min(b.zmin for b in bbox_list) - tolerance
+                    zmax = max(b.zmax for b in bbox_list) + tolerance
                     
-                    # Bounding box filter
-                    bb = face_shape.BoundingBox()
-                    tolerance = 1e-3
-                    xmin, xmax = bb.xmin - tolerance, bb.xmax + tolerance
-                    ymin, ymax = bb.ymin - tolerance, bb.ymax + tolerance
-                    zmin, zmax = bb.zmin - tolerance, bb.zmax + tolerance
-                    
+                    from cadquery import Vector
                     load_nodes = []
-                    for i, coord in enumerate(node_coords):
-                        if (xmin <= coord[0] <= xmax and ymin <= coord[1] <= ymax and zmin <= coord[2] <= zmax):
+                    for i in range(len(x)):
+                        px, py, pz = float(x[i]), float(y[i]), float(z[i])
+                        if not (xmin <= px <= xmax and ymin <= py <= ymax and zmin <= pz <= zmax):
+                            continue
+                        point = Vector(px, py, pz)
+                        for g in geoms:
+                            matched = False
                             try:
-                                from cadquery import Vector
-                                point = Vector(coord[0], coord[1], coord[2])
-                                distance = face_shape.distanceTo(point)
-                                if distance <= tolerance:
-                                    load_nodes.append(i)
-                            except:
+                                if g.distanceTo(point) <= tolerance:
+                                    matched = True
+                            except Exception:
+                                try:
+                                    bb = g.BoundingBox()
+                                    if (bb.xmin - tolerance <= px <= bb.xmax + tolerance and
+                                            bb.ymin - tolerance <= py <= bb.ymax + tolerance and
+                                            bb.zmin - tolerance <= pz <= bb.zmax + tolerance):
+                                        matched = True
+                                except Exception:
+                                    pass
+                            if matched:
                                 load_nodes.append(i)
+                                break
                     
                     if not load_nodes: continue
                     
                     n_nodes = len(load_nodes)
                     nodal_dofs = basis.nodal_dofs
-                    
-                    # Distribute load (Simplified Point Load Distribution)
                     fx, fy, fz = [v / n_nodes for v in vector]
-                    
                     for node_idx in load_nodes:
                          f[nodal_dofs[0, node_idx]] += fx
                          f[nodal_dofs[1, node_idx]] += fy
@@ -1666,10 +1796,7 @@ class TopologyOptimizationNode(CadQueryNode):
                     step = max(1, n_nodes // 20)
                     for i in range(0, n_nodes, step):
                         idx = load_nodes[i]
-                        debug_loads.append({
-                            'start': mesh.p[:, idx].tolist(),
-                            'vector': vector
-                        })
+                        debug_loads.append({'start': mesh.p[:, idx].tolist(), 'vector': vector})
                         
                 elif 'condition' in l and l['condition']:
                     # Legacy string load

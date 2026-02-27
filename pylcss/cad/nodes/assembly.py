@@ -18,36 +18,48 @@ class AssemblyNode(CadQueryNode):
         
         self.add_output('assembly', color=(200, 150, 100))
         self.create_property('assembly_name', 'Assembly1', widget_type='string')
+        self.create_property('fuse_parts', False, widget_type='bool')
 
     def run(self):
-        asm = cq.Assembly(name=self.get_property('assembly_name'))
+        fuse = self.get_property('fuse_parts')
+        asm_name = self.get_property('assembly_name')
         
         parts = []
-        # Dynamic inputs would be better, but fixed for now
         for i in range(1, 5):
             val = self.get_input_value(f'part_{i}', None)
             if val:
-                # Handle different input types (Workplane, Shape, Assembly)
-                if isinstance(val, cq.Workplane):
-                    parts.append(val)
-                elif hasattr(val, 'val'): # CadQuery object wrappers
-                    parts.append(val)
+                # Extract raw shape if it's a Workplane or wrapper
+                if hasattr(val, 'val'):
+                    parts.append(val.val())
                 elif isinstance(val, cq.Assembly):
-                    # Assemblies can be nested
-                    parts.append(val)
+                    # For nested assemblies, toCompound() gets everything
+                    parts.append(val.toCompound())
                 else:
-                    # Try to add generic object if compatible
                     parts.append(val)
 
         if not parts:
             return None
             
+        if fuse:
+            # Union all parts into a single compound
+            try:
+                fused = parts[0]
+                for next_part in parts[1:]:
+                    fused = fused.union(next_part)
+                
+                # Wrap in a fresh assembly so downstream nodes (Mesh, SelectFace) 
+                # still receive the expected type.
+                final_asm = cq.Assembly(name=asm_name)
+                final_asm.add(fused, name="Fused_Body")
+                return final_asm
+            except Exception as e:
+                self.set_error(f"Fusion failed: {e}")
+                # Fallback to standard assembly
+        
+        # Standard Assembly path
+        asm = cq.Assembly(name=asm_name)
         for idx, part in enumerate(parts):
             name = f"part_{idx+1}"
-            # Extract name if part is Assembly
-            if isinstance(part, cq.Assembly) and part.name:
-                name = part.name
-                
             asm.add(part, name=name)
             
         return asm
