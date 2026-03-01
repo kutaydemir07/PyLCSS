@@ -1,0 +1,237 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+
+    "0xWH01": {
+      "type_": "com.cad.box.BoxNode",
+      "icon": null,
+      "name": "Cantilever Column (DP780 Whip)",
+      "color": [13, 18, 23, 255],
+      "border_color": [74, 84, 85, 255],
+      "text_color": [255, 255, 255, 180],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 170,
+      "height": 190,
+      "pos": [50.0, 200.0],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "box_length": 260.0,
+        "box_width": 30.0,
+        "box_depth": 30.0,
+        "center_x": 0.0,
+        "center_y": 0.0,
+        "center_z": 0.0
+      }
+    },
+
+    "0xWH02": {
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "icon": null,
+      "name": "Fine Tet Mesh",
+      "color": [13, 18, 23, 255],
+      "border_color": [74, 84, 85, 255],
+      "text_color": [255, 255, 255, 180],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 170,
+      "height": 120,
+      "pos": [290.0, 200.0],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "mesh_type": "Tet",
+        "element_size": 5.0,
+        "refinement_size": 0.5
+      }
+    },
+
+    "0xWH03": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Root Face (Clamped Wall)",
+      "color": [13, 18, 23, 255],
+      "border_color": [74, 84, 85, 255],
+      "text_color": [255, 255, 255, 180],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 60,
+      "pos": [290.0, 40.0],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "selector_type": "Direction",
+        "direction": ">X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "face_index": 0,
+        "tag": "root"
+      }
+    },
+
+    "0xWH04": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Free-End Face (Transverse Impact)",
+      "color": [13, 18, 23, 255],
+      "border_color": [74, 84, 85, 255],
+      "text_color": [255, 255, 255, 180],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 60,
+      "pos": [290.0, 390.0],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "selector_type": "Direction",
+        "direction": "<X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "face_index": 0,
+        "tag": "free_end"
+      }
+    },
+
+    "0xWH05": {
+      "type_": "com.cad.sim.crash_material.CrashMaterialNode",
+      "icon": null,
+      "name": "DP780 Dual-Phase Steel",
+      "color": [13, 18, 23, 255],
+      "border_color": [74, 84, 85, 255],
+      "text_color": [255, 255, 255, 180],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 192,
+      "height": 205,
+      "pos": [290.0, 500.0],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "preset": "DP780 Dual-Phase",
+        "youngs_modulus": 210000.0,
+        "poissons_ratio": 0.28,
+        "density": 7.83e-9,
+        "yield_strength": 560.0,
+        "tangent_modulus": 1800.0,
+        "failure_strain": 0.60,
+        "enable_fracture": false
+      }
+    },
+
+    "0xWH06": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "icon": null,
+      "name": "Clamped Root (Fixed Wall)",
+      "color": [13, 18, 23, 255],
+      "border_color": [74, 84, 85, 255],
+      "text_color": [255, 255, 255, 180],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 176,
+      "height": 75,
+      "pos": [590.0, 40.0],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "constraint_type": "Fixed",
+        "displacement_x": 0.0,
+        "displacement_y": 0.0,
+        "displacement_z": 0.0,
+        "condition": ""
+      }
+    },
+
+    "0xWH07": {
+      "type_": "com.cad.sim.impact.ImpactConditionNode",
+      "icon": null,
+      "name": "5 m/s Transverse Whip (No Fracture)",
+      "color": [13, 18, 23, 255],
+      "border_color": [74, 84, 85, 255],
+      "text_color": [255, 255, 255, 180],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 200,
+      "height": 120,
+      "pos": [590.0, 390.0],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "velocity_x": 0.0,
+        "velocity_y": -5.0,
+        "velocity_z": 0.0,
+        "node_tolerance": 3.0
+      }
+    },
+
+    "0xWH08": {
+      "type_": "com.cad.sim.crash_solver.CrashSolverNode",
+      "icon": null,
+      "name": "Whip-Fracture Crash Solver",
+      "color": [13, 18, 23, 255],
+      "border_color": [74, 84, 85, 255],
+      "text_color": [255, 255, 255, 180],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 200,
+      "height": 260,
+      "pos": [900.0, 200.0],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "end_time": 2.5,
+        "time_steps": 5000,
+        "damping_alpha": 4.0,
+        "visualization": "Plastic Strain",
+        "n_frames": 200,
+        "disp_scale": 1.0,
+        "enable_corotation": true,
+        "enable_contact": true,
+        "contact_stiffness": 0.1,
+        "contact_thickness": 0.15,
+        "contact_update_interval": 5
+      }
+    }
+
+  },
+  "connections": [
+    { "out": ["0xWH01", "shape"],           "in":  ["0xWH02", "shape"]           },
+    { "out": ["0xWH01", "shape"],           "in":  ["0xWH03", "shape"]           },
+    { "out": ["0xWH01", "shape"],           "in":  ["0xWH04", "shape"]           },
+    { "out": ["0xWH02", "mesh"],            "in":  ["0xWH06", "mesh"]            },
+    { "out": ["0xWH03", "workplane"],       "in":  ["0xWH06", "target_face"]     },
+    { "out": ["0xWH04", "workplane"],       "in":  ["0xWH07", "impact_face"]     },
+    { "out": ["0xWH02", "mesh"],            "in":  ["0xWH08", "mesh"]            },
+    { "out": ["0xWH05", "crash_material"],  "in":  ["0xWH08", "crash_material"]  },
+    { "out": ["0xWH06", "constraints"],     "in":  ["0xWH08", "constraints"]     },
+    { "out": ["0xWH07", "impact"],          "in":  ["0xWH08", "impact"]          }
+  ]
+}
