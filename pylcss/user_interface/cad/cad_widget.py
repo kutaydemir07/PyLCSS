@@ -33,6 +33,7 @@ except ImportError:
 
 # Import all node types
 from pylcss.cad.nodes import NODE_REGISTRY, NumberNode, ExportStepNode, ExportStlNode
+from pylcss.cad.nodes.modeling import InteractiveSelectFaceNode
 
 
 class GraphExecutionWorker(QtCore.QThread):
@@ -164,10 +165,14 @@ class PropertiesPanel(QtWidgets.QWidget):
         sub_header.setAlignment(QtCore.Qt.AlignCenter)
         self.props_layout.addWidget(sub_header)
         
-        # Route: TopOpt gets specialized UI, all others get generic
+        # Route: specialized builders based on node class
         node_class = node.__class__.__name__
         if node_class == 'TopologyOptimizationNode':
             self._build_topopt_ui(node)
+        elif node_class == 'InteractiveSelectFaceNode':
+            self._build_interactive_select_ui(node)
+        elif node_class in ('ConstraintNode', 'LoadNode', 'PressureLoadNode'):
+            self._build_fea_bc_ui(node)
         else:
             self._build_generic_ui(node)
             
@@ -555,27 +560,6 @@ class PropertiesPanel(QtWidgets.QWidget):
             group.setLayout(layout)
             self.props_layout.addWidget(group)
             
-        elif node_class in ['ConstraintNode', 'LoadNode', 'PressureLoadNode']:
-            group = QtWidgets.QGroupBox("Boundary Condition")
-            layout = QtWidgets.QFormLayout()
-            
-            if 'condition' in props:
-                edit = QtWidgets.QLineEdit(str(props['condition']))
-                edit.editingFinished.connect(lambda: self.update_property('condition', edit.text()))
-                layout.addRow("Condition:", edit)
-            
-            # Force components
-            for prop in ['fx', 'fy', 'fz', 'pressure']:
-                if prop in props:
-                    spin = QtWidgets.QDoubleSpinBox()
-                    spin.setRange(-1e12, 1e12)
-                    spin.setDecimals(2)
-                    spin.setValue(float(props[prop]))
-                    spin.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
-                    layout.addRow(f"{prop.upper()}:", spin)
-            
-            group.setLayout(layout)
-            self.props_layout.addWidget(group)
         else:
             self._build_generic_ui(node)
     
@@ -749,6 +733,308 @@ class PropertiesPanel(QtWidgets.QWidget):
         group.setLayout(layout)
         self.props_layout.addWidget(group)
     
+    # ──────────────────────────────────────────────────
+    # Interactive Select Face UI
+    # ──────────────────────────────────────────────────
+
+    def _build_interactive_select_ui(self, node):
+        """Dedicated Properties Panel UI for InteractiveSelectFaceNode."""
+        # -- Status banner --
+        sel_label = node.get_property('selection_label') or 'No faces selected'
+        raw_indices = node.get_property('picked_face_indices') or ''
+        face_indices = [int(t.strip()) for t in raw_indices.split(',') if t.strip().isdigit()]
+
+        banner = QtWidgets.QLabel(sel_label)
+        banner.setWordWrap(True)
+        if face_indices:
+            banner.setStyleSheet(
+                "background:#1a5c2a; color:#6dde8d; font-weight:bold;"
+                "padding:8px; border-radius:4px; margin-bottom:6px;"
+            )
+        else:
+            banner.setStyleSheet(
+                "background:#3a2800; color:#f0b040; font-weight:bold;"
+                "padding:8px; border-radius:4px; margin-bottom:6px;"
+            )
+        self.props_layout.addWidget(banner)
+        self._pick_banner = banner
+
+        # -- Face list --
+        if face_indices:
+            group_list = QtWidgets.QGroupBox(f"Selected Faces ({len(face_indices)})")
+            vbox = QtWidgets.QVBoxLayout(group_list)
+            for idx in face_indices:
+                lbl = QtWidgets.QLabel(f"  Face index {idx}")
+                lbl.setStyleSheet("color:#aad4ff; font-size:11px;")
+                vbox.addWidget(lbl)
+            self.props_layout.addWidget(group_list)
+
+        # -- Pick button --
+        btn_pick = QtWidgets.QPushButton("Pick Faces in 3D Viewer")
+        btn_pick.setStyleSheet(
+            "QPushButton { background:#1e5ab4; color:white; border-radius:5px;"
+            "  padding:8px; font-weight:bold; font-size:13px; }"
+            "QPushButton:hover { background:#2470d8; }"
+        )
+        btn_pick.setToolTip(
+            "Click to enter face-picking mode.\n"
+            "Then click faces on the 3D model. Ctrl+Click for multi-select."
+        )
+        btn_pick.clicked.connect(lambda: self._start_picking_session(node))
+        self.props_layout.addWidget(btn_pick)
+
+        # -- Clear button --
+        btn_clear = QtWidgets.QPushButton("Clear Selection")
+        btn_clear.setStyleSheet(
+            "QPushButton { background:#3a1010; color:#f08080; border-radius:5px;"
+            "  padding:6px; font-size:12px; }"
+            "QPushButton:hover { background:#5a1010; }"
+        )
+        btn_clear.clicked.connect(lambda: self._clear_face_selection(node))
+        self.props_layout.addWidget(btn_clear)
+
+        # -- Hint --
+        hint = QtWidgets.QLabel(
+            "<i>Note: Execute the graph first so the 3D viewer has geometry to pick from.</i>"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#666; font-size:10px; margin-top:8px;")
+        self.props_layout.addWidget(hint)
+
+    def _start_picking_session(self, node):
+        """Enable picking mode in the 3D viewer for this node."""
+        # Walk up to find ProfessionalCadApp
+        app = self._get_main_app()
+        if app is None:
+            QtWidgets.QMessageBox.warning(
+                self, "No Viewer",
+                "Cannot access the 3D viewer. Make sure the application is fully loaded."
+            )
+            return
+
+        viewer = getattr(app, 'viewer', None)
+        if viewer is None:
+            QtWidgets.QMessageBox.warning(self, "No Viewer", "3D viewer not found.")
+            return
+
+        # Build index→OCC mapping from the viewer's stored face list
+        # The viewer must have already rendered the upstream shape
+        if not viewer._all_occ_faces:
+            QtWidgets.QMessageBox.information(
+                self, "Run Graph First",
+                "Please execute the graph (▶ Run) so the 3D viewer has the shape loaded,"
+                " then try picking again."
+            )
+            return
+
+        viewer.enable_picking_mode(multi_select=True)
+
+        # Wire done signal
+        def _on_faces_picked(occ_faces):
+            try:
+                viewer.face_picked.disconnect(_on_faces_picked)
+            except Exception:
+                pass
+            # Map OCC face objects → indices in the viewer's list
+            all_occ = viewer._all_occ_faces
+            picked_indices = []
+            for face in occ_faces:
+                for i, f in enumerate(all_occ):
+                    # Identity check via hash code (OCC)
+                    try:
+                        if face.hashCode(10000) == f.hashCode(10000):
+                            picked_indices.append(i)
+                            break
+                    except Exception:
+                        if face is f:
+                            picked_indices.append(i)
+                            break
+
+            if hasattr(node, 'set_picked_faces'):
+                node.set_picked_faces(picked_indices)
+            else:
+                node.set_property('picked_face_indices',
+                                  ','.join(str(i) for i in picked_indices))
+
+            # Invalidate and re-run
+            if hasattr(node, '_last_hash'):
+                node._last_hash = None
+            try:
+                self.property_changed.emit(node, 'picked_face_indices',
+                                           '', node.get_property('picked_face_indices'))
+            except Exception:
+                pass
+
+            # Refresh the panel
+            self.display_node(node)
+
+            if hasattr(app, '_execute_graph'):
+                app._execute_graph(skip_simulation=True)
+
+        def _on_cancelled():
+            try:
+                viewer.picking_cancelled.disconnect(_on_cancelled)
+                viewer.face_picked.disconnect(_on_faces_picked)
+            except Exception:
+                pass
+
+        viewer.face_picked.connect(_on_faces_picked)
+        viewer.picking_cancelled.connect(_on_cancelled)
+
+    def _clear_face_selection(self, node):
+        """Clear all picked faces from an InteractiveSelectFaceNode."""
+        if hasattr(node, 'set_picked_faces'):
+            node.set_picked_faces([])
+        else:
+            node.set_property('picked_face_indices', '')
+            node.set_property('selection_label', 'No faces selected')
+        if hasattr(node, '_last_hash'):
+            node._last_hash = None
+        self.display_node(node)
+
+    def _get_main_app(self):
+        """Walk up the parent chain to find ProfessionalCadApp."""
+        widget = self.parent()
+        while widget is not None:
+            if widget.__class__.__name__ == 'ProfessionalCadApp':
+                return widget
+            widget = widget.parent() if hasattr(widget, 'parent') else None
+        return None
+
+    # ──────────────────────────────────────────────────
+    # FEA Boundary Condition Rich UI
+    # ──────────────────────────────────────────────────
+
+    def _build_fea_bc_ui(self, node):
+        """Rich Properties Panel UI for ConstraintNode, LoadNode, PressureLoadNode."""
+        node_class = node.__class__.__name__
+        props = node.model.properties
+
+        if node_class == 'ConstraintNode':
+            ct = props.get('constraint_type', 'Fixed')
+
+            grp = QtWidgets.QGroupBox("Constraint Type")
+            lay = QtWidgets.QFormLayout()
+
+            combo = QtWidgets.QComboBox()
+            combo.addItems(['Fixed', 'Roller X', 'Roller Y', 'Roller Z',
+                            'Pinned', 'Symmetry X', 'Symmetry Y', 'Symmetry Z', 'Displacement'])
+            combo.setCurrentText(str(ct))
+            combo.currentTextChanged.connect(lambda v: self.update_property('constraint_type', v))
+            lay.addRow("Type:", combo)
+
+            if ct == 'Displacement':
+                for ax in ['displacement_x', 'displacement_y', 'displacement_z']:
+                    if ax in props:
+                        spin = QtWidgets.QDoubleSpinBox()
+                        spin.setRange(-1e6, 1e6)
+                        spin.setDecimals(4)
+                        spin.setValue(float(props[ax]))
+                        spin.valueChanged.connect(lambda v, p=ax: self.update_property(p, v))
+                        lay.addRow(ax.replace('displacement_', 'U') + ':', spin)
+
+            grp.setLayout(lay)
+            self.props_layout.addWidget(grp)
+
+            # Fallback condition (legacy)
+            if 'condition' in props:
+                grp2 = QtWidgets.QGroupBox("Legacy Condition (fallback if no face connected)")
+                lay2 = QtWidgets.QFormLayout()
+                edit = QtWidgets.QLineEdit(str(props.get('condition', '')))
+                edit.setPlaceholderText("e.g. z < 0.01")
+                edit.editingFinished.connect(lambda: self.update_property('condition', edit.text()))
+                lay2.addRow("Expression:", edit)
+                grp2.setLayout(lay2)
+                self.props_layout.addWidget(grp2)
+
+        elif node_class == 'LoadNode':
+            lt = props.get('load_type', 'Force')
+            grp = QtWidgets.QGroupBox("Load Settings")
+            lay = QtWidgets.QFormLayout()
+
+            combo = QtWidgets.QComboBox()
+            combo.addItems(['Force', 'Moment', 'Gravity', 'Remote Force'])
+            combo.setCurrentText(str(lt))
+            combo.currentTextChanged.connect(lambda v: self.update_property('load_type', v))
+            lay.addRow("Type:", combo)
+
+            if lt in ('Force', 'Remote Force'):
+                fx = float(props.get('force_x', 0.0))
+                fy = float(props.get('force_y', -1000.0))
+                fz = float(props.get('force_z', 0.0))
+                for axis, prop, val in [('X', 'force_x', fx), ('Y', 'force_y', fy), ('Z', 'force_z', fz)]:
+                    spin = QtWidgets.QDoubleSpinBox()
+                    spin.setRange(-1e12, 1e12)
+                    spin.setDecimals(2)
+                    spin.setValue(val)
+                    spin.setSuffix(' N')
+                    spin.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
+                    lay.addRow(f"F{axis}:", spin)
+                mag = (fx**2 + fy**2 + fz**2) ** 0.5
+                mag_lbl = QtWidgets.QLabel(f"Magnitude: {mag:.2f} N")
+                mag_lbl.setStyleSheet("color:#6dde8d; font-weight:bold;")
+                lay.addRow("", mag_lbl)
+
+            elif lt == 'Gravity':
+                for p in ['gravity_accel', 'gravity_direction']:
+                    if p in props:
+                        if p == 'gravity_direction':
+                            cb = QtWidgets.QComboBox()
+                            cb.addItems(['-Y', '-Z', '-X', '+Y', '+Z', '+X'])
+                            cb.setCurrentText(str(props[p]))
+                            cb.currentTextChanged.connect(lambda v: self.update_property(p, v))
+                            lay.addRow("Direction:", cb)
+                        else:
+                            spin = QtWidgets.QDoubleSpinBox()
+                            spin.setRange(0, 100000)
+                            spin.setDecimals(2)
+                            spin.setValue(float(props[p]))
+                            spin.setSuffix(' mm/s2')
+                            spin.valueChanged.connect(lambda v: self.update_property(p, v))
+                            lay.addRow("Accel:", spin)
+
+            grp.setLayout(lay)
+            self.props_layout.addWidget(grp)
+
+            # Fallback condition
+            if 'condition' in props:
+                grp2 = QtWidgets.QGroupBox("Legacy Condition (fallback if no face connected)")
+                lay2 = QtWidgets.QFormLayout()
+                edit = QtWidgets.QLineEdit(str(props.get('condition', '')))
+                edit.setPlaceholderText("e.g. z > 19")
+                edit.editingFinished.connect(lambda: self.update_property('condition', edit.text()))
+                lay2.addRow("Expression:", edit)
+                grp2.setLayout(lay2)
+                self.props_layout.addWidget(grp2)
+
+        elif node_class == 'PressureLoadNode':
+            grp = QtWidgets.QGroupBox("Pressure Load")
+            lay = QtWidgets.QFormLayout()
+
+            pval = float(props.get('pressure', 1000000.0))
+            spin = QtWidgets.QDoubleSpinBox()
+            spin.setRange(-1e15, 1e15)
+            spin.setDecimals(2)
+            spin.setValue(pval)
+            spin.setSuffix(' Pa')
+            spin.valueChanged.connect(lambda v: self.update_property('pressure', v))
+            lay.addRow("Pressure:", spin)
+
+            pval_mpa = pval / 1e6
+            info_lbl = QtWidgets.QLabel(f"{pval_mpa:.4g} MPa  (positive = outward, negative = inward)")
+            info_lbl.setStyleSheet("color:#aad4ff; font-size:11px;")
+            lay.addRow("", info_lbl)
+
+            grp.setLayout(lay)
+            self.props_layout.addWidget(grp)
+
+        else:
+            self._build_generic_ui(node)
+
+    # ──────────────────────────────────────────────────
+    # Property update
+    # ──────────────────────────────────────────────────
+
     def update_property(self, prop_name, value):
         """Update node property and mark as dirty for recalculation."""
         if self.current_node:
@@ -881,7 +1167,9 @@ class LibraryPanel(QtWidgets.QWidget):
             # WORKBENCH: SIMULATION (FEA)
             # ═══════════════════════════════════════════════════════════════
             "Simulation - Pre-Procesing": [
-                ("Select Face", "com.cad.select_face", "Select face for BCs"),
+                ("Select Face", "com.cad.select_face", "Select face for BCs using text selectors (Direction, Index, Box…)"),
+                ("Select Face (Interactive)", "com.cad.select_face_interactive",
+                 "Click faces directly in the 3D viewer to select them — no code required"),
                 ("Material", "com.cad.sim.material", "Define material"),
                 ("Generate Mesh", "com.cad.sim.mesh", "Create FEM mesh"),
             ],
@@ -896,6 +1184,18 @@ class LibraryPanel(QtWidgets.QWidget):
                 ("Size Opt", "com.cad.sim.sizeopt", "Optimize parametric dimensions"),
                 ("Shape Opt", "com.cad.sim.shapeopt", "Optimize boundary shape"),
                 ("Remesh Surface", "com.cad.sim.remesh", "Convert TopOpt surface to volume mesh"),
+            ],
+
+            # ═══════════════════════════════════════════════════════════════
+            # WORKBENCH: CRASH / IMPACT SIMULATION
+            # ═══════════════════════════════════════════════════════════════
+            "Crash Simulation": [
+                ("Crash Material",    "com.cad.sim.crash_material",
+                 "Elasto-plastic material with yield strength, hardening and failure strain (presets: A36, DP780, UHSS 1500, Al 6061, Al 5052, CFRP)"),
+                ("Impact Condition",  "com.cad.sim.impact",
+                 "Define initial velocity (mm/ms = m/s) applied to impact face nodes"),
+                ("Crash Solver",      "com.cad.sim.crash_solver",
+                 "Explicit central-difference transient solver with J2 plasticity, element deletion and frame-by-frame playback"),
             ],
 
             # ═══════════════════════════════════════════════════════════════
@@ -1194,9 +1494,15 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             self.properties.display_node(node)
             self.statusBar().showMessage(f"Selected: {node.name}")
 
-            # Only render if we have a CACHED result. 
+            # Only render if we have a CACHED result.
             # Do NOT call execute_graph() here to avoid freezing on selection.
             geometry = getattr(node, '_last_result', None)
+
+            # If the result is a face-selection dict (from SelectFaceNode /
+            # InteractiveSelectFaceNode), render the upstream shape instead so
+            # the user can see the full 3D model and pick faces on it.
+            if isinstance(geometry, dict) and 'faces' in geometry and 'mesh' not in geometry:
+                geometry = self._get_upstream_shape(node)
 
             if geometry:
                 # Check if it's simulation data or mesh object
@@ -1209,20 +1515,56 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
                 if is_sim:
                     self.viewer.render_simulation(geometry)
+                elif self._is_2d_sketch(geometry):
+                    self.viewer.render_sketch(geometry)
                 else:
                     self.viewer.render_shape(geometry)
+                    
+                # Re-apply face highlights if it's the interactive picker
+                if node.__class__.__name__ == 'InteractiveSelectFaceNode':
+                    raw = node.get_property('picked_face_indices') or ''
+                    idx_list = [int(x.strip()) for x in raw.split(',') if x.strip().isdigit()]
+                    if idx_list:
+                        if hasattr(self.viewer, 'highlight_faces'):
+                            self.viewer.highlight_faces(idx_list)
             else:
-                # Optional: Trigger a background update if you really want "Live" feel
-                # but only if it's a fast node. For now, better to wait for user to click "Execute"
-                pass
+                # No cached result yet — execute the shape pipeline automatically
+                # (skip_simulation=True means heavy FEA/TopOpt nodes are skipped,
+                # so this is fast and behaves the same as when any property changes).
+                if hasattr(self, 'auto_update_cb') and self.auto_update_cb.isChecked():
+                    self._execute_graph(skip_simulation=True)
+
+    def _get_upstream_shape(self, node):
+        """Walk input ports to find the first cached shape result upstream."""
+        try:
+            for port in node.input_ports():
+                for conn_port in port.connected_ports():
+                    upstream = conn_port.node()
+                    upstream_result = getattr(upstream, '_last_result', None)
+                    if upstream_result is None:
+                        continue
+                    # Skip face-dicts — keep walking up
+                    if isinstance(upstream_result, dict) and 'faces' in upstream_result:
+                        shape = self._get_upstream_shape(upstream)
+                        if shape is not None:
+                            return shape
+                    # Return if it looks like a renderable shape
+                    if hasattr(upstream_result, 'tessellate') or hasattr(upstream_result, 'val'):
+                        return upstream_result
+                    if hasattr(upstream_result, 'toCompound'):
+                        return upstream_result
+        except Exception:
+            pass
+        return None
 
     def _on_node_double_clicked(self, node):
         """
-        Handle double-click. 
-        Intentionally left empty (or just log) to consume the event and prevent 
+        Handle double-click.
+        Intentionally left empty (or just log) to consume the event and prevent
         any default popup/dialog from appearing.
         """
         self.timeline.add_event(f"Double-clicked {node.name} (Popup disabled)")
+
 
     def _on_graph_property_changed(self, node, prop_name, prop_value):
         """Handle property changes from the graph (including widgets on nodes)."""
@@ -1578,7 +1920,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         sim_nodes = []
         for node in self.graph.all_nodes():
             node_class = node.__class__.__name__
-            if node_class in ['SolverNode', 'TopologyOptimizationNode', 'MeshNode']:
+            if node_class in ['SolverNode', 'TopologyOptimizationNode', 'MeshNode', 'CrashSolverNode']:
                 sim_nodes.append(node)
         
         if not sim_nodes:

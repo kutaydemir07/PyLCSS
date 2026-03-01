@@ -44,7 +44,7 @@ from pylcss.cad.nodes.sketcher import (
 # =============================================================================
 from pylcss.cad.nodes.modeling import (
     ExtrudeNode, RevolveNode, BooleanNode, FilletNode, 
-    ChamferNode, ShellNode, SelectFaceNode, OffsetNode,
+    ChamferNode, ShellNode, SelectFaceNode, InteractiveSelectFaceNode, OffsetNode,
     TranslateNode, RotateNode, ScaleNode, MirrorNode,
     CutExtrudeNode, TwistedExtrudeNode
 )
@@ -114,6 +114,16 @@ from pylcss.cad.nodes.fem import (
 )
 
 # =============================================================================
+# CRASH / IMPACT SIMULATION
+# =============================================================================
+from pylcss.cad.nodes.crash import (
+    CrashMaterialNode,
+    ImpactConditionNode,
+    CrashSolverNode,
+    CrashSolverGPUNode,
+)
+
+# =============================================================================
 # ALL EXPORTS
 # =============================================================================
 __all__ = [
@@ -132,7 +142,7 @@ __all__ = [
     
     # Modeling
     "ExtrudeNode", "RevolveNode", "BooleanNode", "FilletNode", 
-    "ChamferNode", "ShellNode", "SelectFaceNode", "OffsetNode",
+    "ChamferNode", "ShellNode", "SelectFaceNode", "InteractiveSelectFaceNode", "OffsetNode",
     "TranslateNode", "RotateNode", "ScaleNode", "MirrorNode",
     "LinearPatternNode", "CircularPatternNode", "TwistedExtrudeNode",
     
@@ -167,4 +177,8 @@ __all__ = [
     
     # Advanced FEA
     "RemeshNode", "SizeOptimizationNode", "ShapeOptimizationNode",
+
+    # Crash / Impact
+    "CrashMaterialNode", "ImpactConditionNode", "CrashSolverNode",
+    "CrashSolverGPUNode",
 ]

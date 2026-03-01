@@ -15,6 +15,10 @@ SIMULATION_NODE_IDENTIFIERS = {
     'com.cad.sim.pressure_load',
     'com.cad.sim.solver',
     'com.cad.sim.topopt',
+    # Crash / Impact nodes
+    'com.cad.sim.crash_material',
+    'com.cad.sim.impact',
+    'com.cad.sim.crash_solver',
 }
 
 def _hash_value(value):

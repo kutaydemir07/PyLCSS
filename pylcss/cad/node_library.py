@@ -10,6 +10,9 @@ from pylcss.cad.nodes import (
     # Primitives
     BoxNode, CylinderNode, SphereNode, ConeNode, TorusNode, 
     WedgeNode, PyramidNode,
+
+    # Crash / Impact Simulation
+    CrashMaterialNode, ImpactConditionNode, CrashSolverNode, CrashSolverGPUNode,
     
     # Sketching
     SketchNode, SplineNode, EllipseNode, PolylineNode,
@@ -17,7 +20,7 @@ from pylcss.cad.nodes import (
     ParametricRectangleSketchNode, PolygonSketchNode,
     
     # Operations
-    ExtrudeNode, PocketNode, FilletNode, SelectFaceNode,
+    ExtrudeNode, PocketNode, FilletNode, SelectFaceNode, InteractiveSelectFaceNode,
     CutExtrudeNode, BooleanNode, RevolveNode, CylinderCutNode,
     ChamferNode, ShellNode, SweepNode, LoftNode, HelixNode,
     TwistedExtrudeNode,
@@ -95,6 +98,7 @@ NODE_CLASS_MAPPING = {
     'com.cad.shell': ShellNode,
     'com.cad.boolean': BooleanNode,
     'com.cad.select_face': SelectFaceNode,
+    'com.cad.select_face_interactive': InteractiveSelectFaceNode,
 
     # Cutting Operations (5)
     'com.cad.hole_at_coords': HoleAtCoordinatesNode,
@@ -145,6 +149,12 @@ NODE_CLASS_MAPPING = {
     'com.cad.sim.remesh': RemeshNode,
     'com.cad.sim.sizeopt': SizeOptimizationNode,
     'com.cad.sim.shapeopt': ShapeOptimizationNode,
+
+    # Crash / Impact Simulation (4)
+    'com.cad.sim.crash_material':     CrashMaterialNode,
+    'com.cad.sim.impact':             ImpactConditionNode,
+    'com.cad.sim.crash_solver':       CrashSolverNode,
+    'com.cad.sim.crash_solver_gpu':   CrashSolverGPUNode,
 
     # Import (2)
     'com.cad.import_step': ImportStepNode,

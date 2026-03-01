@@ -681,3 +681,104 @@ class SelectFaceNode(CadQueryNode):
             print(f"DEBUG SelectFaceNode ({self.NODE_NAME}): ERROR: {e}")
             self.set_error(f"Face selection failed: {e}")
             return None
+
+
+class InteractiveSelectFaceNode(CadQueryNode):
+    """
+    Select faces by interactively clicking them in the 3D viewport.
+
+    This node stores a list of face indices (integers) chosen by the user
+    when they click 'Pick Faces in 3D Viewer' in the Properties Panel.
+    Its output is identical to SelectFaceNode — a dict with keys
+    ``{'workplane', 'face', 'faces'}`` — so it is a drop-in replacement
+    for any downstream FEA node.
+    """
+    __identifier__ = 'com.cad.select_face_interactive'
+    NODE_NAME = 'Select Face (Interactive)'
+
+    def __init__(self):
+        super(InteractiveSelectFaceNode, self).__init__()
+        self.add_input('shape', color=(100, 255, 100))
+        self.add_output('workplane', color=(100, 200, 255))
+
+        # Comma-separated face indices, e.g. "0,2,5"
+        # Updated programmatically by the Properties Panel picking session.
+        self.create_property('picked_face_indices', '', widget_type='string')
+        # Human-readable label shown in the Properties Panel.
+        self.create_property('selection_label', 'No faces selected', widget_type='string')
+
+    # ------------------------------------------------------------------
+    # Public helper: called by the Properties Panel after picking
+    # ------------------------------------------------------------------
+    def set_picked_faces(self, face_indices):
+        """Store a list of face indices and update the label."""
+        indices_str = ','.join(str(i) for i in face_indices)
+        self.set_property('picked_face_indices', indices_str)
+        n = len(face_indices)
+        if n == 0:
+            label = 'No faces selected'
+        elif n == 1:
+            label = f'1 face selected  (idx: {face_indices[0]})'
+        else:
+            label = f'{n} faces selected  (idx: {", ".join(str(i) for i in face_indices)})'
+        self.set_property('selection_label', label)
+
+    # ------------------------------------------------------------------
+    # Node execution
+    # ------------------------------------------------------------------
+    def run(self):
+        shape_input = resolve_shape_input(self.get_input('shape'))
+        if not shape_input:
+            return None
+
+        # Parse stored indices
+        raw = self.get_property('picked_face_indices') or ''
+        face_indices = []
+        for tok in raw.split(','):
+            tok = tok.strip()
+            if tok.isdigit():
+                face_indices.append(int(tok))
+
+        if not face_indices:
+            self.set_error('No faces picked yet — click "Pick Faces in 3D Viewer"')
+            return None
+
+        # Resolve shape
+        if hasattr(shape_input, 'toCompound'):
+            try:
+                shape_val = shape_input.toCompound()
+            except Exception:
+                shape_val = shape_input
+        else:
+            shape_val = shape_input
+
+        if isinstance(shape_val, cq.Workplane):
+            obj = shape_val
+        else:
+            obj = cq.Workplane("XY").newObject([shape_val])
+
+        try:
+            all_faces = obj.faces().vals()
+        except Exception as e:
+            self.set_error(f"Cannot enumerate faces: {e}")
+            return None
+
+        selected = []
+        for idx in face_indices:
+            if 0 <= idx < len(all_faces):
+                selected.append(all_faces[idx])
+            else:
+                logger.warning(f"InteractiveSelectFaceNode: face index {idx} out of range "
+                               f"({len(all_faces)} faces total) — skipped")
+
+        if not selected:
+            self.set_error(f"None of the stored face indices are valid for this shape "
+                           f"(shape has {len(all_faces)} faces)")
+            return None
+
+        try:
+            wp = obj.newObject(selected).workplane()
+        except Exception:
+            wp = None
+
+        return {'workplane': wp, 'face': selected[0], 'faces': selected}

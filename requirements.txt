@@ -40,6 +40,9 @@ faster-whisper==1.2.1
 edge-tts==7.2.7
 pydantic==2.12.5
 
+# ── GPU / Acceleration ──────────────────────────────────
+taichi
+
 # ── Utilities ────────────────────────────────────────
 packaging==26.0
 pyaudio==0.2.14
