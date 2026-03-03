@@ -209,7 +209,7 @@
       "custom": {
         "end_time": 2.0,
         "time_steps": 2500,
-        "damping_alpha": 5.0,
+        "damping_alpha": 0.05,
         "visualization": "Von Mises Stress",
         "n_frames": 200,
         "disp_scale": 3.0

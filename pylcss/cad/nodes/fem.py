@@ -24,27 +24,49 @@ logger = logging.getLogger(__name__)
 
 @contextlib.contextmanager
 def suppress_output():
-    """Context manager to suppress stdout and stderr."""
+    """Context manager to suppress stdout **and** C-level stdout/stderr.
+
+    Python's sys.stdout redirect does not silence output written directly to
+    file-descriptor 1 (e.g. Netgen's C++ std::cout).  This implementation
+    uses os.dup2() to redirect the raw file descriptors so that *all* output
+    — including C-extension output — is sent to /dev/null (or NUL on Windows).
+    """
     if not simulation_config.SUPPRESS_EXTERNAL_LIBRARY_OUTPUT:
         yield
         return
-        
-    # Save the current stdout and stderr
-    old_stdout = sys.stdout
-    old_stderr = sys.stderr
-    
-    # Redirect to null
-    sys.stdout = open(os.devnull, 'w')
-    sys.stderr = open(os.devnull, 'w')
-    
+
+    # Flush Python-level buffers before redirecting.
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+    # Save duplicates of the real file descriptors.
+    old_stdout_fd = os.dup(1)
+    old_stderr_fd = os.dup(2)
+
     try:
-        yield
+        with open(os.devnull, 'w') as devnull:
+            devnull_fd = devnull.fileno()
+            # Redirect FD 1 & 2 at the OS level.
+            os.dup2(devnull_fd, 1)
+            os.dup2(devnull_fd, 2)
+            # Also redirect Python-level streams.
+            old_py_stdout = sys.stdout
+            old_py_stderr = sys.stderr
+            sys.stdout = open(os.devnull, 'w')
+            sys.stderr = open(os.devnull, 'w')
+            try:
+                yield
+            finally:
+                sys.stdout.close()
+                sys.stderr.close()
+                sys.stdout = old_py_stdout
+                sys.stderr = old_py_stderr
     finally:
-        # Restore stdout and stderr
-        sys.stdout.close()
-        sys.stderr.close()
-        sys.stdout = old_stdout
-        sys.stderr = old_stderr
+        # Restore the original file descriptors unconditionally.
+        os.dup2(old_stdout_fd, 1)
+        os.dup2(old_stderr_fd, 2)
+        os.close(old_stdout_fd)
+        os.close(old_stderr_fd)
 
 # ADD: Netgen imports
 try:
@@ -211,6 +233,111 @@ def density_filter_chainrule(dc, densities, filtered_densities, centroids, r_min
             dc_filtered[j] = dc[j]
     
     return dc_filtered
+
+
+def _assemble_traction_force(mesh, basis, geoms, vector, tolerance=1.5):
+    """
+    Assemble a nodal force vector using FacetBasis integration (proper Neumann BC).
+
+    Distributes a total force vector over the loaded surface facets via numerical
+    integration.  Because integration is area-weighted, dense mesh regions do not
+    receive artificially large loads — this corrects the error of dividing the
+    total force equally across all matched nodes on unstructured meshes.
+
+    Parameters
+    ----------
+    mesh      : skfem MeshTet
+    basis     : skfem CellBasis (P1 or P2 tetrahedral)
+    geoms     : list of CadQuery Face objects — target surface
+    vector    : (3,) iterable — total force [Fx, Fy, Fz]
+    tolerance : float — geometric snap tolerance (mm)
+
+    Returns
+    -------
+    f_traction : np.ndarray of shape (basis.N,), or None if assembly failed.
+    On None the caller should fall back to equal nodal distribution.
+    """
+    try:
+        from cadquery import Vector as CQVector
+
+        # Boundary facets only — get their indices into mesh.facets
+        boundary_facet_ids = mesh.boundary_facets()
+        if boundary_facet_ids is None or len(boundary_facet_ids) == 0:
+            return None
+
+        # Coordinates of each boundary facet node: (3, 3, n_boundary)
+        bf_node_ids   = mesh.facets[:, boundary_facet_ids]   # (3, n_boundary)
+        bf_midpoints  = mesh.p[:, bf_node_ids].mean(axis=1)  # (3, n_boundary)
+
+        # Bounding-box pre-filter
+        bbox_list = [g.BoundingBox() for g in geoms]
+        xmin_bb = min(b.xmin for b in bbox_list) - tolerance
+        xmax_bb = max(b.xmax for b in bbox_list) + tolerance
+        ymin_bb = min(b.ymin for b in bbox_list) - tolerance
+        ymax_bb = max(b.ymax for b in bbox_list) + tolerance
+        zmin_bb = min(b.zmin for b in bbox_list) - tolerance
+        zmax_bb = max(b.zmax for b in bbox_list) + tolerance
+
+        in_bb = (
+            (bf_midpoints[0] >= xmin_bb) & (bf_midpoints[0] <= xmax_bb) &
+            (bf_midpoints[1] >= ymin_bb) & (bf_midpoints[1] <= ymax_bb) &
+            (bf_midpoints[2] >= zmin_bb) & (bf_midpoints[2] <= zmax_bb)
+        )
+        candidate_local_idxs = np.where(in_bb)[0]
+
+        # Refine with distanceTo check
+        loaded_local_idxs = []
+        for li in candidate_local_idxs:
+            px, py, pz = bf_midpoints[:, li]
+            pt = CQVector(float(px), float(py), float(pz))
+            for g in geoms:
+                try:
+                    if g.distanceTo(pt) <= tolerance:
+                        loaded_local_idxs.append(li)
+                        break
+                except Exception:
+                    loaded_local_idxs.append(li)
+                    break
+
+        if not loaded_local_idxs:
+            return None  # No matching boundary facets found
+
+        # Map local indices back to global facet indices
+        loaded_facets = boundary_facet_ids[np.array(loaded_local_idxs, dtype=np.int32)]
+
+        # Compute total loaded area for traction = force / area
+        fi_nodes   = mesh.facets[:, loaded_facets]        # (3, n_loaded)
+        fv         = mesh.p[:, fi_nodes]                  # (3, 3, n_loaded)
+        e1         = fv[:, 1, :] - fv[:, 0, :]            # (3, n_loaded)
+        e2         = fv[:, 2, :] - fv[:, 0, :]            # (3, n_loaded)
+        cross      = np.cross(e1.T, e2.T).T               # (3, n_loaded)
+        face_areas = 0.5 * np.linalg.norm(cross, axis=0)  # (n_loaded,)
+        total_area = float(np.sum(face_areas))
+
+        if total_area < 1e-20:
+            return None
+
+        # Constant traction vector (uniform distributed load)
+        tx = float(vector[0]) / total_area
+        ty = float(vector[1]) / total_area
+        tz = float(vector[2]) / total_area
+
+        # FacetBasis restricted to loaded boundary facets only
+        fb = FacetBasis(mesh, basis.elem, facets=loaded_facets)
+
+        @LinearForm
+        def traction_form(v, w):
+            return tx * v[0] + ty * v[1] + tz * v[2]
+
+        return traction_form.assemble(fb)
+
+    except Exception as e:
+        logger.warning(
+            f"_assemble_traction_force: FacetBasis assembly failed ({e}). "
+            "Falling back to nodal load distribution."
+        )
+        return None
+
 
 def mma_update(n, itr, xval, xmin, xmax, xold1, xold2, f0val, df0dx, 
                fval, dfdx, low, upp, move=0.2):
@@ -678,12 +805,17 @@ class MeshNode(CadQueryNode):
             if temp_base is None:
                 temp_base = tempfile.gettempdir()
             
+            # Initialise paths before try so the finally block can safely
+            # reference them even if the NamedTemporaryFile call fails.
+            step_path = None
+            msh_path  = None
+
             # Create temporary files in optimized location
             with tempfile.NamedTemporaryFile(suffix=".step", dir=temp_base, delete=False) as step_file:
                 step_path = step_file.name
-            
+
             msh_path = step_path.replace(".step", ".msh")
-            
+
             try:
                 # 1. Export CadQuery shape to STEP
                 if hasattr(shape, 'val'):
@@ -733,11 +865,13 @@ class MeshNode(CadQueryNode):
                 return None
                 
             finally:
-                # Clean up temporary files immediately
+                # Clean up temporary files immediately.
+                # Guard against step_path / msh_path being None when the
+                # NamedTemporaryFile call itself failed (UnboundLocalError fix).
                 try:
-                    if os.path.exists(step_path):
+                    if step_path and os.path.exists(step_path):
                         os.remove(step_path)
-                    if os.path.exists(msh_path):
+                    if msh_path and os.path.exists(msh_path):
                         os.remove(msh_path)
                 except OSError:
                     pass  # Ignore cleanup errors
@@ -900,7 +1034,7 @@ class LoadNode(CadQueryNode):
         # If no face input provided, use fallback string condition
         if target_wp is None:
             if not fallback_condition:
-
+                self.set_error("No target face or condition")
                 return None
             return {
                 'type': 'force',
@@ -1052,25 +1186,29 @@ class SolverNode(CadQueryNode):
 
         # 4. Apply Boundary Conditions
         x, y, z = mesh.p
-        
+
         fixed_dofs = np.array([], dtype=int)
-        
+        # Prescribed displacement vector for non-zero Displacement BCs.
+        # condense(K, f, x=u_prescribed, D=fixed_dofs) enforces u[fixed_dofs] = u_prescribed[fixed_dofs].
+        u_prescribed = np.zeros(basis.N)
+
         for constraint in constraints:
             if not constraint: continue
-            
+
             fixed_dof_indices = constraint.get('fixed_dofs', [0, 1, 2])
-            
+            disp_vals = constraint.get('displacement', None)  # [dx, dy, dz] or None
+
             try:
                 # Handle geometry-based selection (either single 'geometry' or list 'geometries')
                 geoms = constraint.get('geometries', [constraint.get('geometry')])
                 geoms = [g for g in geoms if g is not None]
-                
+
                 if geoms:
                     # Robust multi-geometry node selection
                     fixed_nodes = []
                     # Larger tolerance handles coarse/curved mesh discretisation
                     tolerance = 1.5
-                    
+
                     # 1. Pre-filter with combined bounding box
                     bbox_list = [g.BoundingBox() for g in geoms]
                     xmin = min(b.xmin for b in bbox_list) - tolerance
@@ -1079,11 +1217,11 @@ class SolverNode(CadQueryNode):
                     ymax = max(b.ymax for b in bbox_list) + tolerance
                     zmin = min(b.zmin for b in bbox_list) - tolerance
                     zmax = max(b.zmax for b in bbox_list) + tolerance
-                    
+
                     in_bb = (x >= xmin) & (x <= xmax) & (y >= ymin) & (y <= ymax) & (z >= zmin) & (z <= zmax)
                     candidate_indices = np.where(in_bb)[0]
                     print(f"FEA Solver: Constraint candidates in BBox: {len(candidate_indices)}")
-                    
+
                     from cadquery import Vector
                     for i in candidate_indices:
                         px, py, pz = float(x[i]), float(y[i]), float(z[i])
@@ -1108,13 +1246,17 @@ class SolverNode(CadQueryNode):
                                 fixed_nodes.append(i)
                                 break
                     print(f"FEA Solver: Constraint fixed nodes found: {len(fixed_nodes)}")
-                    
+
                     nodal_dofs = basis.nodal_dofs
                     current_fixed_dofs = []
                     for node_idx in fixed_nodes:
                         for dof_idx in fixed_dof_indices:
-                             current_fixed_dofs.append(nodal_dofs[dof_idx, node_idx])
-                    
+                            dof = int(nodal_dofs[dof_idx, node_idx])
+                            current_fixed_dofs.append(dof)
+                            # Store prescribed value (0.0 for all non-displacement BCs)
+                            if disp_vals is not None:
+                                u_prescribed[dof] = float(disp_vals[dof_idx])
+
                     if current_fixed_dofs:
                         fixed_dofs = np.union1d(fixed_dofs, current_fixed_dofs)
                     
@@ -1155,121 +1297,74 @@ class SolverNode(CadQueryNode):
                 if not load: continue
                 
                 if load['type'] == 'pressure':
-                    # NEW: Handle pressure loads
+                    # Pressure load: convert to equivalent total-force vector then
+                    # integrate via FacetBasis so that larger boundary elements
+                    # automatically receive proportionally more force.
                     face_shape = load['geometry']
-                    pressure = load['pressure']
-                    
-                    # Get node coordinates
-                    node_coords = np.column_stack((x, y, z))
-                    
-                    # Find nodes on the pressure face
-                    pressure_nodes = []
-                    tolerance = 1e-3
-                    
-                    # OPTIMIZATION: Pre-calculate bounding box for fallback
-                    bb = face_shape.BoundingBox()
-                    xmin, xmax = bb.xmin - tolerance, bb.xmax + tolerance
-                    ymin, ymax = bb.ymin - tolerance, bb.ymax + tolerance
-                    zmin, zmax = bb.zmin - tolerance, bb.zmax + tolerance
-                    
-                    for i, coord in enumerate(node_coords):
-                        try:
-                            from cadquery import Vector
-                            point = Vector(coord[0], coord[1], coord[2])
-                            distance = face_shape.distanceTo(point)
-                            if distance <= tolerance:
-                                pressure_nodes.append(i)
-                        except:
-                            # Fallback: use bounding box (pre-calculated - fast)
-                            if (xmin <= coord[0] <= xmax and
-                                ymin <= coord[1] <= ymax and
-                                zmin <= coord[2] <= zmax):
-                                pressure_nodes.append(i)
-                    
-                    if pressure_nodes:
-                        # Calculate pressure force on each node
-                        # For simplicity, distribute pressure evenly across face nodes
-                        # In reality, this should integrate pressure over face area
-                        n_pressure_nodes = len(pressure_nodes)
-                        face_area = face_shape.Area()
-                        
-                        if face_area > 0:
-                            # Total force = pressure * area
-                            total_force = pressure * face_area
-                            # Distribute to nodes (simplified - should use shape functions)
-                            force_per_node = total_force / n_pressure_nodes
-                            
-                            # Get face normal for direction
-                            try:
-                                # Get normal vector of the face
-                                normal = face_shape.normalAt()
-                                fx_per_node = force_per_node * normal.x
-                                fy_per_node = force_per_node * normal.y
-                                fz_per_node = force_per_node * normal.z
-                            except:
-                                # Fallback: assume normal pressure (outward)
-                                fx_per_node = fy_per_node = 0.0
-                                fz_per_node = force_per_node
-                            
-                            nodal_dofs = basis.nodal_dofs
-                            for node_idx in pressure_nodes:
-                                dof_x = nodal_dofs[0, node_idx]
-                                dof_y = nodal_dofs[1, node_idx]
-                                dof_z = nodal_dofs[2, node_idx]
-                                
-                                f[dof_x] += fx_per_node
-                                f[dof_y] += fy_per_node
-                                f[dof_z] += fz_per_node
+                    pressure   = load['pressure']
+
+                    try:
+                        # Outward unit normal at centroid
+                        normal     = face_shape.normalAt()
+                        face_area  = face_shape.Area()
+                        # Total force = pressure × area × n̂
+                        # _assemble_traction_force divides by mesh area internally,
+                        # yielding traction ≈ pressure × n̂ on every facet.
+                        pvec = [
+                            float(pressure) * float(normal.x) * face_area,
+                            float(pressure) * float(normal.y) * face_area,
+                            float(pressure) * float(normal.z) * face_area,
+                        ]
+                    except Exception as _ne:
+                        logger.warning(f"FEA Solver: Pressure normal fallback ({_ne}); using +Z.")
+                        face_area = getattr(face_shape, 'Area', lambda: 1.0)()
+                        pvec = [0.0, 0.0, float(pressure) * face_area]
+
+                    f_pressure = _assemble_traction_force(
+                        mesh, basis, [face_shape], pvec
+                    )
+                    if f_pressure is not None:
+                        f += f_pressure
+                        print(f"FEA Solver: Pressure {pressure} applied via FacetBasis traction.")
+                    else:
+                        logger.error(
+                            "FEA Solver: Pressure FacetBasis assembly failed — "
+                            "no facets matched loaded geometry.  "
+                            "Check that the geometry face lies on the mesh boundary."
+                        )
                                 
                 elif load['type'] == 'force':
-                    # NEW: Support for geometry-based force selection
+                    # Support for geometry-based force selection
                     geoms = load.get('geometries', [load.get('geometry')])
                     geoms = [g for g in geoms if g is not None]
                     load_vec = load['vector']
-                    
-                    matching_nodes_indices = []
-                    
+
                     if geoms:
-                        # Robust multi-geometry node selection
-                        tolerance = 1.5
-                        bbox_list = [g.BoundingBox() for g in geoms]
-                        xmin = min(b.xmin for b in bbox_list) - tolerance
-                        xmax = max(b.xmax for b in bbox_list) + tolerance
-                        ymin = min(b.ymin for b in bbox_list) - tolerance
-                        ymax = max(b.ymax for b in bbox_list) + tolerance
-                        zmin = min(b.zmin for b in bbox_list) - tolerance
-                        zmax = max(b.zmax for b in bbox_list) + tolerance
-                        
-                        in_bb = (x >= xmin) & (x <= xmax) & (y >= ymin) & (y <= ymax) & (z >= zmin) & (z <= zmax)
-                        candidate_indices = np.where(in_bb)[0]
-                        print(f"FEA Solver: Load candidates in BBox: {len(candidate_indices)}")
-                        
-                        from cadquery import Vector
-                        for i in candidate_indices:
-                            px, py, pz = float(x[i]), float(y[i]), float(z[i])
-                            point = Vector(px, py, pz)
-                            for g in geoms:
-                                matched = False
-                                try:
-                                    if g.distanceTo(point) <= tolerance:
-                                        matched = True
-                                except Exception:
-                                    # Fallback: use per-face BBox check
-                                    try:
-                                        bb = g.BoundingBox()
-                                        if (bb.xmin - tolerance <= px <= bb.xmax + tolerance and
-                                                bb.ymin - tolerance <= py <= bb.ymax + tolerance and
-                                                bb.zmin - tolerance <= pz <= bb.zmax + tolerance):
-                                            matched = True
-                                    except Exception:
-                                        pass
-                                if matched:
-                                    matching_nodes_indices.append(i)
-                                    break
-                        print(f"FEA Solver: Load matched nodes: {len(matching_nodes_indices)}")
+                        # ----------------------------------------------------------------
+                        # PRIMARY PATH: proper Neumann BC via FacetBasis integration.
+                        # This distributes the force area-weighted over the loaded surface
+                        # facets, which is mathematically correct for unstructured meshes.
+                        # ----------------------------------------------------------------
+                        f_traction = _assemble_traction_force(mesh, basis, geoms, load_vec)
+                        if f_traction is not None:
+                            f += f_traction
+                            print(f"FEA Solver: Force {load_vec} applied via FacetBasis traction integration.")
+                        else:
+                            # Do NOT fall back to equal nodal distribution — on unstructured meshes
+                            # equal nodal weighting concentrates force on dense mesh regions
+                            # and produces artificial stress spikes ("bed of nails" effect).
+                            # The load is skipped so the failure is obvious (zero reaction)
+                            # rather than silently wrong.
+                            logger.error(
+                                f"FEA Solver: FacetBasis traction assembly failed for load {load_vec}. "
+                                "No load applied — check that the selected geometry face "
+                                "coincides with the mesh boundary and tolerance is adequate."
+                            )
+
                     elif 'condition' in load and load['condition']:
                         # LEGACY: Handle force loads via condition string
                         load_cond = load['condition']
+                        matching_nodes_indices = []
                         # Secure evaluation using simpleeval
                         if simple_eval is not None:
                             try:
@@ -1281,44 +1376,30 @@ class SolverNode(CadQueryNode):
                                     result = simple_eval(load_cond, names=names, functions=functions)
                                     condition_results.append(bool(result))
                                 matching_nodes_indices = np.where(condition_results)[0]
-                            except:
+                            except Exception:
                                 matching_nodes_indices = np.where(eval(load_cond, {'x': x, 'y': y, 'z': z, 'np': np}))[0]
                         else:
                             matching_nodes_indices = np.where(eval(load_cond, {'x': x, 'y': y, 'z': z, 'np': np}))[0]
-                    
-                    n_load_nodes = len(matching_nodes_indices)
-                    if n_load_nodes > 0:
-                        n_orig_vertices = mesh.p.shape[1]
-                        corners = [idx for idx in matching_nodes_indices if idx < n_orig_vertices]
-                        mid_edges = [idx for idx in matching_nodes_indices if idx >= n_orig_vertices]
-                        
-                        fx_total, fy_total, fz_total = load_vec
-                        nodal_dofs = basis.nodal_dofs
-                        
-                        if mid_edges:
-                            # Quadratic mesh nodes detected on this face
-                            # Distribute force among mid-edge nodes (using consistently 1/3 weight each)
-                            # For a single face, there are 3 mid-edges. 3 * 1/3 = 1.
-                            w_nodes = mid_edges
-                            weight = 1.0 / len(mid_edges)
-                        else:
-                            # Linear mesh or only vertices found
-                            w_nodes = matching_nodes_indices
+                        n_load_nodes = len(matching_nodes_indices)
+                        if n_load_nodes > 0:
+                            fx_total, fy_total, fz_total = load_vec
+                            nodal_dofs = basis.nodal_dofs
                             weight = 1.0 / n_load_nodes
-                            
-                        for node_idx in w_nodes:
-                            f[nodal_dofs[0, node_idx]] += fx_total * weight
-                            f[nodal_dofs[1, node_idx]] += fy_total * weight
-                            f[nodal_dofs[2, node_idx]] += fz_total * weight
-                            
+                            for node_idx in matching_nodes_indices:
+                                f[nodal_dofs[0, node_idx]] += fx_total * weight
+                                f[nodal_dofs[1, node_idx]] += fy_total * weight
+                                f[nodal_dofs[2, node_idx]] += fz_total * weight
+
         except Exception:
             pass
 
         # 6. Solve
         try:
             print(f"FEA Solver: Starting Linear Solve (Fixed DOFs: {len(fixed_dofs)})...")
-            # Removed suppress_output to allow diagnostic visibility
-            u = solve(*condense(K, f, D=fixed_dofs))
+            # Pass u_prescribed so that Displacement BCs with non-zero values are enforced
+            # correctly.  For Fixed/Roller/Pinned BCs u_prescribed[dofs] == 0.0, so this
+            # is backward-compatible with the zero-displacement case.
+            u = solve(*condense(K, f, x=u_prescribed, D=fixed_dofs))
             print(f"FEA Solve Complete. Max Displacement: {np.max(np.abs(u)):.6e}")
         except Exception as e:
             print(f"FEA Solver: ERROR during solve: {e}")
@@ -1475,7 +1556,15 @@ class TopologyOptimizationNode(CadQueryNode):
         # NEW: Filter type and update scheme selection
         self.create_property('filter_type', 'density', widget_type='combo', items=['sensitivity', 'density'])
         self.create_property('update_scheme', 'MMA', widget_type='combo', items=['MMA', 'OC'])
-        
+
+        # Element type for displacement basis.
+        # Linear P1 is fast (recommended for many iterations) but exhibits
+        # shear/volumetric locking in bending, making structures appear stiffer
+        # than they really are and producing overly thin optimised members.
+        # Quadratic P2 is significantly more accurate but ~4-8x slower per solve.
+        self.create_property('element_type', 'Fast (Linear P1)', widget_type='combo',
+                             items=['Fast (Linear P1)', 'Accurate (Quadratic P2)'])
+
         # NEW: Heaviside projection for sharper boundaries
         self.create_property('projection', 'None', widget_type='combo', 
                              items=['None', 'Heaviside'])
@@ -1540,7 +1629,13 @@ class TopologyOptimizationNode(CadQueryNode):
         logger.info("TopOpt: Inputs confirmed. Setting up basis...")
 
         # 1. Setup Basis (Vector for displacement, Scalar P0 for density)
-        e_vec = ElementVector(ElementTetP1())
+        _elem_type = self.get_property('element_type')
+        if _elem_type == 'Accurate (Quadratic P2)':
+            logger.info("TopOpt: Using quadratic P2 elements (accurate, slower).")
+            e_vec = ElementVector(ElementTetP2())
+        else:
+            logger.info("TopOpt: Using linear P1 elements (fast, may lock in bending).")
+            e_vec = ElementVector(ElementTetP1())
         basis = Basis(mesh, e_vec)
         
         # Density basis (P0 - constant per element)
@@ -1639,20 +1734,24 @@ class TopologyOptimizationNode(CadQueryNode):
         load_list = flatten_inputs(self.get_input_list('loads'))
         
         fixed_dofs = np.array([], dtype=int)
-        
+        # Prescribed displacement vector for non-zero Displacement BCs.
+        # Initialised here (before the loop); values are filled in below.
+        u_prescribed = np.zeros(basis.N)
+
         # --- PROCESS CONSTRAINTS ---
         try:
             for c in constraint_list:
                 if not c: continue
-                
+
                 fixed_dof_indices = c.get('fixed_dofs', [0, 1, 2])
-                
+                disp_vals = c.get('displacement', None)  # [dx, dy, dz] or None
+
                 # Handle both 'geometries' (list, from SelectFaceNode) and legacy 'geometry' (single)
                 geoms = c.get('geometries', None)
                 if geoms is None and 'geometry' in c:
                     geoms = [c['geometry']]
                 geoms = [g for g in (geoms or []) if g is not None]
-                
+
                 if geoms:
                     tolerance = 1.5
                     bbox_list = [g.BoundingBox() for g in geoms]
@@ -1662,7 +1761,7 @@ class TopologyOptimizationNode(CadQueryNode):
                     ymax = max(b.ymax for b in bbox_list) + tolerance
                     zmin = min(b.zmin for b in bbox_list) - tolerance
                     zmax = max(b.zmax for b in bbox_list) + tolerance
-                    
+
                     from cadquery import Vector
                     fixed_nodes = []
                     for i in range(len(x)):
@@ -1687,13 +1786,16 @@ class TopologyOptimizationNode(CadQueryNode):
                             if matched:
                                 fixed_nodes.append(i)
                                 break
-                    
-                    # Convert to DOFs
+
+                    # Convert to DOFs and store prescribed values
                     nodal_dofs = basis.nodal_dofs
                     for node_idx in fixed_nodes:
                         for dof_idx in fixed_dof_indices:
-                             fixed_dofs = np.union1d(fixed_dofs, [nodal_dofs[dof_idx, node_idx]])
-                    
+                            dof = int(nodal_dofs[dof_idx, node_idx])
+                            fixed_dofs = np.union1d(fixed_dofs, [dof])
+                            if disp_vals is not None:
+                                u_prescribed[dof] = float(disp_vals[dof_idx])
+
                     # Debug Viz (Sampled)
                     step = max(1, len(fixed_nodes) // 50)
                     for i in range(0, len(fixed_nodes), step):
@@ -1748,55 +1850,28 @@ class TopologyOptimizationNode(CadQueryNode):
                 geoms = [g for g in (geoms or []) if g is not None]
                 
                 if geoms:
-                    tolerance = 1.5
-                    bbox_list = [g.BoundingBox() for g in geoms]
-                    xmin = min(b.xmin for b in bbox_list) - tolerance
-                    xmax = max(b.xmax for b in bbox_list) + tolerance
-                    ymin = min(b.ymin for b in bbox_list) - tolerance
-                    ymax = max(b.ymax for b in bbox_list) + tolerance
-                    zmin = min(b.zmin for b in bbox_list) - tolerance
-                    zmax = max(b.zmax for b in bbox_list) + tolerance
-                    
-                    from cadquery import Vector
-                    load_nodes = []
-                    for i in range(len(x)):
-                        px, py, pz = float(x[i]), float(y[i]), float(z[i])
-                        if not (xmin <= px <= xmax and ymin <= py <= ymax and zmin <= pz <= zmax):
-                            continue
-                        point = Vector(px, py, pz)
-                        for g in geoms:
-                            matched = False
-                            try:
-                                if g.distanceTo(point) <= tolerance:
-                                    matched = True
-                            except Exception:
-                                try:
-                                    bb = g.BoundingBox()
-                                    if (bb.xmin - tolerance <= px <= bb.xmax + tolerance and
-                                            bb.ymin - tolerance <= py <= bb.ymax + tolerance and
-                                            bb.zmin - tolerance <= pz <= bb.zmax + tolerance):
-                                        matched = True
-                                except Exception:
-                                    pass
-                            if matched:
-                                load_nodes.append(i)
-                                break
-                    
-                    if not load_nodes: continue
-                    
-                    n_nodes = len(load_nodes)
-                    nodal_dofs = basis.nodal_dofs
-                    fx, fy, fz = [v / n_nodes for v in vector]
-                    for node_idx in load_nodes:
-                         f[nodal_dofs[0, node_idx]] += fx
-                         f[nodal_dofs[1, node_idx]] += fy
-                         f[nodal_dofs[2, node_idx]] += fz
-                    
-                    # Debug Viz
-                    step = max(1, n_nodes // 20)
-                    for i in range(0, n_nodes, step):
-                        idx = load_nodes[i]
-                        debug_loads.append({'start': mesh.p[:, idx].tolist(), 'vector': vector})
+                    # ----------------------------------------------------------------
+                    # PRIMARY PATH: area-weighted FacetBasis traction integration.
+                    # ----------------------------------------------------------------
+                    f_traction = _assemble_traction_force(mesh, basis, geoms, vector)
+                    if f_traction is not None:
+                        f += f_traction
+                    else:
+                        # Do NOT fall back to equal nodal distribution — on unstructured meshes
+                        # equal nodal weighting concentrates force on dense mesh regions and
+                        # produces artificial stress spikes.  Skip load and surface the error.
+                        logger.error(
+                            f"TopOpt: FacetBasis traction assembly failed for load {vector}. "
+                            "No load applied — check that the selected geometry face "
+                            "coincides with the mesh boundary."
+                        )
+
+                    # Debug Viz (uses bounding box centre — lightweight)
+                    bbox_list_dbg = [g.BoundingBox() for g in geoms]
+                    cx = sum(b.xmin + b.xmax for b in bbox_list_dbg) / (2 * len(bbox_list_dbg))
+                    cy = sum(b.ymin + b.ymax for b in bbox_list_dbg) / (2 * len(bbox_list_dbg))
+                    cz = sum(b.zmin + b.zmax for b in bbox_list_dbg) / (2 * len(bbox_list_dbg))
+                    debug_loads.append({'start': [cx, cy, cz], 'vector': list(vector)})
                         
                 elif 'condition' in l and l['condition']:
                     # Legacy string load
@@ -1845,25 +1920,24 @@ class TopologyOptimizationNode(CadQueryNode):
             # Add small epsilon to avoid singularity
             return (rho_min + w['rho'] ** penal) * (term1 + term2)
             
-        # Energy Functional for Sensitivity
+        # Element Compliance Functional for Sensitivity Analysis
+        # --------------------------------------------------------
+        # What we actually compute here is u_e^T k_e u_e per element, which equals
+        # 2 × (strain energy per element) = element compliance contribution.
+        # This is the correct quantity for SIMP sensitivity:
+        #   dc/d(rho_e) = -p * rho_e^(p-1) * (u_e^T k_e u_e)
+        # The name 'element_compliance' prevents the common confusion with
+        # the factor-of-two difference between strain energy and compliance.
         @Functional
-        def strain_energy(w):
-            # Manual strain energy density
+        def element_compliance(w):
             def epsilon(w):
                 return sym_grad(w)
-            
+
             u = w['u']
             E = epsilon(u)
-            
-            # 1/2 * sigma : epsilon
-            # But we need 2*mu*E:E + lam*tr(E)^2
-            # Wait, linear_elasticity form returns sigma:epsilon.
-            # Strain energy is 1/2 * sigma : epsilon.
-            # But here we just need the term that scales with rho.
-            # The compliance is u^T K u.
-            # Element energy is u_e^T k_e u_e.
-            # This is exactly what the bilinear form evaluates if u=v.
-            
+
+            # u_e^T k_e u_e = integral_e (sigma : epsilon) dV
+            # = integral_e (2*mu*E:E + lam*tr(E)^2) dV
             term1 = 2.0 * w['mu'] * ddot(E, E)
             term2 = w['lam'] * tr(E) * tr(E)
             return term1 + term2
@@ -1953,21 +2027,25 @@ class TopologyOptimizationNode(CadQueryNode):
             # Solve
             try:
                 with suppress_output():
-                    u = solve(*condense(K, f, D=fixed_dofs))
+                    u = solve(*condense(K, f, x=u_prescribed, D=fixed_dofs))
             except Exception as e:
                 logger.error(f"Solver failed at iter {loop}: {e}")
                 break
-            
+
             # 3. Sensitivity Analysis
-            energies = strain_energy.elemental(basis, u=basis.interpolate(u), lam=lam_interp, mu=mu_interp)
+            # NOTE: the Functional is named 'element_compliance' (not 'strain_energy') to
+            # reflect that term1+term2 = u_e^T k_e u_e = 2*strain_energy_e = element compliance.
+            energies = element_compliance.elemental(basis, u=basis.interpolate(u), lam=lam_interp, mu=mu_interp)
             
-            # dc/drho = -p * rho^(p-1) * energy
+            # dc/drho = -p * rho^(p-1) * energy  (elemental() already integrates over vol)
             dc = -penal * (densities_phys ** (penal - 1)) * energies
-            
-            # Divide by volume (sensitivity per unit volume)
-            # Make sure we use the correct volume measure
-            dc = dc / volumes
-            
+
+            # Apply Heaviside projection chain rule BEFORE the density filter.
+            # d_proj = dH/d(rho_filtered); without this the gradient is incorrect
+            # whenever Heaviside projection is active.
+            if projection_type == 'Heaviside':
+                dc = dc * d_proj
+
             # Apply Filter to Sensitivities
             if filter_type == 'density' and filter_radius > 0:
                 # Chain rule for density filter
@@ -1975,28 +2053,29 @@ class TopologyOptimizationNode(CadQueryNode):
             elif filter_type == 'sensitivity' and filter_radius > 0:
                 # Heuristic sensitivity filter
                 dc = sensitivity_filter(dc, centroids, filter_radius, densities_phys)
-            
+
             # 4. Update Design Variables
             if update_scheme == 'MMA':
                 # Objective: Compliance (minimize)
                 # Constraint: Volume - Target <= 0
                 
-                # Compliance value (approximate)
-                c = np.sum(densities_phys**penal * energies * volumes)
-                
-                # Volume constraint value
+                # Compliance value — energies is already integrated over element vol,
+                # so do NOT multiply by volumes again.
+                c = np.sum(densities_phys**penal * energies)
+
+                # Volume constraint value (physical densities drive the actual volume)
                 current_vol = np.sum(densities_phys * volumes)
                 vol_constraint = current_vol - target_vol
-                
-                # Volume constraint gradient
-                # dV/dx = volumes (if no filter) or filtered volumes
-                dvol = volumes
+
+                # Volume constraint gradient dV/dx, accounting for both Heaviside and
+                # density-filter chain rules in the correct order.
+                # dV/d(phys_e) = volumes[e]
+                # dV/d(filt_e) = volumes[e] * d_proj[e]   (Heaviside chain rule)
+                # dV/d(x_j)   = sum_e dV/d(filt_e) * d(filt_e)/d(x_j)  (filter chain rule)
+                dvol_base = volumes * d_proj if projection_type == 'Heaviside' else volumes
+                dvol = dvol_base
                 if filter_type == 'density' and filter_radius > 0:
-                    # Chain rule for volume constraint gradient
-                    # dVol/dx = sum(dV/dy * dy/dx) = sum(volumes * dy/dx)
-                    # This is effectively applying the filter to the volumes vector
-                    dvol = density_filter_chainrule(volumes, densities, densities_phys, centroids, filter_radius, weight_sums)
-                
+                    dvol = density_filter_chainrule(dvol_base, densities, densities_phys, centroids, filter_radius, weight_sums)
                 # Adaptive move limit: wider in early iterations for faster convergence
                 ramp_iters = 20
                 move_factor = 1.0 + max(0.0, 1.5 * (1.0 - loop / ramp_iters))
@@ -2051,9 +2130,12 @@ class TopologyOptimizationNode(CadQueryNode):
                 min_densities = np.minimum(densities[src_indices], densities[target_indices])
                 densities[src_indices] = min_densities
                 densities[target_indices] = min_densities
-            
+
             # Compute compliance for logging
-            obj_val = np.sum(densities_phys**penal * energies * volumes) if update_scheme != 'MMA' else c
+            # energies already contains the integrated element volume (skfem
+            # .elemental() folds the Jacobian into the quadrature), so we must
+            # NOT multiply by `volumes` again — that would be double-counting.
+            obj_val = np.sum(densities_phys**penal * energies) if update_scheme != 'MMA' else c
             logger.info(f"Iter {loop}: Change {change:.4f}, Vol {np.sum(densities*volumes)/total_vol:.2f}, Compliance {obj_val:.4e}")
             
             # Check convergence: density change OR objective plateau
@@ -2249,14 +2331,46 @@ class RemeshNode(CadQueryNode):
         return None
     
     def _remesh_via_solid(self, vertices, faces, element_size):
-        """Create volumetric mesh by first creating a solid from surface."""
+        """Create volumetric mesh by first creating a solid from surface.
+
+        .. warning::
+            This method passes raw marching-cubes output (highly triangulated,
+            non-manifold triangles) to OpenCASCADE's ``BRepBuilderAPI_Sewing`` /
+            ``ShapeFix_Solid`` pipeline.  OCC sewing is designed for CAD B-Rep
+            surfaces, *not* dense isosurface meshes.  Common failure modes on
+            marching-cubes output include:
+
+            * Sewing never terminates (exponential cost at >5 k triangles).
+            * Shell fails to close → ``BRepBuilderAPI_MakeSolid`` returns Nothing.
+            * ``ShapeFix_Solid`` silently produces an incorrect orientated solid.
+
+            Recommended robust alternative
+            --------------------------------
+            1. Reduce face count *before* sewing:
+               ``pyvista`` / ``trimesh`` Laplacian smoothing + quadric-decimation
+               typically reduce a 50 k-face marching-cubes mesh to <2 k faces
+               while preserving topology.
+            2. Skip B-Rep altogether and remesh the smoothed STL directly with
+               ``tetgen`` or ``fTetWild`` to obtain a quality tetrahedral mesh
+               suitable for skfem.
+        """
         # Performance guard: very large meshes are slow to sew into B-Rep.
         # Raise the limit to 20 000 faces (typical TopOpt output) with a warning.
         if len(faces) > 20000:
-            logger.info(f"RemeshNode: Mesh very complex ({len(faces)} faces > 20000). Skipping solid conversion.")
+            logger.warning(
+                f"RemeshNode: Mesh has {len(faces)} faces (> 20 000). "
+                "OCC sewing on marching-cubes output at this density is likely to "
+                "hang or produce a broken solid. Skipping solid conversion. "
+                "Consider using pyvista/trimesh decimation + tetgen for robust remeshing."
+            )
             return None, None
         if len(faces) > 5000:
-            logger.info(f"RemeshNode: Large mesh ({len(faces)} faces). Solid conversion may be slow.")
+            logger.warning(
+                f"RemeshNode: Large marching-cubes mesh ({len(faces)} faces). "
+                "OCC sewing may be slow or fail. "
+                "Laplacian smoothing + decimation (pyvista/trimesh) is strongly recommended "
+                "before B-Rep conversion."
+            )
             
         mesh = None
         solid = None
@@ -2297,14 +2411,31 @@ class RemeshNode(CadQueryNode):
             
             sew.Perform()
             sewed_shape = sew.SewedShape()
-            
-            # Check if we have a shell
-            if sewed_shape.ShapeType() == 0: # TopAbs_COMPOUND
-                # Try to extract shells
-                pass 
-                
+
+            # Extract the shell to pass to ShapeFix_Shell.
+            # BRepBuilderAPI_Sewing may return a TopoDS_Compound when the
+            # input triangles form more than one disconnected patch, or simply
+            # because OCC wraps singletons in a Compound.  Attempting a direct
+            # downcast TopoDS_Shell(compound) causes a C++ type-assertion
+            # exception.  We must use TopExp_Explorer to pull the first shell.
+            from OCP.TopAbs import TopAbs_COMPOUND, TopAbs_SHELL
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopoDS import topods
+
+            if sewed_shape.ShapeType() == TopAbs_COMPOUND:
+                explorer = TopExp_Explorer(sewed_shape, TopAbs_SHELL)
+                if explorer.More():
+                    shell_shape = explorer.Current()
+                else:
+                    raise RuntimeError(
+                        "RemeshNode: sewing produced a Compound with no Shell — "
+                        "mesh may be non-manifold or have open boundaries."
+                    )
+            else:
+                shell_shape = sewed_shape
+
             # Try to fix shell
-            fixer = ShapeFix_Shell(TopoDS_Shell(sewed_shape))
+            fixer = ShapeFix_Shell(topods.Shell(shell_shape))
             fixer.Perform()
             shell = fixer.Shell()
             
@@ -2457,8 +2588,13 @@ class SizeOptimizationNode(CadQueryNode):
         # Optimization parameters
         self.create_property('max_iterations', 50, widget_type='int')
         self.create_property('tolerance', 1e-4, widget_type='float')
-        self.create_property('optimizer', 'SLSQP', widget_type='combo',
-                             items=['SLSQP', 'L-BFGS-B', 'trust-constr', 'Powell'])
+        self.create_property('optimizer', 'COBYLA', widget_type='combo',
+                             items=['COBYLA', 'Nelder-Mead', 'SLSQP', 'L-BFGS-B', 'trust-constr', 'Powell'])
+        # Finite-difference step for gradient-based solvers (SLSQP / L-BFGS-B).
+        # Each FD perturbation costs one full CAD→Mesh→FEA loop, so keep this
+        # coarse (1e-2..1e-1) unless you need high-accuracy gradients.
+        # Gradient-free methods (COBYLA, Nelder-Mead) ignore this setting entirely.
+        self.create_property('gradient_step', 0.05, widget_type='float')
         
         # Mesh settings
         self.create_property('element_size', 2.0, widget_type='float')
@@ -2514,6 +2650,7 @@ class SizeOptimizationNode(CadQueryNode):
         max_iter = self.get_property('max_iterations')
         tol = self.get_property('tolerance')
         optimizer = self.get_property('optimizer')
+        gradient_step = float(self.get_property('gradient_step'))
         elem_size = self.get_property('element_size')
         
         # History tracking
@@ -2540,7 +2677,7 @@ class SizeOptimizationNode(CadQueryNode):
             
             # Mesh the shape
             try:
-                from pylcss.cad.nodes.fem import MeshNode
+                # MeshNode is defined in this same file — no import needed.
                 mesh_node = MeshNode()
                 mesh_node._inputs = {'shape': shape}
                 mesh_node.set_property('element_size', elem_size)
@@ -2619,12 +2756,47 @@ class SizeOptimizationNode(CadQueryNode):
         logger.info(f"SizeOpt: Running {optimizer} optimization...")
         try:
             if optimizer in ['SLSQP', 'trust-constr']:
+                # Gradient-based: SciPy uses finite-differences internally.
+                # Each FD perturbation = one full CAD/Mesh/FEA loop per parameter.
+                # 'eps' controls the FD step size; expose it so users can tune it.
                 result = minimize(
                     objective, x0, method=optimizer,
                     bounds=bounds, constraints=constraints_list,
-                    options={'maxiter': max_iter, 'disp': True, 'ftol': tol}
+                    options={'maxiter': max_iter, 'disp': True, 'ftol': tol,
+                             'eps': gradient_step}
                 )
-            else:
+            elif optimizer == 'L-BFGS-B':
+                result = minimize(
+                    objective, x0, method='L-BFGS-B',
+                    bounds=bounds,
+                    options={'maxiter': max_iter, 'disp': True, 'eps': gradient_step}
+                )
+            elif optimizer == 'COBYLA':
+                # Gradient-free: no CAD/Mesh/FEA calls for gradient estimation.
+                # Bounds are converted to inequality constraints because COBYLA
+                # does not accept a 'bounds' argument.
+                cobyla_cons = list(constraints_list)
+                for _j, (_lb, _ub) in enumerate(bounds):
+                    j_cap = _j  # capture loop variable
+                    cobyla_cons.append({'type': 'ineq',
+                                        'fun': lambda x, j=j_cap, lb=_lb: x[j] - lb})
+                    cobyla_cons.append({'type': 'ineq',
+                                        'fun': lambda x, j=j_cap, ub=_ub: ub - x[j]})
+                # rhobeg ~ initial trust-region radius; roughly 10x gradient_step works well.
+                result = minimize(
+                    objective, x0, method='COBYLA',
+                    constraints=cobyla_cons,
+                    options={'maxiter': max_iter, 'disp': True,
+                             'rhobeg': gradient_step * 10, 'catol': tol}
+                )
+            elif optimizer == 'Nelder-Mead':
+                # Pure gradient-free simplex search; ignores constraints.
+                result = minimize(
+                    objective, x0, method='Nelder-Mead',
+                    options={'maxiter': max_iter, 'disp': True,
+                             'xatol': tol, 'fatol': tol}
+                )
+            else:  # Powell or other gradient-free
                 result = minimize(
                     objective, x0, method=optimizer,
                     bounds=bounds,
@@ -2794,18 +2966,23 @@ class SizeOptimizationNode(CadQueryNode):
             
             if condition:
                 try:
-                    # Use string condition
                     def make_cond(cond_str):
                         def condition_func(x):
+                            if simple_eval is not None:
+                                x_val, y_val, z_val = x
+                                return simple_eval(cond_str,
+                                                  names={'x': x_val, 'y': y_val, 'z': z_val},
+                                                  functions={'sin': np.sin, 'cos': np.cos,
+                                                             'abs': abs, 'sqrt': np.sqrt})
                             return eval(cond_str, {'x': x, 'np': np})
                         return condition_func
-                    
+
                     facet_dofs = basis.get_dofs(make_cond(condition))
                     for dof_idx in fixed_dofs:
                         dofs_to_fix = np.union1d(dofs_to_fix, facet_dofs.nodal[f'u^{dof_idx+1}'])
                 except Exception as e:
                     logger.warning(f"SizeOpt BC condition failed: {e}")
-        
+
         return dofs_to_fix
     
     def _apply_loads(self, mesh, basis, load_data):
@@ -2828,9 +3005,15 @@ class SizeOptimizationNode(CadQueryNode):
                 try:
                     def make_cond(cond_str):
                         def condition_func(x):
+                            if simple_eval is not None:
+                                x_val, y_val, z_val = x
+                                return simple_eval(cond_str,
+                                                  names={'x': x_val, 'y': y_val, 'z': z_val},
+                                                  functions={'sin': np.sin, 'cos': np.cos,
+                                                             'abs': abs, 'sqrt': np.sqrt})
                             return eval(cond_str, {'x': x, 'np': np})
                         return condition_func
-                    
+
                     facet_dofs = basis.get_dofs(make_cond(condition))
                     n_nodes = len(facet_dofs.nodal['u^1'])
                     for i, v in enumerate(vector):
@@ -2858,10 +3041,24 @@ class SizeOptimizationNode(CadQueryNode):
 class ShapeOptimizationNode(CadQueryNode):
     """
     Shape Optimization Node - Optimizes boundary geometry via mesh morphing.
-    
-    This node performs Form Optimization by moving boundary nodes to minimize
-    stress concentrations or compliance while maintaining volume constraints.
-    Uses Laplacian smoothing for regularization.
+
+    Two sensitivity methods are available:
+
+    Biological Stress Leveling (classical Fully-Stressed Design)
+        Moves boundary nodes to drive the surface toward a *uniform* stress
+        state: inward at low-stress zones (remove material) and outward at
+        high-stress zones (add material).  Works well for stress-concentration
+        reduction (fillets, notches) but is **not** rigorously minimising
+        compliance.  It is a heuristic inspired by Wolff's Law of bone
+        remodelling and should be labelled as such in publications.
+
+    Adjoint Compliance (Hadamard-Zolesio shape derivative)
+        Uses the mathematically exact shape derivative of compliance
+            dC/dV_n  ≈  -2 W(u)  on the free boundary
+        where W(u) = ½ σ:ε is the strain energy density.  Under a
+        volume-preservation constraint this drives the boundary toward
+        a *uniform strain-energy density* state, which IS the true
+        optimality condition for minimum-compliance shape optimisation.
     """
     __identifier__ = 'com.cad.sim.shapeopt'
     NODE_NAME = 'Shape Optimization'
@@ -2894,7 +3091,12 @@ class ShapeOptimizationNode(CadQueryNode):
         
         # Fixed regions - JSON format: condition strings for faces that shouldn't move
         self.create_property('fixed_faces', '[]', widget_type='text')
-        
+
+        # Sensitivity method
+        self.create_property('sensitivity_method', 'Biological Stress Leveling',
+                             widget_type='combo',
+                             items=['Biological Stress Leveling', 'Adjoint Compliance'])
+
         # Visualization
         self.create_property('visualization', 'Stress', widget_type='combo',
                              items=['Stress', 'Displacement', 'Shape Change'])
@@ -3173,24 +3375,36 @@ class ShapeOptimizationNode(CadQueryNode):
                     try:
                         def make_cond(cond_str):
                             def condition_func(x):
+                                if simple_eval is not None:
+                                    x_val, y_val, z_val = x
+                                    return simple_eval(cond_str,
+                                                      names={'x': x_val, 'y': y_val, 'z': z_val},
+                                                      functions={'sin': np.sin, 'cos': np.cos,
+                                                                 'abs': abs, 'sqrt': np.sqrt})
                                 return eval(cond_str, {'x': x, 'np': np})
                             return condition_func
                         facets = mesh.facets_satisfying(make_cond(condition))
                         fixed = np.union1d(fixed, np.unique(mesh.facets[:, facets].flatten()))
-                    except:
-                        pass
-        
+                    except Exception as e:
+                        logger.warning(f"ShapeOpt: BC condition failed: {e}")
+
         # Additional fixed faces from property (string conditions)
         for face_cond in fixed_faces:
             try:
                 def make_cond(cond_str):
                     def condition_func(x):
+                        if simple_eval is not None:
+                            x_val, y_val, z_val = x
+                            return simple_eval(cond_str,
+                                              names={'x': x_val, 'y': y_val, 'z': z_val},
+                                              functions={'sin': np.sin, 'cos': np.cos,
+                                                         'abs': abs, 'sqrt': np.sqrt})
                         return eval(cond_str, {'x': x, 'np': np})
                     return condition_func
                 facets = mesh.facets_satisfying(make_cond(face_cond))
                 fixed = np.union1d(fixed, np.unique(mesh.facets[:, facets].flatten()))
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"ShapeOpt: Fixed face condition failed: {e}")
         
         return fixed.astype(np.int64)
     
@@ -3228,25 +3442,58 @@ class ShapeOptimizationNode(CadQueryNode):
         return normals
     
     def _compute_shape_sensitivity(self, mesh, result, moveable_nodes, normals, obj_type, lam, mu):
-        """Compute shape sensitivity at boundary nodes."""
+        """Compute shape sensitivity at boundary nodes.
+
+        The update rule applied by the caller is:
+            move = -step_size * sensitivities[:, newaxis] * normals
+        so a *positive* sensitivity moves the node *inward* (removes material)
+        and a *negative* sensitivity moves it *outward* (adds material).
+
+        Biological Stress Leveling
+        --------------------------
+        sens_i = (sigma_i - sigma_mean) / sigma_mean
+        High-stress nodes  (sens > 0) => inward? -- NO.  For biological growth
+        we WANT to add material at high-stress zones, so we negate:
+            sens_i = (sigma_mean - sigma_i) / sigma_mean
+        => high stress: sens < 0 => move outward  (add material, reduce stress) OK
+        => low  stress: sens > 0 => move inward   (remove material)             OK
+
+        Adjoint Compliance  (Hadamard-Zolesio boundary shape derivative)
+        ----------------------------------------------------------------
+        dC/dV_n = -2 W(u)  where W = strain energy density = ½ σ:ε
+        To *minimise* C under a volume constraint we move outward where W is
+        above average (add material where the structure is working hardest) and
+        inward where W is below average.  Using the same sign convention:
+            sens_i = (W_mean - W_i) / W_mean
+        => high SED: sens < 0 => move outward (add material, reduce compliance)
+        => low  SED: sens > 0 => move inward  (remove idle material)
+        """
+        sensitivity_method = self.get_property('sensitivity_method')
+
         stress = result['stress']
-        displacement = result['displacement']
-        
-        # Simple approximation: sensitivity proportional to local stress
         sensitivities = np.zeros(len(moveable_nodes))
-        
-        # Map stress to nodes (stress is at nodes from L2 projection)
-        for i, node_idx in enumerate(moveable_nodes):
-            if node_idx < len(stress):
-                sensitivities[i] = stress[node_idx]
-            else:
-                sensitivities[i] = np.mean(stress)
-        
-        # Normalize
+
+        if sensitivity_method == 'Adjoint Compliance' and 'sed' in result:
+            # --- Adjoint Compliance (Hadamard shape derivative) ---
+            sed = result['sed']  # strain energy density, nodal projection
+            mean_sed = np.mean(sed) + 1e-30
+            for i, node_idx in enumerate(moveable_nodes):
+                w_i = float(sed[node_idx]) if node_idx < len(sed) else mean_sed
+                sensitivities[i] = (mean_sed - w_i) / mean_sed  # sign: outward at high SED
+        else:
+            # --- Biological Stress Leveling (Fully-Stressed Design heuristic) ---
+            # NOTE: pure stress-levelling; NOT a rigorous compliance minimiser.
+            mean_stress = np.mean(stress) + 1e-30
+            for i, node_idx in enumerate(moveable_nodes):
+                sigma_i = float(stress[node_idx]) if node_idx < len(stress) else mean_stress
+                # Positive at low-stress (remove material), negative at high-stress (add)
+                sensitivities[i] = (mean_stress - sigma_i) / mean_stress
+
+        # Normalise to [-1, 1] to decouple from absolute magnitude
         sens_max = np.max(np.abs(sensitivities))
         if sens_max > 1e-10:
-            sensitivities = sensitivities / sens_max
-        
+            sensitivities /= sens_max
+
         return sensitivities
     
     def _laplacian_smooth(self, values, nodes, mesh, weight):
@@ -3358,39 +3605,29 @@ class ShapeOptimizationNode(CadQueryNode):
                     
                     vector = load.get('vector', [0, 0, 0])
                     
-                    if 'geometry' in load:
-                        # NEW: Geometry-based load (from SelectFaceNode)
-                        face_shape = load['geometry']
-                        node_coords = np.column_stack((x, y, z))
-                        
-                        load_nodes = []
-                        tolerance = 1e-3
-                        
-                        bb = face_shape.BoundingBox()
-                        xmin, xmax = bb.xmin - tolerance, bb.xmax + tolerance
-                        ymin, ymax = bb.ymin - tolerance, bb.ymax + tolerance
-                        zmin, zmax = bb.zmin - tolerance, bb.zmax + tolerance
-                        
-                        for i, coord in enumerate(node_coords):
-                            if (xmin <= coord[0] <= xmax and
-                                ymin <= coord[1] <= ymax and
-                                zmin <= coord[2] <= zmax):
-                                try:
-                                    from cadquery import Vector
-                                    point = Vector(coord[0], coord[1], coord[2])
-                                    distance = face_shape.distanceTo(point)
-                                    if distance <= tolerance:
-                                        load_nodes.append(i)
-                                except:
-                                    load_nodes.append(i)
-                        
-                        if load_nodes:
-                            n_nodes = len(load_nodes)
-                            nodal_dofs = basis.nodal_dofs
-                            for node_idx in load_nodes:
-                                for i, v in enumerate(vector):
-                                    f[nodal_dofs[i, node_idx]] += v / n_nodes
-                            logger.debug(f"ShapeOpt: Applied load to {n_nodes} nodes")
+                    if 'geometries' in load or 'geometry' in load:
+                        # Geometry-based load via area-weighted FacetBasis traction.
+                        # Equal nodal distribution is NOT used — on unstructured meshes
+                        # it concentrates force artificially on dense mesh regions.
+                        geoms_sh = load.get('geometries', None)
+                        if geoms_sh is None and 'geometry' in load:
+                            geoms_sh = [load['geometry']]
+                        geoms_sh = [g for g in (geoms_sh or []) if g is not None]
+
+                        if geoms_sh:
+                            f_traction = _assemble_traction_force(
+                                mesh, basis, geoms_sh, vector
+                            )
+                            if f_traction is not None:
+                                f += f_traction
+                                logger.debug(
+                                    f"ShapeOpt: Load {vector} applied via FacetBasis traction."
+                                )
+                            else:
+                                logger.error(
+                                    f"ShapeOpt: FacetBasis traction failed for load {vector}. "
+                                    "No load applied — check geometry face vs mesh boundary."
+                                )
                         
                     elif 'condition' in load and load['condition']:
                         # LEGACY: String-based condition
@@ -3450,10 +3687,36 @@ class ShapeOptimizationNode(CadQueryNode):
             with suppress_output():
                 stress = solve(M, b)
             stress = np.abs(stress)
-            
+
+            # --- Strain Energy Density (for Adjoint Compliance sensitivity) ---
+            # W = mu * (eps:eps) + (lam/2) * (tr eps)^2  (linear elasticity)
+            # We project it onto the same P1 nodal space via L2 projection.
+            sed = np.zeros_like(stress)  # default: zero if anything fails
+            try:
+                @LinearForm
+                def sed_form(v, w):
+                    u_i = w['u']
+                    g = u_i.grad
+                    E11 = g[0, 0]; E22 = g[1, 1]; E33 = g[2, 2]
+                    E12 = 0.5 * (g[0, 1] + g[1, 0])
+                    E23 = 0.5 * (g[1, 2] + g[2, 1])
+                    E13 = 0.5 * (g[0, 2] + g[2, 0])
+                    trE = E11 + E22 + E33
+                    W = (mu * (E11**2 + E22**2 + E33**2
+                               + 2*E12**2 + 2*E23**2 + 2*E13**2)
+                         + 0.5 * lam * trE**2)
+                    return W * v
+                b_sed = sed_form.assemble(basis_p1, u=basis.interpolate(u))
+                with suppress_output():
+                    sed = solve(M, b_sed)   # reuse mass matrix from Von Mises
+                sed = np.abs(sed)
+            except Exception as _sed_err:
+                logger.debug(f"ShapeOpt: SED computation skipped: {_sed_err}")
+
             return {
                 'displacement': u,
                 'stress': stress,
+                'sed': sed,
                 'compliance': compliance
             }
             

@@ -109,6 +109,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         self.layout.setSpacing(5)
         self.current_node = None
         self.property_widgets = {}
+        self._updating_property = False  # guard against feedback loop
         
         # Title
         title = QtWidgets.QLabel("INSPECTOR")
@@ -911,7 +912,9 @@ class PropertiesPanel(QtWidgets.QWidget):
         props = node.model.properties
 
         if node_class == 'ConstraintNode':
-            ct = props.get('constraint_type', 'Fixed')
+            # Use get_property (NodeGraphQt API) so we always read the live value,
+            # not a potentially stale snapshot from node.model.properties.
+            ct = node.get_property('constraint_type') or 'Fixed'
 
             grp = QtWidgets.QGroupBox("Constraint Type")
             lay = QtWidgets.QFormLayout()
@@ -919,49 +922,63 @@ class PropertiesPanel(QtWidgets.QWidget):
             combo = QtWidgets.QComboBox()
             combo.addItems(['Fixed', 'Roller X', 'Roller Y', 'Roller Z',
                             'Pinned', 'Symmetry X', 'Symmetry Y', 'Symmetry Z', 'Displacement'])
+            # Block signals while setting the initial value so construction doesn't
+            # fire currentTextChanged and cause a spurious property-change loop.
+            combo.blockSignals(True)
             combo.setCurrentText(str(ct))
+            combo.blockSignals(False)
             combo.currentTextChanged.connect(lambda v: self.update_property('constraint_type', v))
             lay.addRow("Type:", combo)
 
             if ct == 'Displacement':
                 for ax in ['displacement_x', 'displacement_y', 'displacement_z']:
-                    if ax in props:
+                    val = node.get_property(ax)
+                    if val is not None:
                         spin = QtWidgets.QDoubleSpinBox()
                         spin.setRange(-1e6, 1e6)
                         spin.setDecimals(4)
-                        spin.setValue(float(props[ax]))
+                        spin.setValue(float(val))
                         spin.valueChanged.connect(lambda v, p=ax: self.update_property(p, v))
                         lay.addRow(ax.replace('displacement_', 'U') + ':', spin)
 
             grp.setLayout(lay)
             self.props_layout.addWidget(grp)
 
-            # Fallback condition (legacy)
-            if 'condition' in props:
-                grp2 = QtWidgets.QGroupBox("Legacy Condition (fallback if no face connected)")
-                lay2 = QtWidgets.QFormLayout()
-                edit = QtWidgets.QLineEdit(str(props.get('condition', '')))
-                edit.setPlaceholderText("e.g. z < 0.01")
-                edit.editingFinished.connect(lambda: self.update_property('condition', edit.text()))
-                lay2.addRow("Expression:", edit)
-                grp2.setLayout(lay2)
-                self.props_layout.addWidget(grp2)
+            # Condition expression — used when no face is connected (e.g. all .cad examples)
+            cond_val = node.get_property('condition') or ''
+            grp2 = QtWidgets.QGroupBox("Applied To (Condition Expression)")
+            grp2.setToolTip("NumPy boolean expression over mesh node coordinates x, y, z.\n"
+                            "Nodes where the expression is True receive this constraint.\n"
+                            "Used when no SelectFace node is connected.")
+            lay2 = QtWidgets.QFormLayout()
+            edit = QtWidgets.QLineEdit(str(cond_val))
+            edit.setPlaceholderText("e.g. z < 0.01  or  (x < 1) & (y > 9)")
+            edit.editingFinished.connect(lambda: self.update_property('condition', edit.text()))
+            lay2.addRow("Expression:", edit)
+            info = QtWidgets.QLabel("Variables: x, y, z (node coords in mm).  Leave blank if a face is connected.")
+            info.setStyleSheet("color:#888; font-size:10px;")
+            info.setWordWrap(True)
+            lay2.addRow(info)
+            grp2.setLayout(lay2)
+            self.props_layout.addWidget(grp2)
 
         elif node_class == 'LoadNode':
-            lt = props.get('load_type', 'Force')
+            lt = node.get_property('load_type') or 'Force'
             grp = QtWidgets.QGroupBox("Load Settings")
             lay = QtWidgets.QFormLayout()
 
             combo = QtWidgets.QComboBox()
             combo.addItems(['Force', 'Moment', 'Gravity', 'Remote Force'])
+            combo.blockSignals(True)
             combo.setCurrentText(str(lt))
+            combo.blockSignals(False)
             combo.currentTextChanged.connect(lambda v: self.update_property('load_type', v))
             lay.addRow("Type:", combo)
 
             if lt in ('Force', 'Remote Force'):
-                fx = float(props.get('force_x', 0.0))
-                fy = float(props.get('force_y', -1000.0))
-                fz = float(props.get('force_z', 0.0))
+                fx = float(node.get_property('force_x') or 0.0)
+                fy = float(node.get_property('force_y') or 0.0)
+                fz = float(node.get_property('force_z') or 0.0)
                 for axis, prop, val in [('X', 'force_x', fx), ('Y', 'force_y', fy), ('Z', 'force_z', fz)]:
                     spin = QtWidgets.QDoubleSpinBox()
                     spin.setRange(-1e12, 1e12)
@@ -971,41 +988,65 @@ class PropertiesPanel(QtWidgets.QWidget):
                     spin.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
                     lay.addRow(f"F{axis}:", spin)
                 mag = (fx**2 + fy**2 + fz**2) ** 0.5
-                mag_lbl = QtWidgets.QLabel(f"Magnitude: {mag:.2f} N")
-                mag_lbl.setStyleSheet("color:#6dde8d; font-weight:bold;")
-                lay.addRow("", mag_lbl)
+                # Direction arrow label  e.g. "→ (-1000, 0, 0)"
+                def _dir_arrow(x, y, z):
+                    dominant = max([(abs(x),'X',x),(abs(y),'Y',y),(abs(z),'Z',z)], key=lambda t: t[0])
+                    sign = '−' if dominant[2] < 0 else '+'
+                    return f"{sign}{dominant[1]}"
+                dir_lbl = QtWidgets.QLabel(
+                    f"({fx:+.0f}, {fy:+.0f}, {fz:+.0f}) N   │   {mag:.2f} N   │   dir ≈ {_dir_arrow(fx,fy,fz)}")
+                dir_lbl.setStyleSheet("color:#6dde8d; font-weight:bold; font-size:11px;")
+                lay.addRow("", dir_lbl)
+
+            elif lt == 'Moment':
+                for axis, prop in [('X', 'moment_x'), ('Y', 'moment_y'), ('Z', 'moment_z')]:
+                    val = float(node.get_property(prop) or 0.0)
+                    spin = QtWidgets.QDoubleSpinBox()
+                    spin.setRange(-1e12, 1e12)
+                    spin.setDecimals(2)
+                    spin.setValue(val)
+                    spin.setSuffix(' N·mm')
+                    spin.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
+                    lay.addRow(f"M{axis}:", spin)
 
             elif lt == 'Gravity':
-                for p in ['gravity_accel', 'gravity_direction']:
-                    if p in props:
-                        if p == 'gravity_direction':
-                            cb = QtWidgets.QComboBox()
-                            cb.addItems(['-Y', '-Z', '-X', '+Y', '+Z', '+X'])
-                            cb.setCurrentText(str(props[p]))
-                            cb.currentTextChanged.connect(lambda v: self.update_property(p, v))
-                            lay.addRow("Direction:", cb)
-                        else:
-                            spin = QtWidgets.QDoubleSpinBox()
-                            spin.setRange(0, 100000)
-                            spin.setDecimals(2)
-                            spin.setValue(float(props[p]))
-                            spin.setSuffix(' mm/s2')
-                            spin.valueChanged.connect(lambda v: self.update_property(p, v))
-                            lay.addRow("Accel:", spin)
+                grav_accel = float(node.get_property('gravity_accel') or 9810.0)
+                grav_dir   = node.get_property('gravity_direction') or '-Y'
+                spin_g = QtWidgets.QDoubleSpinBox()
+                spin_g.setRange(0, 100000)
+                spin_g.setDecimals(2)
+                spin_g.setValue(grav_accel)
+                spin_g.setSuffix(' mm/s²')
+                spin_g.valueChanged.connect(lambda v: self.update_property('gravity_accel', v))
+                lay.addRow("Accel:", spin_g)
+                cb_dir = QtWidgets.QComboBox()
+                cb_dir.addItems(['-Y', '-Z', '-X', '+Y', '+Z', '+X'])
+                cb_dir.blockSignals(True)
+                cb_dir.setCurrentText(str(grav_dir))
+                cb_dir.blockSignals(False)
+                cb_dir.currentTextChanged.connect(lambda v: self.update_property('gravity_direction', v))
+                lay.addRow("Direction:", cb_dir)
 
             grp.setLayout(lay)
             self.props_layout.addWidget(grp)
 
-            # Fallback condition
-            if 'condition' in props:
-                grp2 = QtWidgets.QGroupBox("Legacy Condition (fallback if no face connected)")
-                lay2 = QtWidgets.QFormLayout()
-                edit = QtWidgets.QLineEdit(str(props.get('condition', '')))
-                edit.setPlaceholderText("e.g. z > 19")
-                edit.editingFinished.connect(lambda: self.update_property('condition', edit.text()))
-                lay2.addRow("Expression:", edit)
-                grp2.setLayout(lay2)
-                self.props_layout.addWidget(grp2)
+            # Applied-to condition expression
+            cond_val = node.get_property('condition') or ''
+            grp2 = QtWidgets.QGroupBox("Applied To (Condition Expression)")
+            grp2.setToolTip("NumPy boolean expression over mesh node coordinates x, y, z.\n"
+                            "Nodes where the expression is True receive this load.\n"
+                            "Used when no SelectFace node is connected.")
+            lay2 = QtWidgets.QFormLayout()
+            edit = QtWidgets.QLineEdit(str(cond_val))
+            edit.setPlaceholderText("e.g. z > 19   or   (np.abs(z) < 1.5) & (x > 9)")
+            edit.editingFinished.connect(lambda: self.update_property('condition', edit.text()))
+            lay2.addRow("Expression:", edit)
+            info = QtWidgets.QLabel("Variables: x, y, z (node coords in mm).  Leave blank if a SelectFace is connected.")
+            info.setStyleSheet("color:#888; font-size:10px;")
+            info.setWordWrap(True)
+            lay2.addRow(info)
+            grp2.setLayout(lay2)
+            self.props_layout.addWidget(grp2)
 
         elif node_class == 'PressureLoadNode':
             grp = QtWidgets.QGroupBox("Pressure Load")
@@ -1039,6 +1080,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         """Update node property and mark as dirty for recalculation."""
         if self.current_node:
             try:
+                self._updating_property = True
                 old = self.current_node.get_property(prop_name)
                 self.current_node.set_property(prop_name, value)
                 # Mark node as dirty for recalculation
@@ -1049,6 +1091,8 @@ class PropertiesPanel(QtWidgets.QWidget):
                 except Exception: pass
             except Exception:
                 pass
+            finally:
+                self._updating_property = False
 
 
 class TimelinePanel(QtWidgets.QWidget):
@@ -1194,8 +1238,10 @@ class LibraryPanel(QtWidgets.QWidget):
                  "Elasto-plastic material with yield strength, hardening and failure strain (presets: A36, DP780, UHSS 1500, Al 6061, Al 5052, CFRP)"),
                 ("Impact Condition",  "com.cad.sim.impact",
                  "Define initial velocity (mm/ms = m/s) applied to impact face nodes"),
-                ("Crash Solver",      "com.cad.sim.crash_solver",
+                ("Crash Solver (CPU)", "com.cad.sim.crash_solver",
                  "Explicit central-difference transient solver with J2 plasticity, element deletion and frame-by-frame playback"),
+                ("Crash Solver (GPU)",  "com.cad.sim.crash_solver_gpu",
+                 "GPU-accelerated explicit crash solver (CUDA); falls back to CPU if no CUDA device is found)"),
             ],
 
             # ═══════════════════════════════════════════════════════════════
@@ -1571,8 +1617,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         # Mark node as dirty so it re-executes
         setattr(node, '_dirty', True)
 
-        # Update the properties panel if this node is selected
-        if self.properties.current_node == node:
+        # Update the properties panel if this node is selected.
+        # Skip if the inspector itself triggered the change to avoid a reset loop.
+        if self.properties.current_node == node and not self.properties._updating_property:
             self.properties.display_node(node)
         
         # SPECIAL CASE: Visualization mode changes should update display immediately
@@ -1920,7 +1967,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         sim_nodes = []
         for node in self.graph.all_nodes():
             node_class = node.__class__.__name__
-            if node_class in ['SolverNode', 'TopologyOptimizationNode', 'MeshNode', 'CrashSolverNode']:
+            if node_class in ['SolverNode', 'TopologyOptimizationNode', 'MeshNode', 'CrashSolverNode', 'CrashSolverGPUNode']:
                 sim_nodes.append(node)
         
         if not sim_nodes:
