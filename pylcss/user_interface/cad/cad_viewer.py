@@ -1383,7 +1383,19 @@ class CQ3DViewer(QtWidgets.QWidget):
             mapper.SetScalarModeToUsePointData()
             mapper.SelectColorArray("VonMises")
 
-            min_s, max_s = float(np.min(stress)), float(np.max(stress))
+            # FIX: Skip void elements when calculating stress range for colorbar
+            if hasattr(mesh, 't') and mesh.t.shape[1] == len(density) and len(stress) == mesh.p.shape[1]:
+                # Nodes connected to solid elements
+                solid_elems = np.where(density >= float(np.clip(density_cutoff, 0.05, 0.95)))[0]
+                if len(solid_elems) > 0:
+                    solid_nodes = np.unique(mesh.t[:, solid_elems])
+                    valid_stress = stress[solid_nodes]
+                    min_s, max_s = float(np.min(valid_stress)), float(np.max(valid_stress))
+                else:
+                    min_s, max_s = float(np.min(stress)), float(np.max(stress))
+            else:
+                min_s, max_s = float(np.min(stress)), float(np.max(stress))
+
             if max_s - min_s < 1e-10:
                 max_s = min_s + 1.0
 

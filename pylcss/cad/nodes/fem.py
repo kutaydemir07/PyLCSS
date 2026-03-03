@@ -78,87 +78,44 @@ except ImportError:
 # Alias trace to tr if needed, or just use trace
 tr = trace
 
-def sensitivity_filter(sensitivities, centers, r_min, densities=None):
+def build_filter_matrix(centroids, r_min):
     """
-    Apply sensitivity filtering using a KD-Tree for O(N log N) performance.
-    
-    Uses the original Sigmund (2001) formulation:
-        ĉ_e = (1 / (ρ_e * Σ_i H_ei)) * Σ_i (H_ei * ρ_i * dc_i)
-    
-    where H_ei = max(0, r_min - dist(e, i)) is the filter weight.
-    This includes the ρ_i / ρ_e density weighting from Bendsøe & Sigmund (2003).
+    Build a sparse filter matrix H for O(1) vectorized filter applications.
+    H_ij = max(0, r_min - dist(i, j))
     """
-    # Build spatial tree (very fast)
-    tree = cKDTree(centers)
-    
-    # Query all neighbors within r_min for all points at once
-    # returns a sparse list of neighbors
-    neighbors_list = tree.query_ball_point(centers, r_min)
-    
-    filtered = np.zeros_like(sensitivities)
-    
-    for i, neighbors in enumerate(neighbors_list):
-        if not neighbors:
-            filtered[i] = sensitivities[i]
-            continue
-            
-        # Get indices and coordinates of neighbors
-        indices = np.array(neighbors)
-        neighbor_centers = centers[indices]
-        
-        # Calculate distances
-        dist = np.linalg.norm(neighbor_centers - centers[i], axis=1)
-        
-        # Linear weight decay: max(0, r_min - d)
-        weights = np.maximum(0, r_min - dist)
-        
-        # Avoid division by zero
-        weight_sum = np.sum(weights)
-        if weight_sum > 1e-10:
-            if densities is not None and densities[i] > 1e-10:
-                # Sigmund (2001) original: ĉ_e = Σ(H_ei * ρ_i * dc_i) / (ρ_e * Σ H_ei)
-                filtered[i] = np.sum(weights * densities[indices] * sensitivities[indices]) / (densities[i] * weight_sum)
-            else:
-                filtered[i] = np.sum(weights * sensitivities[indices]) / weight_sum
-        else:
-            filtered[i] = sensitivities[i]
-            
-    return filtered
-
-def density_filter_3d(densities, centroids, r_min):
-    """
-    Apply density filter using spatial tree for 3D elements.
-    Returns both filtered densities and the filter weights matrix for chain rule.
-    """
+    from scipy.sparse import coo_matrix
     tree = cKDTree(centroids)
     neighbors_list = tree.query_ball_point(centroids, r_min)
     
-    n_elem = len(densities)
-    filtered = np.zeros(n_elem)
-    
-    # Store weight sums for chain rule
-    weight_sums = np.zeros(n_elem)
-    
+    I, J, V = [], [], []
     for i, neighbors in enumerate(neighbors_list):
-        if not neighbors:
-            filtered[i] = densities[i]
-            weight_sums[i] = 1.0
-            continue
-        
-        indices = np.array(neighbors)
-        neighbor_centroids = centroids[indices]
-        dist = np.linalg.norm(neighbor_centroids - centroids[i], axis=1)
-        weights = np.maximum(0, r_min - dist)
-        weight_sum = np.sum(weights)
-        
-        if weight_sum > 1e-10:
-            filtered[i] = np.sum(weights * densities[indices]) / weight_sum
-            weight_sums[i] = weight_sum
-        else:
-            filtered[i] = densities[i]
-            weight_sums[i] = 1.0
+        for j in neighbors:
+            dist = np.linalg.norm(centroids[i] - centroids[j])
+            H_ij = max(0.0, r_min - dist)
+            if H_ij > 1e-10:
+                I.append(i)
+                J.append(j)
+                V.append(H_ij)
     
-    return filtered, weight_sums
+    H = coo_matrix((V, (I, J)), shape=(len(centroids), len(centroids))).tocsr()
+    H_sum = np.array(H.sum(axis=1)).flatten()
+    return H, H_sum
+
+def sensitivity_filter(sensitivities, H, H_sum, densities=None):
+    """
+    Apply sensitivity filtering using precomputed sparse matrix H.
+    """
+    if densities is not None:
+        safe_densities = np.maximum(densities, 1e-10)
+        return H.dot(safe_densities * sensitivities) / (safe_densities * H_sum)
+    else:
+        return H.dot(sensitivities) / H_sum
+
+def density_filter_3d(densities, H, H_sum):
+    """
+    Apply density filter using precomputed sparse matrix H.
+    """
+    return H.dot(densities) / H_sum
 
 
 def heaviside_projection(densities, beta, eta=0.5):
@@ -201,38 +158,11 @@ def heaviside_projection(densities, beta, eta=0.5):
     return projected, d_proj
 
 
-def density_filter_chainrule(dc, densities, filtered_densities, centroids, r_min, weight_sums):
+def density_filter_chainrule(dc, H, H_sum):
     """
-    Apply chain rule for density filter sensitivities.
-    dc_tilde_j = sum_i (H_ij / sum_k H_ik) * dc_i / rho_j
+    Apply chain rule for density filter sensitivities using precomputed sparse matrix H.
     """
-    tree = cKDTree(centroids)
-    neighbors_list = tree.query_ball_point(centroids, r_min)
-    
-    n_elem = len(densities)
-    dc_filtered = np.zeros(n_elem)
-    
-    for j, neighbors in enumerate(neighbors_list):
-        if not neighbors:
-            dc_filtered[j] = dc[j]
-            continue
-        
-        # For each element j, sum contributions from elements i that include j in their filter
-        total = 0.0
-        indices = np.array(neighbors)
-        for i in indices:
-            # Element i includes j in its filter neighborhood
-            dist = np.linalg.norm(centroids[i] - centroids[j])
-            H_ij = max(0, r_min - dist)
-            if weight_sums[i] > 1e-10 and densities[j] > 1e-10:
-                total += H_ij / weight_sums[i] * dc[i] * densities[j]
-        
-        if densities[j] > 1e-10:
-            dc_filtered[j] = total / densities[j]
-        else:
-            dc_filtered[j] = dc[j]
-    
-    return dc_filtered
+    return H.T.dot(dc / H_sum)
 
 
 def _assemble_traction_force(mesh, basis, geoms, vector, tolerance=1.5):
@@ -1914,8 +1844,8 @@ class TopologyOptimizationNode(CadQueryNode):
             
             # sigma(u) : epsilon(v)
             # 2*mu*E:D + lam*tr(E)*tr(D)
-            term1 = 2.0 * w['mu'] * ddot(E, D)
-            term2 = w['lam'] * tr(E) * tr(D)
+            term1 = 2.0 * mu_val * ddot(E, D)
+            term2 = lam_val * tr(E) * tr(D)
             
             # Add small epsilon to avoid singularity
             return (rho_min + w['rho'] ** penal) * (term1 + term2)
@@ -1936,10 +1866,9 @@ class TopologyOptimizationNode(CadQueryNode):
             u = w['u']
             E = epsilon(u)
 
-            # u_e^T k_e u_e = integral_e (sigma : epsilon) dV
             # = integral_e (2*mu*E:E + lam*tr(E)^2) dV
-            term1 = 2.0 * w['mu'] * ddot(E, E)
-            term2 = w['lam'] * tr(E) * tr(E)
+            term1 = 2.0 * mu_val * ddot(E, E)
+            term2 = lam_val * tr(E) * tr(E)
             return term1 + term2
 
         # Element Volumes for OC
@@ -1965,19 +1894,35 @@ class TopologyOptimizationNode(CadQueryNode):
         low = np.zeros(n)
         upp = np.zeros(n)
         
-        # Calculate filter weights once for density filter
-        density_filter_weights = None
-        if filter_type == 'density' and filter_radius > 0:
-            # We don't need to return anything here, just checking it runs? 
-            # Actually we need weights for chain rule.
-            # But the functions compute them on the fly. That's O(N log N) per iter.
-            # For max efficiency we should compute weights once.. but let's stick to the function interface for now.
-            pass
+        # Filter precomputation
+        H, H_sum = None, None
+        if filter_radius > 0 and filter_type in ['density', 'sensitivity']:
+            logger.info("TopOpt: Precomputing sparse filter matrix...")
+            H, H_sum = build_filter_matrix(centroids, filter_radius)
 
+        # NEW: Precompute Base Stiffness Matrix (Performance Optimization)
+        # We pre-evaluate the element stiffness matrices k_e for unscaled density.
+        logger.info("TopOpt: Precomputing base element stiffness matrices for fast assembly...")
+        
+        @BilinearForm
+        def stiffness_base(u, v, w):
+            E = sym_grad(u)
+            D = sym_grad(v)
+            term1 = 2.0 * mu_val * ddot(E, D)
+            term2 = lam_val * tr(E) * tr(D)
+            return term1 + term2
+
+        # _assemble returns (indices, data, shape, bshape)
+        # where data is flattened 'C' from (Nbfun, Nbfun, n_elem)
+        res_K = stiffness_base._assemble(basis)
+        I_indices, J_indices = res_K[0][0], res_K[0][1]
+        K_base_data = res_K[1]
+        Nbfun_sq = res_K[3][0] * res_K[3][1]
+        
         # Optimization Loop
         logger.info(f"TopOpt: Optimization loop started. Type: {update_scheme}, Filter: {filter_type}, Max iter: {max_iter}")
-        lam_interp = basis0.interpolate(lam_field)
-        mu_interp = basis0.interpolate(mu_field)
+        
+        from scipy.sparse import coo_matrix
         
         for loop in range(max_iter):
             # Track consecutive convergence (require 3 consecutive low-change iterations)
@@ -1988,9 +1933,8 @@ class TopologyOptimizationNode(CadQueryNode):
 
             # 1. Apply Density Filter (if enabled)
             densities_phys = densities
-            weight_sums = None
             if filter_type == 'density' and filter_radius > 0:
-                densities_phys, weight_sums = density_filter_3d(densities, centroids, filter_radius)
+                densities_phys = density_filter_3d(densities, H, H_sum)
             
             # 1b. Apply Heaviside projection (if enabled)
             projection_type = self.get_property('projection')
@@ -2020,9 +1964,15 @@ class TopologyOptimizationNode(CadQueryNode):
                 except Exception:
                     pass
             
-            # 2. FE Analysis (using physical densities)
-            rho_interp = basis0.interpolate(densities_phys)
-            K = stiffness.assemble(basis, rho=rho_interp, lam=lam_interp, mu=mu_interp)
+            # 2. FE Analysis (FAST PATH)
+            # Scale the precomputed element matrices
+            density_penalty = rho_min + densities_phys ** penal
+            # Tile penalty over the Nbfun^2 components (since n_elem is innermost dimension in C-flatten)
+            V_data = K_base_data * np.tile(density_penalty, Nbfun_sq)
+            
+            # Build fast sparse global stiffness matrix
+            K_coo = coo_matrix((V_data, (I_indices, J_indices)), shape=(basis.N, basis.N))
+            K = K_coo.tocsr()
             
             # Solve
             try:
@@ -2035,7 +1985,7 @@ class TopologyOptimizationNode(CadQueryNode):
             # 3. Sensitivity Analysis
             # NOTE: the Functional is named 'element_compliance' (not 'strain_energy') to
             # reflect that term1+term2 = u_e^T k_e u_e = 2*strain_energy_e = element compliance.
-            energies = element_compliance.elemental(basis, u=basis.interpolate(u), lam=lam_interp, mu=mu_interp)
+            energies = element_compliance.elemental(basis, u=basis.interpolate(u))
             
             # dc/drho = -p * rho^(p-1) * energy  (elemental() already integrates over vol)
             dc = -penal * (densities_phys ** (penal - 1)) * energies
@@ -2049,10 +1999,10 @@ class TopologyOptimizationNode(CadQueryNode):
             # Apply Filter to Sensitivities
             if filter_type == 'density' and filter_radius > 0:
                 # Chain rule for density filter
-                dc = density_filter_chainrule(dc, densities, densities_phys, centroids, filter_radius, weight_sums)
+                dc = density_filter_chainrule(dc, H, H_sum)
             elif filter_type == 'sensitivity' and filter_radius > 0:
                 # Heuristic sensitivity filter
-                dc = sensitivity_filter(dc, centroids, filter_radius, densities_phys)
+                dc = sensitivity_filter(dc, H, H_sum, densities=densities_phys)
 
             # 4. Update Design Variables
             if update_scheme == 'MMA':
@@ -2075,7 +2025,7 @@ class TopologyOptimizationNode(CadQueryNode):
                 dvol_base = volumes * d_proj if projection_type == 'Heaviside' else volumes
                 dvol = dvol_base
                 if filter_type == 'density' and filter_radius > 0:
-                    dvol = density_filter_chainrule(dvol_base, densities, densities_phys, centroids, filter_radius, weight_sums)
+                    dvol = density_filter_chainrule(dvol_base, H, H_sum)
                 # Adaptive move limit: wider in early iterations for faster convergence
                 ramp_iters = 20
                 move_factor = 1.0 + max(0.0, 1.5 * (1.0 - loop / ramp_iters))
@@ -2162,9 +2112,18 @@ class TopologyOptimizationNode(CadQueryNode):
         # Calculate final stress for visualization if requested
         stress = None
         try:
-            # Re-solve with final density
-            rho_interp = basis0.interpolate(densities)
-            K = stiffness.assemble(basis, rho=rho_interp, lam=lam_interp, mu=mu_interp)
+            # Re-solve with final density (FAST PATH)
+            densities_phys = densities
+            if filter_type == 'density' and filter_radius > 0:
+                densities_phys = density_filter_3d(densities, H, H_sum)
+            if projection_type == 'Heaviside':
+                densities_phys, _ = heaviside_projection(densities_phys, beta_schedule, eta)
+
+            density_penalty = rho_min + densities_phys ** penal
+            V_data = K_base_data * np.tile(density_penalty, Nbfun_sq)
+            K_coo = coo_matrix((V_data, (I_indices, J_indices)), shape=(basis.N, basis.N))
+            K = K_coo.tocsr()
+            
             with suppress_output():
                 u = solve(*condense(K, f, D=fixed_dofs))
             
@@ -2176,18 +2135,16 @@ class TopologyOptimizationNode(CadQueryNode):
                 def epsilon(w):
                     return sym_grad(w)
                 E = epsilon(w['u'])
-                mu = w['mu']
-                lam = w['lam']
                 E11, E12, E13 = E[0,0], E[0,1], E[0,2]
                 E21, E22, E23 = E[1,0], E[1,1], E[1,2]
                 E31, E32, E33 = E[2,0], E[2,1], E[2,2]
                 trE = E11 + E22 + E33
-                S11 = 2*mu*E11 + lam*trE
-                S22 = 2*mu*E22 + lam*trE
-                S33 = 2*mu*E33 + lam*trE
-                S12 = 2*mu*E12
-                S23 = 2*mu*E23
-                S13 = 2*mu*E13
+                S11 = 2*mu_val*E11 + lam_val*trE
+                S22 = 2*mu_val*E22 + lam_val*trE
+                S33 = 2*mu_val*E33 + lam_val*trE
+                S12 = 2*mu_val*E12
+                S23 = 2*mu_val*E23
+                S13 = 2*mu_val*E13
                 vm = np.sqrt(0.5 * ((S11-S22)**2 + (S22-S33)**2 + (S33-S11)**2 + 6*(S12**2 + S23**2 + S13**2)))
                 return vm * v
 
@@ -2196,7 +2153,7 @@ class TopologyOptimizationNode(CadQueryNode):
                 return u * v
             
             M = mass.assemble(basis_p1)
-            b = von_mises.assemble(basis_p1, u=basis.interpolate(u), mu=basis_p1.zeros()+mu_val, lam=basis_p1.zeros()+lam_val)
+            b = von_mises.assemble(basis_p1, u=basis.interpolate(u))
             with suppress_output():
                 stress = solve(M, b)
             stress = np.abs(stress)
@@ -2212,7 +2169,7 @@ class TopologyOptimizationNode(CadQueryNode):
             # Recompute final physical densities
             densities_final = densities
             if filter_type == 'density' and filter_radius > 0:
-                densities_final, _ = density_filter_3d(densities, centroids, filter_radius)
+                densities_final = density_filter_3d(densities, H, H_sum)
             if projection_type == 'Heaviside':
                 densities_final, _ = heaviside_projection(densities_final, beta_schedule, eta)
             

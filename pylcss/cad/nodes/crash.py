@@ -783,23 +783,26 @@ def _update_boundary_nodes(mesh, failed_elem):
     # The 4 triangular faces of a tet (local node combinations)
     FACE_IDX = [(0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)]
 
-    face_count: dict = {}
+    if len(live_conn) == 0:
+        return np.array([], dtype=int)
+
+    all_faces = []
     for fi, fj, fk in FACE_IDX:
-        faces = np.sort(
-            np.stack([live_conn[:, fi],
-                      live_conn[:, fj],
-                      live_conn[:, fk]], axis=1), axis=1
-        )                                         # (N_live, 3) sorted triplets
-        for row in faces:
-            key = (row[0], row[1], row[2])
-            face_count[key] = face_count.get(key, 0) + 1
+        faces = np.stack([live_conn[:, fi],
+                          live_conn[:, fj],
+                          live_conn[:, fk]], axis=1)
+        all_faces.append(np.sort(faces, axis=1))
 
-    surf_nodes_set = set()
-    for (a, b, c), cnt in face_count.items():
-        if cnt == 1:              # exposed face (only one live element owns it)
-            surf_nodes_set.update([a, b, c])
+    # Fast uncompiled C-backend hashing for unique faces
+    all_faces = np.vstack(all_faces)  # (4 * N_live, 3)
+    unique_faces, counts = np.unique(all_faces, axis=0, return_counts=True)
+    exposed_faces = unique_faces[counts == 1]
 
-    return np.array(sorted(surf_nodes_set), dtype=int)
+    if len(exposed_faces) == 0:
+        return np.array([], dtype=int)
+
+    surf_nodes_set = np.unique(exposed_faces)
+    return surf_nodes_set.astype(int)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
