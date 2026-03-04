@@ -114,6 +114,10 @@ class CQ3DViewer(QtWidgets.QWidget):
         self._face_polydata_list = []        # per-face vtkPolyData for highlighting
         self._pick_callback_id = None
 
+        # --- BC Overlay State ---
+        self._bc_overlay_actors = []     # dedicated list for load/support overlay actors
+        self._cached_bc_data = None      # (constraint_faces, load_faces, load_vectors) – replayed after sim render
+
         # --- Crash Playback State ---
         self._crash_frames      = []         # list of frame dicts
         self._crash_base_data   = None       # original crash result (mesh, viz_mode, etc.)
@@ -627,6 +631,13 @@ class CQ3DViewer(QtWidgets.QWidget):
         """Clear the viewer and release memory."""
         self._clear_highlight_actors()
 
+        # Clear BC overlay actors
+        for actor in list(self._bc_overlay_actors):
+            self.renderer.RemoveActor(actor)
+        self._bc_overlay_actors = []
+        # Reset cached BC data so overlays don't auto-replay on wrong shapes
+        self._cached_bc_data = None
+
         # Clear legacy single actor if present
         if self.current_actor:
             self.renderer.RemoveActor(self.current_actor)
@@ -634,11 +645,13 @@ class CQ3DViewer(QtWidgets.QWidget):
                 self.current_actor.GetMapper().RemoveAllInputConnections(0)
             self.current_actor = None
 
-        # Clear all actors in the list
-        for actor in self.actors:
-            self.renderer.RemoveActor(actor)
-            if actor.GetMapper():
-                actor.GetMapper().RemoveAllInputConnections(0)
+        # Clear all actors in the list (excluding bc_overlay which were
+        # already removed above to avoid double-removal)
+        for actor in list(self.actors):
+            if not getattr(actor, '_bc_overlay', False):
+                self.renderer.RemoveActor(actor)
+                if actor.GetMapper():
+                    actor.GetMapper().RemoveAllInputConnections(0)
         self.actors = []
 
         self.scalar_bar.VisibilityOff()
@@ -1028,19 +1041,40 @@ class CQ3DViewer(QtWidgets.QWidget):
     # BC OVERLAYS
     # ──────────────────────────────────────────────────────────────────────────
 
+    def set_bc_overlay_data(self, constraint_faces=None, load_faces=None, load_vectors=None):
+        """
+        Cache BC overlay data so it can be re-applied after render_simulation().
+        Pass None to all arguments to clear the cached data.
+        """
+        has_data = bool(
+            (constraint_faces and any(f is not None for f in constraint_faces)) or
+            (load_faces and any(f is not None for f in load_faces)) or
+            (load_vectors and len(load_vectors) > 0)
+        )
+        if has_data:
+            self._cached_bc_data = (
+                list(constraint_faces) if constraint_faces else [],
+                list(load_faces) if load_faces else [],
+                list(load_vectors) if load_vectors else [],
+            )
+        else:
+            self._cached_bc_data = None
+
     def render_bc_overlays(self, constraint_faces=None, load_faces=None, load_vectors=None):
         """
         Highlight boundary condition faces in the viewer:
           - constraint_faces: list of OCC face objects → red highlight
           - load_faces: list of OCC face objects → yellow highlight
           - load_vectors: list of (centroid [x,y,z], vector [fx,fy,fz]) → force arrows
-        Called after FEA setup but before solve, so BCs are always visible.
+        Always replaces previously drawn BC overlays (no stale arrows/highlights).
         """
-        # Remove any previous BC overlay actors (leave main shape and highlights)
-        for actor in list(self.actors):
-            if getattr(actor, '_bc_overlay', False):
-                self.renderer.RemoveActor(actor)
+        # ── Remove all previous BC overlay actors ──────────────────────────────
+        for actor in list(self._bc_overlay_actors):
+            self.renderer.RemoveActor(actor)
+            # Also pull out of the generic actors list if it ended up there
+            if actor in self.actors:
                 self.actors.remove(actor)
+        self._bc_overlay_actors = []
 
         def _face_to_polydata(occ_face):
             try:
@@ -1083,7 +1117,36 @@ class CQ3DViewer(QtWidgets.QWidget):
             actor.GetProperty().SetEdgeColor(*color)
             actor._bc_overlay = True
             self.renderer.AddActor(actor)
-            self.actors.append(actor)
+            self._bc_overlay_actors.append(actor)
+
+        def _add_bc_arrow(start, vector, color):
+            """Arrow tagged as a BC overlay so it is cleaned up with the rest."""
+            import numpy as _np
+            length = _np.linalg.norm(vector)
+            if length < 1e-9:
+                return
+            arrow_source = vtk.vtkArrowSource()
+            visual_length = 5.0
+            norm_vec = vector / length
+            transform = vtk.vtkTransform()
+            transform.Translate(start[0], start[1], start[2])
+            default_dir = _np.array([1.0, 0.0, 0.0])
+            axis = _np.cross(default_dir, norm_vec)
+            angle_deg = _np.degrees(_np.arccos(_np.clip(_np.dot(default_dir, norm_vec), -1.0, 1.0)))
+            if _np.linalg.norm(axis) > 1e-6:
+                transform.RotateWXYZ(angle_deg, axis)
+            elif _np.dot(default_dir, norm_vec) < 0:
+                transform.RotateWXYZ(180, [0, 1, 0])
+            transform.Scale(visual_length, visual_length, visual_length)
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputConnection(arrow_source.GetOutputPort())
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            actor.SetUserTransform(transform)
+            actor.GetProperty().SetColor(color)
+            actor._bc_overlay = True
+            self.renderer.AddActor(actor)
+            self._bc_overlay_actors.append(actor)
 
         if constraint_faces:
             for face in constraint_faces:
@@ -1097,7 +1160,7 @@ class CQ3DViewer(QtWidgets.QWidget):
 
         if load_vectors:
             for centroid, vec in load_vectors:
-                self._add_arrow(centroid, vec, color=(1.0, 0.85, 0.0), scale=1.0)
+                _add_bc_arrow(centroid, vec, color=(1.0, 0.85, 0.0))
 
         self.vtkWidget.GetRenderWindow().Render()
 
@@ -1435,6 +1498,18 @@ class CQ3DViewer(QtWidgets.QWidget):
             if 'debug_constraints' in data and data['debug_constraints']:
                 for const in data['debug_constraints']:
                     self._add_cube_marker(const['pos'], color=(1, 0, 0), size=2.0)
+
+        # 5. Re-apply cached BC face overlays on top of the simulation result
+        #    so they remain visible after FEA/TopOpt solve.
+        #    (Skip for TopOpt iteration previews to keep frame rate high.)
+        skip_bc_replay = isinstance(data, dict) and data.get('type') in ('topopt', 'crash_frame')
+        if not skip_bc_replay and self._cached_bc_data is not None:
+            c_faces, l_faces, l_vecs = self._cached_bc_data
+            self.render_bc_overlays(
+                constraint_faces=c_faces or None,
+                load_faces=l_faces or None,
+                load_vectors=l_vecs or None,
+            )
 
         # Reset camera only when explicitly requested (first crash frame) or for
         # non-animation renders.  Skipping ResetCamera on subsequent animation

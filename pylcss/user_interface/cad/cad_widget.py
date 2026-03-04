@@ -1048,6 +1048,40 @@ class PropertiesPanel(QtWidgets.QWidget):
             grp2.setLayout(lay2)
             self.props_layout.addWidget(grp2)
 
+        # ── Preview in 3D button (Constraint + Load) ──────────────────────────
+        if node_class in ('ConstraintNode', 'LoadNode'):
+            btn_preview = QtWidgets.QPushButton("👁  Preview in 3D")
+            btn_preview.setToolTip(
+                "Highlight this load / support face in the 3D viewer"
+            )
+            btn_preview.setStyleSheet(
+                "QPushButton {"
+                "  background: #1e5aab; color: white; border-radius: 4px;"
+                "  padding: 5px 10px; font-weight: bold; font-size: 12px;"
+                "  margin-top: 6px;"
+                "}"
+                "QPushButton:hover { background: #2673cc; }"
+            )
+            # Use a local default so the closure captures the right node.
+            def _on_preview(checked=False, _node=node):
+                app = self._get_main_app()
+                if app:
+                    # Render the upstream shape first, then overlay BCs.
+                    shape = app._get_upstream_shape(_node)
+                    if shape is None:
+                        # Maybe the node itself has a cached shape in a parent
+                        shape = getattr(_node, '_last_result', None)
+                    if shape and hasattr(shape, 'tessellate'):
+                        app.viewer.render_shape(shape)
+                    elif shape and isinstance(shape, dict) and 'mesh' in shape:
+                        app.viewer.render_simulation(shape)
+                    try:
+                        app._show_bc_for_node(_node)
+                    except Exception:
+                        pass
+            btn_preview.clicked.connect(_on_preview)
+            self.props_layout.addWidget(btn_preview)
+
         elif node_class == 'PressureLoadNode':
             grp = QtWidgets.QGroupBox("Pressure Load")
             lay = QtWidgets.QFormLayout()
@@ -1402,6 +1436,13 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         self._graph_widget = graph_widget
         center_splitter.addWidget(graph_widget)
         center_splitter.setSizes([600, 400])
+        
+        # Setup context menu for the graph
+        try:
+            menu = self.graph.get_context_menu('graph')
+            menu.add_command('Fit to View', self._fit_all, 'F')
+        except Exception:
+            pass
 
         # Right panel
         right_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
@@ -1463,8 +1504,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         self.toolbar.addAction("▶ Run", self._execute_graph)
         self.toolbar.addAction("✓ Validate", self._validate_model)
         self.toolbar.addAction("📊 Report", self._generate_report)
+        self.toolbar.addSeparator()
+        self.toolbar.addAction("Fit to View", self._fit_all)
         
-
         self.toolbar.addSeparator()
         self.auto_update_cb = QtWidgets.QCheckBox("Auto-Update")
         self.auto_update_cb.setChecked(True)  # Default ON for CAD rendering
@@ -1565,7 +1607,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                     self.viewer.render_sketch(geometry)
                 else:
                     self.viewer.render_shape(geometry)
-                    
+
                 # Re-apply face highlights if it's the interactive picker
                 if node.__class__.__name__ == 'InteractiveSelectFaceNode':
                     raw = node.get_property('picked_face_indices') or ''
@@ -1573,6 +1615,12 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                     if idx_list:
                         if hasattr(self.viewer, 'highlight_faces'):
                             self.viewer.highlight_faces(idx_list)
+
+                # Show BC overlays for this node (load/support highlights + arrows)
+                try:
+                    self._show_bc_for_node(node)
+                except Exception:
+                    pass
             else:
                 # No cached result yet — execute the shape pipeline automatically
                 # (skip_simulation=True means heavy FEA/TopOpt nodes are skipped,
@@ -1602,6 +1650,134 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         except Exception:
             pass
         return None
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # BC OVERLAY HELPERS
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _get_face_centroid(occ_face):
+        """Compute centroid of an OCC face from its bounding-box mid-point."""
+        try:
+            bb = occ_face.BoundingBox()
+            return [
+                (bb.xmin + bb.xmax) / 2.0,
+                (bb.ymin + bb.ymax) / 2.0,
+                (bb.zmin + bb.zmax) / 2.0,
+            ]
+        except Exception:
+            return [0.0, 0.0, 0.0]
+
+    def _collect_bc_for_node(self, anchor_node):
+        """
+        Walk the entire graph and collect load/constraint BC data that feeds
+        into (or is associated with) *anchor_node*.
+
+        Returns:
+            (constraint_faces, load_faces, load_vectors)
+            Each is a list (possibly empty). load_vectors is a list of
+            ([cx,cy,cz], [fx,fy,fz]) tuples.
+        """
+        constraint_faces = []
+        load_faces = []
+        load_vectors = []
+
+        anchor_cls = anchor_node.__class__.__name__
+
+        def _get_faces_for_bc_node(bc_node):
+            """Try two sources: (1) _last_result geometries, (2) target_face input port."""
+            faces = []
+            # Source 1: cached result of BC node itself (populated after full run)
+            try:
+                result = getattr(bc_node, '_last_result', None)
+                if isinstance(result, dict):
+                    geoms = result.get('geometries') or []
+                    faces.extend([g for g in geoms if g is not None])
+            except Exception:
+                pass
+
+            # Source 2: walk target_face input port to SelectFaceNode result
+            if not faces:
+                try:
+                    for port in bc_node.input_ports():
+                        try:
+                            pname = port.name()
+                        except Exception:
+                            pname = ''
+                        if pname != 'target_face':
+                            continue
+                        for conn_port in port.connected_ports():
+                            upstream = conn_port.node()
+                            upstream_result = getattr(upstream, '_last_result', None)
+                            if isinstance(upstream_result, dict):
+                                sel_faces = upstream_result.get('faces') or []
+                                faces.extend([f for f in sel_faces if f is not None])
+                                if not faces and upstream_result.get('face') is not None:
+                                    faces.append(upstream_result['face'])
+                except Exception:
+                    pass
+
+            return faces
+
+        for node in self.graph.all_nodes():
+            cls = node.__class__.__name__
+
+            # ---- ConstraintNode ----
+            if cls == 'ConstraintNode':
+                if anchor_cls == 'ConstraintNode' and node is not anchor_node:
+                    continue
+                if anchor_cls == 'LoadNode':
+                    continue
+                faces = _get_faces_for_bc_node(node)
+                constraint_faces.extend(faces)
+
+            # ---- LoadNode ----
+            elif cls == 'LoadNode':
+                if anchor_cls == 'LoadNode' and node is not anchor_node:
+                    continue
+                if anchor_cls == 'ConstraintNode':
+                    continue
+                faces = _get_faces_for_bc_node(node)
+                try:
+                    fx = float(node.get_property('force_x') or 0.0)
+                    fy = float(node.get_property('force_y') or 0.0)
+                    fz = float(node.get_property('force_z') or 0.0)
+                    vec = [fx, fy, fz]
+                    for g in faces:
+                        load_faces.append(g)
+                        centroid = self._get_face_centroid(g)
+                        load_vectors.append((centroid, vec))
+                except Exception:
+                    pass
+
+        return constraint_faces, load_faces, load_vectors
+
+    def _show_bc_for_node(self, node):
+        """
+        Collect all BC data visible from *node* and push it to both the viewer
+        cache and render_bc_overlays().  Safe to call after render_shape() or
+        render_simulation() — overlays are layered on top.
+        """
+        try:
+            c_faces, l_faces, l_vecs = self._collect_bc_for_node(node)
+            has_any = bool(c_faces or l_faces or l_vecs)
+            if has_any:
+                self.viewer.set_bc_overlay_data(
+                    constraint_faces=c_faces or None,
+                    load_faces=l_faces or None,
+                    load_vectors=l_vecs or None,
+                )
+                self.viewer.render_bc_overlays(
+                    constraint_faces=c_faces or None,
+                    load_faces=l_faces or None,
+                    load_vectors=l_vecs or None,
+                )
+            else:
+                # Nothing to show — clear any stale overlays
+                self.viewer.set_bc_overlay_data()
+                self.viewer.render_bc_overlays()
+        except Exception:
+            pass
 
     def _on_node_double_clicked(self, node):
         """
@@ -1746,6 +1922,13 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                         self.viewer.render_sketch(geom)
                     else:
                         self.viewer.render_shape(geom)
+
+                    # Re-collect and cache BC overlays so they show on the
+                    # freshly rendered shape / simulation result.
+                    try:
+                        self._show_bc_for_node(target_node)
+                    except Exception:
+                        pass
                 else:
                     self.viewer.clear()
 
@@ -1926,6 +2109,11 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             except Exception:
                 pass
             self.graph.clear_session()
+            self._last_rendered_node = None
+            try:
+                self.viewer.clear()
+            except Exception:
+                pass
             self.timeline.add_event("Cleared graph")
     
     def _fit_all(self):
@@ -2170,6 +2358,11 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         """Create a new project."""
         self.graph.clear_session()
         self.current_file = None
+        self._last_rendered_node = None
+        try:
+            self.viewer.clear()
+        except Exception:
+            pass
         self.timeline.add_event("New project created")
         self.statusBar().showMessage("New project")
     
@@ -2187,7 +2380,21 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             try:
                 # Load and deserialize using NodeGraphQt's built-in session manager
                 # load_session handles clearing the session and reading the file
+
+                # Clear viewer BEFORE loading so old geometry disappears immediately
+                self._last_rendered_node = None
+                try:
+                    self.viewer.clear()
+                except Exception:
+                    pass
+
                 self.graph.load_session(fname)
+                
+                # Automatically fit all nodes in view after loading
+                try:
+                    self._fit_all()
+                except Exception:
+                    pass
                 
                 # Done loading - clear flag
                 self._is_loading = False
