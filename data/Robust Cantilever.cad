@@ -318,6 +318,7 @@
         "smoothing_iterations": 3,
         "filter_type": "density",
         "update_scheme": "MMA",
+        "element_type": "Fast (Linear P1)",
         "projection": "Heaviside",
         "heaviside_beta": 4.0,
         "heaviside_eta": 0.5,

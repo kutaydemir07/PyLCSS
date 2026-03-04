@@ -1021,7 +1021,15 @@ class PressureLoadNode(CadQueryNode):
 
         try:
             # Extract the face geometry
-            face_objs = target_wp.vals()
+            if isinstance(target_wp, dict):
+                # Handle SelectFaceNode output dict {'workplane', 'face', 'faces'}
+                face_objs = target_wp.get('faces', [])
+                if not face_objs and 'face' in target_wp:
+                    face_objs = [target_wp['face']]
+            else:
+                # Handle direct Workplane input
+                face_objs = target_wp.vals() if hasattr(target_wp, 'vals') else []
+
             if not face_objs:
                 self.set_error("No faces found in target face input")
                 return None
@@ -1471,7 +1479,7 @@ class TopologyOptimizationNode(CadQueryNode):
         self.create_property('filter_radius', 3.0, widget_type='float')  # Should be 2-3x element size
         self.create_property('density_cutoff', 0.3, widget_type='float')
         self.create_property('shape_recovery', True, widget_type='bool')
-        self.create_property('visualization', 'Density', widget_type='combo', items=['Density', 'Von Mises Stress'])
+        self.create_property('visualization', 'Density', widget_type='combo', items=['Density', 'Recovered Shape', 'Von Mises Stress'])
         # NEW: Symmetry properties
         self.create_property('symmetry_x', None, widget_type='float')  # None means no symmetry
         self.create_property('symmetry_y', None, widget_type='float')

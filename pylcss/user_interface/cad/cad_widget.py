@@ -269,7 +269,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         layout_v = QtWidgets.QFormLayout()
         
         combo_vis = QtWidgets.QComboBox()
-        combo_vis.addItems(['Density', 'Von Mises Stress'])
+        combo_vis.addItems(['Density', 'Recovered Shape', 'Von Mises Stress'])
         combo_vis.setCurrentText(str(node.get_property('visualization')))
         combo_vis.currentTextChanged.connect(lambda v: self.update_property('visualization', v))
         layout_v.addRow("Mode:", combo_vis)
@@ -329,6 +329,20 @@ class PropertiesPanel(QtWidgets.QWidget):
         combo_scheme.setCurrentText(str(node.get_property('update_scheme') or 'MMA'))
         combo_scheme.currentTextChanged.connect(lambda v: self.update_property('update_scheme', v))
         layout_adv.addRow("Update Scheme:", combo_scheme)
+        
+        # Element Type
+        combo_elem = QtWidgets.QComboBox()
+        combo_elem.addItems(['Fast (Linear P1)', 'Accurate (Quadratic P2)'])
+        combo_elem.setCurrentText(str(node.get_property('element_type') or 'Fast (Linear P1)'))
+        combo_elem.currentTextChanged.connect(lambda v: self.update_property('element_type', v))
+        layout_adv.addRow("Element Type:", combo_elem)
+
+        # Projection
+        combo_proj = QtWidgets.QComboBox()
+        combo_proj.addItems(['None', 'Heaviside'])
+        combo_proj.setCurrentText(str(node.get_property('projection') or 'Heaviside'))
+        combo_proj.currentTextChanged.connect(lambda v: self.update_property('projection', v))
+        layout_adv.addRow("Projection:", combo_proj)
         
         # Filter Type
         combo_filter = QtWidgets.QComboBox()
@@ -396,7 +410,8 @@ class PropertiesPanel(QtWidgets.QWidget):
                 for j in range(3):
                     stl_obj.vectors[i][j] = verts[f[j]]
             stl_obj.save(path)
-            self.statusBar().showMessage(f"\u2713 Exported {len(faces)} triangles to {path}")
+            if hasattr(self.window(), 'statusBar') and self.window().statusBar():
+                self.window().statusBar().showMessage(f"\u2713 Exported {len(faces)} triangles to {path}")
         except ImportError:
             # Fallback: raw binary STL without numpy-stl
             self._write_binary_stl(path, result['recovered_shape'])
@@ -423,7 +438,8 @@ class PropertiesPanel(QtWidgets.QWidget):
                     f.write(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}\n")
                 for face in faces:
                     f.write(f"f {face[0]+1} {face[1]+1} {face[2]+1}\n")
-            self.statusBar().showMessage(f"\u2713 Exported {len(faces)} faces to {path}")
+            if hasattr(self.window(), 'statusBar') and self.window().statusBar():
+                self.window().statusBar().showMessage(f"\u2713 Exported {len(faces)} faces to {path}")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Export Error", str(e))
 
@@ -450,7 +466,8 @@ class PropertiesPanel(QtWidgets.QWidget):
                 f.write(struct.pack('<3f', *v1))
                 f.write(struct.pack('<3f', *v2))
                 f.write(struct.pack('<H', 0))
-        self.statusBar().showMessage(f"\u2713 Exported {len(faces)} triangles to {path}")
+        if hasattr(self.window(), 'statusBar') and self.window().statusBar():
+            self.window().statusBar().showMessage(f"\u2713 Exported {len(faces)} triangles to {path}")
 
     def _build_primitive_ui(self, node):
         """UI for Primitive nodes (Box, Cylinder, Sphere, etc.)."""
@@ -1579,8 +1596,34 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
     def _on_node_selected(self, node):
         """Handle node selection."""
         if node:
+            # --- PATCH: force-update graph model combo items for TopOpt ---
+            # NodeGraphQt bakes combo items into the graph model at node-creation
+            # time. If the .cad file was saved with an older items list, the new
+            # options won't appear.  We patch ALL TopOpt combos here before
+            # calling display_node so stale .cad files always show current items.
+            try:
+                if node.type_ == 'com.cad.sim.topopt':
+                    graph_model = node.model._graph_model
+                    if graph_model is not None:
+                        common = graph_model.get_node_common_properties(node.type_)
+                        if common:
+                            _topopt_combos = {
+                                'visualization': ['Density', 'Recovered Shape', 'Von Mises Stress'],
+                                'element_type':  ['Fast (Linear P1)', 'Accurate (Quadratic P2)'],
+                                'filter_type':   ['sensitivity', 'density'],
+                                'update_scheme': ['MMA', 'OC'],
+                                'projection':    ['None', 'Heaviside'],
+                            }
+                            for prop, items in _topopt_combos.items():
+                                if prop in common:
+                                    common[prop]['items'] = items
+            except Exception:
+                pass
+            # ---------------------------------------------------------------
+
             self.properties.display_node(node)
             self.statusBar().showMessage(f"Selected: {node.name}")
+
 
             # Only render if we have a CACHED result.
             # Do NOT call execute_graph() here to avoid freezing on selection.
@@ -2439,7 +2482,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             
             # OPTIMIZATION: Check if this is a visualization-only property change
             # These properties don't need a re-run, just a re-render
-            visualization_only_props = ['visualization', 'density_cutoff']
+            visualization_only_props = ['visualization', 'density_cutoff', 'element_type', 'projection']
             
             if prop_name in visualization_only_props:
                 # Check if the node has cached results (_last_result)
@@ -2454,19 +2497,21 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
                     # Just re-render with existing results instead of re-executing
                     try:
-                        if isinstance(cached_result, dict) and ('mesh' in cached_result or 'displacement' in cached_result):
+                        if isinstance(cached_result, dict) and ('mesh' in cached_result or 'displacement' in cached_result or 'recovered_shape' in cached_result):
                             self.viewer.render_simulation(cached_result)
                         elif hasattr(cached_result, 'p') and hasattr(cached_result, 't'):
                             # Direct Mesh object from skfem
                             self.viewer.render_simulation(cached_result)
                         else:
                             self.viewer.render_shape(cached_result)
-                        self.statusBar().showMessage(f"✓ Updated {prop_name} display")
+                        if hasattr(self.window(), 'statusBar') and self.window().statusBar():
+                            self.window().statusBar().showMessage(f"✓ Updated {prop_name} display")
                         return  # Skip full graph execution
-                    except Exception:
-                        pass
-                        # Fall through to full execution if re-render fails
-            
+                    except Exception as e:
+                        print(f"Warning: Render failed during viz update for {prop_name}: {e}")
+                        
+                # Unconditionally return for visualization properties to prevent full recompute
+                return
             # Auto-execute if enabled (for non-visualization properties)
             if hasattr(self, 'auto_update_cb') and self.auto_update_cb.isChecked():
                 self._execute_graph()

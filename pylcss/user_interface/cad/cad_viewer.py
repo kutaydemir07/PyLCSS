@@ -7,6 +7,277 @@ from PySide6 import QtWidgets, QtCore, QtGui
 from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
 
+class NavCubeWidget(QtWidgets.QWidget):
+    """Clickable orientation cube overlay.
+    Mirrors the scene camera orientation; click any face, edge or corner
+    to jump to that standard view.
+    """
+
+    view_requested = QtCore.Signal(object, object)  # (pos_tuple, up_tuple)
+
+    SIZE = 140  # widget pixel size
+
+    # Unit cube vertices  (+X=Right, -Y=Front, +Z=Top, matching viewer axes)
+    _V = np.array([
+        [-1, -1, -1],  # 0  FLB
+        [ 1, -1, -1],  # 1  FRB
+        [ 1,  1, -1],  # 2  BRB
+        [-1,  1, -1],  # 3  BLB
+        [-1, -1,  1],  # 4  FLT
+        [ 1, -1,  1],  # 5  FRT
+        [ 1,  1,  1],  # 6  BRT
+        [-1,  1,  1],  # 7  BLT
+    ], dtype=float)
+
+    # faces  (vertex_indices, label, cam_pos_norm, cam_up)
+    _FACES = [
+        ((4, 5, 6, 7), "TOP",   ( 0,  0,  1), (0,  1,  0)),
+        ((3, 2, 1, 0), "BOT",   ( 0,  0, -1), (0,  1,  0)),
+        ((0, 1, 5, 4), "FRONT", ( 0, -1,  0), (0,  0,  1)),
+        ((2, 3, 7, 6), "BACK",  ( 0,  1,  0), (0,  0,  1)),
+        ((1, 2, 6, 5), "RIGHT", ( 1,  0,  0), (0,  0,  1)),
+        ((3, 0, 4, 7), "LEFT",  (-1,  0,  0), (0,  0,  1)),
+    ]
+    _FACE_N = np.array([
+        ( 0,  0,  1), ( 0,  0, -1), ( 0, -1,  0),
+        ( 0,  1,  0), ( 1,  0,  0), (-1,  0,  0),
+    ], dtype=float)
+
+    # edges  (v0, v1, cam_pos_norm, cam_up)
+    _EDGES = [
+        (4, 5, ( 0, -1,  1), (0,  0,  1)),   # FT
+        (5, 6, ( 1,  0,  1), (0,  0,  1)),   # RT
+        (6, 7, ( 0,  1,  1), (0,  0,  1)),   # BT
+        (7, 4, (-1,  0,  1), (0,  0,  1)),   # LT
+        (0, 1, ( 0, -1, -1), (0,  0, -1)),   # FB
+        (1, 2, ( 1,  0, -1), (0,  0, -1)),   # RB
+        (2, 3, ( 0,  1, -1), (0,  0, -1)),   # BB
+        (3, 0, (-1,  0, -1), (0,  0, -1)),   # LB
+        (4, 0, (-1, -1,  0), (0,  0,  1)),   # FL
+        (5, 1, ( 1, -1,  0), (0,  0,  1)),   # FR
+        (6, 2, ( 1,  1,  0), (0,  0,  1)),   # BR
+        (7, 3, (-1,  1,  0), (0,  0,  1)),   # BL
+    ]
+
+    # corners  (vertex_idx, cam_pos_norm, cam_up)
+    _CORNERS = [
+        (0, (-1, -1, -1), (0,  0, -1)),  # FLB
+        (1, ( 1, -1, -1), (0,  0, -1)),  # FRB
+        (2, ( 1,  1, -1), (0,  0, -1)),  # BRB
+        (3, (-1,  1, -1), (0,  0, -1)),  # BLB
+        (4, (-1, -1,  1), (0,  0,  1)),  # FLT
+        (5, ( 1, -1,  1), (0,  0,  1)),  # FRT
+        (6, ( 1,  1,  1), (0,  0,  1)),  # BRT
+        (7, (-1,  1,  1), (0,  0,  1)),  # BLT
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self.setMouseTracking(True)
+        self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
+        self.setAutoFillBackground(False)
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self._rot = np.eye(3)
+        self._hovered = None
+
+    # ── public ────────────────────────────────────────────────────────────
+
+    def update_rotation(self, camera):
+        """Extract VTK camera orientation and repaint the cube."""
+        pos   = np.array(camera.GetPosition(),   dtype=float)
+        focal = np.array(camera.GetFocalPoint(), dtype=float)
+        up    = np.array(camera.GetViewUp(),     dtype=float)
+        fwd = focal - pos
+        n = np.linalg.norm(fwd)
+        if n < 1e-10:
+            return
+        fwd /= n
+        right = np.cross(fwd, up)
+        rn = np.linalg.norm(right)
+        if rn < 1e-10:
+            return
+        right /= rn
+        up = np.cross(right, fwd)
+        self._rot = np.array([right, up, -fwd])   # rows = camera X/Y/Z in world
+        self.update()
+
+    # ── geometry helpers ──────────────────────────────────────────────────
+
+    def _project(self):
+        """Project 8 vertices. Returns (8,3): cols = screen_x, screen_y, depth."""
+        cx = cy = self.SIZE / 2.0
+        # Worst-case: camera axis aligned with body diagonal → L1-norm = sqrt(3).
+        # scale × sqrt(3) must fit in (half-width − margin) for ALL orientations.
+        scale = (self.SIZE / 2.0 - 8.0) / np.sqrt(3.0)
+        v = self._V @ self._rot.T
+        p = np.empty((8, 3))
+        p[:, 0] = cx + v[:, 0] * scale
+        p[:, 1] = cy - v[:, 1] * scale
+        p[:, 2] = v[:, 2]
+        return p
+
+    @staticmethod
+    def _pt_in_poly(poly_xy, mx, my):
+        """Point-in-polygon (works for convex polys with any winding)."""
+        n = len(poly_xy)
+        sign = None
+        for i in range(n):
+            ax, ay = poly_xy[i]
+            bx, by = poly_xy[(i + 1) % n]
+            cross = (bx - ax) * (my - ay) - (by - ay) * (mx - ax)
+            if abs(cross) < 1e-9:
+                continue
+            s = cross > 0
+            if sign is None:
+                sign = s
+            elif s != sign:
+                return False
+        return True
+
+    @staticmethod
+    def _seg_dist2(ax, ay, bx, by, px, py):
+        """Squared distance from (px,py) to segment (ax,ay)-(bx,by)."""
+        dx, dy = bx - ax, by - ay
+        denom = dx * dx + dy * dy
+        if denom < 1e-12:
+            return (px - ax) ** 2 + (py - ay) ** 2
+        t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / denom))
+        return (px - ax - t * dx) ** 2 + (py - ay - t * dy) ** 2
+
+    def _hit_test(self, mx, my):
+        p  = self._project()
+        vd = self._rot[2]  # camera Z = direction we're looking along
+        # corners (highest priority)
+        for i, (vi, _, _) in enumerate(self._CORNERS):
+            if (mx - p[vi, 0]) ** 2 + (my - p[vi, 1]) ** 2 < 64:
+                return ('corner', i)
+        # edges
+        for i, (v0, v1, _, _) in enumerate(self._EDGES):
+            if self._seg_dist2(p[v0,0], p[v0,1], p[v1,0], p[v1,1], mx, my) < 36:
+                return ('edge', i)
+        # faces (front-facing first)
+        order = sorted(range(6), key=lambda fi: -float(np.dot(self._FACE_N[fi], vd)))
+        for fi in order:
+            if float(np.dot(self._FACE_N[fi], vd)) < 0.05:
+                continue
+            vi = self._FACES[fi][0]
+            poly = [(p[v, 0], p[v, 1]) for v in vi]
+            if self._pt_in_poly(poly, mx, my):
+                return ('face', fi)
+        return None
+
+    # ── events ────────────────────────────────────────────────────────────
+
+    def mouseMoveEvent(self, event):
+        hit = self._hit_test(event.x(), event.y())
+        if hit != self._hovered:
+            self._hovered = hit
+            self.update()
+
+    def leaveEvent(self, event):
+        if self._hovered is not None:
+            self._hovered = None
+            self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() != QtCore.Qt.LeftButton:
+            return
+        hit = self._hit_test(event.x(), event.y())
+        if hit is None:
+            return
+        kind, idx = hit
+        if kind == 'face':
+            _, _, cp, cu = self._FACES[idx]
+        elif kind == 'edge':
+            _, _, cp, cu = self._EDGES[idx]
+        else:
+            _, cp, cu = self._CORNERS[idx]
+        self.view_requested.emit(cp, cu)
+
+    # ── paint ─────────────────────────────────────────────────────────────
+
+    def paintEvent(self, event):
+        p  = self._project()
+        vd = self._rot[2]
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+
+        # Solid background matching VTK renderer bg (0.2,0.2,0.2) = rgb(51,51,51)
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QColor(51, 51, 51))
+        painter.drawRoundedRect(0, 0, self.SIZE, self.SIZE, 8, 8)
+
+        # Per-face base colors (front-face tone; back-face dims automatically)
+        _BASE = [
+            QtGui.QColor( 50, 110, 200),  # TOP   – blue
+            QtGui.QColor( 35,  80, 150),  # BOT   – darker blue
+            QtGui.QColor( 45, 170,  90),  # FRONT – green
+            QtGui.QColor( 35, 130,  70),  # BACK  – darker green
+            QtGui.QColor(210,  90,  50),  # RIGHT – orange-red
+            QtGui.QColor(160,  70,  40),  # LEFT  – darker orange
+        ]
+
+        # Faces – back-to-front depth sort
+        face_depths = [float(np.mean([p[vi, 2] for vi in self._FACES[fi][0]])) for fi in range(6)]
+        for fi in sorted(range(6), key=lambda fi: face_depths[fi]):
+            vis = float(np.dot(self._FACE_N[fi], vd))
+            vi_list, label, _, _ = self._FACES[fi]
+            poly = [QtCore.QPointF(p[v, 0], p[v, 1]) for v in vi_list]
+            qpoly = QtGui.QPolygonF(poly)
+            is_hov = self._hovered == ('face', fi)
+            base = _BASE[fi]
+            if vis > 0:
+                # front-facing: full brightness, hover = lighter
+                factor = 1.4 if is_hov else 1.0
+                col = QtGui.QColor(
+                    min(255, int(base.red()   * factor)),
+                    min(255, int(base.green() * factor)),
+                    min(255, int(base.blue()  * factor)),
+                    255,
+                )
+                painter.setPen(QtGui.QPen(QtGui.QColor(220, 230, 255, 180), 1.0))
+            else:
+                # back-facing: solid dark version
+                col = QtGui.QColor(
+                    max(0, int(base.red()   * 0.28)),
+                    max(0, int(base.green() * 0.28)),
+                    max(0, int(base.blue()  * 0.28)),
+                    255,
+                )
+                painter.setPen(QtGui.QPen(QtGui.QColor(60, 70, 90, 160), 0.6))
+            painter.setBrush(col)
+            painter.drawPolygon(qpoly)
+            if vis > 0.15:
+                cx_f = sum(pt.x() for pt in poly) / 4
+                cy_f = sum(pt.y() for pt in poly) / 4
+                font = QtGui.QFont("Arial", 7 if is_hov else 6, QtGui.QFont.Bold)
+                painter.setFont(font)
+                painter.setPen(QtGui.QColor(255, 255, 255))
+                painter.drawText(QtCore.QRectF(cx_f - 18, cy_f - 8, 36, 16),
+                                 QtCore.Qt.AlignCenter, label)
+
+        # Edges
+        for i, (v0, v1, _, _) in enumerate(self._EDGES):
+            is_hov = self._hovered == ('edge', i)
+            painter.setPen(QtGui.QPen(
+                QtGui.QColor(140, 200, 255) if is_hov else QtGui.QColor(90, 120, 165),
+                3.5 if is_hov else 1.2
+            ))
+            painter.drawLine(QtCore.QPointF(p[v0, 0], p[v0, 1]),
+                             QtCore.QPointF(p[v1, 0], p[v1, 1]))
+
+        # Corners
+        painter.setPen(QtCore.Qt.NoPen)
+        for i, (vi, _, _) in enumerate(self._CORNERS):
+            is_hov = self._hovered == ('corner', i)
+            r = 5.5 if is_hov else 3.5
+            painter.setBrush(QtGui.QColor(105, 190, 255) if is_hov else QtGui.QColor(68, 108, 162))
+            painter.drawEllipse(QtCore.QPointF(p[vi, 0], p[vi, 1]), r, r)
+
+        painter.end()
+
+
 class CQ3DViewer(QtWidgets.QWidget):
     """
     Professional 3D Viewer for CadQuery using VTK.
@@ -23,6 +294,31 @@ class CQ3DViewer(QtWidgets.QWidget):
         self.main_layout = QtWidgets.QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
+
+        # --- View Orientation Toolbar ---
+        self._view_toolbar = QtWidgets.QWidget(self)
+        self._view_toolbar.setObjectName("view_toolbar")
+        self._view_toolbar.setStyleSheet(
+            "#view_toolbar { background: rgba(30, 30, 30, 180); border-bottom: 1px solid #444; }"
+            "QPushButton { background: transparent; color: #ccc; font-weight: bold; border-radius: 3px; padding: 4px 10px; }"
+            "QPushButton:hover { background: rgba(80, 80, 80, 200); color: white; }"
+        )
+        vtb_layout = QtWidgets.QHBoxLayout(self._view_toolbar)
+        vtb_layout.setContentsMargins(5, 2, 5, 2)
+        vtb_layout.addStretch()
+
+        btn_grid = QtWidgets.QPushButton("Grid")
+        btn_grid.setCheckable(True)
+        btn_grid.setChecked(False)
+        btn_grid.setStyleSheet(
+            "QPushButton { background: transparent; color: #ccc; font-weight: bold; border-radius: 3px; padding: 4px 10px; }"
+            "QPushButton:hover { background: rgba(80, 80, 80, 200); color: white; }"
+            "QPushButton:checked { background: rgba(74, 158, 255, 100); color: #4a9eff; border: 1px solid #4a9eff; }"
+        )
+        btn_grid.clicked.connect(self._toggle_grid)
+        vtb_layout.addWidget(btn_grid)
+
+        self.main_layout.addWidget(self._view_toolbar)
 
         # --- Picking toolbar (hidden by default) ---
         self._picking_toolbar = QtWidgets.QWidget(self)
@@ -91,13 +387,33 @@ class CQ3DViewer(QtWidgets.QWidget):
         self.vtkWidget.GetRenderWindow().AddRenderer(self.renderer)
         self.interactor = self.vtkWidget.GetRenderWindow().GetInteractor()
 
-        # Initialize axes (XYZ arrows)
+        # Initialize sophisticated View Axes
         axes = vtk.vtkAxesActor()
+        axes.SetTotalLength(1.0, 1.0, 1.0)
+        axes.SetShaftTypeToCylinder()
+        axes.SetCylinderRadius(0.02)
+        axes.SetConeRadius(0.08)
+        
+        # Style the labels
+        for txt in [axes.GetXAxisCaptionActor2D(), axes.GetYAxisCaptionActor2D(), axes.GetZAxisCaptionActor2D()]:
+            txt.GetCaptionTextProperty().SetColor(1, 1, 1)
+            txt.GetCaptionTextProperty().SetFontFamilyToArial()
+            txt.GetCaptionTextProperty().BoldOn()
+            txt.GetCaptionTextProperty().ItalicOff()
+            txt.GetCaptionTextProperty().ShadowOff()
+            txt.GetCaptionTextProperty().SetFontSize(24)
+            txt.SetWidth(0.1)
+
         self.marker_widget = vtk.vtkOrientationMarkerWidget()
         self.marker_widget.SetOrientationMarker(axes)
         self.marker_widget.SetInteractor(self.interactor)
         self.marker_widget.SetViewport(0.0, 0.0, 0.2, 0.2)
         self.marker_widget.SetEnabled(1)
+        self.marker_widget.InteractiveOff()  # Prevent user from dragging it around
+        
+        # Initialize Grid state
+        self._grid_actor = None
+        self._axes_actor = None
 
         # State
         self.current_actor = None
@@ -134,6 +450,15 @@ class CQ3DViewer(QtWidgets.QWidget):
 
         self.interactor.Initialize()
         self.interactor.Start()
+
+        # NavCube overlay – replaces the VTK axes orientation marker widget
+        self.marker_widget.SetEnabled(0)
+        self._nav_cube = NavCubeWidget(self)
+        self._nav_cube.view_requested.connect(self._set_camera_view)
+        self._nav_cube.raise_()
+        self._nav_cube.show()
+        self._position_nav_cube()
+        self.vtkWidget.GetRenderWindow().AddObserver("EndEvent", lambda o, e: self._on_vtk_render())
 
     # ──────────────────────────────────────────────────────────────────────────
     # CRASH ANIMATION PLAYBACK
@@ -657,8 +982,183 @@ class CQ3DViewer(QtWidgets.QWidget):
         self.scalar_bar.VisibilityOff()
         self.vtkWidget.GetRenderWindow().Render()
 
+    # ── NavCube helpers ───────────────────────────────────────────────────────
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, '_nav_cube'):
+            self._position_nav_cube()
+
+    def _position_nav_cube(self):
+        """Keep the NavCube anchored to the bottom-left of the VTK area."""
+        margin = 8
+        y = self.height() - NavCubeWidget.SIZE - margin
+        self._nav_cube.move(margin, y)
+
+    def _on_vtk_render(self):
+        """Sync NavCube rotation to camera after every VTK render."""
+        try:
+            self._nav_cube.update_rotation(self.renderer.GetActiveCamera())
+        except Exception:
+            pass
+
+    def _toggle_grid(self, state):
+        """Toggle grid visibility."""
+        if state:
+            if not self._grid_actor:
+                self._grid_actor, self._axes_actor = self._build_grid_actors()
+            self.renderer.AddActor(self._grid_actor)
+            self.renderer.AddActor(self._axes_actor)
+        else:
+            if self._grid_actor:
+                self.renderer.RemoveActor(self._grid_actor)
+                self.renderer.RemoveActor(self._axes_actor)
+        self.vtkWidget.GetRenderWindow().Render()
+
+    def _build_grid_actors(self):
+        """Creates a 3-plane (XY/XZ/YZ) reference grid and thick main axes for spatial reference."""
+        size = 500.0  # Big enough to feel infinite
+        step = 10.0
+        
+        pts = vtk.vtkPoints()
+        lines = vtk.vtkCellArray()
+        colors = vtk.vtkUnsignedCharArray()
+        colors.SetNumberOfComponents(3)
+        colors.SetName("Colors")
+
+        idx = 0
+
+        def add_line(p0, p1, r, g, b):
+            nonlocal idx
+            pts.InsertNextPoint(*p0)
+            pts.InsertNextPoint(*p1)
+            lines.InsertNextCell(2)
+            lines.InsertCellPoint(idx)
+            lines.InsertCellPoint(idx + 1)
+            colors.InsertNextTuple3(r, g, b)
+            idx += 2
+
+        ticks = np.arange(-size, size + step, step)
+
+        # XY plane (z=0) — neutral gray
+        for v in ticks:
+            add_line(( v, -size, 0), ( v,  size, 0), 58, 58, 58)
+            add_line((-size,  v, 0), ( size, v,  0), 58, 58, 58)
+
+        # XZ plane (y=0) — faint blue tint
+        for v in ticks:
+            add_line(( v, 0, -size), ( v, 0,  size), 48, 48, 65)
+            add_line((-size, 0,  v), ( size, 0, v),  48, 48, 65)
+
+        # YZ plane (x=0) — faint red tint
+        for v in ticks:
+            add_line((0,  v, -size), (0,  v,  size), 65, 48, 48)
+            add_line((0, -size,  v), (0,  size, v),  65, 48, 48)
+
+        grid_pd = vtk.vtkPolyData()
+        grid_pd.SetPoints(pts)
+        grid_pd.SetLines(lines)
+        grid_pd.GetCellData().SetScalars(colors)
+        
+        grid_mapper = vtk.vtkPolyDataMapper()
+        grid_mapper.SetInputData(grid_pd)
+        grid_mapper.SetColorModeToDirectScalars()
+        grid_actor = vtk.vtkActor()
+        grid_actor.SetMapper(grid_mapper)
+        grid_actor.GetProperty().SetLineWidth(1.0)
+        grid_actor.GetProperty().LightingOff()
+        grid_actor.SetPickable(0)
+        grid_actor.UseBoundsOff()   # exclude from ResetCamera bounds
+
+        # Thick Central Axes Crosshair
+        axes_pd = vtk.vtkPolyData()
+        axes_pts = vtk.vtkPoints()
+        axes_lines = vtk.vtkCellArray()
+        axes_colors = vtk.vtkUnsignedCharArray()
+        axes_colors.SetNumberOfComponents(3)
+        
+        # X Red
+        axes_pts.InsertNextPoint(-size, 0, 0)
+        axes_pts.InsertNextPoint(size, 0, 0)
+        axes_lines.InsertNextCell(2, [0, 1])
+        axes_colors.InsertNextTuple3(255, 50, 50)
+        
+        # Y Green
+        axes_pts.InsertNextPoint(0, -size, 0)
+        axes_pts.InsertNextPoint(0, size, 0)
+        axes_lines.InsertNextCell(2, [2, 3])
+        axes_colors.InsertNextTuple3(50, 255, 50)
+        
+        # Z Blue
+        axes_pts.InsertNextPoint(0, 0, -size)
+        axes_pts.InsertNextPoint(0, 0, size)
+        axes_lines.InsertNextCell(2, [4, 5])
+        axes_colors.InsertNextTuple3(50, 50, 255)
+
+        axes_pd.SetPoints(axes_pts)
+        axes_pd.SetLines(axes_lines)
+        axes_pd.GetCellData().SetScalars(axes_colors)
+        
+        axes_mapper = vtk.vtkPolyDataMapper()
+        axes_mapper.SetInputData(axes_pd)
+        axes_mapper.SetColorModeToDirectScalars()
+        axes_actor = vtk.vtkActor()
+        axes_actor.SetMapper(axes_mapper)
+        axes_actor.GetProperty().SetLineWidth(2.5)  # Thicker than grid
+        axes_actor.GetProperty().LightingOff()
+        axes_actor.SetPickable(0)
+        axes_actor.UseBoundsOff()   # exclude from ResetCamera bounds
+
+        return grid_actor, axes_actor
+
+    def _set_camera_view(self, position, view_up):
+        """Sets the camera to look at the focal point from the given relative direction."""
+        import math
+        camera = self.renderer.GetActiveCamera()
+
+        # Normalize the position direction vector so distance is consistent
+        pos = np.array(position, dtype=float)
+        mag = np.linalg.norm(pos)
+        if mag > 1e-10:
+            pos = pos / mag
+
+        # Compute focal point and distance from visible geometry bounds
+        bounds = self.renderer.ComputeVisiblePropBounds()
+        if bounds and len(bounds) == 6 and bounds[0] <= bounds[1]:
+            dx = bounds[1] - bounds[0]
+            dy = bounds[3] - bounds[2]
+            dz = bounds[5] - bounds[4]
+            max_dim = max(dx, dy, dz, 1e-3)
+            distance = max_dim * 2.5
+            focal_point = (
+                (bounds[0] + bounds[1]) / 2.0,
+                (bounds[2] + bounds[3]) / 2.0,
+                (bounds[4] + bounds[5]) / 2.0,
+            )
+        else:
+            distance = camera.GetDistance()
+            focal_point = camera.GetFocalPoint()
+
+        camera.SetFocalPoint(*focal_point)
+        camera.SetPosition(
+            focal_point[0] + pos[0] * distance,
+            focal_point[1] + pos[1] * distance,
+            focal_point[2] + pos[2] * distance,
+        )
+        camera.SetViewUp(*view_up)
+        self.renderer.ResetCamera()   # fit geometry to view for every standard view
+        self.renderer.ResetCameraClippingRange()
+        self.vtkWidget.GetRenderWindow().Render()
+        # Immediately sync the NavCube to the new orientation
+        if hasattr(self, '_nav_cube'):
+            self._nav_cube.update_rotation(camera)
+
     def _update_scalar_bar(self, title, min_val, max_val, lut=None):
         """Update and show the scalar bar."""
+        if not title:
+            self.scalar_bar.VisibilityOff()
+            return
+
         self.scalar_bar.SetTitle(title)
         self.scalar_bar.SetNumberOfLabels(5)
 
@@ -1259,6 +1759,47 @@ class CQ3DViewer(QtWidgets.QWidget):
         if self.current_actor:
             self.renderer.RemoveActor(self.current_actor)
             self.current_actor = None
+
+        # --- RECOVERED SHAPE VIZ (Triangulated Surface) ---
+        if isinstance(data, dict) and data.get('visualization_mode') == 'Recovered Shape':
+            rec = data.get('recovered_shape')
+            if rec and 'vertices' in rec and 'faces' in rec:
+                verts = rec['vertices']
+                faces = rec['faces']
+                
+                poly_data = vtk.vtkPolyData()
+                points = vtk.vtkPoints()
+                for v in verts:
+                    points.InsertNextPoint(v[0], v[1], v[2])
+                poly_data.SetPoints(points)
+                
+                cells = vtk.vtkCellArray()
+                for f in faces:
+                    triangle = vtk.vtkTriangle()
+                    triangle.GetPointIds().SetId(0, f[0])
+                    triangle.GetPointIds().SetId(1, f[1])
+                    triangle.GetPointIds().SetId(2, f[2])
+                    cells.InsertNextCell(triangle)
+                poly_data.SetPolys(cells)
+                
+                mapper = vtk.vtkPolyDataMapper()
+                mapper.SetInputData(poly_data)
+                
+                actor = vtk.vtkActor()
+                actor.SetMapper(mapper)
+                # Soft premium gray
+                actor.GetProperty().SetColor(0.8, 0.8, 0.8)
+                actor.GetProperty().SetOpacity(1.0)
+                
+                self.renderer.AddActor(actor)
+                self.current_actor = actor
+                
+                # Update scalar bar to be empty for geometry view
+                self._update_scalar_bar("", 0, 1, None)
+                
+                self.vtkWidget.GetRenderWindow().Render()
+                return
+
 
         # Check if it's a Mesh object or Result dict
         mesh = None
