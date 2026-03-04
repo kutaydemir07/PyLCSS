@@ -1227,6 +1227,54 @@ class SolverNode(CadQueryNode):
 
         fixed_dofs = fixed_dofs.astype(int)
 
+        # ── Rigid-Body-Motion (RBM) Singularity Guard ────────────────────────────
+        # In 3-D, a body has 6 rigid-body modes: 3 translations + 3 rotations.
+        # The assembled stiffness matrix K stays singular until ALL six modes are
+        # suppressed by boundary conditions.  The minimum requirement is:
+        #   • At least one DOF constrained in each global direction (X, Y, Z)
+        #     → prevents pure translational rigid-body motion.
+        #   • Total of ≥ 6 fixed DOFs distributed across non-collinear,
+        #     non-coplanar nodes → prevents pure rotational modes as well.
+        # This pre-check catches the most common user mistakes (forgetting a
+        # constraint, pinning only a single node, etc.) and emits an actionable
+        # warning BEFORE the solver call so the user sees a clear message
+        # rather than a cryptic LinAlgError or NaN displacement field.
+        _rbm_issues: list[str] = []
+        if len(fixed_dofs) == 0:
+            _rbm_issues.append(
+                "No DOFs are constrained — the model is completely free to move "
+                "and K will be singular."
+            )
+        else:
+            if len(fixed_dofs) < 6:
+                _rbm_issues.append(
+                    f"Only {len(fixed_dofs)} DOF(s) are constrained. "
+                    "At least 6 are required to suppress all 3 translational "
+                    "and 3 rotational rigid-body modes in 3-D."
+                )
+            # For skfem vector-DOF layout the Cartesian direction index
+            # equals  DOF_global mod 3  (0 → X, 1 → Y, 2 → Z).
+            _constrained_dirs = set(int(d) % 3 for d in fixed_dofs)
+            _missing_dirs = {0, 1, 2} - _constrained_dirs
+            if _missing_dirs:
+                _dir_labels = {0: 'X', 1: 'Y', 2: 'Z'}
+                _missing_str = ', '.join(_dir_labels[d] for d in sorted(_missing_dirs))
+                _rbm_issues.append(
+                    f"No constraint applied in direction(s): {_missing_str}. "
+                    "The structure can translate freely along these axes — K will be singular."
+                )
+        if _rbm_issues:
+            _rbm_msg = (
+                "FEA Solver: WARNING — Possible rigid-body motion (RBM) detected.\n"
+                "  The stiffness matrix K may be singular and the linear solve will fail.\n"
+                "  Issues found:\n"
+                + "".join(f"    • {w}\n" for w in _rbm_issues)
+                + "  Fix: add constraints on distinct, non-collinear/non-coplanar nodes\n"
+                  "  that collectively suppress all 6 rigid-body DOFs."
+            )
+            print(_rbm_msg)
+            logger.warning(_rbm_msg)
+
         # 5. Apply Loads
         f = np.zeros(basis.N)
         
@@ -1339,6 +1387,21 @@ class SolverNode(CadQueryNode):
             # is backward-compatible with the zero-displacement case.
             u = solve(*condense(K, f, x=u_prescribed, D=fixed_dofs))
             print(f"FEA Solve Complete. Max Displacement: {np.max(np.abs(u)):.6e}")
+        except np.linalg.LinAlgError as e:
+            _sing_msg = (
+                f"FEA Solver: Linear solve FAILED — singular stiffness matrix ({e}).\n"
+                "  Most likely cause: insufficient boundary conditions (rigid-body motion).\n"
+                "  The stiffness matrix K has one or more zero eigenvalues, meaning the\n"
+                "  structure is free to translate or rotate without any elastic resistance.\n"
+                "  Checks to perform:\n"
+                "    1. Ensure at least 6 DOFs are constrained (3 translations + 3 rotations).\n"
+                "    2. Constraints must be on non-collinear, non-coplanar nodes.\n"
+                "    3. Each global direction (X, Y, Z) must have at least one fixed DOF.\n"
+                "  See the RBM warning printed above for specific issues detected."
+            )
+            print(_sing_msg)
+            self.set_error(_sing_msg)
+            return None
         except Exception as e:
             print(f"FEA Solver: ERROR during solve: {e}")
             return None

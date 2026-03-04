@@ -682,6 +682,99 @@ def _compute_cfl_dt(mesh, E, nu, rho, safety=0.5):
     return safety * min_L / c_d * 1000.0
 
 
+def _apply_mass_scaling(M_diag, mesh, E, nu, rho, dt_target, threshold=0.05):
+    """
+    Selective mass scaling for the central-difference explicit solver.
+
+    For every tetrahedral element whose natural CFL time-step  dt_e  is smaller
+    than the target *dt_target*, the element’s share of the lumped mass matrix
+    is scaled by the factor
+
+        s_e = (dt_target / dt_e)²
+
+    so that its new CFL limit equals *dt_target*.  Only “critical” elements
+    (dt_e < dt_target) are affected; well-shaped elements with dt_e ≥ dt_target
+    are left unchanged.
+
+    Reference: Belytschko, Liu & Moran “Nonlinear FE for Continua and
+    Structures”, Section 6.3 (Explicit time integration with mass scaling).
+
+    Parameters
+    ----------
+    M_diag    : (3·N,) lumped mass diagonal  [tonne]
+    mesh      : skfem MeshTet
+    E         : Young’s modulus  [MPa]
+    nu        : Poisson’s ratio  [–]
+    rho       : mass density  [tonne/mm³]
+    dt_target : float — target time step  [ms]  (= end_time / requested steps)
+    threshold : fraction of total mass increase that triggers a warning
+                (default 0.05 = 5 %)
+
+    Returns
+    -------
+    M_scaled   : (3·N,) scaled mass diagonal
+    scale_info : dict with 'n_scaled', 'mass_increase_fraction', 'max_scale_factor'
+    """
+    lam_s  = E * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
+    mu_s   = E / (2.0 * (1.0 + nu))
+    c_d    = float(np.sqrt(max(lam_s + 2.0 * mu_s, 1.0) / max(rho, 1e-30)))
+
+    pts      = mesh.p.T       # (N_nodes, 3)
+    conn     = mesh.t.T       # (N_elem, 4)
+    N_nodes  = pts.shape[0]
+    N_elem   = conn.shape[0]
+    node_coords = pts[conn]   # (N_elem, 4, 3)
+
+    # Element volumes  (same formula as assemble_lumped_mass)
+    T = np.ones((N_elem, 4, 4))
+    T[:, :, 1:] = node_coords
+    vols = np.abs(np.linalg.det(T)) / 6.0
+
+    # Maximum face area per element  (same as _compute_cfl_dt)
+    face_sets = [(1, 2, 3), (0, 2, 3), (0, 1, 3), (0, 1, 2)]
+    max_area  = np.zeros(N_elem)
+    for fi, fj, fk in face_sets:
+        ab   = node_coords[:, fj, :] - node_coords[:, fi, :]
+        ac   = node_coords[:, fk, :] - node_coords[:, fi, :]
+        area = 0.5 * np.linalg.norm(np.cross(ab, ac), axis=1)
+        max_area = np.maximum(max_area, area)
+
+    valid = (max_area > 1e-20) & (vols > 1e-20)
+    L_e   = np.full(N_elem, np.inf)
+    L_e[valid] = 3.0 * vols[valid] / max_area[valid]
+
+    # Per-element CFL stability limit  [ms]
+    dt_e = np.full(N_elem, np.inf)
+    if c_d > 1e-20:
+        dt_e[valid] = 0.5 * L_e[valid] / c_d * 1000.0   # safety = 0.5
+
+    # Critical elements: natural dt_e < user-requested dt_target
+    critical  = valid & (dt_e < dt_target)
+    scale_e   = np.ones(N_elem)
+    safe_dt_e = np.where(dt_e > 1e-30, dt_e, 1e-30)
+    scale_e[critical] = (dt_target / safe_dt_e[critical]) ** 2
+
+    # Distribute scaled mass to nodes via row-sum lumping
+    m_node_orig   = np.zeros(N_nodes)
+    m_node_scaled = np.zeros(N_nodes)
+    np.add.at(m_node_orig,   conn.ravel(), np.repeat(rho * vols / 4.0, 4))
+    np.add.at(m_node_scaled, conn.ravel(), np.repeat(rho * vols * scale_e / 4.0, 4))
+
+    M_scaled = np.repeat(m_node_scaled, 3)
+
+    # Diagnostics
+    total_orig    = float(np.sum(m_node_orig))
+    total_scaled  = float(np.sum(m_node_scaled))
+    mass_increase = (total_scaled - total_orig) / max(total_orig, 1e-30)
+    max_sf        = float(np.max(scale_e[critical])) if np.any(critical) else 1.0
+
+    return M_scaled, {
+        'n_scaled':               int(np.sum(critical)),
+        'mass_increase_fraction': mass_increase,
+        'max_scale_factor':       max_sf,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Contact mechanics helper
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1083,6 +1176,18 @@ class CrashSolverNode(CadQueryNode):
         # being deleted, exposing new interior nodes to contact).
         self.create_property('contact_update_interval', 10, widget_type='int')
 
+        # ── Mass Scaling ──────────────────────────────────────────────────────
+        # Artificially increases the mass of elements whose natural CFL
+        # time-step is smaller than the requested step size (end_time/steps),
+        # by a factor s_e = (dt_target/dt_e)².  Only critical (very small)
+        # elements are affected; well-conditioned elements are unchanged.
+        # This allows a larger global dt and fewer time steps on fine meshes.
+        # Risk: increases total model mass.  A warning is printed when the mass
+        # increase exceeds the threshold fraction (default 5 % — industry guideline).
+        # Disable for quasi-static or inertia-sensitive analyses.
+        self.create_property('enable_mass_scaling',    False, widget_type='checkbox')
+        self.create_property('mass_scaling_threshold', 0.05,  widget_type='float')
+
     # ─────────────────────────────────────────────────────────────────────────
 
     def run(self):
@@ -1315,6 +1420,30 @@ class CrashSolverNode(CadQueryNode):
         dt_req      = end_time / n_steps_req
         alpha       = float(self.get_property('damping_alpha'))
 
+        # ── Optional mass scaling — applied BEFORE the CFL check so that
+        #    scaled elements count toward the global stable time step. ─────────
+        _enable_ms    = bool(self.get_property('enable_mass_scaling'))
+        _ms_threshold = float(self.get_property('mass_scaling_threshold'))
+        if _enable_ms:
+            M_diag, _ms_info = _apply_mass_scaling(
+                M_diag, mesh, E, nu, rho, dt_req, _ms_threshold
+            )
+            print(
+                f"Crash Solver: Mass scaling ON — "
+                f"{_ms_info['n_scaled']} element(s) scaled, "
+                f"Δmass = {_ms_info['mass_increase_fraction'] * 100:.2f}%, "
+                f"max scale factor = {_ms_info['max_scale_factor']:.2f}×."
+            )
+            if _ms_info['mass_increase_fraction'] > _ms_threshold:
+                print(
+                    f"  WARNING: total mass increased by "
+                    f"{_ms_info['mass_increase_fraction'] * 100:.1f}% "
+                    f"(threshold {_ms_threshold * 100:.0f}%). "
+                    "Results may be physically inaccurate for high-rate dynamic events."
+                )
+            # Update total_mass after scaling
+            total_mass = float(np.sum(M_diag[0::3]))
+
         # CFL stability check — explicit central-difference requires
         #   dt ≤ L_e / c_d  (with a safety margin).
         # If the requested dt violates this, auto-reduce it.
@@ -1358,6 +1487,21 @@ class CrashSolverNode(CadQueryNode):
 
         # Plastic dissipation accumulator
         absorbed_energy = 0.0
+
+        # ── Energy balance accumulators ───────────────────────────────────────
+        # W_ext_cumulative : work done on the system by the prescribed-velocity
+        #   impact BC (the external driver / impactor).  In explicit solvers the
+        #   correct energy balance is:
+        #     KE + SE_elastic + W_plastic_diss = KE_0 + W_ext_input
+        #   Significant deviation (> ~10-15 %) indicates numerical instability or
+        #   a time-step that is too large.
+        # W_ext is computed incrementally each step as:
+        #   dW_ext = (F_int + F_damp)[impact_dofs] · delta_u[impact_dofs]
+        #   i.e. the work done by the constraint force overcoming structural
+        #   and damping resistance at the prescribed DOFs.
+        W_ext_cumulative = 0.0   # cumulative external work input  [N·mm]
+        EB_hist          = []    # energy balance error ratio at each sample point
+        _max_eb_error    = 0.0   # peak energy balance error (for post-summary)
 
         # ── 8a. Precompute element geometry (B matrices, volumes, DOF table) ─
         #        This is done ONCE; the mesh does not deform the connectivity.
@@ -1421,6 +1565,10 @@ class CrashSolverNode(CadQueryNode):
         F_damp = alpha * M_diag * v
         a = (- F_int - F_damp) / M_diag     # F_ext = 0 (velocity-driven impact)
         a[fixed_dofs] = 0.0
+
+        # Initial kinetic energy (typically 0 because the velocity ramp starts
+        # at v = 0; recorded here as the energy-balance reference baseline).
+        KE_0 = 0.5 * float(np.dot(M_diag, v * v))
 
         # ── 9. Central-difference leapfrog time loop ──────────────────────────
 
@@ -1573,6 +1721,25 @@ class CrashSolverNode(CadQueryNode):
             # Rayleigh damping force
             F_damp = alpha * M_diag * v
 
+            # ── Energy balance: work done by impactor (kinematic BC) ──────────
+            # The prescribed-velocity constraint at impact nodes requires an
+            # external force from the impactor to overcome the structural
+            # resistance F_int and damping force F_damp at those DOFs.
+            #
+            # Sign convention:  in this solver  a = (-F_int - F_damp) / M,
+            # so F_int and F_damp are RESTORING forces (they oppose motion and
+            # point in the -impact direction).  The constraint force the
+            # impactor must supply is:
+            #     F_ext = -(F_int + F_damp)   [at impact nodes, after ramp]
+            # giving POSITIVE work for positive displacement:
+            #     dW_ext = F_ext · Δu = -(F_int + F_damp) · Δu  > 0
+            #
+            # Using +F_int·Δu (wrong sign) would give negative W_ext →
+            # E_ref collapses toward zero → spurious 1000s-% EB errors.
+            if len(impact_dof_arr) > 0 and step >= n_ramp:
+                _F_constr = F_int[impact_dof_arr] + F_damp[impact_dof_arr]
+                W_ext_cumulative -= float(np.dot(_F_constr, delta_u[impact_dof_arr]))
+
             # New acceleration (contact force enters with positive sign — it is
             # already a restoring/repulsive force, not an internal stress)
             a = (- F_int + F_contact - F_damp) / M_diag
@@ -1586,6 +1753,38 @@ class CrashSolverNode(CadQueryNode):
                 KE_hist.append(KE)
                 SE_hist.append(max(SE, 0.0))
                 PE_hist.append(absorbed_energy)
+
+                # ── Energy balance check ───────────────────────────────────
+                # Correct balance:  KE + SE_elastic + PD = KE_0 + W_ext_input
+                # The check is only useful once meaningful energy is in the
+                # system.  Guard against near-zero E_ref (early ramp phase
+                # or trivially elastic steps) with a 1 N·mm minimum:  below
+                # this level the ratio has no practical meaning.
+                # Warn only when the error first crosses the threshold or has
+                # risen by >5% since the last warning, to avoid log spam.
+                E_total = KE + max(SE, 0.0) + absorbed_energy
+                E_ref   = KE_0 + W_ext_cumulative
+                _eb_min_energy = max(1.0, KE_0 * 10.0)  # meaningful energy floor [N·mm]
+                if E_ref > _eb_min_energy and E_total > _eb_min_energy and step >= n_ramp:
+                    _eb_err = abs(E_total - E_ref) / E_ref
+                    _prev_max = _max_eb_error
+                    _max_eb_error = max(_max_eb_error, _eb_err)
+                    EB_hist.append(_eb_err)
+                    # Only emit a new warning when the error first crosses a
+                    # decade boundary (15 / 30 / 50 / 100 %) to avoid flooding.
+                    _thresholds = [0.50, 0.30, 0.15]
+                    for _thr in _thresholds:
+                        if _eb_err > _thr and _prev_max <= _thr:
+                            logger.warning(
+                                f"Crash Solver: Energy balance error crossed "
+                                f"{_thr*100:.0f}% threshold "
+                                f"({_eb_err * 100:.1f}% at t = {step * dt:.4f} ms). "
+                                "This may indicate numerical instability — consider "
+                                "reducing the time step or improving mesh quality."
+                            )
+                            break
+                else:
+                    EB_hist.append(0.0)
 
             # Record animation frame
             if n_frames > 0 and (step % frame_interval == 0 or step == n_steps - 1):
@@ -1615,6 +1814,23 @@ class CrashSolverNode(CadQueryNode):
         print(f"  Max displacement  = {max_disp_live:.3f} mm")
         print(f"  Failed elements   = {int(np.sum(failed_elem))}")
         print(f"  Absorbed energy   ≈ {absorbed_energy:.3f} N·mm")
+
+        # Energy balance summary
+        if _max_eb_error > 0.0:
+            _eb_status = (
+                "PASS" if _max_eb_error <= 0.10 else
+                "WARN" if _max_eb_error <= 0.20 else
+                "FAIL"
+            )
+            print(
+                f"  Energy balance    = {_eb_status}  "
+                f"(max error {_max_eb_error * 100:.1f}%)"
+            )
+            if _max_eb_error > 0.20:
+                print(
+                    "  WARNING: Large energy balance error may indicate numerical "
+                    "instability.  Consider reducing the time step or refining the mesh."
+                )
 
         # Nodal Von Mises (element average → nodes)
         nodal_vm = sigma_vm_to_nodal(mesh, sigma_vm)
@@ -1667,12 +1883,14 @@ class CrashSolverNode(CadQueryNode):
             'energy_kinetic':     np.array(KE_hist),
             'energy_strain':      np.array(SE_hist),
             'energy_plastic':     np.array(PE_hist),
+            'energy_balance':     np.array(EB_hist),   # error ratio (0 = perfect balance)
 
             # ── Scalar summary ────────────────────────────────────────────
             'peak_displacement':  max_disp_live,
             'peak_stress':        peak_vm,
             'absorbed_energy':    float(absorbed_energy),
             'n_failed':           int(np.sum(failed_elem)),
+            'energy_balance_max_error': float(_max_eb_error),
         }
 
 
