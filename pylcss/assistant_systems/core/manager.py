@@ -10,6 +10,7 @@ Note: Camera-based head tracking has been removed.
 
 import logging
 import json
+import re
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Signal, QTimer, Qt, Slot
@@ -669,6 +670,11 @@ class AssistantManager(QObject):
     def process_agentic_request(self, text: str) -> None:
         """Process request through the multi-agent system (in background thread)."""
         logger.info(f"Processing agentic request: {text[:100]}...")
+
+        if not self._agent_orchestrator:
+            logger.warning("Agentic request received without initialized orchestrator; falling back to legacy LLM path")
+            self._process_llm_request(text)
+            return
         
         # Store for overlay updates
         self._current_request_text = text
@@ -720,6 +726,13 @@ class AssistantManager(QObject):
         success = result.get("success", False)
         plan = result.get("plan")
         results = result.get("results", [])
+        telemetry_summary = result.get("telemetry_summary")
+        telemetry = result.get("telemetry")
+
+        if telemetry:
+            logger.info(f"Agent telemetry snapshot: {telemetry}")
+        if telemetry_summary:
+            logger.info(f"Agent telemetry summary: {telemetry_summary}")
         
         # Auto-save successful workflows
         if success and self._workflow_recorder and plan and len(plan.steps) >= 2:
@@ -740,9 +753,6 @@ class AssistantManager(QObject):
                 overlay.show_response(message, has_actions=False)
             else:
                 overlay.show_error(message)
-        
-        # Speak result
-        self._do_speak(message, len(message.split()) * 500)
         
         # Resume voice
         if self._voice_controller:
@@ -901,10 +911,35 @@ class AssistantManager(QObject):
         # Speak the response using TTS with unmute
         # Delay speech slightly to allow UI (overlay) to update first
         QTimer.singleShot(50, lambda: self._do_speak(speak_text, estimated_duration_ms))
+
+    @staticmethod
+    def _sanitize_tts_text(text: str) -> str:
+        """Strip symbols and UI-only lines that sound bad in speech."""
+        if not text:
+            return ""
+
+        lines = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("Session telemetry:"):
+                continue
+            lines.append(line)
+
+        cleaned = " ".join(lines)
+        cleaned = cleaned.encode("ascii", errors="ignore").decode("ascii")
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned
         
     def _do_speak(self, text: str, duration_ms: int) -> None:
         """Actual speech execution with exact callback sync."""
         try:
+            text = self._sanitize_tts_text(text)
+            if not text:
+                self._on_speech_finished()
+                return
+
             tts = get_tts()
             if tts.is_available():
                 

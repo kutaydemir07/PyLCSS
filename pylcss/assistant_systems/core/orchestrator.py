@@ -51,308 +51,128 @@ logger = logging.getLogger(__name__)
 
 # -- Supervisor (NOT templated — uses single braces in JSON examples) --
 
-SUPERVISOR_PROMPT = '''You are the Supervisor for PyLCSS, an engineering design platform.
-Classify the request and, if complex, decompose it into sub-tasks.
+SUPERVISOR_PROMPT = '''You are the Supervisor for PyLCSS.
+Classify the request and decompose only when needed.
 
-## Domains
-- **cad** — 3D geometry: primitives, booleans, transforms, patterns, extrude, etc.
-- **modeling** — System modelling: design variables, functions, connections, validation
-- **analysis** — Optimization, sensitivity, surrogate training, DOE sampling
-- **navigation** — Switching application tabs
-- **project** — Save / load / new project
-- **conversation** — Questions, explanations (no tool action needed)
+Domains:
+- cad: geometry creation or CAD graph edits
+- modeling: inputs, outputs, equations, variables, functions, validation, model build
+- analysis: sensitivity, surrogate, optimization, DOE
+- navigation: tab switching
+- project: save, load, new project
+- conversation: questions or explanations only
 
-## Complexity
-- **simple** — 1 action
-- **compound** — 2-4 related actions in ONE domain
-- **complex** — Spans multiple domains or 5+ actions
+Complexity:
+- simple: 1 action
+- compound: 2-4 related actions in one domain
+- complex: multiple domains, dependencies, or 5+ actions
 
-## CRITICAL Rules
-1. "Create", "make", "build", "design", "draw" + ANY object → **domain = cad**, always.
-   Complex objects (car, aircraft, gearbox) are STILL cad — the Decomposer handles breakdown.
-2. simple / compound → return ONE sub_task with the FULL original request, domain = cad.
-3. complex → break into sequential sub-tasks, each targeting ONE domain.
-4. Insert **navigation** sub-tasks before domain work when a tab switch is needed.
-5. If the user asks a question → domain = conversation.
-6. NEVER return sub-tasks that "explain", "ask the user", or "discuss".
-   Your job is to EXECUTE, not to ask for clarification.
-7. When in doubt, classify as **cad** with **compound** complexity.
+Rules:
+1. Classify by intent, not only verbs.
+2. Modeling requests mention inputs, outputs, variables, equations, functions, systems, or validation.
+3. CAD requests mention shapes, parts, assemblies, booleans, transforms, patterns, or 3D objects.
+4. Simple and compound requests usually return one sub_task.
+5. Add navigation sub_tasks only if a tab switch is required.
+6. Do not return discussion-only sub_tasks.
 
 Respond with ONLY JSON:
 ```json
 {
-  "domain": "<domain>",
-  "complexity": "simple|compound|complex",
-  "sub_tasks": [
-    {"domain": "...", "task": "Detailed instruction for the specialist", "context": ""}
-  ],
-  "reasoning": "brief"
+    "domain": "<domain>",
+    "complexity": "simple|compound|complex",
+    "sub_tasks": [
+        {"domain": "...", "task": "Detailed instruction for the specialist", "context": ""}
+    ],
+    "reasoning": "brief"
 }
 ```'''
 
 
 # -- Domain planners (templated via format_map — use double braces for literal JSON) --
 
-CAD_PLANNER_PROMPT = '''You are the **CAD Specialist** for PyLCSS.
-Create a plan using ONLY the tools and node types listed below.
+CAD_PLANNER_PROMPT = '''You are the CAD Specialist for PyLCSS.
+Create a plan using only the tools and node types below.
 
-## Tools
+Tools
 {cad_tools}
 
-## Node Types (condensed)
+Node Types
 {cad_schema}
 
-## Current Graph
+Current Graph
 {current_state}
 
-## ⚠ THINK BEFORE YOU ACT (mandatory)
-Before writing the steps, write a short 1-2 sentence \"reasoning\" explaining your approach.
-Include: what shape, which recipe/approach, key dimensions in mm.
-
-## CRITICAL Rules — violating these causes failure
-1. Put ALL nodes AND connections in ONE `create_cad_geometry` call.
+Rules:
+1. Build the requested part with one `create_cad_geometry` call whenever practical.
 2. Always finish with `execute_cad`.
-3. ONLY use `type` values that appear in the Node Types list above.
-   If a type is NOT listed, it DOES NOT EXIST. Do not guess or invent.
-   Do NOT add the `com.cad.` prefix — it is added automatically.
-4. ONLY use property names that appear in the Node Types list above.
-   If a property is NOT listed for that node type, it DOES NOT EXIST. Do not guess.
-5. Connection format: {{"from": "id.port", "to": "id.port"}}
-   - Boolean inputs: `shape_a` and `shape_b`  (NEVER `shape_1` or `input`)
-   - Other ops (fillet, translate, etc.): `shape`
-   - Sketch-based: sketch node → `sketch` port into sketch element → `shape` out
-6. ALWAYS use a Recipe below when the request matches one.
-   Adapt dimensions but keep the same node types, connections, and structure.
-7. Keep it SIMPLE — ≤ 6 nodes per call. Build complex shapes from fewer, bigger primitives.
-8. **Cross-referencing earlier sub-parts**: When your task description lists
-   "Available shapes" from earlier sub-parts, connect DIRECTLY to those node IDs.
-   Example: `{{"from": "p1_body.shape", "to": "p8_union.shape_a"}}`.
-   Do NOT create proxy/parameter/reference nodes — the earlier nodes already exist in the graph.
+3. Use only listed node types and exact property names.
+4. Do not add the `com.cad.` prefix.
+5. Connections use `{{"from": "id.port", "to": "id.port"}}`.
+6. Boolean inputs are `shape_a` and `shape_b`; most other modifiers use `shape`.
+7. Reuse existing node IDs when modifying current geometry.
+8. Connect directly to prior part IDs when they are available; do not invent proxy nodes.
+9. Keep the graph simple and practical; prefer primitives, booleans, transforms, patterns, and sketch+extrude.
+10. For FEA or topology optimization, use the exact simulation nodes from the schema: `sim.mesh`, `sim.material`, `sim.constraint`, `sim.load`, `sim.solver`, `sim.topopt`.
+11. Do not invent unsupported names like `fixed_constraint`, `force_load`, or other non-schema simulation nodes.
+12. For face-based FEA constraints and loads, connect `select_face.workplane` to `sim.constraint.target_face` or `sim.load.target_face`.
 
-## Recipes — COPY these patterns, only change dimensions
+Common patterns:
+- box with hole: box + cylinder + boolean Cut
+- tube: outer cylinder + inner cylinder + boolean Cut
+- flange: disc + bore cut + hole pattern
+- bracket/profile: sketch + polyline + extrude + optional fillet
+- gear: hub + one tooth + union + circular pattern
+- topology optimization beam: box -> sim.mesh, box -> select_face, select_face.workplane -> sim.constraint.target_face, sim.mesh -> sim.constraint.mesh, sim.mesh/material/constraints/loads -> sim.topopt
 
-### Gear tooth + hub + circular pattern
-Hub cylinder + one tooth (sketch polyline → extrude) at pitch radius + Boolean Union + Circular Pattern.
-For helical gears: use twisted_extrude instead of extrude.
-```json
-{{"nodes": [
-  {{"type":"cylinder","id":"hub","properties":{{"cyl_radius":20,"cyl_height":10}}}},
-  {{"type":"sketch","id":"sk","properties":{{"plane":"XY"}}}},
-  {{"type":"polyline","id":"tooth","properties":{{"points":"[(18,-1.5),(24,-1.2),(25,0),(24,1.2),(18,1.5)]","closed":true}}}},
-  {{"type":"extrude","id":"ext","properties":{{"extrude_distance":10}}}},
-  {{"type":"boolean","id":"merged","properties":{{"operation":"Union"}}}},
-  {{"type":"circular_pattern","id":"gear","properties":{{"count":20,"angle":360,"axis_x":0,"axis_y":0,"axis_z":1}}}}
-],
-"connections": [
-  {{"from":"sk.sketch","to":"tooth.sketch"}},
-  {{"from":"tooth.shape","to":"ext.shape"}},
-  {{"from":"hub.shape","to":"merged.shape_a"}},
-  {{"from":"ext.shape","to":"merged.shape_b"}},
-  {{"from":"merged.shape","to":"gear.shape"}}
-]}}
-```
-Tooth profile tips: points go from root radius inward, curve out to tip, back to root.
-Scale tooth width ≈ pitch_circumference / (2 × num_teeth). Adjust radius values proportionally.
-
-### Box with hole
-```json
-{{"nodes": [
-  {{"type":"box","id":"base","properties":{{"box_length":100,"box_width":60,"box_depth":40}}}},
-  {{"type":"cylinder","id":"hole","properties":{{"cyl_radius":15,"cyl_height":50}}}},
-  {{"type":"boolean","id":"cut","properties":{{"operation":"Cut"}}}}
-],
-"connections": [
-  {{"from":"base.shape","to":"cut.shape_a"}},
-  {{"from":"hole.shape","to":"cut.shape_b"}}
-]}}
-```
-
-### Plate with hole pattern
-```json
-{{"nodes": [
-  {{"type":"box","id":"plate","properties":{{"box_length":100,"box_width":60,"box_depth":10}}}},
-  {{"type":"array_holes","id":"holes","properties":{{"x_start":15,"y_start":15,"x_spacing":20,"y_spacing":30,"x_count":4,"y_count":2,"diameter":8,"through_all":true,"from_face":">Z"}}}}
-],
-"connections": [{{"from":"plate.shape","to":"holes.shape"}}]}}
-```
-
-### Hollow cylinder (pipe/tube)
-```json
-{{"nodes": [
-  {{"type":"cylinder","id":"outer","properties":{{"cyl_radius":20,"cyl_height":50}}}},
-  {{"type":"cylinder","id":"inner","properties":{{"cyl_radius":15,"cyl_height":60}}}},
-  {{"type":"boolean","id":"tube","properties":{{"operation":"Cut"}}}}
-],
-"connections": [
-  {{"from":"outer.shape","to":"tube.shape_a"}},
-  {{"from":"inner.shape","to":"tube.shape_b"}}
-]}}
-```
-
-### Flange
-```json
-{{"nodes": [
-  {{"type":"cylinder","id":"disc","properties":{{"cyl_radius":40,"cyl_height":8}}}},
-  {{"type":"cylinder","id":"bore","properties":{{"cyl_radius":15,"cyl_height":10}}}},
-  {{"type":"boolean","id":"base","properties":{{"operation":"Cut"}}}},
-  {{"type":"multi_hole","id":"bolts","properties":{{"coordinates":"[(30,0),(21.2,21.2),(0,30),(-21.2,21.2),(-30,0),(-21.2,-21.2),(0,-30),(21.2,-21.2)]","diameter":6,"through_all":true,"from_face":">Z"}}}}
-],
-"connections": [
-  {{"from":"disc.shape","to":"base.shape_a"}},
-  {{"from":"bore.shape","to":"base.shape_b"}},
-  {{"from":"base.shape","to":"bolts.shape"}}
-]}}
-```
-
-### L-Bracket / extruded profile
-```json
-{{"nodes": [
-  {{"type":"sketch","id":"sk","properties":{{"plane":"XY"}}}},
-  {{"type":"polyline","id":"profile","properties":{{"points":"[(0,0),(30,0),(30,5),(5,5),(5,25),(0,25)]","closed":true}}}},
-  {{"type":"extrude","id":"ext","properties":{{"extrude_distance":10}}}},
-  {{"type":"fillet","id":"fil","properties":{{"fillet_radius":2}}}}
-],
-"connections": [
-  {{"from":"sk.sketch","to":"profile.sketch"}},
-  {{"from":"profile.shape","to":"ext.shape"}},
-  {{"from":"ext.shape","to":"fil.shape"}}
-]}}
-```
-
-### Shaft with keyway
-```json
-{{"nodes": [
-  {{"type":"cylinder","id":"shaft","properties":{{"cyl_radius":10,"cyl_height":80}}}},
-  {{"type":"box","id":"keyway","properties":{{"box_length":20,"box_width":4,"box_depth":3,"center_x":0,"center_y":9,"center_z":0}}}},
-  {{"type":"boolean","id":"cut","properties":{{"operation":"Cut"}}}}
-],
-"connections": [
-  {{"from":"shaft.shape","to":"cut.shape_a"}},
-  {{"from":"keyway.shape","to":"cut.shape_b"}}
-]}}
-```
-
-If no Recipe matches, build the shape from primitives + booleans + patterns.
-NOTE: You may receive a sub-part description from the decomposer. Build ONLY that part, not the whole assembly.
-The assembly/positioning will be handled in subsequent calls.
-
-**NODE IDs**: When building a sub-part, prefix all node IDs with the part label
-(e.g. `fuselage_cyl`, `wing_sk`, `engine1_cyl`). This prevents ID collisions when
-multiple sub-parts are added to the same graph.
-
-Respond with ONLY a JSON block:
+Respond with ONLY JSON:
 ```json
 {{
-  "goal": "...",
-  "reasoning": "Brief: what shape, recipe used, key dimensions in mm",
-  "steps": [
-    {{"tool": "create_cad_geometry", "params": {{"nodes": [...], "connections": [...]}}, "description": "...", "expected": "..."}},
-    {{"tool": "execute_cad", "params": {{}}, "description": "Render", "expected": "Shape in viewer"}}
-  ],
-  "complexity": N
+    "goal": "...",
+    "reasoning": "shape, approach, key dimensions in mm",
+    "steps": [
+        {{"tool": "create_cad_geometry", "params": {{"nodes": [...], "connections": [...]}}, "description": "...", "expected": "..."}},
+        {{"tool": "execute_cad", "params": {{}}, "description": "Render", "expected": "Shape in viewer"}}
+    ],
+    "complexity": 1
 }}
 ```'''
 
 
-MODELING_PLANNER_PROMPT = '''You are the **Modeling Specialist** for PyLCSS.
-Create a plan using ONLY the tools and node types listed below.
+MODELING_PLANNER_PROMPT = '''You are the Modeling Specialist for PyLCSS.
+Create a plan using only the tools and node types below.
 
-## Tools
+Tools
 {modeling_tools}
 
-## System Node Types
+System Node Types
 {modeling_schema}
 
-## Current Graph
+Current Graph
 {current_state}
 
-## Rules
-1. Use `create_system_model` to create all nodes + connections in one call.
-2. `com.pfd.input` — design variable. Set `var_name`, `min`, `max`, and optionally `unit`.
-3. `com.pfd.output` — quantity of interest (QoI). Set `var_name`, and optionally:
-   - `unit` — physical unit (e.g. "kg", "mm", "N/m^2", or "-" for dimensionless)
-   - `req_min` / `req_max` — requirement bounds (constraints). Use "-1e9" / "1e9" for no bound.
-   - `minimize` (bool) — set True to make this an objective to minimize
-   - `maximize` (bool) — set True to make this an objective to maximize
-4. `com.pfd.intermediate` — internal variable for chaining blocks. Set `var_name`, optionally `unit`.
-5. `com.pfd.custom_block` — Python function. Set `num_inputs`, `num_outputs`, `code_content`.
-   Code uses `in_1, in_2, ...` as inputs, assigns to `out_1, out_2, ...` as outputs.
-   Supports numpy (np) and math.
-6. **Port naming**:
-   - Input/Output/Intermediate: port name = `var_name` (e.g. var_name="width" → port "width")
-   - CustomBlock: ports are `in_1, in_2, ...` and `out_1, out_2, ...`
-   - Connection format: `{{"from": "nodeId.portName", "to": "nodeId.portName"}}`
-7. After creation, call `validate_model`.
-8. Use `build_model` to transfer for analysis.
+Rules:
+1. Use `create_system_model` to create or update all nodes and connections in one call when possible.
+2. `com.pfd.input`: set `var_name`, `min`, `max`, optional `unit`.
+3. `com.pfd.output`: set `var_name`, optional `unit`, `req_min`, `req_max`, `minimize`, `maximize`.
+4. `com.pfd.intermediate`: set `var_name`, optional `unit`.
+5. `com.pfd.custom_block`: set `num_inputs`, `num_outputs`, `code_content`.
+6. Input/output/intermediate ports use `var_name`; custom blocks use `in_1..in_n` and `out_1..out_n`.
+7. Connections use `{{"from": "nodeId.port", "to": "nodeId.port"}}`.
+8. After creation, call `validate_model`.
+9. Add `build_model` only if the task explicitly needs analysis transfer.
 
-## Example 1 — Simple: f(x,y) = x² + y², minimize f
+Respond with ONLY JSON:
 ```json
 {{
-  "goal": "Model f = x² + y², minimize f",
-  "reasoning": "Two inputs, one function block, one output with minimize objective",
-  "steps": [
-    {{
-      "tool": "create_system_model",
-      "params": {{
-        "nodes": [
-          {{"type": "com.pfd.input", "id": "x", "properties": {{"var_name": "x", "min": -10, "max": 10}}}},
-          {{"type": "com.pfd.input", "id": "y", "properties": {{"var_name": "y", "min": -10, "max": 10}}}},
-          {{"type": "com.pfd.custom_block", "id": "fn", "properties": {{"code_content": "out_1 = in_1**2 + in_2**2", "num_inputs": 2, "num_outputs": 1}}}},
-          {{"type": "com.pfd.output", "id": "f", "properties": {{"var_name": "f", "minimize": true}}}}
-        ],
-        "connections": [
-          {{"from": "x.x", "to": "fn.in_1"}},
-          {{"from": "y.y", "to": "fn.in_2"}},
-          {{"from": "fn.out_1", "to": "f.f"}}
-        ]
-      }},
-      "description": "Create model graph",
-      "expected": "4-node system model"
-    }},
-    {{"tool": "validate_model", "params": {{}}, "description": "Validate", "expected": "No errors"}}
-  ],
-  "complexity": 2
+    "goal": "...",
+    "reasoning": "brief",
+    "steps": [
+        {{"tool": "create_system_model", "params": {{"nodes": [...], "connections": [...]}}, "description": "...", "expected": "..."}},
+        {{"tool": "validate_model", "params": {{}}, "description": "Validate", "expected": "No errors"}}
+    ],
+    "complexity": 1
 }}
-```
-
-## Example 2 — With units, requirements, intermediate, and multi-output function
-```json
-{{
-  "goal": "Beam model: width/height inputs in mm, compute stress and weight with requirements",
-  "reasoning": "2 inputs with units + 1 function (2 outputs) + intermediate + 2 QoIs with requirements",
-  "steps": [
-    {{
-      "tool": "create_system_model",
-      "params": {{
-        "nodes": [
-          {{"type": "com.pfd.input", "id": "w", "properties": {{"var_name": "width", "min": 10, "max": 100, "unit": "mm"}}}},
-          {{"type": "com.pfd.input", "id": "h", "properties": {{"var_name": "height", "min": 10, "max": 200, "unit": "mm"}}}},
-          {{"type": "com.pfd.custom_block", "id": "beam_calc", "properties": {{
-            "num_inputs": 2, "num_outputs": 2,
-            "code_content": "area = in_1 * in_2\\nout_1 = 1000 / area\\nout_2 = area * 0.001 * 7850"
-          }}}},
-          {{"type": "com.pfd.intermediate", "id": "s", "properties": {{"var_name": "stress", "unit": "MPa"}}}},
-          {{"type": "com.pfd.output", "id": "stress_out", "properties": {{"var_name": "max_stress", "unit": "MPa", "req_max": "250"}}}},
-          {{"type": "com.pfd.output", "id": "weight_out", "properties": {{"var_name": "weight", "unit": "kg", "req_max": "50", "minimize": true}}}}
-        ],
-        "connections": [
-          {{"from": "w.width", "to": "beam_calc.in_1"}},
-          {{"from": "h.height", "to": "beam_calc.in_2"}},
-          {{"from": "beam_calc.out_1", "to": "s.stress"}},
-          {{"from": "s.stress", "to": "stress_out.max_stress"}},
-          {{"from": "beam_calc.out_2", "to": "weight_out.weight"}}
-        ]
-      }},
-      "description": "Create beam model with units and requirements",
-      "expected": "6-node model with stress constraint and weight objective"
-    }},
-    {{"tool": "validate_model", "params": {{}}, "description": "Validate", "expected": "No errors"}}
-  ],
-  "complexity": 3
-}}
-```
-
-Respond with ONLY a JSON block matching the format above.'''
+```'''
 
 
 ANALYSIS_PLANNER_PROMPT = '''You are the **Analysis Specialist** for PyLCSS.
@@ -398,6 +218,102 @@ Respond with ONLY JSON:
   "reasoning": "...",
   "steps": [{{"tool": "...", "params": {{}}, "description": "...", "expected": "..."}}],
   "complexity": 1
+}}
+```'''
+
+
+ASSEMBLY_PLANNER_PROMPT = '''You are the Assembly Specialist for PyLCSS CAD.
+Plan assembly and arrangement work using the tools and node types below.
+
+Tools
+{cad_tools}
+
+Node Types
+{cad_schema}
+
+Current Graph
+{current_state}
+
+Rules:
+1. Prefer transforms, mirror/pattern tools, and boolean union over rebuilding finished parts.
+2. Reuse existing part IDs from the current graph whenever possible.
+3. Create only the minimum extra helper nodes needed for placement or combination.
+4. For multipart requests, focus on positioning, alignment, symmetry, and final combination.
+5. Always finish with `execute_cad`.
+
+Respond with ONLY JSON:
+```json
+{{
+    "goal": "...",
+    "reasoning": "brief",
+    "steps": [
+        {{"tool": "create_cad_geometry", "params": {{"nodes": [...], "connections": [...]}}, "description": "...", "expected": "..."}},
+        {{"tool": "execute_cad", "params": {{}}, "description": "Render", "expected": "Assembly in viewer"}}
+    ],
+    "complexity": 1
+}}
+```'''
+
+
+SYSTEM_MODEL_AGENT_PROMPT = '''You are the System Model Specialist for PyLCSS.
+Plan complete modeling workflows using the tools and node types below.
+
+Tools
+{modeling_tools}
+
+System Node Types
+{modeling_schema}
+
+Current Graph
+{current_state}
+
+Rules:
+1. Build coherent system models with variables, equations, constraints, objectives, and units.
+2. Prefer one `create_system_model` call containing the full local graph update.
+3. Use `com.pfd.custom_block` for equations or transformations.
+4. Set objective and requirement properties explicitly on outputs when relevant.
+5. Always include `validate_model`; include `build_model` only when analysis transfer is requested.
+
+Respond with ONLY JSON:
+```json
+{{
+    "goal": "...",
+    "reasoning": "brief",
+    "steps": [
+        {{"tool": "create_system_model", "params": {{"nodes": [...], "connections": [...]}}, "description": "...", "expected": "..."}},
+        {{"tool": "validate_model", "params": {{}}, "description": "Validate", "expected": "No errors"}}
+    ],
+    "complexity": 1
+}}
+```'''
+
+
+GRAPH_EDIT_PLANNER_PROMPT = '''You are the Graph Edit Specialist for PyLCSS.
+Modify existing CAD or modeling graphs using the tools below.
+
+Tools
+{tools}
+
+Current Graph
+{current_state}
+
+Rules:
+1. Prefer targeted edits over rebuilding the entire graph.
+2. Reuse existing node IDs from the current graph state.
+3. For CAD edits, prefer `modify_cad_node`, `connect_cad_nodes`, or a minimal `create_cad_geometry` patch.
+4. For modeling edits, prefer `modify_system_node` or a minimal `create_system_model` patch.
+5. Only create new nodes when the requested change cannot be expressed as a property or connection edit.
+6. If execution/validation is needed after the edit, include the appropriate follow-up tool.
+
+Respond with ONLY JSON:
+```json
+{{
+    "goal": "...",
+    "reasoning": "brief",
+    "steps": [
+        {{"tool": "...", "params": {{}}, "description": "...", "expected": "..."}}
+    ],
+    "complexity": 1
 }}
 ```'''
 
@@ -472,6 +388,87 @@ class TaskClassification:
     complexity: str
     sub_tasks: List[SubTask]
     reasoning: str = ""
+
+
+@dataclass
+class AgentSessionTelemetry:
+    """Small in-memory telemetry store for planner, tool, and verifier outcomes."""
+    request_count: int = 0
+    planner_stats: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    tool_stats: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    verifier_rule_stats: Dict[str, Dict[str, int]] = field(default_factory=dict)
+
+    def start_request(self) -> None:
+        self.request_count += 1
+
+    def record_plan(self, planner_name: str, step_count: int) -> None:
+        stats = self.planner_stats.setdefault(planner_name, {"plans": 0, "steps": 0})
+        stats["plans"] += 1
+        stats["steps"] += step_count
+
+    def record_tool_result(self, tool_name: str, success: bool) -> None:
+        stats = self.tool_stats.setdefault(tool_name, {"calls": 0, "successes": 0, "failures": 0})
+        stats["calls"] += 1
+        if success:
+            stats["successes"] += 1
+        else:
+            stats["failures"] += 1
+
+    def record_verifier_result(self, target_tool: str, output: Dict[str, Any]) -> None:
+        issues = output.get("issues", []) or []
+        repairs = output.get("applied_repairs", []) or []
+        resolved = bool(output.get("ok", False))
+        for issue in issues:
+            rule_name = self._rule_name(issue)
+            stats = self.verifier_rule_stats.setdefault(rule_name, {"hits": 0, "resolved": 0, "failed": 0, "repairs": 0})
+            stats["hits"] += 1
+            if resolved:
+                stats["resolved"] += 1
+            else:
+                stats["failed"] += 1
+            stats["repairs"] += len(repairs)
+
+        if not issues and repairs:
+            rule_name = f"repaired:{target_tool}"
+            stats = self.verifier_rule_stats.setdefault(rule_name, {"hits": 0, "resolved": 0, "failed": 0, "repairs": 0})
+            stats["hits"] += 1
+            stats["resolved"] += 1
+            stats["repairs"] += len(repairs)
+
+    def snapshot(self) -> Dict[str, Any]:
+        return {
+            "requests": self.request_count,
+            "planners": self.planner_stats,
+            "tools": self.tool_stats,
+            "verifier_rules": self.verifier_rule_stats,
+        }
+
+    def compact_summary(self) -> str:
+        best_planner = self._top_entry(self.planner_stats, key="plans")
+        busiest_tool = self._top_entry(self.tool_stats, key="calls")
+        hottest_rule = self._top_entry(self.verifier_rule_stats, key="hits")
+        parts = [f"requests={self.request_count}"]
+        if best_planner:
+            parts.append(f"planner={best_planner[0]}:{best_planner[1].get('plans', 0)}")
+        if busiest_tool:
+            parts.append(f"tool={busiest_tool[0]}:{busiest_tool[1].get('successes', 0)}/{busiest_tool[1].get('calls', 0)}")
+        if hottest_rule:
+            parts.append(f"rule={hottest_rule[0]}:{hottest_rule[1].get('resolved', 0)}/{hottest_rule[1].get('hits', 0)}")
+        return " | ".join(parts)
+
+    @staticmethod
+    def _rule_name(issue: str) -> str:
+        if " — " in issue:
+            return issue.split(" — ", 1)[0][:80]
+        if ":" in issue:
+            return issue.split(":", 1)[0][:80]
+        return issue[:80]
+
+    @staticmethod
+    def _top_entry(stats: Dict[str, Dict[str, int]], key: str) -> Optional[tuple]:
+        if not stats:
+            return None
+        return max(stats.items(), key=lambda item: item[1].get(key, 0))
 
 
 # ===================================================================
@@ -584,10 +581,32 @@ class DomainPlannerAgent(BaseAgent):
         }
 
         prompt = self.prompt_template.format_map(fmt)
+        recent_feedback = self._format_recent_feedback(context.get("recent_planner_feedback", []))
+        if recent_feedback:
+            prompt += (
+                "\n\nRecent Verifier Feedback From This Session\n"
+                + recent_feedback
+                + "\nRules:\n"
+                + "- Avoid repeating these verifier failures.\n"
+                + "- Prefer the patterns that were repaired or sanitized successfully."
+            )
 
         logger.info(f"DomainPlanner{self.tool_categories}: planning '{task[:60]}…'")
         response = self._call_llm_sync(task, prompt, max_tokens=4096)
-        return self._parse_plan(response)
+        plan = self._parse_plan(response)
+        if plan.steps:
+            return plan
+
+        retry_prompt = (
+            prompt
+            + "\n\nYour previous response was truncated or unparseable. "
+            + "Respond again with compact JSON only, no markdown fences, and keep it under 1200 characters. "
+            + "Return at most 4 steps."
+        )
+        logger.warning(f"DomainPlanner{self.tool_categories}: retrying with compact JSON output")
+        retry_response = self._call_llm_sync(task, retry_prompt, max_tokens=1400)
+        retry_plan = self._parse_plan(retry_response)
+        return retry_plan if retry_plan.steps else plan
 
     # ------------------------------------------------------------------
 
@@ -603,7 +622,10 @@ class DomainPlannerAgent(BaseAgent):
         if not raw_state or raw_state == "Empty graph":
             return "Empty graph"
         if isinstance(raw_state, str):
-            return raw_state[:500] if len(raw_state) > 500 else raw_state
+            try:
+                raw_state = json.loads(raw_state)
+            except Exception:
+                return raw_state[:500] if len(raw_state) > 500 else raw_state
         if not isinstance(raw_state, dict):
             return str(raw_state)[:500]
 
@@ -653,71 +675,82 @@ class DomainPlannerAgent(BaseAgent):
         logger.error(f"DomainPlanner: no valid JSON — {safe[:300]}")
         return ExecutionPlan(goal="", steps=[], reasoning=f"Parse failed: {safe[:200]}")
 
+    @staticmethod
+    def _format_recent_feedback(entries: List[Dict[str, Any]]) -> str:
+        if not entries:
+            return ""
+
+        lines = []
+        for entry in entries[-4:]:
+            issues = "; ".join(entry.get("issues", [])[:2]) or "unknown issue"
+            repairs = ", ".join(entry.get("applied_repairs", [])[:2]) or "none"
+            target_tool = entry.get("target_tool", "tool")
+            planner = entry.get("planner", "planner")
+            lines.append(f"- {planner} on {target_tool}: issues={issues}; repairs={repairs}")
+        return "\n".join(lines)
+
+
+class AssemblyAgent(DomainPlannerAgent):
+    """Specialized CAD planner for assemblies, placement, and combination work."""
+
+    def __init__(self, llm_provider: 'LLMProvider', tool_registry: ToolRegistry):
+        super().__init__(
+            llm_provider,
+            tool_registry,
+            ASSEMBLY_PLANNER_PROMPT,
+            tool_categories=["cad", "navigation"],
+            schema_func=get_cad_schema_for_prompt,
+        )
+
+
+class SystemModelAgent(DomainPlannerAgent):
+    """Specialized planner for richer system-model construction requests."""
+
+    def __init__(self, llm_provider: 'LLMProvider', tool_registry: ToolRegistry):
+        super().__init__(
+            llm_provider,
+            tool_registry,
+            SYSTEM_MODEL_AGENT_PROMPT,
+            tool_categories=["modeling", "navigation"],
+            schema_func=get_modeling_schema_for_prompt,
+        )
+
+
+class GraphEditAgent(DomainPlannerAgent):
+    """Specialized planner for editing existing graphs with minimal changes."""
+
+    def __init__(self, llm_provider: 'LLMProvider', tool_registry: ToolRegistry):
+        super().__init__(
+            llm_provider,
+            tool_registry,
+            GRAPH_EDIT_PLANNER_PROMPT,
+            tool_categories=["cad", "modeling", "navigation"],
+        )
+
 
 # ===================================================================
 #  Decomposer Agent — "Think first, then act"
 # ===================================================================
 
-DECOMPOSER_PROMPT = '''You are a **Geometry Decomposition Engineer** for PyLCSS CAD.
-Your job: break complex geometry into simple, ordered sub-parts that can each be built independently.
+DECOMPOSER_PROMPT = '''You are a Geometry Decomposition Engineer for PyLCSS CAD.
+Break complex geometry into simple ordered sub-parts.
 
-## Your Process
-1. **ANALYZE** — What is the user asking for? What are the key functional parts?
-2. **DECOMPOSE** — Break it into the smallest independent sub-parts that can each
-   be created with one `create_cad_geometry` call (primitives + booleans + patterns).
-3. **ORDER** — Parts must be ordered by dependency.
-   Earlier parts may be referenced by later assembly steps.
-4. **DIMENSION** — Specify realistic engineering dimensions **in millimeters (mm)**.
-   ALL dimensions must be in mm. A Boeing 747 fuselage is ~70000mm long, wingspan ~64000mm.
-   Think about proportions and physical plausibility.
-
-## Construction Capabilities (each sub-part can use these)
-- Primitives: box, cylinder, sphere, cone, torus, wedge, pyramid
-- Sketching: sketch → polyline/spline/polygon → extrude / twisted_extrude / revolve / sweep / loft
-- Booleans: Union, Cut, Intersect
-- Patterns: circular_pattern, linear_pattern, mirror
-- Transforms: translate, rotate, scale
-- Features: fillet, chamfer, shell, holes, slots, pockets
-
-## Examples
-
-**"Create a helical gear"** → 3 sub-parts:
-1. "Hub: cylinder radius=23.4mm height=12mm"
-2. "One tooth: sketch a closed tooth profile polyline on XY plane at pitch radius, twisted_extrude with helix twist"
-3. "Assembly: boolean union hub+tooth, then circular_pattern count=20 around Z axis"
-
-**"Create a simple car"** → 5 sub-parts:
-1. "Car body: box 4500×1800×800mm for the lower body"
-2. "Cabin: box 2500×1700×700mm positioned on top of body, union with body, fillet edges"
-3. "Front wheel: cylinder radius=350mm height=250mm, rotated 90° around X, positioned at front-left"
-4. "Rear wheel: same as front wheel, positioned at rear-left"
-5. "Assembly: mirror both wheels to get right side, union all parts"
-
-**"Create a flange with bolt holes"** → 2 sub-parts:
-1. "Base: cylinder radius=40mm height=8mm, cut center bore radius=15mm"
-2. "Features: array_holes on bolt circle diameter=60mm, 8 holes, diameter=6mm"
-
-## Rules
-- Each sub-part should be SIMPLE (≤6 nodes). The CAD planner handles the actual node details.
-- Sub-parts describe WHAT to build in engineering terms, not HOW (no node types or JSON).
-- Include key dimensions, positions, and orientations.
-- Later sub-parts can reference earlier ones for positioning context.
-- For teeth/blades/fins: describe the 2D profile shape + extrusion method, don't try to specify exact coordinates.
-- Return 1 sub-part for simple requests, 2-5 for compound, up to 8 for complex assemblies.
-- The LAST sub-part should be an "Assembly" step that positions and unions all earlier sub-parts.
-  Its `depends_on` MUST list ALL earlier part indices (e.g. [1,2,3,4,5]).
-  The assembly step gets direct access to each prior part's output shape —
-  it only needs translate nodes to position them and boolean Union nodes to combine them.
+Rules:
+1. Describe parts in engineering terms, not node JSON.
+2. Keep each part simple enough for one `create_cad_geometry` call.
+3. Include realistic dimensions in millimeters.
+4. Order parts by dependency.
+5. The last part should be an assembly step when the request is multipart.
+6. Use 1 part for simple requests, 2-5 for most compound requests, up to 8 only for large assemblies.
 
 Respond with ONLY JSON:
 ```json
 {
-  "analysis": "What this is, key features, overall dimensions",
-  "sub_parts": [
-    {"description": "Part 1: detailed construction description with dimensions", "depends_on": []},
-    {"description": "Part 2: description with positioning relative to part 1", "depends_on": [1]},
-    {"description": "Assembly: union/position all parts together", "depends_on": [1, 2]}
-  ]
+    "analysis": "brief",
+    "sub_parts": [
+        {"description": "Part description with dimensions and positioning", "depends_on": []},
+        {"description": "Assembly or dependent part", "depends_on": [1]}
+    ]
 }
 ```'''
 
@@ -756,6 +789,18 @@ class DecomposerAgent(BaseAgent):
     SIMPLE_KEYWORDS = frozenset({
         "box", "cube", "cylinder", "sphere", "cone",
     })
+    NON_GEOMETRIC_KEYWORDS = frozenset({
+        "workflow", "optimization", "topology", "topopt", "mesh",
+        "constraint", "constraints", "load", "loads", "solver",
+        "stress", "fea", "simulation", "analysis",
+    })
+    SINGLE_PART_FEATURE_KEYWORDS = frozenset({
+        "hole", "holes", "bore", "bores", "drill", "drilled",
+        "cutout", "cutouts", "pocket", "pockets", "slot", "slots",
+    })
+    SINGLE_PART_BASE_KEYWORDS = frozenset({
+        "box", "plate", "block", "flange", "bracket", "beam",
+    })
 
     def process(self, context: Dict[str, Any]) -> Optional[List[DecomposedPart]]:
         """Analyze a CAD request and optionally decompose it.
@@ -766,6 +811,18 @@ class DecomposerAgent(BaseAgent):
         """
         task = context.get("task_description", context.get("user_request", ""))
         task_lower = task.lower()
+
+        if any(keyword in task_lower for keyword in self.NON_GEOMETRIC_KEYWORDS):
+            logger.info(f"Decomposer: non-geometry workflow detected, skipping → '{task[:60]}'")
+            return None
+
+        if (
+            any(keyword in task_lower for keyword in self.SINGLE_PART_FEATURE_KEYWORDS)
+            and any(keyword in task_lower for keyword in self.SINGLE_PART_BASE_KEYWORDS)
+            and not any(word in task_lower for word in ("assembly", "assemble", "multipart", "gearbox"))
+        ):
+            logger.info(f"Decomposer: single-part feature workflow detected, skipping → '{task[:60]}'")
+            return None
 
         # Simple primitives never need decomposition
         words = set(task_lower.split())
@@ -807,6 +864,50 @@ class DecomposerAgent(BaseAgent):
             f"Decomposer: {len(result)} sub-parts — {analysis[:80]}"
         )
         return result if len(result) > 1 else None
+
+
+class PlanVerifierAgent:
+    """Deterministically injects JSON verification steps into execution plans.
+
+    This keeps verifier behavior reliable and cheap: graph JSON is checked
+    before execution without spending another LLM call.
+    """
+
+    role = AgentRole.VERIFIER
+
+    _VERIFY_TOOL_BY_TARGET = {
+        "create_cad_geometry": "verify_cad_graph_json",
+        "create_system_model": "verify_system_graph_json",
+    }
+
+    def process(self, plan: ExecutionPlan) -> ExecutionPlan:
+        if not plan.steps:
+            return plan
+
+        verified_steps: List[ToolCall] = []
+        for step in plan.steps:
+            verify_tool = self._VERIFY_TOOL_BY_TARGET.get(step.tool_name)
+            if verify_tool:
+                verify_params = dict(step.parameters)
+                verify_params.setdefault("goal", plan.goal)
+                verify_params.setdefault("target_tool", step.tool_name)
+                verified_steps.append(
+                    ToolCall(
+                        tool_name=verify_tool,
+                        parameters=verify_params,
+                        description=f"Verify JSON for {step.tool_name}",
+                        expected_outcome="Verifier reports no structural or semantic issues",
+                    )
+                )
+            verified_steps.append(step)
+
+        return ExecutionPlan(
+            goal=plan.goal,
+            steps=verified_steps,
+            reasoning=plan.reasoning,
+            estimated_complexity=plan.estimated_complexity,
+            requires_confirmation=plan.requires_confirmation,
+        )
 
 
 # ===================================================================
@@ -861,6 +962,9 @@ class ExecutorAgent(BaseAgent):
         original: ToolCall,
         context: Dict[str, Any],
     ) -> Optional[ToolCall]:
+        if original.tool_name.startswith("verify_"):
+            return None
+
         prompt = EXECUTOR_PROMPT.format(
             tool_name=original.tool_name,
             error=failed.error,
@@ -892,6 +996,8 @@ class ExecutorAgent(BaseAgent):
             f"Fix the parameters based on these suggestions.\n"
             f"Tool: {original.tool_name}\n"
             f"Params: {json.dumps(original.parameters, indent=2)}\n"
+            f"User Request: {context.get('user_request', '')}\n"
+            f"Last Result: {json.dumps(context.get('last_result', {}), indent=2)}\n"
             f"Suggestions: {suggestions}\n\n"
             'Respond with JSON: {"params": {...}}'
         )
@@ -928,6 +1034,16 @@ class CriticAgent(BaseAgent):
         step_num: int = 1,
         total_steps: int = 1,
     ) -> CritiqueResult:
+        if isinstance(result.output, dict) and "ok" in result.output and context.get("tool_name", "").startswith("verify_"):
+            issues = result.output.get("issues", [])
+            return CritiqueResult(
+                approved=bool(result.output.get("ok", False)),
+                issues=issues,
+                suggestions=["Repair the graph plan until the verifier returns ok=true"],
+                design_feedback="Preflight verification result",
+                severity=3 if issues else 1,
+            )
+
         get_state = context.get("get_graph_state")
         state = get_state() if get_state else context.get("graph_state", "{}")
 
@@ -997,11 +1113,13 @@ class AgentOrchestrator:
             tool_categories=["cad", "navigation"],
             schema_func=get_cad_schema_for_prompt,
         )
+        self.assembly_agent = AssemblyAgent(llm_provider, tool_registry)
         self.modeling_planner = DomainPlannerAgent(
             llm_provider, tool_registry, MODELING_PLANNER_PROMPT,
             tool_categories=["modeling", "navigation"],
             schema_func=get_modeling_schema_for_prompt,
         )
+        self.system_model_agent = SystemModelAgent(llm_provider, tool_registry)
         self.analysis_planner = DomainPlannerAgent(
             llm_provider, tool_registry, ANALYSIS_PLANNER_PROMPT,
             tool_categories=["analysis", "modeling", "navigation"],
@@ -1010,7 +1128,9 @@ class AgentOrchestrator:
             llm_provider, tool_registry, GENERAL_PLANNER_PROMPT,
             tool_categories=["navigation", "project"],
         )
+        self.graph_edit_agent = GraphEditAgent(llm_provider, tool_registry)
 
+        self.verifier = PlanVerifierAgent()
         self.executor = ExecutorAgent(llm_provider, tool_registry)
         self.critic = CriticAgent(llm_provider) if use_critic else None
 
@@ -1021,12 +1141,14 @@ class AgentOrchestrator:
         self.on_plan_created = on_plan_created
         self.on_step_complete = on_step_complete
         self.on_complete = on_complete
+        self.telemetry = AgentSessionTelemetry()
+        self._recent_planner_feedback: List[Dict[str, Any]] = []
 
         self.react_loop = ReActLoop(
             executor=self.executor,
             critic=self.critic,
             max_iterations=max_retries,
-            on_step=on_step_complete,
+            on_step=self._on_step_complete_internal,
         )
 
         logger.info(
@@ -1044,9 +1166,12 @@ class AgentOrchestrator:
             self.supervisor,
             self.decomposer,
             self.cad_planner,
+            self.assembly_agent,
             self.modeling_planner,
+            self.system_model_agent,
             self.analysis_planner,
             self.general_planner,
+            self.graph_edit_agent,
             self.executor,
         ):
             agent.llm = provider
@@ -1069,7 +1194,9 @@ class AgentOrchestrator:
             "user_request": user_request,
             "graph_state": graph_state,
             "get_graph_state": get_state,
+            "recent_planner_feedback": self._get_recent_feedback(),
         }
+        self.telemetry.start_request()
 
         # 1. Fast-path for trivially obvious requests
         classification = self._fast_classify(user_request)
@@ -1158,8 +1285,14 @@ class AgentOrchestrator:
                             **context,
                             "task_description": prefix_hint + part.description + avail_shapes,
                             "graph_state": get_state(),
+                            "active_domain": "cad",
                         }
-                        part_plan = self.cad_planner.process(part_context)
+                        part_planner = self._select_planner("cad", part_context)
+                        part_context["planner_name"] = self._planner_name(part_planner)
+                        part_context["recent_planner_feedback"] = self._get_recent_feedback("cad")
+                        part_plan = part_planner.process(part_context)
+                        part_plan = self.verifier.process(part_plan)
+                        self.telemetry.record_plan(part_context["planner_name"], len(part_plan.steps))
                         combined_steps.extend(part_plan.steps)
 
                         if self.on_plan_created:
@@ -1178,10 +1311,15 @@ class AgentOrchestrator:
                                 if pnodes:
                                     sub_part_outputs[pi + 1] = pnodes[-1]["id"]
 
-                        part_results = self.react_loop.run(
-                            part_plan,
-                            {**context, "graph_state": get_state()},
-                        )
+                        part_exec_context = {
+                            **context,
+                            "graph_state": get_state(),
+                            "active_domain": "cad",
+                            "planner_name": part_context["planner_name"],
+                            "recent_planner_feedback": self._get_recent_feedback("cad"),
+                        }
+                        part_results = self.react_loop.run(part_plan, part_exec_context)
+                        self._merge_planner_feedback(part_exec_context)
                         all_results.extend(part_results)
 
                         if part_results and not part_results[-1].success:
@@ -1198,8 +1336,13 @@ class AgentOrchestrator:
                     continue  # skip the normal planner path below
 
             # Normal path: single planner call
-            planner = self._get_planner(sub.domain)
+            planner = self._select_planner(sub.domain, sub_context)
+            sub_context["planner_name"] = self._planner_name(planner)
+            sub_context["active_domain"] = sub.domain
+            sub_context["recent_planner_feedback"] = self._get_recent_feedback(sub.domain)
             plan = planner.process(sub_context)
+            plan = self.verifier.process(plan)
+            self.telemetry.record_plan(sub_context["planner_name"], len(plan.steps))
             combined_steps.extend(plan.steps)
 
             if self.on_plan_created:
@@ -1212,9 +1355,15 @@ class AgentOrchestrator:
                 )
                 break
 
-            results = self.react_loop.run(
-                plan, {**context, "graph_state": get_state()}
-            )
+            exec_context = {
+                **context,
+                "graph_state": get_state(),
+                "active_domain": sub.domain,
+                "planner_name": sub_context["planner_name"],
+                "recent_planner_feedback": self._get_recent_feedback(sub.domain),
+            }
+            results = self.react_loop.run(plan, exec_context)
+            self._merge_planner_feedback(exec_context)
             all_results.extend(results)
 
             # Stop on failure
@@ -1243,7 +1392,51 @@ class AgentOrchestrator:
             "results": all_results,
             "plan": combined_plan,
             "message": self._summarize(combined_plan, all_results, user_request),
+            "telemetry": self.telemetry.snapshot(),
+            "telemetry_summary": self.telemetry.compact_summary(),
         }
+
+    def _on_step_complete_internal(self, step: AgentStep) -> None:
+        if step.action and step.result:
+            self.telemetry.record_tool_result(step.action.tool_name, step.result.success)
+            if step.action.tool_name.startswith("verify_") and isinstance(step.result.output, dict):
+                target_tool = step.action.parameters.get("target_tool", step.action.tool_name)
+                self.telemetry.record_verifier_result(target_tool, step.result.output)
+
+        if self.on_step_complete:
+            self.on_step_complete(step)
+
+    def _merge_planner_feedback(self, run_context: Dict[str, Any]) -> None:
+        entries = run_context.get("planner_feedback", [])
+        if not entries:
+            return
+        for entry in entries:
+            if entry not in self._recent_planner_feedback:
+                self._recent_planner_feedback.append(entry)
+        self._recent_planner_feedback = self._recent_planner_feedback[-8:]
+
+    def _get_recent_feedback(self, domain: str = "") -> List[Dict[str, Any]]:
+        if not domain:
+            return self._recent_planner_feedback[-4:]
+        filtered = [entry for entry in self._recent_planner_feedback if entry.get("domain") in ("", domain)]
+        return filtered[-4:]
+
+    def _planner_name(self, planner: BaseAgent) -> str:
+        if planner is self.cad_planner:
+            return "cad_planner"
+        if planner is self.assembly_agent:
+            return "assembly_agent"
+        if planner is self.modeling_planner:
+            return "modeling_planner"
+        if planner is self.system_model_agent:
+            return "system_model_agent"
+        if planner is self.analysis_planner:
+            return "analysis_planner"
+        if planner is self.general_planner:
+            return "general_planner"
+        if planner is self.graph_edit_agent:
+            return "graph_edit_agent"
+        return planner.__class__.__name__
 
     def get_available_tools_summary(self) -> str:
         """Get a summary of available tools for display."""
@@ -1253,6 +1446,29 @@ class AgentOrchestrator:
 
     _CAD_VERBS = frozenset({"create", "make", "build", "design", "draw", "model",
                              "generate", "construct", "add", "place"})
+    _CAD_SIM_HINTS = frozenset({
+        "topology", "topopt", "mesh", "constraint", "constraints",
+        "load", "loads", "solver", "stress", "fea", "simulation",
+        "material", "compliance",
+    })
+    _ANALYSIS_HINTS = frozenset({
+        "optimization", "optimize", "sensitivity", "surrogate", "doe",
+        "sampling", "workflow", "analysis",
+    })
+    _ASSEMBLY_HINTS = frozenset({
+        "assembly", "assemble", "combine", "union", "position", "place",
+        "arrange", "mount", "attach", "align", "mirror", "pattern",
+    })
+    _EDIT_HINTS = frozenset({
+        "edit", "modify", "change", "update", "adjust", "tweak", "rename",
+        "connect", "disconnect", "set", "move", "reposition", "resize",
+        "increase", "decrease", "replace",
+    })
+    _SYSTEM_MODEL_HINTS = frozenset({
+        "variable", "variables", "equation", "equations", "function", "functions",
+        "input", "inputs", "output", "outputs", "constraint", "constraints",
+        "objective", "objectives", "system", "architecture", "intermediate",
+    })
 
     def _fast_classify(self, request: str) -> Optional[TaskClassification]:
         """Skip the Supervisor for trivially obvious single-action requests."""
@@ -1281,6 +1497,24 @@ class AgentOrchestrator:
                 [SubTask("conversation", request)],
             )
 
+        # CAD simulation workflows are still CAD graph construction, not generic analysis.
+        if any(hint in r for hint in self._CAD_SIM_HINTS) and (
+            words & self._CAD_VERBS or any(noun in r for noun in ("beam", "plate", "bracket", "part", "geometry", "shape"))
+        ):
+            logger.info("Fast-classify: CAD simulation keywords detected")
+            return TaskClassification(
+                "cad", "compound",
+                [SubTask("cad", request)],
+            )
+
+        # Analysis/workflow requests must outrank generic creation verbs.
+        if any(hint in r for hint in self._ANALYSIS_HINTS):
+            logger.info("Fast-classify: analysis/workflow keywords detected")
+            return TaskClassification(
+                "analysis", "compound",
+                [SubTask("analysis", request)],
+            )
+
         # CAD creation — "create me a boeing 747", "make a gear", etc.
         if words & self._CAD_VERBS:
             logger.info(f"Fast-classify: CAD creation verb detected")
@@ -1298,6 +1532,40 @@ class AgentOrchestrator:
             "modeling": self.modeling_planner,
             "analysis": self.analysis_planner,
         }.get(domain, self.general_planner)
+
+    def _select_planner(self, domain: str, context: Dict[str, Any]) -> DomainPlannerAgent:
+        """Pick the most appropriate planner for the current task and state."""
+        task = str(context.get("task_description", context.get("user_request", ""))).lower()
+        graph_state = context.get("graph_state", "")
+
+        if self._looks_like_edit(task, graph_state):
+            return self.graph_edit_agent
+
+        if domain == "cad" and any(hint in task for hint in self._ASSEMBLY_HINTS):
+            return self.assembly_agent
+
+        if domain == "modeling" and any(hint in task for hint in self._SYSTEM_MODEL_HINTS):
+            return self.system_model_agent
+
+        return self._get_planner(domain)
+
+    @staticmethod
+    def _has_graph_state(graph_state: Any) -> bool:
+        if not graph_state:
+            return False
+        if isinstance(graph_state, str):
+            if graph_state == "Empty graph":
+                return False
+            try:
+                graph_state = json.loads(graph_state)
+            except Exception:
+                return bool(graph_state.strip())
+        if isinstance(graph_state, dict):
+            return bool(graph_state.get("nodes"))
+        return True
+
+    def _looks_like_edit(self, task: str, graph_state: Any) -> bool:
+        return self._has_graph_state(graph_state) and any(hint in task for hint in self._EDIT_HINTS)
 
     def _handle_conversation(
         self, question: str, context: Dict[str, Any]
@@ -1341,14 +1609,18 @@ class AgentOrchestrator:
         """Create a concise human-readable summary."""
         total = len(results)
         if total == 0:
-            return f"No actions were executed for: {request}"
+            return f"I did not execute any actions for '{request}'."
 
         ok = sum(1 for r in results if r.success)
+        goal_text = plan.goal or request
         if ok == total:
-            return f"✅ {plan.goal or request}"
+            return f"I completed the requested workflow for '{goal_text}'."
         if ok > 0:
-            errors = ", ".join(
-                (r.error or "?") for r in results if not r.success
-            )[:200]
-            return f"⚠️ {ok}/{total} steps succeeded. Issues: {errors}"
-        return f"❌ Failed: {results[0].error or 'Unknown error'}"
+            errors = "; ".join(
+                (r.error or "unknown issue") for r in results if not r.success
+            )[:240]
+            return (
+                f"I completed {ok} of {total} steps for '{goal_text}', "
+                f"but I ran into this issue: {errors}."
+            )
+        return f"I could not complete '{goal_text}' because: {results[0].error or 'unknown error'}."

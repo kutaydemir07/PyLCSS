@@ -11,8 +11,10 @@ Each tool has:
 """
 
 from dataclasses import dataclass, field
+from copy import deepcopy
 from difflib import SequenceMatcher
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+import json
 import logging
 import re
 
@@ -151,6 +153,390 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
 
     # -- validation helpers ---------------------------------------------------
 
+    def _compact_graph_view(data: Dict[str, Any]) -> Dict[str, Any]:
+        nodes = data.get("nodes", [])
+        connections = data.get("connections", [])
+        compact_nodes = []
+        for node in nodes[:12]:
+            if not isinstance(node, dict):
+                compact_nodes.append(node)
+                continue
+
+            props = node.get("properties", {})
+            compact_nodes.append({
+                "id": node.get("id"),
+                "type": node.get("type"),
+                "properties": props,
+            })
+
+        view: Dict[str, Any] = {
+            "node_count": len(nodes),
+            "connection_count": len(connections),
+            "nodes": compact_nodes,
+            "connections": connections[:20],
+        }
+        if len(nodes) > 12:
+            view["nodes_truncated"] = len(nodes) - 12
+        if len(connections) > 20:
+            view["connections_truncated"] = len(connections) - 20
+        return view
+
+    def _log_graph_payload(stage: str, data: Dict[str, Any], goal: str = ""):
+        compact = _compact_graph_view(data)
+        message = f"CAD payload {stage}"
+        if goal:
+            message += f" | goal={goal!r}"
+        logger.info(message + f" | summary={compact}")
+        try:
+            payload_json = json.dumps(compact, ensure_ascii=True, sort_keys=True)
+        except TypeError:
+            payload_json = str(compact)
+        if len(payload_json) > 4000:
+            payload_json = payload_json[:4000] + "...<truncated>"
+        logger.info(f"CAD payload {stage} json={payload_json}")
+
+    def _node_types(data: Dict[str, Any]) -> List[str]:
+        return [
+            str(node.get("type", ""))
+            for node in data.get("nodes", [])
+            if isinstance(node, dict)
+        ]
+
+    def _has_type(types: List[str], *expected: str) -> bool:
+        return any(node_type in expected for node_type in types)
+
+    def _has_goal_term(goal: str, *terms: str) -> bool:
+        lowered = goal.lower()
+        return any(term in lowered for term in terms)
+
+    def _collect_cad_features(data: Dict[str, Any]) -> Dict[str, bool]:
+        types = set(_node_types(data))
+        primitives = {
+            "com.cad.box",
+            "com.cad.cylinder",
+            "com.cad.sphere",
+            "com.cad.cone",
+            "com.cad.torus",
+            "com.cad.wedge",
+            "com.cad.pyramid",
+        }
+        sketch_profiles = {
+            "com.cad.sketch",
+            "com.cad.sketch.line",
+            "com.cad.sketch.circle",
+            "com.cad.sketch.rectangle",
+            "com.cad.sketch.polygon",
+            "com.cad.sketch.arc",
+            "com.cad.ellipse",
+            "com.cad.spline",
+            "com.cad.polyline",
+        }
+        additive_ops = {
+            "com.cad.extrude",
+            "com.cad.revolve",
+            "com.cad.twisted_extrude",
+            "com.cad.sweep",
+            "com.cad.loft",
+            "com.cad.boolean",
+        }
+        subtractive_ops = {
+            "com.cad.cut_extrude",
+            "com.cad.hole_at_coords",
+            "com.cad.multi_hole",
+            "com.cad.pocket",
+            "com.cad.rectangular_cut",
+            "com.cad.boolean",
+        }
+
+        return {
+            "base_solid": bool(types & (primitives | {"com.cad.extrude", "com.cad.revolve", "com.cad.boolean"})),
+            "sketch_profile": bool(types & sketch_profiles),
+            "additive": bool(types & additive_ops),
+            "subtractive": bool(types & subtractive_ops),
+            "holes": bool(types & {"com.cad.hole_at_coords", "com.cad.multi_hole", "com.cad.cut_extrude", "com.cad.rectangular_cut", "com.cad.boolean"}),
+            "rounded": "com.cad.fillet" in types,
+            "beveled": "com.cad.chamfer" in types,
+            "hollow": bool(types & {"com.cad.shell", "com.cad.cut_extrude", "com.cad.boolean", "com.cad.pocket", "com.cad.rectangular_cut"}),
+            "rotational": bool(types & {"com.cad.cylinder", "com.cad.cone", "com.cad.torus", "com.cad.revolve"}),
+            "revolved": "com.cad.revolve" in types,
+            "swept": "com.cad.sweep" in types,
+            "lofted": "com.cad.loft" in types,
+            "tooth_like": bool(types & {"com.cad.sketch.polygon", "com.cad.polyline", "com.cad.sketch.line", "com.cad.sketch.rectangle", "com.cad.cut_extrude", "com.cad.boolean", "com.cad.extrude"}),
+        }
+
+    def _missing_features(features: Dict[str, bool], required_any: Optional[List[str]] = None, required_all: Optional[List[str]] = None) -> bool:
+        if required_all and any(not features.get(name, False) for name in required_all):
+            return True
+        if required_any and not any(features.get(name, False) for name in required_any):
+            return True
+        return False
+
+    def _verify_cad_semantics(data: Dict[str, Any], goal: str = "") -> List[str]:
+        """Check whether the CAD graph matches key semantic intent from the goal."""
+        if not goal:
+            return []
+
+        issues: List[str] = []
+        lowered_goal = goal.lower()
+
+        features = _collect_cad_features(data)
+        semantic_rules = [
+            {
+                "terms": ["gear", "pinion", "sprocket"],
+                "required_all": ["rotational", "tooth_like"],
+                "message": "Goal suggests toothed rotary geometry, but the graph lacks either a rotary blank/hub or a tooth-forming feature",
+            },
+            {
+                "terms": ["shaft", "axle", "roller", "pulley", "bushing", "spacer"],
+                "required_any": ["rotational", "revolved"],
+                "message": "Goal suggests a rotational part, but the graph lacks cylindrical or revolved geometry",
+            },
+            {
+                "terms": ["hole", "holes", "drill", "drilled", "bore", "slot", "cutout", "notch", "pocket", "window"],
+                "required_any": ["subtractive", "holes"],
+                "message": "Goal requests removed material or openings, but the graph has no cut, pocket, bore, or hole feature",
+            },
+            {
+                "terms": ["fillet", "rounded edge", "round edge", "rounded corner"],
+                "required_all": ["rounded"],
+                "message": "Goal requests rounded edges, but no fillet node is present",
+            },
+            {
+                "terms": ["chamfer", "bevel", "beveled edge", "bevelled edge"],
+                "required_all": ["beveled"],
+                "message": "Goal requests beveled edges, but no chamfer node is present",
+            },
+            {
+                "terms": ["shell", "hollow", "cavity", "hollowed"],
+                "required_all": ["hollow"],
+                "message": "Goal requests a hollow part, but the graph has no shelling or cavity-forming operation",
+            },
+            {
+                "terms": ["plate", "bracket", "flange", "gusset", "mount"],
+                "required_any": ["base_solid", "sketch_profile"],
+                "message": "Goal suggests a plate or bracket-like part, but the graph lacks a clear base solid or profile",
+            },
+            {
+                "terms": ["revolve", "lathe", "turned"],
+                "required_all": ["revolved"],
+                "message": "Goal explicitly suggests a revolved or turned shape, but no revolve node is present",
+            },
+            {
+                "terms": ["sweep", "pipe", "tube", "handle", "rail"],
+                "required_any": ["swept", "hollow", "rotational"],
+                "message": "Goal suggests path-based or tubular geometry, but the graph lacks a sweep, tube, or hollow/rotational construction",
+            },
+            {
+                "terms": ["loft", "blend", "transition"],
+                "required_all": ["lofted"],
+                "message": "Goal suggests a lofted transition, but no loft node is present",
+            },
+        ]
+
+        for rule in semantic_rules:
+            if not _has_goal_term(lowered_goal, *rule["terms"]):
+                continue
+            if _missing_features(
+                features,
+                required_any=rule.get("required_any"),
+                required_all=rule.get("required_all"),
+            ):
+                issues.append(rule["message"])
+
+        return issues
+
+    def _append_connection_if_missing(connections: List[Dict[str, Any]], from_ref: str, to_ref: str) -> bool:
+        for connection in connections:
+            if connection.get("from") == from_ref and connection.get("to") == to_ref:
+                return False
+        connections.append({"from": from_ref, "to": to_ref})
+        return True
+
+    def _repair_cad_graph(data: Dict[str, Any]) -> List[str]:
+        """Apply deterministic repairs for common CAD graph failures."""
+        repairs: List[str] = []
+        nodes = data.get("nodes", [])
+        connections = data.setdefault("connections", data.get("connections", []))
+        node_order = {node.get("id", ""): index for index, node in enumerate(nodes) if isinstance(node, dict)}
+
+        sketch_node_ids = [
+            node.get("id", "")
+            for node in nodes
+            if isinstance(node, dict) and node.get("type") == "com.cad.sketch"
+        ]
+        sketch_profile_types = {
+            "com.cad.sketch.line",
+            "com.cad.sketch.circle",
+            "com.cad.sketch.rectangle",
+            "com.cad.sketch.polygon",
+            "com.cad.sketch.arc",
+            "com.cad.ellipse",
+            "com.cad.spline",
+            "com.cad.polyline",
+        }
+
+        if len(sketch_node_ids) == 1:
+            sketch_source = f"{sketch_node_ids[0]}.sketch"
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                nid = node.get("id", "")
+                ntype = node.get("type", "")
+                schema = CAD_NODE_TYPES.get(ntype, {})
+                if "sketch" not in schema.get("inputs", []):
+                    continue
+                target = f"{nid}.sketch"
+                if not any(conn.get("to") == target for conn in connections):
+                    if _append_connection_if_missing(connections, sketch_source, target):
+                        repairs.append(f"connected lone sketch to '{nid}.sketch'")
+
+        profile_candidates = [
+            node.get("id", "")
+            for node in nodes
+            if isinstance(node, dict) and node.get("type") in sketch_profile_types
+        ]
+        shape_sources = [
+            node.get("id", "")
+            for node in nodes
+            if isinstance(node, dict)
+            and "shape" in CAD_NODE_TYPES.get(node.get("type", ""), {}).get("outputs", [])
+            and node.get("type") != "com.cad.sketch"
+        ]
+
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            nid = node.get("id", "")
+            ntype = node.get("type", "")
+
+            if ntype in {"com.cad.extrude", "com.cad.twisted_extrude", "com.cad.revolve"} and len(profile_candidates) == 1:
+                input_port = "profile" if ntype == "com.cad.revolve" else "shape"
+                target = f"{nid}.{input_port}"
+                if not any(conn.get("to") == target for conn in connections):
+                    source = f"{profile_candidates[0]}.shape"
+                    if _append_connection_if_missing(connections, source, target):
+                        repairs.append(f"connected sketch profile '{profile_candidates[0]}' to '{nid}.{input_port}'")
+
+            if ntype == "com.cad.boolean":
+                current_index = node_order.get(nid, len(nodes))
+                candidates = [
+                    source_id
+                    for source_id in shape_sources
+                    if source_id != nid and node_order.get(source_id, -1) < current_index
+                ]
+                used_sources = {
+                    conn.get("from", "").split(".", 1)[0]
+                    for conn in connections
+                    if conn.get("to", "").startswith(f"{nid}.")
+                }
+                available_sources = [source_id for source_id in candidates if source_id not in used_sources]
+                for input_port in ("shape_a", "shape_b"):
+                    target = f"{nid}.{input_port}"
+                    if any(conn.get("to") == target for conn in connections):
+                        continue
+                    if not available_sources:
+                        break
+                    source_id = available_sources.pop()
+                    if _append_connection_if_missing(connections, f"{source_id}.shape", target):
+                        repairs.append(f"connected '{source_id}.shape' to missing boolean input '{nid}.{input_port}'")
+
+        return repairs
+
+    def _build_passthrough_code(num_inputs: int, num_outputs: int) -> str:
+        input_names = [f"in_{i}" for i in range(1, max(num_inputs, 1) + 1)]
+        lines = ["import numpy as np", ""]
+        for output_index in range(1, max(num_outputs, 1) + 1):
+            source_name = input_names[min(output_index - 1, len(input_names) - 1)]
+            lines.append(f"out_{output_index} = {source_name}")
+        return "\n".join(lines)
+
+    def _repair_system_graph(data: Dict[str, Any]) -> List[str]:
+        """Apply deterministic repairs for common system-model graph failures."""
+        repairs: List[str] = []
+        nodes = data.get("nodes", [])
+
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            nid = node.get("id", "?")
+            ntype = node.get("type", "")
+            props = node.get("properties", {})
+
+            if ntype == "com.pfd.custom_block":
+                code = str(props.get("code_content", ""))
+                real_code = "\n".join(
+                    line for line in code.splitlines()
+                    if line.strip() and not line.strip().startswith("#")
+                )
+                if not real_code.strip():
+                    try:
+                        num_inputs = max(int(props.get("num_inputs", 1)), 1)
+                    except (TypeError, ValueError):
+                        num_inputs = 1
+                    try:
+                        num_outputs = max(int(props.get("num_outputs", 1)), 1)
+                    except (TypeError, ValueError):
+                        num_outputs = 1
+                    props["code_content"] = _build_passthrough_code(num_inputs, num_outputs)
+                    repairs.append(f"generated fallback pass-through code for CustomBlock '{nid}'")
+
+            if ntype == "com.pfd.input":
+                try:
+                    min_value = float(props.get("min", 0))
+                    max_value = float(props.get("max", 10))
+                    if min_value >= max_value:
+                        props["min"] = min(min_value, max_value)
+                        props["max"] = max(min_value, max_value) + 1.0
+                        repairs.append(f"adjusted invalid min/max bounds for Input '{nid}'")
+                except (TypeError, ValueError):
+                    pass
+
+            if ntype == "com.pfd.output" and props.get("minimize") and props.get("maximize"):
+                props["maximize"] = False
+                repairs.append(f"cleared conflicting maximize flag for Output '{nid}'")
+
+        return repairs
+
+    def _normalize_node_specs(data: Dict) -> Dict:
+        """Normalize flat LLM node specs into {id, type, properties} form.
+
+        Models sometimes emit node properties at the top level instead of inside
+        a nested ``properties`` object. Normalize that shape before verification
+        and dispatch so the downstream graph builders interpret the request
+        correctly.
+        """
+        nodes = data.get("nodes", [])
+        normalized_nodes = []
+
+        for node in nodes:
+            if not isinstance(node, dict):
+                normalized_nodes.append(node)
+                continue
+
+            normalized = dict(node)
+            props = normalized.get("properties", {})
+            if not isinstance(props, dict):
+                props = {}
+
+            flat_props = {
+                key: value
+                for key, value in normalized.items()
+                if key not in ("id", "type", "properties")
+            }
+            if flat_props:
+                merged_props = dict(flat_props)
+                merged_props.update(props)
+                normalized = {
+                    "id": normalized.get("id"),
+                    "type": normalized.get("type"),
+                    "properties": merged_props,
+                }
+
+            normalized_nodes.append(normalized)
+
+        data["nodes"] = normalized_nodes
+        return data
+
     def _sanitize_cad_params(data: Dict) -> Dict:
         """Strip hallucinated node types and properties before dispatch.
 
@@ -159,6 +545,8 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
         we log a warning and remove them so the rest of the graph still
         works.  Unknown node types are also flagged.
         """
+        data = _normalize_node_specs(data)
+
         # Sketch-element types that NEED the 'sketch.' sub-prefix:
         #   sketch.circle, sketch.rectangle, sketch.polygon, sketch.arc, sketch.line
         # Sketch-element types WITHOUT 'sketch.' sub-prefix:
@@ -404,7 +792,7 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
 
         return data
 
-    def _verify_cad_graph(data: Dict) -> List[str]:
+    def _verify_cad_graph(data: Dict, goal: str = "") -> List[str]:
         """Verify structural integrity of an LLM-generated CAD node graph.
 
         Returns a list of issue strings (empty = all good).
@@ -422,6 +810,27 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
 
         if not nodes:
             return ["Empty node list — nothing to build"]
+
+        default_sensitive_nodes = {
+            "com.cad.box",
+            "com.cad.cylinder",
+            "com.cad.sphere",
+            "com.cad.cone",
+            "com.cad.torus",
+            "com.cad.wedge",
+            "com.cad.pyramid",
+            "com.cad.extrude",
+            "com.cad.revolve",
+            "com.cad.twisted_extrude",
+            "com.cad.cut_extrude",
+            "com.cad.fillet",
+            "com.cad.chamfer",
+            "com.cad.shell",
+            "com.cad.hole_at_coords",
+            "com.cad.multi_hole",
+            "com.cad.pocket",
+            "com.cad.rectangular_cut",
+        }
 
         node_ids = set()
         node_map: Dict[str, Dict] = {}
@@ -503,13 +912,14 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
 
             # Numeric properties all at default — LLM didn't customize dims
             defaults = schema.get("properties", {})
-            if defaults and props:
+            if defaults and props and ntype in default_sensitive_nodes:
                 # Only check numeric properties (dimensions, counts, angles).
                 # String/enum props (like operation='Union') are intentional.
+                # Exclude bool because in Python bool is a subclass of int.
                 # Skip nodes that have NO numeric defaults (e.g. loft with only 'ruled').
                 numeric_defaults = {
                     k: v for k, v in defaults.items()
-                    if isinstance(v, (int, float)) and k in props
+                    if isinstance(v, (int, float)) and not isinstance(v, bool) and k in props
                 }
                 if len(numeric_defaults) >= 2:
                     all_default = all(
@@ -523,6 +933,7 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
                             f"customized dimensions"
                         )
 
+        issues.extend(_verify_cad_semantics(data, goal))
         return issues
 
     def _verify_system_graph(data: Dict) -> List[str]:
@@ -536,6 +947,7 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
         4. Output node with both minimize and maximize
         5. Connections referencing non-existent nodes
         """
+        data = _normalize_node_specs(data)
         nodes = data.get("nodes", [])
         conns = data.get("connections", [])
         issues: List[str] = []
@@ -607,27 +1019,80 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
 
     def _run_cad_verified(data: Dict) -> Any:
         """Sanitize, verify, then dispatch CAD graph. Returns issues if critical."""
+        goal = str(data.get("goal", "") or "")
+        raw_payload = deepcopy(data)
         data = _sanitize_cad_params(data)
-        issues = _verify_cad_graph(data)
+        applied_repairs = _repair_cad_graph(data)
+        _log_graph_payload("normalized", data, goal)
+        if raw_payload != data:
+            _log_graph_payload("raw", raw_payload, goal)
+        if applied_repairs:
+            logger.info(f"CAD deterministic repairs applied: {applied_repairs}")
+            _log_graph_payload("repaired", data, goal)
+        issues = _verify_cad_graph(data, goal)
         if issues:
             for issue in issues:
                 logger.warning(f"CAD graph issue: {issue}")
         # Dispatch even with warnings — let the engine handle what it can
         result = command_dispatcher._build_node_graph({"params": data}, sync=True)
-        if issues:
-            return f"{result or 'Graph created'} | ⚠ Verifier warnings: {'; '.join(issues)}"
+        if issues or applied_repairs:
+            detail_parts = []
+            if applied_repairs:
+                detail_parts.append(f"repairs: {'; '.join(applied_repairs)}")
+            if issues:
+                detail_parts.append(f"warnings: {'; '.join(issues)}")
+            return f"{result or 'Graph created'} | ⚠ Verifier {' | '.join(detail_parts)}"
         return result
+
+    def _verify_cad_only(data: Dict) -> Dict[str, Any]:
+        """Sanitize and verify CAD graph JSON without executing it."""
+        goal = str(data.get("goal", "") or "")
+        original = deepcopy(data)
+        sanitized = _sanitize_cad_params(deepcopy(data))
+        applied_repairs = _repair_cad_graph(sanitized)
+        _log_graph_payload("verify_raw", original, goal)
+        _log_graph_payload("verify_sanitized", sanitized, goal)
+        if applied_repairs:
+            _log_graph_payload("verify_repaired", sanitized, goal)
+        issues = _verify_cad_graph(sanitized, goal)
+        return {
+            "ok": len(issues) == 0,
+            "issues": issues,
+            "applied_repairs": applied_repairs,
+            "sanitized": sanitized,
+        }
 
     def _run_system_verified(data: Dict) -> Any:
         """Verify then dispatch system modeling graph. Returns issues if critical."""
+        data = _normalize_node_specs(data)
+        applied_repairs = _repair_system_graph(data)
         issues = _verify_system_graph(data)
         if issues:
             for issue in issues:
                 logger.warning(f"System graph issue: {issue}")
+        if applied_repairs:
+            logger.info(f"System deterministic repairs applied: {applied_repairs}")
         result = command_dispatcher._build_system_graph({"params": data}, sync=True)
-        if issues:
-            return f"{result or 'Graph created'} | ⚠ Verifier warnings: {'; '.join(issues)}"
+        if issues or applied_repairs:
+            detail_parts = []
+            if applied_repairs:
+                detail_parts.append(f"repairs: {'; '.join(applied_repairs)}")
+            if issues:
+                detail_parts.append(f"warnings: {'; '.join(issues)}")
+            return f"{result or 'Graph created'} | ⚠ Verifier {' | '.join(detail_parts)}"
         return result
+
+    def _verify_system_only(data: Dict) -> Dict[str, Any]:
+        """Verify system-model graph JSON without executing it."""
+        checked = _normalize_node_specs(deepcopy(data))
+        applied_repairs = _repair_system_graph(checked)
+        issues = _verify_system_graph(checked)
+        return {
+            "ok": len(issues) == 0,
+            "issues": issues,
+            "applied_repairs": applied_repairs,
+            "sanitized": checked,
+        }
 
     # === CAD Tools ===
 
@@ -639,6 +1104,19 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
             ToolParameter("connections", "array", "Connections list. Each has: from (node_id.output_port), to (node_id.input_port)", required=False),
         ],
         handler=lambda data: _run_cad_verified(data),
+        category="cad",
+    ))
+
+    registry.register(Tool(
+        name="verify_cad_graph_json",
+        description="Verify and sanitize CAD graph JSON without executing it. Use this before creating complex geometry.",
+        parameters=[
+            ToolParameter("nodes", "array", "List of CAD node specs to check"),
+            ToolParameter("connections", "array", "CAD connections to check", required=False),
+            ToolParameter("goal", "string", "Original user goal for semantic verification", required=False),
+            ToolParameter("target_tool", "string", "Tool that will consume the verified payload", required=False),
+        ],
+        handler=lambda data: _verify_cad_only(data),
         category="cad",
     ))
     
@@ -722,6 +1200,18 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
                           required=False),
         ],
         handler=lambda data: _run_system_verified(data),
+        category="modeling",
+    ))
+
+    registry.register(Tool(
+        name="verify_system_graph_json",
+        description="Verify system-model graph JSON without executing it. Use this before creating complex models.",
+        parameters=[
+            ToolParameter("nodes", "array", "List of system-model node specs to check"),
+            ToolParameter("connections", "array", "System-model connections to check", required=False),
+            ToolParameter("target_tool", "string", "Tool that will consume the verified payload", required=False),
+        ],
+        handler=lambda data: _verify_system_only(data),
         category="modeling",
     ))
     

@@ -27,6 +27,7 @@ class AgentRole(Enum):
     PLANNER = "planner"
     EXECUTOR = "executor"
     CRITIC = "critic"
+    VERIFIER = "verifier"
     ORCHESTRATOR = "orchestrator"
     SUPERVISOR = "supervisor"
 
@@ -187,14 +188,18 @@ class BaseAgent(ABC):
         """Extract JSON from LLM response, handling comments and code blocks."""
         # 1. Try to find JSON in fenced code blocks
         json_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', response)
-        content = json_match.group(1).strip() if json_match else response.strip()
+        if json_match:
+            content = json_match.group(1).strip()
+        else:
+            open_fence = re.search(r'```(?:json)?\s*', response)
+            content = response[open_fence.end():].strip() if open_fence else response.strip()
         
         # 2. Extract the first valid-looking JSON object if not already cleaned
         if not json_match:
             start = content.find('{')
             end = content.rfind('}')
-            if start != -1 and end != -1:
-                content = content[start:end+1]
+            if start != -1:
+                content = content[start:end+1] if end != -1 else content[start:]
             else:
                 return None
 
@@ -280,10 +285,36 @@ class ReActLoop:
         self.max_iterations = max_iterations
         self.on_step = on_step
         self.on_retry = on_retry
+        self._fast_approve_tools = {
+            'create_cad_geometry',
+            'create_system_model',
+            'modify_cad_node',
+            'modify_system_node',
+            'connect_cad_nodes',
+            'execute_cad',
+            'validate_model',
+            'build_model',
+            'switch_tab',
+            'run_optimization',
+            'run_sensitivity_analysis',
+            'train_surrogate',
+            'generate_samples',
+        }
+
+    def _should_skip_critic(self, tool_call: ToolCall, step_index: int, total_steps: int) -> bool:
+        """Skip critic for deterministic successful tools to avoid extra LLM latency."""
+        if tool_call.tool_name.startswith('verify_'):
+            return True
+        if tool_call.tool_name in self._fast_approve_tools:
+            return True
+        # Intermediate successful tool calls rarely benefit from critique.
+        return step_index < total_steps - 1
         
     def run(self, plan: ExecutionPlan, context: Dict[str, Any]) -> List[ToolResult]:
         """Execute a plan with observation and self-correction."""
         results = []
+        context.setdefault('verified_payloads', {})
+        context.setdefault('planner_feedback', [])
         
         for i, tool_call in enumerate(plan.steps):
             iteration = 0
@@ -292,10 +323,46 @@ class ReActLoop:
             last_result = None
             
             while iteration < self.max_iterations and not success:
+                verified_payload = context['verified_payloads'].get(current_call.tool_name)
+                if (
+                    verified_payload
+                    and current_call.parameters != verified_payload
+                    and current_call.tool_name in ('create_cad_geometry', 'create_system_model')
+                ):
+                    current_call = ToolCall(
+                        tool_name=current_call.tool_name,
+                        parameters=verified_payload,
+                        description=current_call.description,
+                        expected_outcome=current_call.expected_outcome,
+                    )
+
                 # 1. Execute
                 logger.info(f"ReAct: Executing step {i+1}/{len(plan.steps)}, iteration {iteration+1}")
                 result = self.executor.execute_tool(current_call, context)
+
+                if current_call.tool_name.startswith('verify_') and isinstance(result.output, dict):
+                    verification_output = result.output
+                    target_tool = current_call.parameters.get('target_tool')
+                    sanitized = verification_output.get('sanitized')
+                    feedback_entry = {
+                        'domain': context.get('active_domain', ''),
+                        'planner': context.get('planner_name', ''),
+                        'target_tool': target_tool or current_call.tool_name,
+                        'goal': current_call.parameters.get('goal') or context.get('user_request', ''),
+                        'issues': verification_output.get('issues', []),
+                        'applied_repairs': verification_output.get('applied_repairs', []),
+                    }
+                    if feedback_entry['issues']:
+                        context['planner_feedback'].append(feedback_entry)
+                    if target_tool and isinstance(sanitized, dict) and verification_output.get('ok', False):
+                        context['verified_payloads'][target_tool] = sanitized
+                    if not verification_output.get('ok', True):
+                        issues = verification_output.get('issues', [])
+                        result.success = False
+                        result.error = 'Verification failed: ' + '; '.join(issues or ['unknown verifier issue'])
+
                 last_result = result
+                context['tool_name'] = current_call.tool_name
                 
                 step = AgentStep(
                     thought=AgentThought(f"Executing: {current_call.description or current_call.tool_name}"),
@@ -310,14 +377,19 @@ class ReActLoop:
                 # 2. Observe & Critique
                 if result.success:
                     if self.critic:
-                        critique = self.critic.evaluate(
-                            result, 
-                            context,
-                            expected_outcome=current_call.expected_outcome,
-                            step_num=i + 1,
-                            total_steps=len(plan.steps)
-                        )
-                        if critique.approved:
+                        if self._should_skip_critic(current_call, i, len(plan.steps)):
+                            success = True
+                            logger.info("ReAct: Fast-approved successful deterministic step")
+                            critique = None
+                        else:
+                            critique = self.critic.evaluate(
+                                result,
+                                context,
+                                expected_outcome=current_call.expected_outcome,
+                                step_num=i + 1,
+                                total_steps=len(plan.steps)
+                            )
+                        if critique is not None and critique.approved:
                             success = True
                             logger.info(f"ReAct: Step approved by critic")
                         elif not current_call.parameters:
@@ -327,17 +399,17 @@ class ReActLoop:
                             logger.info(f"ReAct: Auto-approving no-param tool that succeeded")
                         else:
                             # Self-correct based on critique
-                            logger.info(f"ReAct: Critic rejected - {critique.issues}")
+                            logger.info(f"ReAct: Critic rejected - {critique.issues if critique else []}")
                             if self.on_retry:
-                                self.on_retry(f"Critique: {critique.issues}", current_call)
+                                self.on_retry(f"Critique: {critique.issues if critique else []}", current_call)
                                 
-                            if critique.retry_with and critique.retry_with.steps:
+                            if critique and critique.retry_with and critique.retry_with.steps:
                                 current_call = critique.retry_with.steps[0]
                             else:
                                 # Try to fix based on suggestions
                                 fixed_call = self.executor.apply_fix(
                                     current_call, 
-                                    critique.suggestions,
+                                    critique.suggestions if critique else [],
                                     context
                                 )
                                 if fixed_call:
