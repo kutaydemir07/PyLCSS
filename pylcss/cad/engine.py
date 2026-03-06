@@ -35,6 +35,31 @@ def _is_simulation_node(node):
     identifier = getattr(node, '__identifier__', '')
     return identifier in SIMULATION_NODE_IDENTIFIERS
 
+
+def _invalidate_downstream_cache(node, reverse_dependencies):
+    """Clear cached results for nodes affected by an upstream execution failure."""
+    pending = deque(reverse_dependencies.get(node, ()))
+    visited = set()
+
+    while pending:
+        downstream = pending.popleft()
+        if downstream in visited:
+            continue
+        visited.add(downstream)
+
+        setattr(downstream, '_last_result', None)
+        setattr(downstream, '_last_input_hash', None)
+        setattr(downstream, '_dirty', True)
+        setattr(downstream, '_force_execute', False)
+
+        if hasattr(downstream, 'clear_error'):
+            try:
+                downstream.clear_error()
+            except Exception:
+                pass
+
+        pending.extend(reverse_dependencies.get(downstream, ()))
+
 def execute_graph(graph_or_nodes, skip_simulation=False, **kwargs):
     """
     Execute nodes in topological order with deep hash-based dirty checks.
@@ -100,6 +125,7 @@ def execute_graph(graph_or_nodes, skip_simulation=False, **kwargs):
     # 3. Execution with Deep Hash-Based Caching
     results = {}
     executed_nodes = set()
+    errors = []
 
     for n in order:
         # Collect current input values for hashing
@@ -157,7 +183,24 @@ def execute_graph(graph_or_nodes, skip_simulation=False, **kwargs):
                 
             results[n] = res
         except Exception as e:
+            setattr(n, '_last_result', None)
+            setattr(n, '_last_input_hash', None)
+            setattr(n, '_dirty', True)
+            setattr(n, '_force_execute', False)
+            _invalidate_downstream_cache(n, rev)
             if hasattr(n, 'set_error'):
                 n.set_error(str(e))
-            
+            node_name = getattr(n, 'name', None)
+            if callable(node_name):
+                node_name = node_name()
+            if not node_name:
+                node_name = getattr(n, 'NODE_NAME', None) or n.__class__.__name__
+            errors.append((str(node_name), str(e)))
+
+    if errors:
+        error_lines = [f"{name}: {message}" for name, message in errors[:10]]
+        if len(errors) > 10:
+            error_lines.append(f"... and {len(errors) - 10} more node error(s)")
+        raise RuntimeError("Graph execution failed:\n" + "\n".join(error_lines))
+
     return results

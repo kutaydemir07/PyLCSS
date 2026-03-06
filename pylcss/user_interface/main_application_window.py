@@ -35,6 +35,7 @@ from pylcss.user_interface.assistant import OverlayWidget
 # --- I/O & MATH IMPORTS ---
 import os
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.action_load_project.setShortcut("Ctrl+O")
         self.action_load_project.triggered.connect(self.load_project)
         self.file_menu.addAction(self.action_load_project)
+
+        self._project_io_busy = False
+        self._project_io_dialog = None
 
         # Central Widget setup
         self.central_widget: QtWidgets.QWidget = QtWidgets.QWidget()
@@ -148,6 +152,128 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # --- ASSISTANT CONTROL SETUP ---
         self._setup_assistant_systems()
+
+    def _set_project_io_enabled(self, enabled: bool) -> None:
+        self.action_save_project.setEnabled(enabled)
+        self.action_load_project.setEnabled(enabled)
+
+    def _run_project_steps(self, title: str, steps, success_message: str, error_title: str) -> None:
+        if self._project_io_busy:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Project Operation In Progress",
+                "Wait for the current project save/load operation to finish first.",
+            )
+            return
+
+        self._project_io_busy = True
+        self._set_project_io_enabled(False)
+
+        dialog = QtWidgets.QProgressDialog(title, "Cancel", 0, len(steps), self)
+        dialog.setWindowTitle(title)
+        dialog.setWindowModality(QtCore.Qt.WindowModal)
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.setValue(0)
+        dialog.show()
+        self._project_io_dialog = dialog
+        self.statusBar().showMessage(title)
+
+        state = {'index': 0, 'cancelled': False}
+
+        def finish(success: bool, message: str = "") -> None:
+            self._project_io_busy = False
+            self._set_project_io_enabled(True)
+            if self._project_io_dialog is not None:
+                self._project_io_dialog.close()
+                self._project_io_dialog.deleteLater()
+                self._project_io_dialog = None
+
+            if success:
+                self.statusBar().showMessage(success_message, 4000)
+                QtWidgets.QMessageBox.information(self, "Success", success_message)
+            elif message:
+                self.statusBar().showMessage(message, 5000)
+                QtWidgets.QMessageBox.critical(self, error_title, message)
+
+        def run_next_step() -> None:
+            if state['cancelled']:
+                finish(False, f"{title} cancelled.")
+                return
+
+            index = state['index']
+            if index >= len(steps):
+                finish(True)
+                return
+
+            label, func = steps[index]
+            if self._project_io_dialog is not None:
+                self._project_io_dialog.setLabelText(label)
+                self._project_io_dialog.setValue(index)
+
+            try:
+                func()
+            except Exception as exc:
+                finish(False, str(exc))
+                return
+
+            state['index'] += 1
+            if self._project_io_dialog is not None:
+                self._project_io_dialog.setValue(state['index'])
+            QtCore.QTimer.singleShot(0, run_next_step)
+
+        dialog.canceled.connect(lambda: state.__setitem__('cancelled', True))
+        QtCore.QTimer.singleShot(0, run_next_step)
+
+    def _collect_active_tasks(self):
+        tasks = []
+
+        if hasattr(self.cad_widget, '_execution_is_active') and self.cad_widget._execution_is_active():
+            tasks.append("CAD computation")
+
+        optimization_worker = getattr(self.optimization_widget, 'worker', None)
+        if optimization_worker is not None and optimization_worker.isRunning():
+            tasks.append("optimization")
+
+        if hasattr(self.sol_space_widget, 'has_active_background_tasks') and self.sol_space_widget.has_active_background_tasks():
+            tasks.append("solution-space analysis")
+
+        sensitivity_worker = getattr(self.sensitivity_widget, 'worker', None)
+        if sensitivity_worker is not None and sensitivity_worker.isRunning():
+            tasks.append("sensitivity analysis")
+
+        refresh_worker = getattr(self.sensitivity_widget, 'refresh_worker', None)
+        if refresh_worker is not None and refresh_worker.isRunning():
+            tasks.append("sensitivity refresh")
+
+        for attr_name, label in (
+            ('gen_worker', 'surrogate data generation'),
+            ('worker', 'surrogate training'),
+            ('adaptive_worker', 'adaptive surrogate training'),
+        ):
+            thread = getattr(self.surrogate_widget, attr_name, None)
+            if thread is not None and thread.isRunning():
+                tasks.append(label)
+
+        return tasks
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        active_tasks = self._collect_active_tasks()
+        if self._project_io_busy:
+            active_tasks.append("project save/load")
+
+        if active_tasks:
+            task_text = ", ".join(active_tasks)
+            QtWidgets.QMessageBox.information(
+                self,
+                "Background Tasks Running",
+                f"Wait for these tasks to finish before closing the application: {task_text}.",
+            )
+            event.ignore()
+            return
+
+        super().closeEvent(event)
 
     def _setup_assistant_systems(self) -> None:
         """Initialize assistant systems (voice + LLM)."""
@@ -321,77 +447,61 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def save_project(self):
         """Save the entire project to a folder."""
+        if self._project_io_busy:
+            QtWidgets.QMessageBox.information(self, "Project Operation In Progress", "Wait for the current project operation to finish first.")
+            return
+
         parent_folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Parent Folder for Project")
         if not parent_folder:
             return
 
-        try:
-            # Get product name for folder creation
-            product_name = self.modeling_widget.system_manager.product_name.text().strip()
-            if not product_name:
-                product_name = "New_Project"
-            
-            # Sanitize folder name
-            import re
-            safe_name = re.sub(r'[<>:"/\\|?*]', '_', product_name)
-            
-            # Create project folder
-            folder_path = os.path.join(parent_folder, safe_name)
-            os.makedirs(folder_path, exist_ok=True)
+        product_name = self.modeling_widget.system_manager.product_name.text().strip() or "New_Project"
+        safe_name = re.sub(r'[<>:"/\\|?*]', '_', product_name)
+        folder_path = os.path.join(parent_folder, safe_name)
 
-            # 1. Save Modeling Graph
-            self.modeling_widget.save_graph_to_file(folder_path)
-            
-            # 2. Save Surrogate Settings
-            self.surrogate_widget.save_to_folder(folder_path)
-            
-            # 3. Save Solution Space Data
-            self.sol_space_widget.save_to_folder(folder_path)
-            
-            # 4. Save Optimization Settings
-            self.optimization_widget.save_to_folder(folder_path)
-            
-            # 5. Save Sensitivity Settings
-            self.sensitivity_widget.save_to_folder(folder_path)
-            
-            QtWidgets.QMessageBox.information(self, "Success", f"Project saved successfully to:\n{folder_path}")
-            
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Save Error", f"Failed to save project: {str(e)}")
+        steps = [
+            ("Saving modeling graph...", lambda: self.modeling_widget.save_graph_to_file(folder_path)),
+            ("Saving surrogate settings...", lambda: self.surrogate_widget.save_to_folder(folder_path)),
+            ("Saving solution-space data...", lambda: self.sol_space_widget.save_to_folder(folder_path)),
+            ("Saving optimization settings...", lambda: self.optimization_widget.save_to_folder(folder_path)),
+            ("Saving sensitivity settings...", lambda: self.sensitivity_widget.save_to_folder(folder_path)),
+        ]
+        self._run_project_steps(
+            "Saving project...",
+            steps,
+            f"Project saved successfully to:\n{folder_path}",
+            "Save Error",
+        )
 
     def load_project(self):
         """Load the entire project from a folder."""
+        if self._project_io_busy:
+            QtWidgets.QMessageBox.information(self, "Project Operation In Progress", "Wait for the current project operation to finish first.")
+            return
+
         folder_path = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Project Folder to Load")
         if not folder_path:
             return
 
-        try:
-            # 1. Load Modeling Graph
-            self.modeling_widget.load_graph_from_file(folder_path)
-            
-            # 2. Load Surrogate Settings
-            self.surrogate_widget.load_from_folder(folder_path)
-            
-            # 3. Load Solution Space Data
-            self.sol_space_widget.load_from_folder(folder_path)
-            
-            # Transfer loaded problem to Optimization Widget
+        def transfer_solution_space_problem() -> None:
             if self.sol_space_widget.problem:
-                # Transfer models list so the dropdown is populated
                 if self.sol_space_widget.models:
                     self.optimization_widget.load_models(self.sol_space_widget.models)
-                
                 self.optimization_widget.set_problem(self.sol_space_widget.problem)
                 self.optimization_widget.system_code = self.sol_space_widget.system_code
 
-            # 4. Load Optimization Settings
-            self.optimization_widget.load_from_folder(folder_path)
-            
-            # 5. Load Sensitivity Settings
-            self.sensitivity_widget.load_from_folder(folder_path)
-            
-            QtWidgets.QMessageBox.information(self, "Success", "Project loaded successfully!")
-            
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Load Error", f"Failed to load project: {str(e)}")
+        steps = [
+            ("Loading modeling graph...", lambda: self.modeling_widget.load_graph_from_file(folder_path)),
+            ("Loading surrogate settings...", lambda: self.surrogate_widget.load_from_folder(folder_path)),
+            ("Loading solution-space data...", lambda: self.sol_space_widget.load_from_folder(folder_path)),
+            ("Syncing optimization problem...", transfer_solution_space_problem),
+            ("Loading optimization settings...", lambda: self.optimization_widget.load_from_folder(folder_path)),
+            ("Loading sensitivity settings...", lambda: self.sensitivity_widget.load_from_folder(folder_path)),
+        ]
+        self._run_project_steps(
+            "Loading project...",
+            steps,
+            "Project loaded successfully!",
+            "Load Error",
+        )
 

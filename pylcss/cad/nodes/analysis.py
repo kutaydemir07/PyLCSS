@@ -14,7 +14,7 @@ class MassPropertiesNode(CadQueryNode):
         self.add_input('shape', color=(100, 255, 100))
         self.add_output('properties', color=(255, 200, 100))
         
-        self.create_property('density', 7850.0, widget_type='float')  # Steel kg/m^3
+        self.create_property('density', 7.85e-9, widget_type='float')  # Steel tonne/mm^3
 
     def run(self):
         shape = self.get_input_shape('shape')
@@ -28,17 +28,13 @@ class MassPropertiesNode(CadQueryNode):
             # Handle Workplane vs value
             solid = shape.val() if hasattr(shape, 'val') else shape
             
-            # Use actual solid volume, not bounding box approximation
-            # Note: Volume() returns mm^3. Density typically kg/m^3 or tonne/mm^3.
-            # If default density is 7850 (kg/m^3), we need to convert volume.
-            # 1 mm^3 = 1e-9 m^3.
-            # So mass (kg) = Volume(mm^3) * 1e-9 * density(kg/m^3)
-            # OR if density is in tonne/mm^3 (e.g. 7.85e-9), mass (tonne) = Volume * density
-            # Let's assume standard kg/m^3 for user property but handle units carefully.
+            # Note: Volume() returns mm^3. Density typically tonne/mm^3 in this system.
+            # So mass (tonne) = Volume(mm^3) * density(tonne/mm^3)
+            # 1 tonne = 1000 kg.
             
             volume_mm3 = solid.Volume()
-            volume_m3 = volume_mm3 / 1e9
-            mass_kg = volume_m3 * float(density)
+            mass_tonne = volume_mm3 * float(density)
+            mass_kg = mass_tonne * 1000.0
             
             # Use actual center of mass if available
             try:

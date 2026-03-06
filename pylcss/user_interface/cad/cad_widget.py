@@ -14,6 +14,8 @@ Features:
 import sys
 import os
 import json
+import tempfile
+import time
 from datetime import datetime
 import vtk
 from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
@@ -705,15 +707,16 @@ class PropertiesPanel(QtWidgets.QWidget):
             # This is a heuristic fallback for common patterns
             known_combos = {
                 'operation': ['Union', 'Cut', 'Intersect'],
-                'preset': ['Custom', 'Steel (Structural)', 'Steel (Stainless 304)', 
+                'preset': ['Custom', 'Steel (Structural)', 'Steel (Stainless 304)',
                           'Aluminum 6061-T6', 'Aluminum 7075-T6', 'Titanium Ti-6Al-4V',
                           'Copper (Annealed)', 'Brass', 'Cast Iron (Gray)', 'Magnesium AZ31',
                           'Nickel Alloy 718', 'CFRP (Quasi-Isotropic)', 'GFRP (E-Glass)',
                           'Concrete (Normal)', 'ABS Plastic', 'Nylon 6/6', 'PEEK', 'Wood (Oak)'],
                 'mesh_type': ['Tet', 'Tet10'],
-                'constraint_type': ['Fixed', 'Roller X', 'Roller Y', 'Roller Z', 
+                'constraint_type': ['Fixed', 'Roller X', 'Roller Y', 'Roller Z',
                                     'Pinned', 'Symmetry X', 'Symmetry Y', 'Symmetry Z', 'Displacement'],
-                'load_type': ['Force', 'Moment', 'Gravity', 'Remote Force'],
+                # FIX #D: Removed 'Moment' and 'Remote Force' — not implemented, removed from node.
+                'load_type': ['Force', 'Gravity', 'Pressure'],
                 'gravity_direction': ['-Y', '-Z', '-X', '+Y', '+Z', '+X'],
                 'visualization': ['Density', 'Von Mises Stress', 'Displacement'],
                 'filter_type': ['sensitivity', 'density'],
@@ -985,14 +988,14 @@ class PropertiesPanel(QtWidgets.QWidget):
             lay = QtWidgets.QFormLayout()
 
             combo = QtWidgets.QComboBox()
-            combo.addItems(['Force', 'Moment', 'Gravity', 'Remote Force'])
+            combo.addItems(['Force', 'Gravity'])
             combo.blockSignals(True)
-            combo.setCurrentText(str(lt))
+            combo.setCurrentText(str(lt) if str(lt) in ['Force', 'Gravity'] else 'Force')
             combo.blockSignals(False)
             combo.currentTextChanged.connect(lambda v: self.update_property('load_type', v))
             lay.addRow("Type:", combo)
 
-            if lt in ('Force', 'Remote Force'):
+            if lt == 'Force':
                 fx = float(node.get_property('force_x') or 0.0)
                 fy = float(node.get_property('force_y') or 0.0)
                 fz = float(node.get_property('force_z') or 0.0)
@@ -1014,17 +1017,6 @@ class PropertiesPanel(QtWidgets.QWidget):
                     f"({fx:+.0f}, {fy:+.0f}, {fz:+.0f}) N   │   {mag:.2f} N   │   dir ≈ {_dir_arrow(fx,fy,fz)}")
                 dir_lbl.setStyleSheet("color:#6dde8d; font-weight:bold; font-size:11px;")
                 lay.addRow("", dir_lbl)
-
-            elif lt == 'Moment':
-                for axis, prop in [('X', 'moment_x'), ('Y', 'moment_y'), ('Z', 'moment_z')]:
-                    val = float(node.get_property(prop) or 0.0)
-                    spin = QtWidgets.QDoubleSpinBox()
-                    spin.setRange(-1e12, 1e12)
-                    spin.setDecimals(2)
-                    spin.setValue(val)
-                    spin.setSuffix(' N·mm')
-                    spin.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
-                    lay.addRow(f"M{axis}:", spin)
 
             elif lt == 'Gravity':
                 grav_accel = float(node.get_property('gravity_accel') or 9810.0)
@@ -1385,6 +1377,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         
         # Initialize worker as None
         self.worker = None
+        self._last_preview_update_time = 0.0
         
         # Loading state flag to suppress events during project load
         self._is_loading = False
@@ -1521,6 +1514,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         self.toolbar.addAction("▶ Run", self._execute_graph)
         self.toolbar.addAction("✓ Validate", self._validate_model)
         self.toolbar.addAction("📊 Report", self._generate_report)
+        self.toolbar.addAction("Export Results", self._export_simulation_results)
         self.toolbar.addSeparator()
         self.toolbar.addAction("Fit to View", self._fit_all)
         
@@ -1727,27 +1721,40 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
         anchor_cls = anchor_node.__class__.__name__
 
-        def _get_faces_for_bc_node(bc_node):
-            """Try two sources: (1) _last_result geometries, (2) target_face input port."""
+        def _get_faces_for_bc_node(bc_node, extra_port_names=None):
+            """Try two sources: (1) _last_result geometries, (2) named input port to SelectFaceNode.
+
+            extra_port_names: additional port names to walk (e.g. ['impact_face'])
+            in addition to the default 'target_face'.
+            """
             faces = []
             # Source 1: cached result of BC node itself (populated after full run)
             try:
                 result = getattr(bc_node, '_last_result', None)
                 if isinstance(result, dict):
                     geoms = result.get('geometries') or []
+                    # PressureLoadNode and older ConstraintNode use 'geometry' (singular)
+                    if not geoms and result.get('geometry'):
+                        geoms = [result['geometry']]
+                    # ImpactConditionNode stores faces under 'face_list'
+                    if not geoms:
+                        geoms = result.get('face_list') or []
                     faces.extend([g for g in geoms if g is not None])
             except Exception:
                 pass
 
-            # Source 2: walk target_face input port to SelectFaceNode result
+            # Source 2: walk named input ports to SelectFaceNode result
             if not faces:
+                port_names_to_check = {'target_face'}
+                if extra_port_names:
+                    port_names_to_check.update(extra_port_names)
                 try:
                     for port in bc_node.input_ports():
                         try:
                             pname = port.name()
                         except Exception:
                             pname = ''
-                        if pname != 'target_face':
+                        if pname not in port_names_to_check:
                             continue
                         for conn_port in port.connected_ports():
                             upstream = conn_port.node()
@@ -1772,7 +1779,12 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 if anchor_cls == 'LoadNode':
                     continue
                 faces = _get_faces_for_bc_node(node)
-                constraint_faces.extend(faces)
+                # FIX #V4: Carry viz metadata (per-type color) alongside the face
+                # object so the viewer can render each constraint type distinctly.
+                result = getattr(node, '_last_result', None)
+                viz_meta = (result.get('viz') if isinstance(result, dict) else None) or {}
+                for g in faces:
+                    constraint_faces.append({'face': g, 'viz': viz_meta})
 
             # ---- LoadNode ----
             elif cls == 'LoadNode':
@@ -1786,12 +1798,68 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                     fy = float(node.get_property('force_y') or 0.0)
                     fz = float(node.get_property('force_z') or 0.0)
                     vec = [fx, fy, fz]
+                    import math as _m
+                    force_mag = _m.sqrt(fx*fx + fy*fy + fz*fz)
                     for g in faces:
                         load_faces.append(g)
                         centroid = self._get_face_centroid(g)
-                        load_vectors.append((centroid, vec))
+                        # FIX #V2: pass magnitude for log-scaled arrow in the viewer
+                        load_vectors.append({
+                            'centroid': centroid,
+                            'face': g,
+                            'vector': vec,
+                            'magnitude_N': force_mag,
+                        })
                 except Exception:
                     pass
+
+            # ---- PressureLoadNode ─ yellow face highlight, no arrow (normal varies) ----
+            elif cls == 'PressureLoadNode':
+                if anchor_cls == 'ConstraintNode':
+                    continue
+                faces = _get_faces_for_bc_node(node)
+                for g in faces:
+                    load_faces.append(g)
+
+            # ---- ImpactConditionNode ─ yellow face highlight + cyan velocity arrow ----
+            elif cls == 'ImpactConditionNode':
+                if anchor_cls == 'ConstraintNode':
+                    continue
+                faces = _get_faces_for_bc_node(node, extra_port_names={'impact_face'})
+                try:
+                    vx = float(node.get_property('velocity_x') or 0.0)
+                    vy = float(node.get_property('velocity_y') or 0.0)
+                    vz = float(node.get_property('velocity_z') or 0.0)
+                except Exception:
+                    vx, vy, vz = 0.0, 0.0, 0.0
+                import math as _m
+                v_mag = _m.sqrt(vx*vx + vy*vy + vz*vz)
+                arrow_emitted = False
+                for g in faces:
+                    try:
+                        load_faces.append(g)
+                        centroid = self._get_face_centroid(g)
+                        load_vectors.append({
+                            'centroid': centroid,
+                            'face': g,
+                            'vector': [vx, vy, vz],
+                            'magnitude_N': v_mag,
+                            'color': '#00e5ff',
+                        })
+                        arrow_emitted = True
+                    except Exception:
+                        try:
+                            load_faces.append(g)
+                        except Exception:
+                            pass
+                # Fallback: draw arrow at centroid (0,0,0) if no face centroid found
+                if not arrow_emitted and v_mag > 1e-9:
+                    load_vectors.append({
+                        'centroid': [0.0, 0.0, 0.0],
+                        'vector': [vx, vy, vz],
+                        'magnitude_N': v_mag,
+                        'color': '#00e5ff',
+                    })
 
         return constraint_faces, load_faces, load_vectors
 
@@ -1907,6 +1975,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
     def _on_execution_finished(self, results):
         """Called when the background thread completes."""
+        self.worker = None
         # Lock before processing results
         self.result_mutex.lock()
         try:
@@ -2008,10 +2077,16 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
     def _on_execution_error(self, error_msg):
         """Called if background thread fails."""
+        self.worker = None
         self.graph.widget.setEnabled(True)
         self.toolbar.setEnabled(True)
         self.statusBar().showMessage(f"❌ Error: {error_msg}")
         self.timeline.add_event(f"Execution failed: {error_msg}")
+        try:
+            self.viewer.set_bc_overlay_data()
+            self.viewer.render_bc_overlays()
+        except Exception:
+            pass
         QtWidgets.QMessageBox.critical(self, "Computation Error", error_msg)
     
     def _update_property(self, prop_name, value):
@@ -2399,6 +2474,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
     
     def _new_project(self):
         """Create a new project."""
+        if not self._ensure_idle_for_io("creating a new project"):
+            return
+
         self.graph.clear_session()
         self.current_file = None
         self._last_rendered_node = None
@@ -2411,6 +2489,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
     
     def _open_project(self):
         """Open a project file."""
+        if not self._ensure_idle_for_io("opening a project"):
+            return
+
         fname, _ = QtWidgets.QFileDialog.getOpenFileName(
             self, "Open Project", "", "CAD Projects (*.cad);;All Files (*)"
         )
@@ -2419,19 +2500,25 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             was_auto_update_enabled = self.auto_update_cb.isChecked()
             self.auto_update_cb.setChecked(False)
             self._is_loading = True
+            previous_file = self.current_file
+            backup_session = None
+            try:
+                backup_session = self.graph.serialize_session()
+            except Exception:
+                backup_session = None
             
             try:
-                # Load and deserialize using NodeGraphQt's built-in session manager
-                # load_session handles clearing the session and reading the file
+                with open(fname, 'r', encoding='utf-8') as f:
+                    session_data = json.load(f)
 
-                # Clear viewer BEFORE loading so old geometry disappears immediately
+                self.graph.clear_session()
+                self.graph.deserialize_session(session_data)
+
                 self._last_rendered_node = None
                 try:
                     self.viewer.clear()
                 except Exception:
                     pass
-
-                self.graph.load_session(fname)
                 
                 # Automatically fit all nodes in view after loading
                 try:
@@ -2439,27 +2526,287 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 except Exception:
                     pass
                 
-                # Done loading - clear flag
-                self._is_loading = False
-                
                 self.current_file = fname
                 self.timeline.add_event(f"Opened project: {fname}")
                 self.statusBar().showMessage(f"Opened: {fname}")
                 
                 # Execute to restore view (but skip heavy simulation)
                 self._execute_graph(skip_simulation=True)
-                
-                # Re-enable auto-update after loading is complete
-                self.auto_update_cb.setChecked(True)
             except Exception as e:
-                self._is_loading = False
+                self.current_file = previous_file
+                if backup_session is not None:
+                    try:
+                        self.graph.clear_session()
+                        self.graph.deserialize_session(backup_session)
+                        self._fit_all()
+                    except Exception:
+                        pass
                 QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open project: {e}")
-                # Restore auto-update state on error
+            finally:
+                self._is_loading = False
                 self.auto_update_cb.setChecked(was_auto_update_enabled)
+
+    def _execution_is_active(self):
+        return bool(self.worker and self.worker.isRunning())
+
+    def _ensure_idle_for_io(self, action_name):
+        if not self._execution_is_active():
+            return True
+
+        message = f"Wait for the current computation to finish before {action_name}."
+        self.statusBar().showMessage(f"⚠️ {message}")
+        QtWidgets.QMessageBox.information(self, "Computation In Progress", message)
+        return False
     
     def _get_node_class(self, class_name):
         """Get node class by name."""
         return NODE_NAME_MAPPING.get(class_name)
+
+    def _get_exportable_result_node(self):
+        """Return the best candidate node with cached simulation results."""
+        candidates = []
+        selected = next(iter(self.graph.selected_nodes()), None)
+        if selected is not None:
+            candidates.append(selected)
+
+        current = getattr(self.properties, 'current_node', None)
+        if current is not None and current not in candidates:
+            candidates.append(current)
+
+        last = getattr(self, '_last_rendered_node', None)
+        if last is not None and last not in candidates:
+            candidates.append(last)
+
+        for node in reversed(list(self.graph.all_nodes())):
+            if node not in candidates:
+                candidates.append(node)
+
+        for node in candidates:
+            result = getattr(node, '_last_result', None)
+            if isinstance(result, dict) and result.get('mesh') is not None and result.get('type') in {'fea', 'topopt', 'crash'}:
+                return node
+        return None
+
+    def _build_simulation_export_payload(self, node):
+        """Create portable JSON/HDF5 payloads from a cached simulation result."""
+        import numpy as np
+
+        result = getattr(node, '_last_result', None)
+        if not isinstance(result, dict) or result.get('mesh') is None:
+            raise ValueError("The selected node has no exportable simulation result.")
+
+        mesh = result['mesh']
+        if not hasattr(mesh, 'p') or not hasattr(mesh, 't'):
+            raise ValueError("Only scikit-fem style simulation meshes are supported for export.")
+
+        points = np.asarray(mesh.p.T, dtype=float)
+        if points.ndim != 2:
+            raise ValueError("Invalid mesh point array.")
+        if points.shape[1] == 2:
+            points = np.column_stack([points, np.zeros(len(points))])
+
+        cells = np.asarray(mesh.t.T, dtype=int)
+        if cells.ndim != 2:
+            raise ValueError("Invalid mesh connectivity array.")
+
+        n_points = points.shape[0]
+        n_cells = cells.shape[0]
+        nodes_per_cell = cells.shape[1]
+        cell_type_map = {2: 'line', 3: 'triangle', 4: 'tetra', 8: 'hexahedron'}
+        cell_type = cell_type_map.get(nodes_per_cell, f'{nodes_per_cell}-node')
+
+        def _as_numeric_array(value):
+            if value is None:
+                return None
+            arr = np.asarray(value)
+            if arr.size == 0 or arr.dtype == object:
+                return None
+            return arr
+
+        point_data = {}
+        cell_data = {}
+        history = {}
+        recovered_shape = None
+
+        displacement = _as_numeric_array(result.get('displacement'))
+        displacement_vec = None
+        if displacement is not None and displacement.ndim == 1 and displacement.size == 3 * n_points:
+            displacement_vec = displacement.reshape(n_points, 3)
+        elif displacement is not None and displacement.ndim == 2 and displacement.shape[0] == n_points:
+            if displacement.shape[1] == 2:
+                displacement_vec = np.column_stack([displacement, np.zeros(n_points)])
+            elif displacement.shape[1] >= 3:
+                displacement_vec = displacement[:, :3]
+
+        if displacement_vec is not None:
+            point_data['displacement'] = displacement_vec
+            point_data['displacement_magnitude'] = np.linalg.norm(displacement_vec, axis=1)
+
+        stress = _as_numeric_array(result.get('stress'))
+        if stress is not None:
+            if stress.ndim == 1 and stress.size == n_points:
+                point_data['stress'] = stress
+            elif stress.ndim == 1 and stress.size == n_cells:
+                cell_data['stress'] = stress
+
+        density = _as_numeric_array(result.get('density'))
+        if density is not None:
+            if density.ndim == 1 and density.size == n_cells:
+                cell_data['density'] = density
+            elif density.ndim == 1 and density.size == n_points:
+                point_data['density'] = density
+
+        design_density = _as_numeric_array(result.get('design_density'))
+        if design_density is not None and design_density.ndim == 1 and design_density.size == n_cells:
+            cell_data['design_density'] = design_density
+
+        element_stress = _as_numeric_array(result.get('element_stress'))
+        if element_stress is not None and element_stress.ndim == 1 and element_stress.size == n_cells:
+            cell_data['element_stress'] = element_stress
+
+        plastic_strain = _as_numeric_array(result.get('plastic_strain'))
+        if plastic_strain is not None and plastic_strain.ndim == 1 and plastic_strain.size == n_cells:
+            cell_data['plastic_strain'] = plastic_strain
+
+        failed_elements = _as_numeric_array(result.get('failed_elements'))
+        if failed_elements is not None and failed_elements.ndim == 1 and failed_elements.size == n_cells:
+            cell_data['failed_elements'] = failed_elements.astype(np.int8)
+
+        for key in ('time', 'energy_kinetic', 'energy_strain', 'energy_plastic', 'energy_balance'):
+            arr = _as_numeric_array(result.get(key))
+            if arr is not None:
+                history[key] = arr
+
+        topopt_shape = result.get('recovered_shape')
+        if isinstance(topopt_shape, dict):
+            vertices = _as_numeric_array(topopt_shape.get('vertices'))
+            faces = _as_numeric_array(topopt_shape.get('faces'))
+            if vertices is not None and faces is not None:
+                recovered_shape = {
+                    'vertices': vertices,
+                    'faces': faces,
+                }
+
+        node_name = getattr(node, 'name', None)
+        if callable(node_name):
+            node_name = node_name()
+        if not node_name:
+            node_name = getattr(node, 'NODE_NAME', None) or node.__class__.__name__
+
+        metadata = {
+            'node_name': str(node_name),
+            'node_class': node.__class__.__name__,
+            'simulation_type': str(result.get('type', 'unknown')),
+            'visualization_mode': str(result.get('visualization_mode', '')),
+            'exported_at': datetime.now().isoformat(),
+            'cell_type': cell_type,
+            'point_count': int(n_points),
+            'cell_count': int(n_cells),
+        }
+
+        summary = {}
+        for key in (
+            'peak_displacement',
+            'peak_stress',
+            'absorbed_energy',
+            'n_failed',
+            'energy_balance_max_error',
+            'max_stress_gauss',
+            'deformation_scale',
+            'density_cutoff',
+        ):
+            value = result.get(key)
+            if isinstance(value, (int, float)):
+                summary[key] = float(value)
+
+        json_payload = {
+            'metadata': metadata,
+            'summary': summary,
+            'mesh': {
+                'points': points.tolist(),
+                'cell_type': cell_type,
+                'cells': cells.tolist(),
+            },
+            'point_data': {name: np.asarray(values).tolist() for name, values in point_data.items()},
+            'cell_data': {name: np.asarray(values).tolist() for name, values in cell_data.items()},
+            'history': {name: np.asarray(values).tolist() for name, values in history.items()},
+        }
+
+        if recovered_shape is not None:
+            json_payload['recovered_shape'] = {
+                'vertices': recovered_shape['vertices'].tolist(),
+                'faces': recovered_shape['faces'].tolist(),
+            }
+
+        hdf5_datasets = {
+            'mesh/points': points,
+            'mesh/cells': cells,
+        }
+        for name, values in point_data.items():
+            hdf5_datasets[f'point_data/{name}'] = np.asarray(values)
+        for name, values in cell_data.items():
+            hdf5_datasets[f'cell_data/{name}'] = np.asarray(values)
+        for name, values in history.items():
+            hdf5_datasets[f'history/{name}'] = np.asarray(values)
+        if recovered_shape is not None:
+            hdf5_datasets['recovered_shape/vertices'] = recovered_shape['vertices']
+            hdf5_datasets['recovered_shape/faces'] = recovered_shape['faces']
+
+        return json_payload, hdf5_datasets, metadata
+
+    def _export_simulation_results(self):
+        """Export cached FEA/TopOpt/Crash results from the active node."""
+        if not self._ensure_idle_for_io("exporting simulation results"):
+            return
+
+        node = self._get_exportable_result_node()
+        if node is None:
+            QtWidgets.QMessageBox.information(
+                self,
+                "No Results",
+                "Run or select an FEA, topology-optimization, or crash node before exporting results.",
+            )
+            return
+
+        try:
+            json_payload, hdf5_datasets, metadata = self._build_simulation_export_payload(node)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Export Error", str(e))
+            return
+
+        node_name = metadata.get('node_name', 'simulation_results')
+        safe_name = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in node_name).strip('_') or 'simulation_results'
+        fname, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Export Simulation Results",
+            f"{safe_name}.json",
+            "JSON Files (*.json);;HDF5 Files (*.h5)",
+        )
+        if not fname:
+            return
+
+        ext = os.path.splitext(fname)[1].lower()
+        if not ext:
+            fname += '.json'
+            ext = '.json'
+
+        try:
+            from pylcss.io_manager.data_io import DataExporter
+
+            if ext == '.json':
+                DataExporter.to_json(fname, json_payload)
+            elif ext == '.h5':
+                attrs = {k: v for k, v in metadata.items() if isinstance(v, (str, int, float, bool))}
+                for key, value in json_payload.get('summary', {}).items():
+                    attrs[f'summary_{key}'] = value
+                DataExporter.to_hdf5(fname, hdf5_datasets, attrs=attrs)
+            else:
+                raise ValueError(f"Unsupported export format: {ext}")
+
+            self.timeline.add_event(f"Exported simulation results: {fname}")
+            self.statusBar().showMessage(f"Exported results: {fname}")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Export Error", str(e))
 
 
     # --- Undo stack helpers ---
@@ -2521,6 +2868,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
     
     def _save_project(self):
         """Save current project."""
+        if not self._ensure_idle_for_io("saving the project"):
+            return
+
         if not self.current_file:
             self._save_as_project()
             return
@@ -2528,10 +2878,21 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         try:
             # Serialize graph using NodeGraphQt's built-in session manager
             project_data = self.graph.serialize_session()
-            
-            # Save to file
-            with open(self.current_file, 'w') as f:
-                json.dump(project_data, f, indent=2)
+
+            target_dir = os.path.dirname(self.current_file) or None
+            fd, temp_path = tempfile.mkstemp(prefix='pylcss_cad_', suffix='.tmp', dir=target_dir)
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    json.dump(project_data, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_path, self.current_file)
+            finally:
+                if os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except OSError:
+                        pass
             
             self.timeline.add_event(f"Saved project: {self.current_file}")
             self.statusBar().showMessage(f"Saved: {self.current_file}")
@@ -2540,6 +2901,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
     
     def _save_as_project(self):
         """Save project with a new name."""
+        if not self._ensure_idle_for_io("saving the project"):
+            return
+
         fname, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Save Project As", "", "CAD Projects (*.cad);;All Files (*)"
         )
@@ -2598,6 +2962,12 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         """Update the 3D viewer with current optimization state (real-time viz)."""
         try:
             import numpy as np
+            now = time.monotonic()
+            is_final_step = (step + 1) >= total
+            if not is_final_step and (now - self._last_preview_update_time) < 0.1:
+                return
+
+            self._last_preview_update_time = now
             self.statusBar().showMessage(f"⏳ TopOpt: Iteration {step+1}/{total} (Vol: {np.mean(densities):.1%})")
             
             # Update viewer with current density field
@@ -2609,10 +2979,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 'density_cutoff': 0.3  # Use default cutoff for preview
             }
             self.viewer.render_simulation(result)
-            
-            # Force Qt to process events and update the display
-            from PySide6.QtWidgets import QApplication
-            QApplication.processEvents()
             
         except Exception:
             pass

@@ -665,7 +665,13 @@ class OptimizationWidget(QtWidgets.QWidget):
         # Stop any existing optimization
         if self.worker and self.worker.isRunning():
             self.worker.stop()
-            self.worker.wait()  # Wait for it to finish
+            if not self.worker.wait(250):
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Optimization Still Stopping",
+                    "The current optimization is still shutting down. Wait a moment and start again.",
+                )
+                return
         
         # UI State
         self.btn_run.setEnabled(False)

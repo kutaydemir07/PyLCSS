@@ -14,6 +14,7 @@ class NavCubeWidget(QtWidgets.QWidget):
     """
 
     view_requested = QtCore.Signal(object, object)  # (pos_tuple, up_tuple)
+    roll_requested = QtCore.Signal(float)           # (angle_in_degrees)
 
     SIZE = 140  # widget pixel size
 
@@ -146,6 +147,11 @@ class NavCubeWidget(QtWidgets.QWidget):
         return (px - ax - t * dx) ** 2 + (py - ay - t * dy) ** 2
 
     def _hit_test(self, mx, my):
+        # Roll buttons (top-left, top-right corners of widget)
+        if my < 30:
+            if mx < 35: return ('roll', -90.0)
+            if mx > self.SIZE - 35: return ('roll', 90.0)
+
         p  = self._project()
         vd = self._rot[2]  # camera Z = direction we're looking along
         # corners (highest priority)
@@ -187,6 +193,9 @@ class NavCubeWidget(QtWidgets.QWidget):
         if hit is None:
             return
         kind, idx = hit
+        if kind == 'roll':
+            self.roll_requested.emit(idx)
+            return
         if kind == 'face':
             _, _, cp, cu = self._FACES[idx]
         elif kind == 'edge':
@@ -274,6 +283,21 @@ class NavCubeWidget(QtWidgets.QWidget):
             r = 5.5 if is_hov else 3.5
             painter.setBrush(QtGui.QColor(105, 190, 255) if is_hov else QtGui.QColor(68, 108, 162))
             painter.drawEllipse(QtCore.QPointF(p[vi, 0], p[vi, 1]), r, r)
+
+        # Roll Buttons (2D overlays in the top corners)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        font = QtGui.QFont("Arial", 16, QtGui.QFont.Bold)
+        painter.setFont(font)
+        
+        # Left roll (-90)
+        is_hov_l = self._hovered == ('roll', -90.0)
+        painter.setPen(QtGui.QColor(200, 230, 255) if is_hov_l else QtGui.QColor(120, 140, 160))
+        painter.drawText(QtCore.QRectF(8, 5, 25, 25), QtCore.Qt.AlignCenter, "↶")
+        
+        # Right roll (+90)
+        is_hov_r = self._hovered == ('roll', 90.0)
+        painter.setPen(QtGui.QColor(200, 230, 255) if is_hov_r else QtGui.QColor(120, 140, 160))
+        painter.drawText(QtCore.QRectF(self.SIZE - 33, 5, 25, 25), QtCore.Qt.AlignCenter, "↷")
 
         painter.end()
 
@@ -455,6 +479,7 @@ class CQ3DViewer(QtWidgets.QWidget):
         self.marker_widget.SetEnabled(0)
         self._nav_cube = NavCubeWidget(self)
         self._nav_cube.view_requested.connect(self._set_camera_view)
+        self._nav_cube.roll_requested.connect(self._roll_camera)
         self._nav_cube.raise_()
         self._nav_cube.show()
         self._position_nav_cube()
@@ -1153,6 +1178,15 @@ class CQ3DViewer(QtWidgets.QWidget):
         if hasattr(self, '_nav_cube'):
             self._nav_cube.update_rotation(camera)
 
+    def _roll_camera(self, angle):
+        """Rolls the camera around its viewing axis by the given angle in degrees."""
+        camera = self.renderer.GetActiveCamera()
+        camera.Roll(angle)
+        self.renderer.ResetCameraClippingRange()
+        self.vtkWidget.GetRenderWindow().Render()
+        if hasattr(self, '_nav_cube'):
+            self._nav_cube.update_rotation(camera)
+
     def _update_scalar_bar(self, title, min_val, max_val, lut=None):
         """Update and show the scalar bar."""
         if not title:
@@ -1576,7 +1610,7 @@ class CQ3DViewer(QtWidgets.QWidget):
                 self.actors.remove(actor)
         self._bc_overlay_actors = []
 
-        def _face_to_polydata(occ_face):
+        def _triangulate_face(occ_face):
             try:
                 tri = occ_face.tessellate(tolerance=0.15, angularTolerance=0.3)
                 if isinstance(tri, dict):
@@ -1585,11 +1619,21 @@ class CQ3DViewer(QtWidgets.QWidget):
                 else:
                     verts, tris = tri[0], tri[1]
                 if not verts:
-                    return None
+                    return None, None
+                np_verts = np.array([[v.x, v.y, v.z] for v in verts], dtype=float)
+                return np_verts, tris
+            except Exception:
+                return None, None
+
+        def _face_to_polydata(occ_face):
+            verts, tris = _triangulate_face(occ_face)
+            if verts is None or tris is None:
+                return None
+            try:
                 pts = vtk.vtkPoints()
                 polys = vtk.vtkCellArray()
                 for v in verts:
-                    pts.InsertNextPoint(v.x, v.y, v.z)
+                    pts.InsertNextPoint(float(v[0]), float(v[1]), float(v[2]))
                 for t in tris:
                     polys.InsertNextCell(3)
                     polys.InsertCellPoint(t[0])
@@ -1602,7 +1646,103 @@ class CQ3DViewer(QtWidgets.QWidget):
             except Exception:
                 return None
 
-        def _add_face_overlay(occ_face, color, opacity=0.55):
+        def _face_boundary_polydata(occ_face):
+            verts, tris = _triangulate_face(occ_face)
+            if verts is None or tris is None:
+                return None
+            try:
+                edge_counts = {}
+                for tri in tris:
+                    a, b, c = int(tri[0]), int(tri[1]), int(tri[2])
+                    for i0, i1 in ((a, b), (b, c), (c, a)):
+                        edge = (min(i0, i1), max(i0, i1))
+                        edge_counts[edge] = edge_counts.get(edge, 0) + 1
+                boundary_edges = [edge for edge, count in edge_counts.items() if count == 1]
+                if not boundary_edges:
+                    return None
+                pts = vtk.vtkPoints()
+                lines = vtk.vtkCellArray()
+                for vert in verts:
+                    pts.InsertNextPoint(float(vert[0]), float(vert[1]), float(vert[2]))
+                for i0, i1 in boundary_edges:
+                    lines.InsertNextCell(2)
+                    lines.InsertCellPoint(i0)
+                    lines.InsertCellPoint(i1)
+                pd = vtk.vtkPolyData()
+                pd.SetPoints(pts)
+                pd.SetLines(lines)
+                return pd
+            except Exception:
+                return None
+
+        def _sample_face_points(occ_face, max_points=6):
+            verts, tris = _triangulate_face(occ_face)
+            if verts is None or tris is None or len(tris) == 0:
+                return []
+            try:
+                tri_centroids = []
+                tri_areas = []
+                for tri in tris:
+                    a, b, c = int(tri[0]), int(tri[1]), int(tri[2])
+                    pa, pb, pc = verts[a], verts[b], verts[c]
+                    tri_centroids.append((pa + pb + pc) / 3.0)
+                    tri_areas.append(0.5 * np.linalg.norm(np.cross(pb - pa, pc - pa)))
+                if not tri_centroids:
+                    return []
+                order = np.argsort(np.asarray(tri_areas, dtype=float))[::-1]
+                selected = []
+                min_spacing = 0.0
+                try:
+                    bb = occ_face.BoundingBox()
+                    diag = ((bb.xmax - bb.xmin) ** 2 + (bb.ymax - bb.ymin) ** 2 + (bb.zmax - bb.zmin) ** 2) ** 0.5
+                    min_spacing = max(0.25, 0.12 * diag)
+                except Exception:
+                    min_spacing = 0.25
+                for idx in order:
+                    p = np.asarray(tri_centroids[int(idx)], dtype=float)
+                    if all(np.linalg.norm(p - q) >= min_spacing for q in selected):
+                        selected.append(p)
+                    if len(selected) >= max_points:
+                        break
+                return [p.tolist() for p in selected]
+            except Exception:
+                return []
+
+        def _add_face_outline(occ_face, color, line_width=2.5, opacity=1.0):
+            boundary_pd = _face_boundary_polydata(occ_face)
+            if boundary_pd is not None:
+                mapper = vtk.vtkPolyDataMapper()
+                mapper.SetInputData(boundary_pd)
+                mapper.ScalarVisibilityOff()
+                actor = vtk.vtkActor()
+                actor.SetMapper(mapper)
+                actor.GetProperty().SetColor(*color)
+                actor.GetProperty().SetLineWidth(line_width)
+                actor.GetProperty().SetOpacity(opacity)
+                actor.GetProperty().LightingOff()
+                actor._bc_overlay = True
+                self.renderer.AddActor(actor)
+                self._bc_overlay_actors.append(actor)
+                return
+
+            pd = _face_to_polydata(occ_face)
+            if pd is None:
+                return
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputData(pd)
+            mapper.ScalarVisibilityOff()
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            actor.GetProperty().SetColor(*color)
+            actor.GetProperty().SetOpacity(0.18)
+            actor.GetProperty().EdgeVisibilityOn()
+            actor.GetProperty().SetEdgeColor(*color)
+            actor.GetProperty().SetLineWidth(line_width)
+            actor._bc_overlay = True
+            self.renderer.AddActor(actor)
+            self._bc_overlay_actors.append(actor)
+
+        def _add_face_overlay(occ_face, color, opacity=0.12):
             pd = _face_to_polydata(occ_face)
             if pd is None:
                 return
@@ -1620,13 +1760,17 @@ class CQ3DViewer(QtWidgets.QWidget):
             self._bc_overlay_actors.append(actor)
 
         def _add_bc_arrow(start, vector, color):
-            """Arrow tagged as a BC overlay so it is cleaned up with the rest."""
+            """Arrow tagged as a BC overlay so it is cleaned up with the rest.
+
+            The arrow is drawn with length == np.linalg.norm(vector), pointing
+            in the direction of vector, with its BASE at *start*.  The caller
+            is responsible for choosing *start* so the tip lands where desired.
+            """
             import numpy as _np
             length = _np.linalg.norm(vector)
             if length < 1e-9:
                 return
             arrow_source = vtk.vtkArrowSource()
-            visual_length = 5.0
             norm_vec = vector / length
             transform = vtk.vtkTransform()
             transform.Translate(start[0], start[1], start[2])
@@ -1637,7 +1781,8 @@ class CQ3DViewer(QtWidgets.QWidget):
                 transform.RotateWXYZ(angle_deg, axis)
             elif _np.dot(default_dir, norm_vec) < 0:
                 transform.RotateWXYZ(180, [0, 1, 0])
-            transform.Scale(visual_length, visual_length, visual_length)
+            # Scale so the rendered arrow length == the magnitude of *vector*.
+            transform.Scale(length, length, length)
             mapper = vtk.vtkPolyDataMapper()
             mapper.SetInputConnection(arrow_source.GetOutputPort())
             actor = vtk.vtkActor()
@@ -1648,19 +1793,120 @@ class CQ3DViewer(QtWidgets.QWidget):
             self.renderer.AddActor(actor)
             self._bc_overlay_actors.append(actor)
 
+        def _overlay_scale():
+            try:
+                _b = self.renderer.GetBounds()
+                _diag = ((_b[1]-_b[0])**2 + (_b[3]-_b[2])**2 + (_b[5]-_b[4])**2) ** 0.5
+                return max(2.5, 0.04 * _diag)
+            except Exception:
+                return 5.0
+
+        def _add_constraint_direction_overlay(occ_face, viz_meta, color):
+            sample_points = _sample_face_points(occ_face, max_points=5)
+            if not sample_points:
+                return
+
+            arrow_len = _overlay_scale()
+            fixed_dofs = list(viz_meta.get('fixed_dofs') or [])
+            disp_vals = viz_meta.get('displacement')
+
+            if disp_vals is not None:
+                disp_vec = np.array(disp_vals, dtype=float)
+                if np.linalg.norm(disp_vec) > 1e-12:
+                    vis_vec = disp_vec / np.linalg.norm(disp_vec) * arrow_len
+                    for point in sample_points:
+                        start = np.array(point, dtype=float) - 0.5 * vis_vec
+                        _add_bc_arrow(start.tolist(), vis_vec.tolist(), color)
+                return
+
+            axis_dirs = {
+                0: np.array([1.0, 0.0, 0.0]),
+                1: np.array([0.0, 1.0, 0.0]),
+                2: np.array([0.0, 0.0, 1.0]),
+            }
+            if len(fixed_dofs) == 1 and fixed_dofs[0] in axis_dirs:
+                direction = axis_dirs[fixed_dofs[0]]
+                for point in sample_points:
+                    start = np.array(point, dtype=float) - 0.5 * arrow_len * direction
+                    _add_bc_arrow(start.tolist(), (arrow_len * direction).tolist(), color)
+
         if constraint_faces:
-            for face in constraint_faces:
-                if face is not None:
-                    _add_face_overlay(face, color=(0.9, 0.15, 0.15))  # Red
+            for item in constraint_faces:
+                if item is None:
+                    continue
+                # item can be a bare OCC face (legacy) or a dict with 'face' + 'viz' keys
+                if isinstance(item, dict):
+                    occ_face = item.get('face')
+                    viz_meta = item.get('viz', {})
+                    # FIX #V4: Per constraint-type colour from viz metadata.
+                    hex_col = viz_meta.get('color', '#FF3333') if viz_meta else '#FF3333'
+                    # Convert hex #RRGGBB → (r,g,b) floats 0-1
+                    try:
+                        r = int(hex_col[1:3], 16) / 255.0
+                        g = int(hex_col[3:5], 16) / 255.0
+                        b = int(hex_col[5:7], 16) / 255.0
+                    except Exception:
+                        r, g, b = 1.0, 0.2, 0.2
+                    _label = viz_meta.get('constraint_type', 'Fixed') if viz_meta else 'Fixed'
+                    _ = _label  # may be used for a 3D text label in the future
+                else:
+                    occ_face = item
+                    r, g, b = 1.0, 0.2, 0.2  # legacy: red
+                if occ_face is not None:
+                    _add_face_outline(occ_face, color=(r, g, b), line_width=3.0)
+                    if isinstance(item, dict):
+                        _add_constraint_direction_overlay(occ_face, viz_meta, (r, g, b))
 
         if load_faces:
-            for face in load_faces:
-                if face is not None:
-                    _add_face_overlay(face, color=(1.0, 0.85, 0.0))   # Yellow
+            for item in load_faces:
+                if item is None:
+                    continue
+                occ_face = item.get('face') if isinstance(item, dict) else item
+                if occ_face is not None:
+                    _add_face_outline(occ_face, color=(1.0, 0.85, 0.0), line_width=2.5)
+                    _add_face_overlay(occ_face, color=(1.0, 0.85, 0.0), opacity=0.08)
 
         if load_vectors:
-            for centroid, vec in load_vectors:
-                _add_bc_arrow(centroid, vec, color=(1.0, 0.85, 0.0))
+            import math as _math
+            for entry in load_vectors:
+                if isinstance(entry, dict):
+                    centroid  = entry['centroid']
+                    occ_face   = entry.get('face')
+                    vec       = np.array(entry['vector'], dtype=float)
+                    force_mag = float(entry.get('magnitude_N', np.linalg.norm(vec)))
+                    # Per-entry color: hex string or default yellow
+                    _hex = entry.get('color', '#FFD900')
+                    try:
+                        _hx = _hex.lstrip('#')
+                        arrow_color = tuple(int(_hx[i:i+2], 16)/255.0 for i in (0, 2, 4))
+                    except Exception:
+                        arrow_color = (1.0, 0.85, 0.0)
+                else:
+                    # legacy (centroid, vec) tuple
+                    centroid, vec = entry
+                    occ_face = None
+                    force_mag = float(np.linalg.norm(vec))
+                    arrow_color = (1.0, 0.85, 0.0)
+                # Log-scale arrow length so magnitude is visually conveyed.
+                try:
+                    _b = self.renderer.GetBounds()
+                    _diag = ((_b[1]-_b[0])**2 + (_b[3]-_b[2])**2 + (_b[5]-_b[4])**2) ** 0.5
+                    base_len = max(5.0, 0.08 * _diag)
+                except Exception:
+                    base_len = 5.0
+                log_s = float(np.clip(_math.log10(force_mag + 1) / 6.0, 0.15, 1.0))
+                arrow_len = base_len * (0.5 + log_s)
+                unit_vec  = vec / (np.linalg.norm(vec) + 1e-12)
+                vis_vec   = unit_vec * arrow_len
+                sample_points = _sample_face_points(occ_face, max_points=5) if occ_face is not None else []
+                if sample_points:
+                    scaled_vec = unit_vec * max(0.45 * arrow_len, 0.8 * _overlay_scale())
+                    for point in sample_points:
+                        arrow_start = np.array(point, dtype=float) - scaled_vec
+                        _add_bc_arrow(arrow_start.tolist(), scaled_vec, color=arrow_color)
+                else:
+                    arrow_start = np.array(centroid, dtype=float) - vis_vec
+                    _add_bc_arrow(arrow_start.tolist(), vis_vec, color=arrow_color)
 
         self.vtkWidget.GetRenderWindow().Render()
 
@@ -1809,6 +2055,8 @@ class CQ3DViewer(QtWidgets.QWidget):
         visualization_mode = 'Von Mises Stress'
         density_cutoff = 0.5
         locked_scalar_range = None   # (lo, hi) supplied by crash playback for stable colormap
+        max_stress_gauss    = 0.0    # P0 Gauss-point peak (populated by SolverNode)
+        _def_scale          = 1.0    # visualisation deformation scale factor
 
         # Detect skfem Mesh
         if hasattr(data, 'p') and hasattr(data, 't'):
@@ -1828,6 +2076,10 @@ class CQ3DViewer(QtWidgets.QWidget):
                 density_cutoff = float(data['density_cutoff'])
             if '_scalar_range' in data:
                 locked_scalar_range = data['_scalar_range']
+            if 'max_stress_gauss' in data:
+                max_stress_gauss = float(data['max_stress_gauss'])
+            if 'deformation_scale' in data:
+                _def_scale = float(data['deformation_scale'])
 
         if mesh is None:
             return
@@ -1839,11 +2091,11 @@ class CQ3DViewer(QtWidgets.QWidget):
         pts = mesh.p
         n_points = pts.shape[1]
 
-        # Apply displacement if available
+        # Apply displacement if available (scaled for visualisation)
         if displacement is not None:
             if len(displacement) == 3 * n_points:
                 disp_3n = displacement.reshape((3, n_points), order='F')
-                pts = pts + disp_3n * 1.0
+                pts = pts + disp_3n * _def_scale
 
         for i in range(n_points):
             points.InsertNextPoint(pts[0, i], pts[1, i], pts[2, i])
@@ -1958,7 +2210,11 @@ class CQ3DViewer(QtWidgets.QWidget):
                     else:
                         self._update_scalar_bar("Von Mises Stress (MPa)", min_val, max_val, lut)
                 elif scalar_name == "Displacement":
-                    self._update_scalar_bar("Displacement (mm)", min_val, max_val, lut)
+                    _disp_title = (
+                        f"Displacement (mm)  [scale: {_def_scale:.0f}\u00d7]"
+                        if _def_scale != 1.0 else "Displacement (mm)"
+                    )
+                    self._update_scalar_bar(_disp_title, min_val, max_val, lut)
 
             elif stress is not None and len(stress) > 0:
                 if locked_scalar_range is not None:
@@ -1983,7 +2239,6 @@ class CQ3DViewer(QtWidgets.QWidget):
             mapper_input = mapper.GetInput()
             if mapper_input is not None and mapper_input.GetPointData() is not None:
                 mapper_input.GetPointData().SetActiveScalars("VonMises")
-
             mapper.SetScalarModeToUsePointData()
             mapper.SelectColorArray("VonMises")
 
@@ -2030,20 +2285,64 @@ class CQ3DViewer(QtWidgets.QWidget):
         self.current_actor = actor
         self.actors.append(actor)
 
-        # 4. Debug Visualization (Loads/Constraints)
-        if isinstance(data, dict):
+        # 4. Debug Visualization (Loads/Constraints after solve)
+        # If exact BC overlays are cached from the graph, prefer those over the
+        # approximate centroid/bbox debug markers to avoid duplicate clutter.
+        _has_exact_bc_overlay = self._cached_bc_data is not None
+        if isinstance(data, dict) and not _has_exact_bc_overlay:
             if 'debug_loads' in data and data['debug_loads']:
+                import math as _math
                 for load in data['debug_loads']:
-                    self._add_arrow(load['start'], load['vector'], color=(1, 1, 0), scale=1.0)
+                    # Reconstruct vector and compute normalized direction
+                    if 'vector' in load:
+                        raw_vec = np.array(load['vector'], dtype=float)
+                        raw_mag = float(np.linalg.norm(raw_vec))
+                        if raw_mag < 1e-9: continue
+                        norm_dir = raw_vec / raw_mag
+                    else: continue
+                    
+                    center = load.get('start') or load.get('pos')
+                    if not center and 'bbox' in load:
+                        bb = load['bbox']
+                        center = [(bb.xmin+bb.xmax)/2, (bb.ymin+bb.ymax)/2, (bb.zmin+bb.zmax)/2]
+                        
+                    if center:
+                        try:
+                            _b = self.renderer.GetBounds()
+                            _diag = ((_b[1]-_b[0])**2 + (_b[3]-_b[2])**2 + (_b[5]-_b[4])**2) ** 0.5
+                            base_len = max(5.0, 0.08 * _diag)
+                        except Exception:
+                            base_len = 5.0
+                        
+                        rel_mag = load.get('relative_mag', 1.0)
+                        arrow_len = base_len * max(0.2, min(1.0, rel_mag)) * 1.5
+                        color = load.get('color', '#ffff00')
+                        if isinstance(color, str) and color.startswith('#'):
+                            # Hex to tuple
+                            c = color.lstrip('#')
+                            c_rgb = tuple(int(c[i:i+2], 16)/255.0 for i in (0, 2, 4))
+                        else:
+                            c_rgb = (1, 1, 0)
+                            
+                        self._add_arrow(center, norm_dir, color=c_rgb, scale=arrow_len/5.0)
 
             if 'debug_constraints' in data and data['debug_constraints']:
                 for const in data['debug_constraints']:
-                    self._add_cube_marker(const['pos'], color=(1, 0, 0), size=2.0)
+                    center = const.get('pos')
+                    if center:
+                        color = const.get('color', '#ff0000')
+                        if isinstance(color, str) and color.startswith('#'):
+                            c = color.lstrip('#')
+                            c_rgb = tuple(int(c[i:i+2], 16)/255.0 for i in (0, 2, 4))
+                        else:
+                            c_rgb = (1, 0, 0)
+                        self._add_cube_marker(center, color=c_rgb, size=2.0)
 
         # 5. Re-apply cached BC face overlays on top of the simulation result
         #    so they remain visible after FEA/TopOpt solve.
-        #    (Skip for TopOpt iteration previews to keep frame rate high.)
-        skip_bc_replay = isinstance(data, dict) and data.get('type') in ('topopt', 'crash_frame')
+        #    Skip only for TopOpt iteration previews (keep frame rate high).
+        #    Crash frames DO replay overlays so supports/impact face stay visible.
+        skip_bc_replay = isinstance(data, dict) and data.get('type') == 'topopt'
         if not skip_bc_replay and self._cached_bc_data is not None:
             c_faces, l_faces, l_vecs = self._cached_bc_data
             self.render_bc_overlays(

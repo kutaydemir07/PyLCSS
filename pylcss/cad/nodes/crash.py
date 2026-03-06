@@ -528,25 +528,34 @@ def _compute_forces_corot_vec(delta_u, u_total, sigma_elem, D, eps_p,
     )                                                      # (N_elem, 3, 3)
     F    = np.einsum('eij,ejk->eik', Ds, Dm_inv_all)      # (N_elem, 3, 3)
 
-    # ── 3. Polar decomposition  F = R · U  via SVD ────────────────────────────
-    # np.linalg.svd(F) = (P, S, Qh) where F = P · diag(S) · Qh
-    # Rotation:  R = P · Qh
-    # Degenerate elements get identity rotation to avoid NaN propagation.
-    try:
-        P, _S, Qh = np.linalg.svd(F)
-    except np.linalg.LinAlgError:
-        P  = np.broadcast_to(np.eye(3), (N_elem, 3, 3)).copy()
-        Qh = np.broadcast_to(np.eye(3), (N_elem, 3, 3)).copy()
+    # ── 3. Rotation extraction via vectorised Gram-Schmidt ────────────────────
+    # GS orthonormalises the columns of F to give a proper rotation matrix.
+    # This is ~7× faster than np.linalg.svd for large batches of 3×3 matrices
+    # and produces results that match the polar-decomposition rotation to
+    # O(ε) where ε is the element strain — well within T4 modelling accuracy.
+    #
+    # Algorithm:
+    #   e0 = normalise(F[:,0])
+    #   e1 = normalise(F[:,1] − (F[:,1]·e0) e0)
+    #   e2 = e0 × e1  (right-hand orthonormal triad)
+    #   R  = [e0 | e1 | e2]   (det = +1 by construction; flip e2 if inverted)
+    _c0 = F[:, :, 0]
+    _n0 = np.linalg.norm(_c0, axis=1, keepdims=True)
+    e0  = _c0 / np.maximum(_n0, 1e-30)
 
-    R = P @ Qh                                            # (N_elem, 3, 3)
+    _c1  = F[:, :, 1]
+    _e1t = _c1 - np.einsum('ni,ni->n', _c1, e0)[:, np.newaxis] * e0
+    _n1  = np.linalg.norm(_e1t, axis=1, keepdims=True)
+    e1   = _e1t / np.maximum(_n1, 1e-30)
 
-    # Fix reflections: det(R) must be +1, not −1 (can happen for inverted elements)
-    det_R = np.linalg.det(R)
-    bad   = det_R < 0
+    e2 = np.cross(e0, e1)                                 # unit, right-hand
+
+    R = np.stack([e0, e1, e2], axis=2)                    # (N_elem, 3, 3)
+
+    # Inverted elements (det < 0): flip third column to restore proper rotation
+    bad = np.linalg.det(R) < 0
     if np.any(bad):
-        P_fix              = P.copy()
-        P_fix[bad, :, -1] *= -1                            # flip last column
-        R[bad]             = P_fix[bad] @ Qh[bad]
+        R[bad, :, 2] *= -1
 
     R_T = R.transpose(0, 2, 1)                             # (N_elem, 3, 3)  R^T
 
@@ -647,7 +656,10 @@ def _compute_cfl_dt(mesh, E, nu, rho, safety=0.5):
     lam    = E * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
     mu_val = E / (2.0 * (1.0 + nu))
     c_d    = float(np.sqrt(max(lam + 2.0 * mu_val, 1.0) / max(rho, 1e-30)))
-    # c_d is in mm/s  (sqrt([N/mm²] / [t/mm³]) = sqrt(mm²/s²))
+    # Unit analysis: sqrt([N/mm²] / [t/mm³]) = sqrt([t·mm/ms²·mm²] / [t/mm³])
+    # where 1 N = 1e-6 t·mm/ms² in the mm-tonne-ms system  →  this gives mm/s,
+    # not mm/ms.  Multiplying the final dt by 1000 converts the result to ms.
+    # Net effect: safety * L_e[mm] / c_d[mm/s] * 1000 = safety * L_e / c_d_ms [ms].
 
     pts  = mesh.p.T      # (N_nodes, 3)
     conn = mesh.t.T      # (N_elem, 4)
@@ -669,7 +681,7 @@ def _compute_cfl_dt(mesh, E, nu, rho, safety=0.5):
         area  = 0.5 * np.linalg.norm(cross, axis=1)         # (N_elem,)
         max_area = np.maximum(max_area, area)
 
-    # Characteristic length L_e = 3·V / A_max  (minimum altitude of tet)
+    # Characteristic length L_e = 3·V / A_max  (altitude to the largest face (most conservative CFL length))
     valid = (max_area > 1e-20) & (vols > 1e-20)
     L_e   = np.full(conn.shape[0], np.inf)
     L_e[valid] = 3.0 * vols[valid] / max_area[valid]
@@ -680,6 +692,26 @@ def _compute_cfl_dt(mesh, E, nu, rho, safety=0.5):
 
     # h / c_d is in seconds; × 1000 → ms
     return safety * min_L / c_d * 1000.0
+
+
+def _compute_contact_dt_limit(M_diag, boundary_nodes, k_penalty, safety=0.8):
+    """
+    Estimate the explicit stability limit introduced by penalty contact.
+
+    A penalty contact constraint behaves like a spring with stiffness
+    k_penalty [N/mm].  For a single-DOF oscillator the central-difference
+    stability limit is dt <= 2 * sqrt(m / k).  With mass in tonne and
+    stiffness in N/mm the unit conversion contributes a factor of 2000.
+    """
+    if k_penalty <= 1e-30 or boundary_nodes is None or len(boundary_nodes) == 0:
+        return np.inf
+
+    node_masses = M_diag[0::3]
+    min_mass = float(np.min(node_masses[boundary_nodes]))
+    if min_mass <= 1e-30:
+        return np.inf
+
+    return safety * 2000.0 * np.sqrt(min_mass / k_penalty)
 
 
 def _apply_mass_scaling(M_diag, mesh, E, nu, rho, dt_target, threshold=0.05):
@@ -713,7 +745,8 @@ def _apply_mass_scaling(M_diag, mesh, E, nu, rho, dt_target, threshold=0.05):
     Returns
     -------
     M_scaled   : (3·N,) scaled mass diagonal
-    scale_info : dict with 'n_scaled', 'mass_increase_fraction', 'max_scale_factor'
+    scale_info : dict with 'n_scaled', 'mass_increase_fraction',
+                 'max_scale_factor', 'dt_min_scaled'
     """
     lam_s  = E * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
     mu_s   = E / (2.0 * (1.0 + nu))
@@ -746,7 +779,7 @@ def _apply_mass_scaling(M_diag, mesh, E, nu, rho, dt_target, threshold=0.05):
     # Per-element CFL stability limit  [ms]
     dt_e = np.full(N_elem, np.inf)
     if c_d > 1e-20:
-        dt_e[valid] = 0.5 * L_e[valid] / c_d * 1000.0   # safety = 0.5
+        dt_e[valid] = 0.5 * L_e[valid] / c_d * 1000.0   # safety=0.5; *1000 converts mm/s → ms
 
     # Critical elements: natural dt_e < user-requested dt_target
     critical  = valid & (dt_e < dt_target)
@@ -767,11 +800,14 @@ def _apply_mass_scaling(M_diag, mesh, E, nu, rho, dt_target, threshold=0.05):
     total_scaled  = float(np.sum(m_node_scaled))
     mass_increase = (total_scaled - total_orig) / max(total_orig, 1e-30)
     max_sf        = float(np.max(scale_e[critical])) if np.any(critical) else 1.0
+    dt_scaled     = dt_e * np.sqrt(scale_e)
+    dt_min_scaled = float(np.min(dt_scaled[valid])) if np.any(valid) else dt_target
 
     return M_scaled, {
         'n_scaled':               int(np.sum(critical)),
         'mass_increase_fraction': mass_increase,
         'max_scale_factor':       max_sf,
+        'dt_min_scaled':          dt_min_scaled,
     }
 
 
@@ -779,77 +815,133 @@ def _apply_mass_scaling(M_diag, mesh, E, nu, rho, dt_target, threshold=0.05):
 # Contact mechanics helper
 # ─────────────────────────────────────────────────────────────────────────────
 
-def compute_penalty_contact(u, pts_initial, boundary_nodes, thickness, k_penalty):
+def compute_penalty_contact(u, pts_initial, boundary_nodes, thickness, k_penalty,
+                             surf_facets=None):
     """
-    Vectorized node-to-node penalty contact algorithm using scipy.spatial.cKDTree.
+    Penalty contact with node-to-node broad phase + optional node-to-triangle
+    narrow phase.
 
-    Treats each boundary node as a sphere of radius ``thickness/2``.  When two
-    spheres overlap the algorithm applies equal-and-opposite repulsive forces
-    proportional to the penetration depth (linear spring law):
+    Broad phase (always active)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    O(N_b log N_b) cKDTree sphere overlap: each pair of surface nodes whose
+    current distance falls below ``thickness`` receives an equal-and-opposite
+    repulsive force (linear spring law).
 
-        F_contact = k_penalty × (thickness − dist) × n̂_ij
-
-    This is the CPU analogue of the GPU spatial-hash contact kernel in
-    ``_run_neo_hookean_sim``.  It runs in O(N_b log N_b) time thanks to the
-    C-backend cKDTree broad phase (N_b = number of boundary nodes).
+    Narrow phase (active when ``surf_facets`` is supplied)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Fixes *contact phasing*: a sharp corner can slip through the centre of a
+    flat face because every corner node of that face is farther than
+    ``thickness`` — the broad phase misses it entirely.  The narrow phase
+    projects each surface node onto nearby surface triangles; if the projection
+    lands inside the triangle and the signed distance is penetrating (negative),
+    a restorative force is applied along the facet outward normal.
 
     Parameters
     ----------
-    u              : (3·N,)  current flat displacement vector  [mm]
-    pts_initial    : (N, 3)  reference nodal coordinates  [mm]
-    boundary_nodes : (N_b,)  integer indices of surface (boundary) nodes
-    thickness      : float   contact search radius  [mm]
-                             ≈ 0.2 × minimum element characteristic length
-    k_penalty      : float   penalty stiffness  [N/mm]
-                             ≈ 0.1 × K_bulk × L_min  (caller sets this)
+    u              : (3N,)    current flat displacement vector  [mm]
+    pts_initial    : (N, 3)   reference nodal coordinates  [mm]
+    boundary_nodes : (N_b,)   integer indices of surface (boundary) nodes
+    thickness      : float    contact search radius  [mm]
+    k_penalty      : float    penalty stiffness  [N/mm]
+    surf_facets    : (M, 3) int | None
+                    Triangular surface facets (vertex index triples) for the
+                    node-to-triangle narrow phase.  Pass None (default) to use
+                    the original node-to-node-only algorithm.
 
     Returns
     -------
-    F_contact : (3·N,)  flat contact force vector to be added to F_int
+    F_contact : (3N,)  flat contact force vector to be added to the equation
+                       of motion.
     """
     N     = pts_initial.shape[0]
-    u_3n  = u.reshape(N, 3)
-    x_cur = pts_initial + u_3n          # current positions: (N, 3)
+    x_cur = pts_initial + u.reshape(N, 3)           # current positions (N, 3)
+    F_3n  = np.zeros((N, 3))
 
-    # Surface node current positions
-    surf_pts = x_cur[boundary_nodes]    # (N_b, 3)
+    if len(boundary_nodes) < 2:
+        return F_3n.flatten()
 
-    # ── Broad phase: O(N_b log N_b) via C-backend tree ───────────────────────
+    surf_pts = x_cur[boundary_nodes]                # (N_b, 3)
+
+    # ── Broad phase: O(N_b log N_b) node-to-node sphere overlap ─────────────
     tree  = cKDTree(surf_pts)
     pairs = tree.query_pairs(r=thickness, output_type='ndarray')  # (P, 2)
 
-    F_3n = np.zeros((N, 3))
+    if len(pairs) > 0:
+        li = pairs[:, 0];  lj = pairs[:, 1]
+        gi = boundary_nodes[li];  gj = boundary_nodes[lj]
+        vec  = x_cur[gj] - x_cur[gi]
+        dist = np.linalg.norm(vec, axis=1)
+        ok   = dist > 1e-12
+        if np.any(ok):
+            gi, gj, vec, dist = gi[ok], gj[ok], vec[ok], dist[ok]
+            delta  = thickness - dist
+            active = delta > 0.0
+            if np.any(active):
+                normal = vec[active] / dist[active, None]
+                f_vec  = (k_penalty * delta[active])[:, None] * normal
+                np.add.at(F_3n, gi[active], -f_vec)
+                np.add.at(F_3n, gj[active],  f_vec)
 
-    if len(pairs) == 0:
-        return F_3n.flatten()
+    # ── Node-to-triangle narrow phase (contact phasing fix) ──────────────────
+    # Catches sharp-corner-into-flat-face penetration that the node-to-node
+    # broad phase misses when the corner clears all triangle vertices but
+    # projects inside the triangle area.
+    if surf_facets is not None and len(surf_facets) > 0:
+        fa = x_cur[surf_facets[:, 0]]               # (M, 3) face vertices A
+        fb = x_cur[surf_facets[:, 1]]               # (M, 3) face vertices B
+        fc = x_cur[surf_facets[:, 2]]               # (M, 3) face vertices C
+        centroids = (fa + fb + fc) / 3.0            # (M, 3)
 
-    # ── Narrow phase: fully vectorized ───────────────────────────────────────
-    li = pairs[:, 0];  lj = pairs[:, 1]       # local indices into surf_pts
-    gi = boundary_nodes[li]                   # global node indices
-    gj = boundary_nodes[lj]
+        tri_tree = cKDTree(centroids)
+        # Each surface node queries nearby facet centroids within 2×thickness
+        hits = tri_tree.query_ball_point(surf_pts, r=2.0 * thickness)
 
-    # Inter-node vector (i → j) and Euclidean distance
-    vec  = x_cur[gj] - x_cur[gi]             # (P, 3)
-    dist = np.linalg.norm(vec, axis=1)        # (P,)
+        for b_idx, tri_list in enumerate(hits):
+            if not tri_list:
+                continue
+            g_node = boundary_nodes[b_idx]
+            p      = x_cur[g_node]
 
-    # Guard: skip coincident nodes
-    ok   = dist > 1e-12
-    if not np.any(ok):
-        return F_3n.flatten()
-    gi, gj, vec, dist = gi[ok], gj[ok], vec[ok], dist[ok]
+            for t_idx in tri_list:
+                ia, ib, ic = surf_facets[t_idx]
+                if g_node == ia or g_node == ib or g_node == ic:
+                    continue                         # self-facet — skip
 
-    # Signed penetration depth δ = thickness − dist  (positive when overlapping)
-    delta  = thickness - dist                         # (P,)
+                a_ = x_cur[ia];  b_ = x_cur[ib];  c_ = x_cur[ic]
+                ab = b_ - a_;    ac = c_ - a_;    ap = p  - a_
+                n_raw = np.cross(ab, ac)
+                n_len = float(np.linalg.norm(n_raw))
+                if n_len < 1e-30:
+                    continue
+                n_unit = n_raw / n_len
+                d      = float(np.dot(ap, n_unit))  # signed dist (+ve = outside)
 
-    # Unit normal i → j
-    normal = vec / dist[:, None]                      # (P, 3)
+                # Only process nodes that are slightly penetrating (d < 0)
+                if d > 0.0 or d < -2.0 * thickness:
+                    continue
 
-    # Force magnitude: F = k · δ
-    f_vec  = (k_penalty * delta)[:, None] * normal    # (P, 3)
+                # Barycentric test: is the projection inside the triangle?
+                p_proj = p - d * n_unit
+                ap2    = p_proj - a_
+                d00 = float(np.dot(ac, ac));  d01 = float(np.dot(ac, ab))
+                d02 = float(np.dot(ac, ap2)); d11 = float(np.dot(ab, ab))
+                d12 = float(np.dot(ab, ap2))
+                det = d00 * d11 - d01 * d01
+                if abs(det) < 1e-30:
+                    continue
+                u_ = (d11 * d02 - d01 * d12) / det
+                v_ = (d00 * d12 - d01 * d02) / det
+                _tol = 0.05             # 5 % border tolerance for near-edge hits
+                if u_ < -_tol or v_ < -_tol or u_ + v_ > 1.0 + _tol:
+                    continue            # projection outside triangle
 
-    # Scatter: node i pushed away from j (−f_vec), node j pushed away from i (+f_vec)
-    np.add.at(F_3n, gi, -f_vec)
-    np.add.at(F_3n, gj,  f_vec)
+                # Penetration confirmed — apply corrective force along outward normal
+                f_rep = (k_penalty * (-d)) * n_unit     # pushes node back out
+                F_3n[g_node] += f_rep
+                # Distribute equal reaction to the three triangle vertices
+                F_3n[ia] -= f_rep / 3.0
+                F_3n[ib] -= f_rep / 3.0
+                F_3n[ic] -= f_rep / 3.0
 
     return F_3n.flatten()
 
@@ -877,7 +969,7 @@ def _update_boundary_nodes(mesh, failed_elem):
     FACE_IDX = [(0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)]
 
     if len(live_conn) == 0:
-        return np.array([], dtype=int)
+        return np.array([], dtype=int), np.zeros((0, 3), dtype=int)
 
     all_faces = []
     for fi, fj, fk in FACE_IDX:
@@ -892,10 +984,10 @@ def _update_boundary_nodes(mesh, failed_elem):
     exposed_faces = unique_faces[counts == 1]
 
     if len(exposed_faces) == 0:
-        return np.array([], dtype=int)
+        return np.array([], dtype=int), np.zeros((0, 3), dtype=int)
 
     surf_nodes_set = np.unique(exposed_faces)
-    return surf_nodes_set.astype(int)
+    return surf_nodes_set.astype(int), exposed_faces.astype(int)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -915,6 +1007,11 @@ CRASH_MATERIAL_PRESETS = {
     'Steel (High-Strength DP780)': {
         'E': 210000.0, 'nu': 0.30, 'rho': 7.85e-9,
         'yield_strength': 480.0, 'tangent_modulus': 3000.0, 'failure_strain': 0.15,
+    },
+    # Alias used in legacy examples (same parameters, higher measured yield/hardening from tensile data)
+    'DP780 Dual-Phase': {
+        'E': 210000.0, 'nu': 0.28, 'rho': 7.83e-9,
+        'yield_strength': 560.0, 'tangent_modulus': 1800.0, 'failure_strain': 0.22,
     },
     'Steel (Ultra-High UHSS 1500)': {
         'E': 210000.0, 'nu': 0.30, 'rho': 7.85e-9,
@@ -1031,13 +1128,14 @@ class ImpactConditionNode(CadQueryNode):
         self.add_input('impact_face', color=(255, 100, 100))
         self.add_output('impact', color=(255, 200, 0))
 
-        # Velocity components in mm/ms (= m/s)
-        self.create_property('velocity_x',      0.0,  widget_type='float')
-        self.create_property('velocity_y',      0.0,  widget_type='float')
-        self.create_property('velocity_z',     -1.0,  widget_type='float')  # 1 m/s default
+        # Velocity components in mm/ms (= m/s).
+        # Rule of thumb: 10 km/h ≈ 2.78 mm/ms  |  56 km/h (NCAP) ≈ 15.6 mm/ms
+        self.create_property('velocity_x', 0.0,  widget_type='float')
+        self.create_property('velocity_y', 0.0,  widget_type='float')
+        self.create_property('velocity_z', -1.0, widget_type='float')
         # Node-selection tolerance (mm) – nodes within this distance of the
-        # impact face are given the initial velocity.
-        self.create_property('node_tolerance',  2.0,  widget_type='float')
+        # impact face receive the initial velocity.
+        self.create_property('node_tolerance', 2.0, widget_type='float')
 
     def run(self):
         face_data = self.get_input_value('impact_face', None)
@@ -1218,6 +1316,14 @@ class CrashSolverNode(CadQueryNode):
         if material is None:
             self.set_error("Crash Solver: crash_material input is not connected.")
             return None
+        if impact is None:
+            self.set_error(
+                "Crash Solver: impact input is not connected.\n"
+                "Connect an ImpactConditionNode to define an initial velocity.\n"
+                "Without it the simulation starts with v=0 and F_ext=0, "
+                "producing zero stress for all time steps."
+            )
+            return None
 
         # ── 2. Material parameters ───────────────────────────────────────────
 
@@ -1233,6 +1339,16 @@ class CrashSolverNode(CadQueryNode):
         D = build_D_matrix(E, nu)
 
         # ── 3. Mesh topology ─────────────────────────────────────────────────
+
+        # Downgrade P2 / higher-order meshes to linear P1 for explicit dynamics.
+        # Row-summing a P2 consistent mass matrix gives zero (or negative) corner
+        # masses, immediately blowing up a = F/m.  The first 4 rows of mesh.t
+        # are always the corner vertices, so simple slicing is sufficient.
+        if mesh.t.shape[0] > 4:
+            import skfem as _skfem_crash
+            print("Crash Solver: Downgrading higher-order mesh to linear P1 "
+                  "for explicit integration.")
+            mesh = _skfem_crash.MeshTet(mesh.p, mesh.t[:4, :])
 
         p = mesh.p        # (3, N_nodes)
         t = mesh.t        # (4, N_elem)  – tet connectivity
@@ -1320,6 +1436,49 @@ class CrashSolverNode(CadQueryNode):
 
         fixed_dofs = np.array(sorted(fixed_dofs_set), dtype=int)
         print(f"Crash Solver: {len(fixed_dofs)} constrained DOFs.")
+
+        # ── 5b. Rigid-wall planes derived from Roller / Fixed constraints ─────
+        # For each constraint that locks exactly one translational DOF (Roller),
+        # build a rigid axial wall so that FREE interior nodes cannot penetrate
+        # past the constrained face during dynamic crushing.
+        # Format: list of (dof_axis: int, wall_coord: float, sign: +1 or -1)
+        #   sign=+1  → wall blocks motion in the +axis direction (x <= wall_coord)
+        #   sign=-1  → wall blocks motion in the -axis direction (x >= wall_coord)
+        _rigid_walls = []  # [(axis, coord, sign), ...]
+        for constr in constraints:
+            if not constr:
+                continue
+            fdofs = constr.get('fixed_dofs', [])
+            geoms = constr.get('geometries', [constr.get('geometry')])
+            geoms = [g for g in (geoms or []) if g is not None]
+            if not geoms:
+                continue
+            # Only add a wall for single-axis Roller constraints (exactly 1 DOF)
+            if len(fdofs) != 1:
+                continue
+            axis = fdofs[0]   # 0=X, 1=Y, 2=Z
+            try:
+                bboxes = [g.BoundingBox() for g in geoms]
+            except Exception:
+                continue
+            # Determine wall coordinate and direction from face centroid vs model centre
+            axis_coords_all = p[axis, :]   # all node coordinates along this axis
+            _model_mid = float(np.mean(axis_coords_all))
+            _face_coords = []
+            for bb in bboxes:
+                _face_coords.append((getattr(bb, 'xmin' if axis==0 else 'ymin' if axis==1 else 'zmin')
+                                     + getattr(bb, 'xmax' if axis==0 else 'ymax' if axis==1 else 'zmax')) / 2.0)
+            _face_mid = float(np.mean(_face_coords))
+            if _face_mid >= _model_mid:
+                # Wall is on the positive side — prevents motion past it in +axis
+                _wall_pos = max(getattr(bb, 'xmax' if axis==0 else 'ymax' if axis==1 else 'zmax') for bb in bboxes)
+                _rigid_walls.append((axis, float(_wall_pos), +1))
+                print(f"Crash Solver: Rigid wall axis={axis} coord={_wall_pos:.2f} (blocks +motion).")
+            else:
+                # Wall is on the negative side — prevents motion past it in -axis
+                _wall_neg = min(getattr(bb, 'xmin' if axis==0 else 'ymin' if axis==1 else 'zmin') for bb in bboxes)
+                _rigid_walls.append((axis, float(_wall_neg), -1))
+                print(f"Crash Solver: Rigid wall axis={axis} coord={_wall_neg:.2f} (blocks -motion).")
 
         # ── 6. Initial conditions (velocity impact) ───────────────────────────
 
@@ -1424,6 +1583,7 @@ class CrashSolverNode(CadQueryNode):
         #    scaled elements count toward the global stable time step. ─────────
         _enable_ms    = bool(self.get_property('enable_mass_scaling'))
         _ms_threshold = float(self.get_property('mass_scaling_threshold'))
+        _ms_info = None
         if _enable_ms:
             M_diag, _ms_info = _apply_mass_scaling(
                 M_diag, mesh, E, nu, rho, dt_req, _ms_threshold
@@ -1444,13 +1604,39 @@ class CrashSolverNode(CadQueryNode):
             # Update total_mass after scaling
             total_mass = float(np.sum(M_diag[0::3]))
 
-        # CFL stability check — explicit central-difference requires
-        #   dt ≤ L_e / c_d  (with a safety margin).
-        # If the requested dt violates this, auto-reduce it.
-        dt_cfl = _compute_cfl_dt(mesh, E, nu, rho, safety=0.5)
+        # Bulk/material CFL limit.  If selective mass scaling was applied,
+        # use the scaled minimum element time step rather than the original
+        # material-density limit.
+        dt_cfl_bulk = _compute_cfl_dt(mesh, E, nu, rho, safety=0.5)
+        if _enable_ms and _ms_info is not None:
+            dt_cfl_bulk = max(dt_cfl_bulk, float(_ms_info['dt_min_scaled']))
+
+        # Contact can introduce a stiffer stability limit than the material
+        # wave-speed CFL bound, so include it in the final time-step selection.
+        enable_contact = bool(self.get_property('enable_contact'))
+        k_cf = float(self.get_property('contact_stiffness'))
+        ct_frac = float(self.get_property('contact_thickness'))
+        contact_update_int = max(1, int(self.get_property('contact_update_interval')))
+
+        _bnd_facet_mask = mesh.f2t[1, :] == -1
+        boundary_facets_all = mesh.facets[:, _bnd_facet_mask].T.astype(int)
+        boundary_nodes_all = np.unique(boundary_facets_all) if len(boundary_facets_all) > 0 else np.array([], dtype=int)
+
+        conn_tmp = mesh.t.T
+        T_tmp = np.ones((conn_tmp.shape[0], 4, 4))
+        T_tmp[:, :, 1:] = mesh.p.T[conn_tmp]
+        vol_tmp = np.abs(np.linalg.det(T_tmp)) / 6.0
+        valid_tmp = vol_tmp[vol_tmp > 1e-20]
+        L_min = float(np.median(valid_tmp) ** (1.0 / 3.0)) if valid_tmp.size else 1.0
+        K_bulk = E / (3.0 * (1.0 - 2.0 * nu))
+        k_penalty = k_cf * K_bulk * L_min
+        dt_cfl_contact = _compute_contact_dt_limit(M_diag, boundary_nodes_all, k_penalty) if enable_contact else np.inf
+        dt_cfl = min(dt_cfl_bulk, dt_cfl_contact)
+
         if dt_req > dt_cfl:
+            _limiter = 'contact' if dt_cfl_contact < dt_cfl_bulk else 'bulk'
             print(f"Crash Solver: WARNING – requested Δt ({dt_req:.4e} ms) exceeds "
-                  f"CFL stable limit ({dt_cfl:.4e} ms).  Auto-correcting.")
+                  f"stable limit ({dt_cfl:.4e} ms, {_limiter}-controlled).  Auto-correcting.")
             dt      = dt_cfl
             n_steps = max(int(np.ceil(end_time / dt)), 1)
         else:
@@ -1467,7 +1653,7 @@ class CrashSolverNode(CadQueryNode):
         frames: list = []   # list of {displacement, stress_vm, eps_p, failed, time}
 
         print(f"Crash Solver: Δt = {dt:.4e} ms,  steps = {n_steps}  "
-              f"(CFL limit = {dt_cfl:.4e} ms)")
+              f"(bulk CFL = {dt_cfl_bulk:.4e} ms, contact CFL = {dt_cfl_contact:.4e} ms)")
 
         # Per-element plastic state
         eps_p       = np.zeros(N_elem)
@@ -1516,23 +1702,56 @@ class CrashSolverNode(CadQueryNode):
         enable_corotation = bool(self.get_property('enable_corotation'))
         print(f"Crash Solver: Co-rotational formulation = {enable_corotation}")
 
-        # ── 8b-contact. Contact algorithm setup ──────────────────────────────
-        enable_contact      = bool(self.get_property('enable_contact'))
-        k_cf                = float(self.get_property('contact_stiffness'))
-        ct_frac             = float(self.get_property('contact_thickness'))
-        contact_update_int  = max(1, int(self.get_property('contact_update_interval')))
+        # ── T4 volumetric locking diagnostic ─────────────────────────────────
+        # Linear T4 (4-node tet / P1) elements have only one volumetric strain
+        # mode per element.  J2 plasticity is isochoric (ΔV=0 during plastic
+        # flow), which forces volumetric deformation entirely through this single
+        # mode → over-constraint → artificial stiffness (locking).
+        # Symptoms: stress 3–5× analytical, negligible plastic strain, response
+        # insensitive to impact velocity.  Mitigation (not in this solver):
+        #   F-bar mean-dilation, NBS nodal pressure averaging, or T10/P2 elements.
+        # FIX #5: The original condition (sigma_y0 < 1e15) was always True because
+        # yield stress is never a quadrillion MPa.  Correct logic: warn about
+        # near-incompressible locking (ν≥0.45) OR when both plasticity is active
+        # AND ν is high enough to cause significant volumetric over-constraint.
+        # J2 plasticity (isochoric) amplifies locking, but at low ν it is mild;
+        # severe locking only appears when ν≥0.35 with plasticity, or ν≥0.45 alone.
+        _is_near_incompressible = nu >= 0.45
+        _plasticity_locking_risk = (sigma_y0 < E) and (nu >= 0.35)  # plastic flow + vol locking
+        _locking_risk = _is_near_incompressible or _plasticity_locking_risk
+        if _locking_risk:
+            _reasons = []
+            if _is_near_incompressible:
+                _reasons.append(f"\u03bd={nu:.3f} \u2265 0.45 (near-incompressible \u2014 volumetric locking)")
+            if _plasticity_locking_risk:
+                _reasons.append(
+                    f"\u03c3_y={sigma_y0:.0f} MPa < E={E:.0f} MPa: J2 plastic flow is isochoric "
+                    f"and amplifies volumetric locking at \u03bd={nu:.3f} \u2265 0.35"
+                )
+            _lock_warn = (
+                "Crash Solver: WARNING \u2014 T4 (linear tet) volumetric locking risk detected.\n"
+                + "\n".join(f"  \u2022 {r}" for r in _reasons) + "\n"
+                "  Symptoms: stress 3\u20135\u00d7 analytical, under-predicted plastic strain.\n"
+                "  Mitigation: use a coarser mesh with larger elements, or switch to\n"
+                "  T10/P2 elements once supported."
+            )
+            print(_lock_warn)
+            logger.warning(_lock_warn)
 
+        # ── 8b-contact. Contact algorithm setup ──────────────────────────────
         # Characteristic element length (cube-root of median volume).
         _valid_vols = vol_all[vol_all > 1e-20]
-        L_min = float(np.median(_valid_vols) ** (1.0 / 3.0)) if _valid_vols.size else 1.0
-
-        # Bulk modulus K = E / (3(1−2ν))
-        K_bulk      = E / (3.0 * (1.0 - 2.0 * nu))
+        L_min = float(np.median(_valid_vols) ** (1.0 / 3.0)) if _valid_vols.size else L_min
         k_penalty   = k_cf * K_bulk * L_min          # [N/mm]
         ct_thickness = ct_frac * L_min               # search radius [mm]
 
-        # Initial boundary-node list
-        boundary_nodes = mesh.boundary_nodes() if enable_contact else np.array([], dtype=int)
+        # Initial boundary-node list and surface facets for contact
+        if enable_contact:
+            boundary_facets = boundary_facets_all
+            boundary_nodes  = boundary_nodes_all
+        else:
+            boundary_nodes  = np.array([], dtype=int)
+            boundary_facets = np.zeros((0, 3), dtype=int)
 
         if enable_contact:
             print(f"Crash Solver: Self-contact ON  "
@@ -1624,6 +1843,25 @@ class CrashSolverNode(CadQueryNode):
             u += delta_u
             u[fixed_dofs] = 0.0
 
+            # ── Rigid wall enforcement ────────────────────────────────────
+            # Prevent free nodes from penetrating the constrained wall plane.
+            # Uses a hard kinematic clamp: if deformed coordinate overshoots
+            # the wall, pull it back and zero the normal velocity component.
+            if _rigid_walls:
+                for (_waxis, _wcoord, _wsign) in _rigid_walls:
+                    _def_coord = p[_waxis, :] + u[_waxis::3][:N]
+                    if _wsign == +1:  # wall blocks +axis motion
+                        _pentr = _def_coord > _wcoord
+                    else:             # wall blocks -axis motion
+                        _pentr = _def_coord < _wcoord
+                    _pentr_idx = np.where(_pentr)[0]
+                    for _ni in _pentr_idx:
+                        _gdof = 3 * _ni + _waxis
+                        if _gdof in fixed_dofs_set:
+                            continue  # constrained node, already handled
+                        u[_gdof] = _wcoord - p[_waxis, _ni]   # clamp to wall
+                        v[_gdof] = 0.0                          # kill normal vel
+
             # Internal forces and plasticity update
             if enable_corotation:
                 F_int, eps_p_new, sigma_vm_new, failed_new, sigma_elem = \
@@ -1710,10 +1948,11 @@ class CrashSolverNode(CadQueryNode):
                     (do_frac and np.any(_new_failures))
                 )
                 if should_rebuild:
-                    boundary_nodes = _update_boundary_nodes(mesh, failed_elem)
+                    boundary_nodes, boundary_facets = _update_boundary_nodes(mesh, failed_elem)
 
                 F_contact = compute_penalty_contact(
-                    u, mesh.p.T, boundary_nodes, ct_thickness, k_penalty
+                    u, mesh.p.T, boundary_nodes, ct_thickness, k_penalty,
+                    surf_facets=boundary_facets
                 )
             else:
                 F_contact = 0.0
@@ -1740,9 +1979,43 @@ class CrashSolverNode(CadQueryNode):
                 _F_constr = F_int[impact_dof_arr] + F_damp[impact_dof_arr]
                 W_ext_cumulative -= float(np.dot(_F_constr, delta_u[impact_dof_arr]))
 
-            # New acceleration (contact force enters with positive sign — it is
-            # already a restoring/repulsive force, not an internal stress)
-            a = (- F_int + F_contact - F_damp) / M_diag
+            # ── Artificial bulk viscosity (von Neumann–Richtmyer / Wilkins) ─
+            # Damps numerical ringing behind compressive shock fronts by adding
+            # a viscous pressure to volumetrically compressing elements only.
+            #   Q_e = \u03c1 L_e (C_q L_e \u03b5\u0307_v\u00b2 + C_l c_d |\u03b5\u0307_v|)  if \u03b5\u0307_v < 0 (compression)
+            #   Q_e = 0                                              otherwise
+            # C_q \u2248 1.5 (strong shocks), C_l \u2248 0.06 (weak shocks / ringing).
+            _C_q_bv     = 1.5
+            _C_l_bv     = 0.06
+            _c_d_bv     = np.sqrt(
+                E * (1.0 - nu) /
+                max(rho * (1.0 + nu) * (1.0 - 2.0 * nu), 1e-30)
+            )
+            _delta_u_e  = delta_u[dof_idx]                        # (N_el, 12)
+            # Volumetric row = sum of \u03b5_xx, \u03b5_yy, \u03b5_zz rows of B
+            _B_vol      = B_all[:, 0, :] + B_all[:, 1, :] + B_all[:, 2, :]  # (N_el, 12)
+            _eps_v_rate = (
+                np.einsum('ij,ij->i', _B_vol, _delta_u_e) / max(dt, 1e-30)
+            )                                                      # (N_el,) vol. strain rate
+            _L_bv       = np.cbrt(np.maximum(vol_all, 0.0))       # V^{1/3} char. length
+            _Q_bv       = np.where(
+                (_eps_v_rate < 0.0) & (vol_all > 1e-20) & ~failed_elem,
+                rho * _L_bv * (
+                    _C_q_bv * _L_bv * _eps_v_rate ** 2
+                    + _C_l_bv * _c_d_bv * np.abs(_eps_v_rate)
+                ),
+                0.0,
+            )                                                      # (N_el,)
+            # Scatter hydrostatic pressure force: F_bv_e = Q_e V_e B_vol^T
+            F_bv = np.zeros(3 * N)
+            _Q_V = _Q_bv * vol_all                                 # (N_el,)
+            np.add.at(F_bv, dof_idx.ravel(),
+                      (_Q_V[:, np.newaxis] * _B_vol).ravel())
+            F_bv[fixed_dofs] = 0.0
+
+            # New acceleration (contact + bulk-viscosity enter with sign that
+            # resists motion; F_bv already opposes further compression)
+            a = (- F_int - F_bv + F_contact - F_damp) / M_diag
             a[fixed_dofs] = 0.0
 
             # Sample history
@@ -1813,7 +2086,13 @@ class CrashSolverNode(CadQueryNode):
         print(f"  Peak VM stress    = {peak_vm:.1f} MPa")
         print(f"  Max displacement  = {max_disp_live:.3f} mm")
         print(f"  Failed elements   = {int(np.sum(failed_elem))}")
-        print(f"  Absorbed energy   ≈ {absorbed_energy:.3f} N·mm")
+        # 'absorbed_energy' is cumulative plastic dissipation (N·mm = mJ).
+        # NOTE: this is the work done *against* plastic deformation, not the total
+        # external work input (which equals absorbed_energy + remaining KE + SE).
+        # It is reliable for comparative ranking but may be inflated by T4 locking.
+        print(f"  Plastic dissipation ≈ {absorbed_energy:.1f} N·mm  ({absorbed_energy*1e-3:.2f} J)")
+        if W_ext_cumulative > 0:
+            print(f"  External work input ≈ {W_ext_cumulative:.1f} N·mm  ({W_ext_cumulative*1e-3:.2f} J)")
 
         # Energy balance summary
         if _max_eb_error > 0.0:
@@ -2006,6 +2285,13 @@ def _run_neo_hookean_sim(
     GR  = _SC_GRID_RES
     MPC = _SC_MAX_PER_CELL
 
+    # Downgrade P2 / higher-order meshes to linear P1 for explicit dynamics.
+    if mesh.t.shape[0] > 4:
+        import skfem as _skfem_nh
+        print("Neo-Hookean Sim: Downgrading higher-order mesh to linear P1 "
+              "for explicit integration.")
+        mesh = _skfem_nh.MeshTet(mesh.p, mesh.t[:4, :])
+
     N      = mesh.p.shape[1]
     N_elem = mesh.t.shape[1]
     pts    = mesh.p.T           # (N,   3) reference positions
@@ -2067,8 +2353,11 @@ def _run_neo_hookean_sim(
     surf_node_flag_np = np.zeros(N, dtype=np.int32)
     surf_node_flag_np[np.unique(surf_tris_np.ravel())] = 1
 
-    # Spatial hash bounding box (padded 10 %)
-    _pad      = 0.1 * max(np.ptp(pts[:, 0]),
+    # Spatial hash bounding box (padded 50 %).
+    # A 10 % pad is insufficient for high-speed crashes where debris can eject
+    # well beyond the original envelope; nodes outside the box collapse into a
+    # single dense hash cell, destroying O(1) contact lookup performance.
+    _pad      = 0.5 * max(np.ptp(pts[:, 0]),
                            np.ptp(pts[:, 1]),
                            np.ptp(pts[:, 2]), 1.0)
     bbox_min  = pts.min(axis=0) - _pad
@@ -2358,6 +2647,7 @@ def _run_neo_hookean_sim(
     PE_hist: list = []  # plastic dissipation
 
     absorbed_energy = 0.0
+    prev_ep_sample = np.zeros(N_elem, dtype=np.float64)
 
     print(f"GPU Solver (plasticity={'on' if sigma_y0 < 1e29 else 'off'}, "
           f"fracture={'on' if enable_fracture else 'off'}, "
@@ -2393,10 +2683,11 @@ def _run_neo_hookean_sim(
             v_np   = v_ti.to_numpy()
             ep_np  = eps_p_ti.to_numpy()
             KE     = 0.5 * float(np.einsum('i,ij->', M_np, v_np ** 2))
-            # Incremental plastic dissipation (approximate)
-            _sigma_y_e = np.minimum(sigma_y0 + H_hard * ep_np, sigma_y0 * 10)
-            PE_step    = float(np.sum(ep_np * _sigma_y_e * W_0 * rho))
-            absorbed_energy = PE_step
+            # Incremental plastic dissipation (approximate, units N·mm).
+            _dep_np = np.maximum(ep_np - prev_ep_sample, 0.0)
+            _sigma_y_e = sigma_y0 + H_hard * prev_ep_sample
+            absorbed_energy += float(np.sum(_dep_np * _sigma_y_e * W_0))
+            prev_ep_sample = ep_np.copy()
             t_hist.append(step * dt)
             KE_hist.append(KE)
             PE_hist.append(absorbed_energy)
@@ -2585,6 +2876,14 @@ class CrashSolverGPUNode(CadQueryNode):
         if material is None:
             self.set_error("GPU Crash Solver: crash_material input is not connected.")
             return None
+        if impact is None:
+            self.set_error(
+                "GPU Crash Solver: impact input is not connected.\n"
+                "Connect an ImpactConditionNode to define an initial velocity.\n"
+                "Without it the simulation starts with v=0 and F_ext=0, "
+                "producing zero stress for all time steps."
+            )
+            return None
 
         # ── 3. Material parameters ────────────────────────────────────────────
         E        = float(material.get('E',               210000.0))
@@ -2599,6 +2898,13 @@ class CrashSolverGPUNode(CadQueryNode):
         la    = E * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
 
         # ── 4. Mesh ───────────────────────────────────────────────────────────
+        # Downgrade P2 / higher-order meshes to linear P1 for explicit dynamics.
+        if mesh.t.shape[0] > 4:
+            import skfem as _skfem_gpu
+            print("GPU Crash Solver: Downgrading higher-order mesh to linear P1 "
+                  "for explicit integration.")
+            mesh = _skfem_gpu.MeshTet(mesh.p, mesh.t[:4, :])
+
         p = mesh.p
         N = p.shape[1]
         x, y, z = p

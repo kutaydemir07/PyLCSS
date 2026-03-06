@@ -1475,21 +1475,50 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         QtWidgets.QApplication.instance().aboutToQuit.connect(self.on_app_quit)
         
         self.init_ui()
+
+    def _tracked_threads(self):
+        threads = []
+        for name in (
+            'solver_worker',
+            'family_worker',
+            'resample_thread',
+            'candidate_worker',
+            'interpolation_thread',
+        ):
+            thread = getattr(self, name, None)
+            if thread is not None:
+                threads.append(thread)
+        return threads
+
+    def has_active_background_tasks(self):
+        return any(thread.isRunning() for thread in self._tracked_threads())
+
+    def request_background_stop(self):
+        for thread in self._tracked_threads():
+            try:
+                if hasattr(thread, 'stop'):
+                    thread.stop()
+                elif hasattr(thread, 'cancel'):
+                    thread.cancel()
+                elif hasattr(thread, 'requestInterruption'):
+                    thread.requestInterruption()
+            except Exception:
+                pass
         
     def closeEvent(self, event):
-        # Wait for any running threads to finish
-        if self.resample_thread and self.resample_thread.isRunning():
-            self.resample_thread.wait()
-        if self.candidate_worker and self.candidate_worker.isRunning():
-            self.candidate_worker.wait()
+        self.request_background_stop()
+        if self.has_active_background_tasks():
+            QtWidgets.QMessageBox.information(
+                self,
+                "Background Tasks Running",
+                "Solution-space work is still running. Stop or wait for the active computation before closing this view.",
+            )
+            event.ignore()
+            return
         event.accept()
         
     def on_app_quit(self):
-        # Wait for any running threads to finish before app quits
-        if self.resample_thread and self.resample_thread.isRunning():
-            self.resample_thread.wait()
-        if self.candidate_worker and self.candidate_worker.isRunning():
-            self.candidate_worker.wait()
+        self.request_background_stop()
         
     def init_ui(self):
         # Main Layout: Splitter

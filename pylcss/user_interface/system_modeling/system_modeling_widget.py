@@ -749,6 +749,10 @@ class NodeTrainingWorker(QtCore.QThread):
         self.test_size = test_size
         self.random_state = random_state
 
+    def _raise_if_cancelled(self):
+        if self.isInterruptionRequested():
+            raise InterruptedError("Training cancelled.")
+
     def run(self):
         try:
             # Import sklearn modules here to avoid numpy compatibility issues at module load
@@ -765,6 +769,7 @@ class NodeTrainingWorker(QtCore.QThread):
             return
 
         try:
+            self._raise_if_cancelled()
             self.progress_updated.emit(0, "Generating spy model code...")
 
             # Build spy model to capture training data
@@ -782,6 +787,7 @@ class NodeTrainingWorker(QtCore.QThread):
             spy_func = exec_context["spy_model"]
             # --- FIX END ---
 
+            self._raise_if_cancelled()
             self.progress_updated.emit(20, f"Generating {self.num_samples} training samples...")
 
             # Generate training data by sampling input space
@@ -803,6 +809,7 @@ class NodeTrainingWorker(QtCore.QThread):
             # Sample input space
             np.random.seed(self.random_state)
             for i in range(self.num_samples):
+                self._raise_if_cancelled()
                 # Generate random input sample within bounds
                 sample_inputs = []
                 for min_val, max_val in input_bounds:
@@ -825,6 +832,7 @@ class NodeTrainingWorker(QtCore.QThread):
             X = np.array(X_data)
             y = np.array(y_data)
 
+            self._raise_if_cancelled()
             self.progress_updated.emit(70, "Training neural network surrogate...")
 
             # Create and train surrogate model
@@ -852,9 +860,11 @@ class NodeTrainingWorker(QtCore.QThread):
                 X, y, test_size=self.test_size, random_state=self.random_state
             )
 
+            self._raise_if_cancelled()
             # Train model
             model.fit(X_train, y_train)
 
+            self._raise_if_cancelled()
             self.progress_updated.emit(90, "Evaluating model performance...")
 
             # Evaluate model performance
@@ -862,6 +872,7 @@ class NodeTrainingWorker(QtCore.QThread):
             mse = mean_squared_error(y_test, y_pred)
             rmse = np.sqrt(mse)
 
+            self._raise_if_cancelled()
             self.progress_updated.emit(95, "Saving surrogate model...")
 
             # Save model to file
@@ -874,6 +885,9 @@ class NodeTrainingWorker(QtCore.QThread):
 
             self.progress_updated.emit(100, "Training completed successfully!")
             self.training_finished.emit(True, f"Surrogate model trained successfully. RMSE: {rmse:.4f}")
+
+        except InterruptedError as e:
+            self.training_finished.emit(False, str(e))
 
         except Exception as e:
             self.training_finished.emit(False, f"Training failed: {str(e)}")
@@ -984,8 +998,8 @@ def train_selected_node_surrogate(modeling_widget, num_samples=1000):
         )
     )
 
-    # Handle cancellation
-    progress_dialog.canceled.connect(worker.terminate)
+    # Handle cancellation cooperatively to avoid killing the thread mid-operation.
+    progress_dialog.canceled.connect(worker.requestInterruption)
 
     # Start training
     worker.start()

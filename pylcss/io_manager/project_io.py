@@ -18,6 +18,7 @@ import os
 import shutil
 import tempfile
 import zipfile
+import atexit
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -26,6 +27,18 @@ logger = logging.getLogger(__name__)
 
 PROJECT_VERSION = "2.0.0"
 PROJECT_EXTENSION = ".pylcss"
+_EXTRACTED_MODEL_DIRS = []
+
+
+def _cleanup_extracted_model_dirs() -> None:
+    for path in list(_EXTRACTED_MODEL_DIRS):
+        try:
+            shutil.rmtree(path, ignore_errors=True)
+        except Exception:
+            pass
+
+
+atexit.register(_cleanup_extracted_model_dirs)
 
 
 class ProjectManager:
@@ -113,8 +126,19 @@ class ProjectManager:
                 else:
                     _write_json(os.path.join(section_dir, "data.json"), data)
 
-            # Create ZIP archive
-            _zip_directory(tmpdir, filepath)
+            # Create ZIP archive atomically so a failed save does not corrupt the project.
+            target_dir = os.path.dirname(filepath) or None
+            fd, temp_zip = tempfile.mkstemp(prefix="pylcss_project_", suffix=PROJECT_EXTENSION, dir=target_dir)
+            os.close(fd)
+            try:
+                _zip_directory(tmpdir, temp_zip)
+                os.replace(temp_zip, filepath)
+            finally:
+                if os.path.exists(temp_zip):
+                    try:
+                        os.remove(temp_zip)
+                    except OSError:
+                        pass
 
         logger.info(f"Project saved: {filepath}")
 
@@ -127,6 +151,8 @@ class ProjectManager:
         """
         if not os.path.isfile(filepath):
             raise FileNotFoundError(f"Project file not found: {filepath}")
+        if not zipfile.is_zipfile(filepath):
+            raise ValueError(f"Invalid project archive: {filepath}")
 
         project_data = {}
 
@@ -164,11 +190,15 @@ class ProjectManager:
                         section_data.update(_read_arrays_hdf5(file_path))
                     elif file == "models" and os.path.isdir(file_path):
                         models = {}
+                        model_cache_dir = tempfile.mkdtemp(prefix="pylcss_models_")
+                        _EXTRACTED_MODEL_DIRS.append(model_cache_dir)
                         for model_file in os.listdir(file_path):
                             if model_file.endswith(".pkl"):
                                 name = Path(model_file).stem
-                                # Copy to persistent location
-                                models[name] = os.path.join(file_path, model_file)
+                                src = os.path.join(file_path, model_file)
+                                dest = os.path.join(model_cache_dir, model_file)
+                                shutil.copy2(src, dest)
+                                models[name] = dest
                         section_data["models"] = models
 
                 project_data[section] = section_data

@@ -9,20 +9,19 @@
     "reject_connection_types": "{}"
   },
   "nodes": {
-
-    "0xCB01": {
+    "0xCX01": {
       "type_": "com.cad.box.BoxNode",
       "icon": null,
-      "name": "Crashbox Geometry",
+      "name": "Crashbox Solid (Pre-Shell)",
       "color": [13, 18, 23, 255],
       "border_color": [74, 84, 85, 255],
       "text_color": [255, 255, 255, 180],
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 170,
-      "height": 190,
-      "pos": [50.0, 180.0],
+      "width": 180.0,
+      "height": 165.6,
+      "pos": [20.0, 200.0],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
@@ -35,70 +34,19 @@
         "center_z": 0.0
       }
     },
-
-    "0xCB02": {
-      "type_": "com.cad.sim.mesh.MeshNode",
-      "icon": null,
-      "name": "Generate Mesh",
-      "color": [13, 18, 23, 255],
-      "border_color": [74, 84, 85, 255],
-      "text_color": [255, 255, 255, 180],
-      "disabled": false,
-      "selected": false,
-      "visible": true,
-      "width": 170,
-      "height": 120,
-      "pos": [290.0, 180.0],
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
-      "custom": {
-        "mesh_type": "Tet",
-        "element_size": 8.0,
-        "refinement_size": 0.5
-      }
-    },
-
-    "0xCB03": {
+    "0xCX02": {
       "type_": "com.cad.select_face.SelectFaceNode",
       "icon": null,
-      "name": "Rear Face (Fixed)",
+      "name": "Open Front End To Remove",
       "color": [13, 18, 23, 255],
       "border_color": [74, 84, 85, 255],
       "text_color": [255, 255, 255, 180],
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 160,
-      "height": 60,
-      "pos": [290.0, 40.0],
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
-      "custom": {
-        "selector_type": "Direction",
-        "direction": ">X",
-        "near_x": 0.0,
-        "near_y": 0.0,
-        "near_z": 0.0,
-        "face_index": 0,
-        "tag": "rear"
-      }
-    },
-
-    "0xCB04": {
-      "type_": "com.cad.select_face.SelectFaceNode",
-      "icon": null,
-      "name": "Front Face (Impact)",
-      "color": [13, 18, 23, 255],
-      "border_color": [74, 84, 85, 255],
-      "text_color": [255, 255, 255, 180],
-      "disabled": false,
-      "selected": false,
-      "visible": true,
-      "width": 160,
-      "height": 60,
-      "pos": [290.0, 360.0],
+      "width": 180.0,
+      "height": 60.0,
+      "pos": [280.0, 40.0],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
@@ -108,24 +56,105 @@
         "near_x": 0.0,
         "near_y": 0.0,
         "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
         "face_index": 0,
-        "tag": "front"
+        "tag": "open_end"
       }
     },
-
-    "0xCB05": {
-      "type_": "com.cad.sim.crash_material.CrashMaterialNode",
+    "0xCX03": {
+      "type_": "com.cad.shell.ShellNode",
       "icon": null,
-      "name": "Al 5052-H32 (Crashbox)",
+      "name": "Shell (2 mm Wall)",
       "color": [13, 18, 23, 255],
       "border_color": [74, 84, 85, 255],
       "text_color": [255, 255, 255, 180],
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 192,
-      "height": 205,
-      "pos": [290.0, 470.0],
+      "width": 170.0,
+      "height": 60.0,
+      "pos": [280.0, 200.0],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "thickness": -2.0
+      }
+    },
+    "0xCX04": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Rear Wall Contact Face",
+      "color": [13, 18, 23, 255],
+      "border_color": [74, 84, 85, 255],
+      "text_color": [255, 255, 255, 180],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 175.0,
+      "height": 60.0,
+      "pos": [540.0, 40.0],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "selector_type": "Direction",
+        "direction": ">X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "rear_wall"
+      }
+    },
+    "0xCX05": {
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "icon": null,
+      "name": "Generate Mesh",
+      "color": [13, 18, 23, 255],
+      "border_color": [74, 84, 85, 255],
+      "text_color": [255, 255, 255, 180],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 170.0,
+      "height": 119.4,
+      "pos": [540.0, 200.0],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "mesh_type": "Tet",
+        "element_size": 8.0,
+        "refinement_size": 4.0
+      }
+    },
+    "0xCX06": {
+      "type_": "com.cad.sim.crash_material.CrashMaterialNode",
+      "icon": null,
+      "name": "Al 5052-H32 (No Fracture)",
+      "color": [13, 18, 23, 255],
+      "border_color": [74, 84, 85, 255],
+      "text_color": [255, 255, 255, 180],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 185.0,
+      "height": 205.0,
+      "pos": [540.0, 420.0],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
@@ -133,52 +162,50 @@
         "preset": "Aluminum 5052-H32 (Crush)",
         "youngs_modulus": 70300.0,
         "poissons_ratio": 0.33,
-        "density": 2.68e-9,
+        "density": 2.68e-09,
         "yield_strength": 193.0,
         "tangent_modulus": 500.0,
-        "failure_strain": 0.14,
-        "enable_fracture": true
+        "failure_strain": 0.30,
+        "enable_fracture": false
       }
     },
-
-    "0xCB06": {
+    "0xCX07": {
       "type_": "com.cad.sim.constraint.ConstraintNode",
       "icon": null,
-      "name": "Fixed Support (Rear)",
+      "name": "Rigid Wall Contact Plane (Roller X)",
       "color": [13, 18, 23, 255],
       "border_color": [74, 84, 85, 255],
       "text_color": [255, 255, 255, 180],
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 176,
-      "height": 75,
-      "pos": [590.0, 40.0],
+      "width": 205.0,
+      "height": 73.2,
+      "pos": [820.0, 40.0],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
       "custom": {
-        "constraint_type": "Fixed",
+        "constraint_type": "Roller X",
         "displacement_x": 0.0,
         "displacement_y": 0.0,
         "displacement_z": 0.0,
         "condition": ""
       }
     },
-
-    "0xCB07": {
+    "0xCX08": {
       "type_": "com.cad.sim.impact.ImpactConditionNode",
       "icon": null,
-      "name": "5 m/s Frontal Impact",
+      "name": "5 m/s Whole-Box Axial Impact",
       "color": [13, 18, 23, 255],
       "border_color": [74, 84, 85, 255],
       "text_color": [255, 255, 255, 180],
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 185,
-      "height": 120,
-      "pos": [590.0, 360.0],
+      "width": 190.0,
+      "height": 120.0,
+      "pos": [820.0, 360.0],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
@@ -189,44 +216,50 @@
         "node_tolerance": 3.0
       }
     },
-
-    "0xCB08": {
+    "0xCX09": {
       "type_": "com.cad.sim.crash_solver.CrashSolverNode",
       "icon": null,
-      "name": "Explicit Crash Solver",
+      "name": "Crashbox Wall Impact Solver",
       "color": [13, 18, 23, 255],
       "border_color": [74, 84, 85, 255],
       "text_color": [255, 255, 255, 180],
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 200,
-      "height": 200,
-      "pos": [900.0, 200.0],
+      "width": 200.0,
+      "height": 150.0,
+      "pos": [1080.0, 200.0],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
       "custom": {
         "end_time": 2.0,
-        "time_steps": 2500,
-        "damping_alpha": 0.05,
-        "visualization": "Von Mises Stress",
-        "n_frames": 200,
-        "disp_scale": 3.0
+        "time_steps": 800,
+        "damping_alpha": 1.0,
+        "visualization": "Plastic Strain",
+        "n_frames": 80,
+        "disp_scale": 1.0,
+        "enable_corotation": true,
+        "enable_contact": false,
+        "contact_stiffness": 0.1,
+        "contact_thickness": 0.2,
+        "contact_update_interval": 5,
+        "enable_mass_scaling": false,
+        "mass_scaling_threshold": 0.05
       }
     }
-
   },
   "connections": [
-    { "out": ["0xCB01", "shape"],        "in":  ["0xCB02", "shape"]         },
-    { "out": ["0xCB01", "shape"],        "in":  ["0xCB03", "shape"]         },
-    { "out": ["0xCB01", "shape"],        "in":  ["0xCB04", "shape"]         },
-    { "out": ["0xCB02", "mesh"],         "in":  ["0xCB06", "mesh"]          },
-    { "out": ["0xCB03", "workplane"],    "in":  ["0xCB06", "target_face"]   },
-    { "out": ["0xCB04", "workplane"],    "in":  ["0xCB07", "impact_face"]   },
-    { "out": ["0xCB02", "mesh"],         "in":  ["0xCB08", "mesh"]          },
-    { "out": ["0xCB05", "crash_material"], "in": ["0xCB08", "crash_material"] },
-    { "out": ["0xCB06", "constraints"],  "in":  ["0xCB08", "constraints"]   },
-    { "out": ["0xCB07", "impact"],       "in":  ["0xCB08", "impact"]        }
+    { "out": ["0xCX01", "shape"], "in": ["0xCX02", "shape"] },
+    { "out": ["0xCX01", "shape"], "in": ["0xCX03", "shape"] },
+    { "out": ["0xCX02", "workplane"], "in": ["0xCX03", "face_to_remove"] },
+    { "out": ["0xCX03", "shape"], "in": ["0xCX04", "shape"] },
+    { "out": ["0xCX03", "shape"], "in": ["0xCX05", "shape"] },
+    { "out": ["0xCX05", "mesh"], "in": ["0xCX07", "mesh"] },
+    { "out": ["0xCX04", "workplane"], "in": ["0xCX07", "target_face"] },
+    { "out": ["0xCX05", "mesh"], "in": ["0xCX09", "mesh"] },
+    { "out": ["0xCX06", "crash_material"], "in": ["0xCX09", "crash_material"] },
+    { "out": ["0xCX07", "constraints"], "in": ["0xCX09", "constraints"] },
+    { "out": ["0xCX08", "impact"], "in": ["0xCX09", "impact"] }
   ]
 }
