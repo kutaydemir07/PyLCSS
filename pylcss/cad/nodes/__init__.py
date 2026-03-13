@@ -2,20 +2,36 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 """
-CAD Nodes - All node implementations consolidated.
-Updated structure:
+CAD Nodes — all node implementations.
+
+Structure:
     nodes/
-    ├── geometry.py      # Primitives (Box, Cylinder, etc.)
-    ├── sketcher.py      # Sketching (Line, Arc, Circle, etc.)
-    ├── modeling.py      # 3D Ops (Extrude, Revolve, Boolean, Fillet, Transform)
-    ├── surfacing.py     # Surfacing (Sweep, Loft, Helix)
-    ├── features.py      # Engineering features (Holes, Cuts)
-    ├── analysis.py      # Mass props, Bounding box
-    ├── assembly.py      # Assembly
-    ├── fem.py           # Simulation (FEA, TopOpt)
-    ├── patterns.py      # Patterns
-    ├── io.py            # IO
-    └── values.py        # Parameters
+    ├── geometry.py           # Primitives (Box, Cylinder, Sphere, …)
+    ├── sketcher.py           # Sketching (Line, Arc, Circle, …)
+    ├── modeling.py           # 3-D ops (Extrude, Revolve, Boolean, Fillet, Transform)
+    ├── surfacing.py          # Surfacing (Sweep, Loft, Helix)
+    ├── features.py           # Engineering features (Holes, Cuts)
+    ├── analysis.py           # Mass props, Bounding box
+    ├── assembly.py           # Assembly
+    ├── patterns.py           # Patterns
+    ├── io.py                 # IO
+    ├── values.py             # Parameters
+    ├── advanced.py           # Import/Export, Thicken, Split, Pipe, Text, Math, Measure
+    ├── fem/                  # FEM simulation sub-package
+    │   ├── _helpers.py       #   Shared helpers, filters, constants (lam_lame, MATERIAL_DATABASE)
+    │   ├── materials.py      #   MaterialNode
+    │   ├── mesh.py           #   MeshNode
+    │   ├── boundary_conditions.py  # ConstraintNode, LoadNode, PressureLoadNode
+    │   ├── solver.py         #   SolverNode (static linear FEA)
+    │   ├── topology_optimization.py  # TopologyOptimizationNode (SIMP)
+    │   └── advanced.py       #   RemeshNode, SizeOptimizationNode, ShapeOptimizationNode
+    └── crash/                # Crash / impact simulation sub-package
+        ├── _mechanics.py     #   Low-level solid-mechanics helpers (B-matrix, plasticity, contact)
+        ├── _gpu_kernels.py   #   Taichi/GPU Neo-Hookean + J2 kernels
+        ├── materials.py      #   CrashMaterialNode
+        ├── conditions.py     #   ImpactConditionNode
+        ├── solver.py         #   CrashSolverNode (CPU explicit transient)
+        └── solver_gpu.py     #   CrashSolverGPUNode (Taichi GPU)
 """
 
 # Core base classes
