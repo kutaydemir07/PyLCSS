@@ -93,18 +93,29 @@ def convert_anim_files(
           f"(parallelism={max_workers})...")
 
     def _convert_one(anim: Path) -> Path:
+        # The OpenRadioss ``anim_to_vtk`` tool writes the converted VTK ASCII
+        # to STDOUT (not to a file), so we must capture stdout and write it
+        # to ``<anim>.vtk`` ourselves.  Earlier versions of this function
+        # piped stdout to a dropped pipe, which is why the conversion appeared
+        # to succeed (exit 0) but produced no .vtk files.
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 [converter, str(anim)],
                 cwd=str(anim.parent),
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.PIPE,
                 text=True,
                 timeout=timeout_s,
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            pass
+            return anim
+        if proc.returncode == 0 and proc.stdout:
+            out_path = anim.with_name(anim.name + ".vtk")
+            try:
+                out_path.write_text(proc.stdout, encoding="utf-8")
+            except OSError:
+                pass
         return anim
 
     done = 0

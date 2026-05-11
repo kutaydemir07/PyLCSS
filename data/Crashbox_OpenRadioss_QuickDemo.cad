@@ -284,7 +284,7 @@
     "0xCX08": {
       "type_": "com.cad.sim.impact.ImpactConditionNode",
       "icon": null,
-      "name": "5 m/s Whole-Box Axial Impact",
+      "name": "150 m/s Whole-Box Axial Impact (real plastic crush regime)",
       "color": [
         13,
         18,
@@ -316,7 +316,7 @@
       "port_deletion_allowed": false,
       "subgraph_session": {},
       "custom": {
-        "velocity_x": 5.0,
+        "velocity_x": 150.0,
         "velocity_y": 0.0,
         "velocity_z": 0.0,
         "node_tolerance": 3.0
@@ -357,7 +357,7 @@
       "port_deletion_allowed": false,
       "subgraph_session": {},
       "custom": {
-        "end_time": 0.3,
+        "end_time": 0.08,
         "time_steps": 800,
         "damping_alpha": 1.0,
         "visualization": "Plastic Strain",
