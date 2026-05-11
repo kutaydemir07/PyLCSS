@@ -183,15 +183,26 @@ def run_process(
         stop_event = threading.Event()
 
         def _tail():
+            """Emit ONE concise progress line every ``EMIT_INTERVAL`` seconds.
+
+            Radioss spams a 2-line update every ~0.2 s (NC= ... + ELAPSED ...).
+            Echoing each one floods the console.  Instead we read the file
+            continuously, remember the latest NC and ELAPSED lines we've seen,
+            and print only the pair once per interval.  We also emit a
+            ``TERMINATION`` line immediately when one appears.
+            """
+            EMIT_INTERVAL = 30.0
             last_size = 0
             last_emit = 0.0
+            latest_nc = ""
+            latest_elapsed = ""
             while not stop_event.is_set():
                 try:
                     cur = stdout_file.stat().st_size
                 except OSError:
                     _time.sleep(0.5)
                     continue
-                if cur > last_size and _time.time() - last_emit > 2.0:
+                if cur > last_size:
                     try:
                         with open(stdout_file, "r", encoding="utf-8", errors="replace") as r:
                             r.seek(last_size)
@@ -199,15 +210,23 @@ def run_process(
                     except OSError:
                         tail_chunk = ""
                     last_size = cur
-                    last_emit = _time.time()
                     for line in tail_chunk.splitlines():
                         s = line.strip()
-                        # Only echo meaningful solver progress lines, not the
-                        # huge banner blocks.  Radioss progress lines start
-                        # with "NC=" or contain "ELAPSED TIME".
-                        if s.startswith("NC=") or "ELAPSED TIME" in s or "TERMINATION" in s:
+                        if s.startswith("NC="):
+                            latest_nc = s
+                        elif "ELAPSED TIME" in s:
+                            latest_elapsed = s
+                        elif "TERMINATION" in s:
+                            # Show termination immediately, without throttling.
                             print(f"  | {s}")
-                stop_event.wait(0.5)
+                now = _time.time()
+                if now - last_emit >= EMIT_INTERVAL and (latest_nc or latest_elapsed):
+                    if latest_nc:
+                        print(f"  | {latest_nc}")
+                    if latest_elapsed:
+                        print(f"  | {latest_elapsed}")
+                    last_emit = now
+                stop_event.wait(2.0)
 
         watcher = threading.Thread(target=_tail, daemon=True)
         watcher.start()
