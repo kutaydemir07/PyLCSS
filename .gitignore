@@ -71,3 +71,13 @@ pylcss/assistant_systems/config/.llm_key
 # Distribution
 dist/
 build/
+
+# External solver binaries (CalculiX, OpenRadioss) fetched by
+# scripts/install_solvers.py — large, platform-specific, and reproducible
+# via the script, so don't commit them or the auto-generated path config.
+external_solvers/
+
+# Downloaded benchmark decks (e.g. the ~30 MB Neon HPC zip).  Fetched by
+# `python scripts/install_solvers.py --with-neon` and reproducible from the
+# upstream URL, so we don't commit them.
+data/benchmarks/neon/

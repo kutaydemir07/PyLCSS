@@ -645,114 +645,309 @@ class PropertiesPanel(QtWidgets.QWidget):
         group.setLayout(layout)
         self.props_layout.addWidget(group)
 
+    # Ordered list of (section title, prefix list) — first match wins.
+    # Properties that match no section land in "General".
+    _PROPERTY_SECTIONS = [
+        ("External Solver", ("external_", "openradioss_", "calculix_", "run_external", "deck_only", "solver_backend",
+                              "deck_path", "engine_path", "engine_executable_path", "starter_path",
+                              "work_dir", "timeout_s")),
+        ("Visualization",   ("visualization", "deformation_scale", "disp_scale", "n_frames")),
+        ("Solver",          ("end_time", "time_steps", "damping", "enable_", "contact_", "mass_scaling", "iterations",
+                             "convergence_tol", "move_limit", "min_density", "penal", "filter_radius",
+                             "update_scheme", "filter_type", "projection", "heaviside_", "continuation",
+                             "element_type", "shape_recovery", "recovery_resolution", "smoothing_iterations",
+                             "density_cutoff", "vol_frac", "symmetry_")),
+        ("Material",        ("preset", "E", "nu", "rho", "density", "poissons_ratio", "yield_strength",
+                             "tangent_modulus", "failure_strain", "enable_fracture")),
+        ("Mesh",            ("mesh_type", "element_size", "max_size", "min_size", "order")),
+        ("Geometry",        ("box_", "length", "width", "depth", "height", "radius", "thickness",
+                             "near_", "selector_type", "tag", "range_expr", "direction")),
+        ("Load",            ("load_type", "force_", "vector", "magnitude", "pressure", "gravity_",
+                             "accel", "velocity_", "node_tolerance")),
+        ("Constraint",      ("constraint_type", "fixed_dofs", "displacement_")),
+    ]
+    # Hide these unless they have a meaningful value (truthy non-empty).
+    _PROPERTY_HIDE_IF_EMPTY = ("condition", "range_expr", "tag", "external_solver_path",
+                               "external_work_dir", "openradioss_starter_path",
+                               "openradioss_engine_path")
+
+    @classmethod
+    def _section_for(cls, prop_name):
+        for title, prefixes in cls._PROPERTY_SECTIONS:
+            for pref in prefixes:
+                if prop_name == pref or prop_name.startswith(pref):
+                    return title
+        return "General"
+
+    # ── Path / directory property helpers ─────────────────────────────────
+    # File-filter strings keyed by property name (most specific first).
+    # Each entry: (substring match, dialog title, filter pattern).
+    _PATH_PROP_FILTERS = (
+        ("deck_path",                "Select OpenRadioss / LS-DYNA deck",
+         "Solver decks (*.k *.key *.rad *.inp);;All files (*)"),
+        ("engine_path",              "Select OpenRadioss engine file",
+         "Radioss engine files (*.rad *_0001.rad);;All files (*)"),
+        ("engine_executable_path",   "Select OpenRadioss engine binary",
+         "Executables (*.exe);;All files (*)"),
+        ("starter_path",             "Select OpenRadioss starter binary",
+         "Executables (*.exe);;All files (*)"),
+        ("openradioss_starter_path", "Select OpenRadioss starter binary",
+         "Executables (*.exe);;All files (*)"),
+        ("openradioss_engine_path",  "Select OpenRadioss engine binary",
+         "Executables (*.exe);;All files (*)"),
+        ("external_solver_path",     "Select CalculiX `ccx` binary",
+         "Executables (*.exe);;All files (*)"),
+        ("filepath",                 "Select CAD file",
+         "CAD files (*.step *.stp *.iges *.igs *.brep *.stl *.obj);;All files (*)"),
+    )
+
+    @classmethod
+    def _is_directory_prop(cls, name):
+        n = name.lower()
+        return n.endswith("_dir") or n == "work_dir" or n.endswith("_directory")
+
+    @classmethod
+    def _looks_like_path_prop(cls, name):
+        n = name.lower()
+        if cls._is_directory_prop(name):
+            return True
+        # Match anything that ends with _path, equals 'filepath', or is one
+        # of our explicitly known file properties.
+        if n.endswith("_path") or n == "filepath":
+            return True
+        for sub, _, _ in cls._PATH_PROP_FILTERS:
+            if sub in n:
+                return True
+        return False
+
+    def _build_path_widget(self, name, val):
+        """QLineEdit + Browse button for path / directory properties."""
+        container = QtWidgets.QWidget()
+        h = QtWidgets.QHBoxLayout(container)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(4)
+
+        edit = QtWidgets.QLineEdit(str(val) if val is not None else "")
+        edit.setPlaceholderText(
+            "Browse to a folder…" if self._is_directory_prop(name)
+            else "Browse to a file…"
+        )
+        edit.editingFinished.connect(
+            lambda n=name, w=edit: self.update_property(n, w.text())
+        )
+        h.addWidget(edit, 1)
+
+        btn = QtWidgets.QToolButton()
+        btn.setText("...")
+        btn.setToolTip(
+            "Pick a folder" if self._is_directory_prop(name) else "Pick a file"
+        )
+        btn.setMinimumWidth(28)
+
+        def browse():
+            current = edit.text().strip()
+            start_dir = current if (current and os.path.isdir(os.path.dirname(current) or current)) else ""
+            if self._is_directory_prop(name):
+                chosen = QtWidgets.QFileDialog.getExistingDirectory(
+                    self, "Select directory", start_dir or current
+                )
+            else:
+                title = "Select file"
+                filt = "All files (*)"
+                for sub, t, f in self._PATH_PROP_FILTERS:
+                    if sub in name.lower():
+                        title, filt = t, f
+                        break
+                chosen, _ = QtWidgets.QFileDialog.getOpenFileName(
+                    self, title, start_dir or current, filt
+                )
+            if chosen:
+                edit.setText(chosen)
+                self.update_property(name, chosen)
+
+        btn.clicked.connect(browse)
+        h.addWidget(btn)
+        return container
+
     def _build_generic_ui(self, node):
-        """Generic Clean UI - uses node.properties() for custom properties."""
-        # NodeGraphQt stores custom properties inside the 'custom' key
+        """Generic Clean UI - uses node.properties() for custom properties.
+
+        Properties are grouped into semantic sections (External Solver,
+        Visualization, Solver, Material, Mesh, Geometry, Load, Constraint,
+        General) and rendered with the right widget per type — sliders when
+        the node declared a range, checkboxes for bools, combos when items
+        are declared, expression-aware edits for numerics.
+        """
         try:
             all_props = node.properties()
             props = all_props.get('custom', {})
-        except:
+        except Exception:
             props = {}
-        
+
         if not props:
             lbl = QtWidgets.QLabel("No editable properties")
             lbl.setStyleSheet("color: #888; font-style: italic;")
             self.props_layout.addWidget(lbl)
             return
-        
-        group = QtWidgets.QGroupBox(f"Properties ({len(props)})")
-        layout = QtWidgets.QFormLayout()
-        
-        # Get widget metadata from node model if available
-        widget_info = {}
-        if hasattr(node, 'model') and hasattr(node.model, '_graph_model'):
-            try:
-                # NodeGraphQt stores widget info in the model's custom_widgets
+
+        # Collect NodeGraphQt's per-property metadata once.  Items and ranges
+        # both live on the model — items are how we know it's a combo, range
+        # is how we pick a slider over a spinbox.
+        prop_attrs = {}
+        try:
+            if hasattr(node, 'model'):
                 model = node.model
-                if hasattr(model, '_custom_prop_widgets'):
-                    widget_info = model._custom_prop_widgets
-            except:
-                pass
-        
-        sorted_keys = sorted(props.keys())
-        
-        for name in sorted_keys:
-            val = props[name]
-            label_text = name.replace('_', ' ').title()
-            
-            # Check if this property has combo items defined
-            # Try to get widget info from node's internal data
-            combo_items = None
-            try:
-                # NodeGraphQt stores widget type and items in model._custom_prop_widgets
-                if hasattr(node, 'model'):
-                    model = node.model
-                    if hasattr(model, 'get_property_widget_type'):
-                        # Some versions have this method
+                temp_attrs = getattr(model, '_TEMP_property_attrs', None) or {}
+                if isinstance(temp_attrs, dict):
+                    prop_attrs.update({k: dict(v) for k, v in temp_attrs.items() if isinstance(v, dict)})
+                if getattr(model, '_graph_model', None) is not None:
+                    try:
+                        common = model._graph_model.get_node_common_properties(model.type_) or {}
+                        for k, v in common.items():
+                            if isinstance(v, dict):
+                                merged = prop_attrs.get(k, {})
+                                merged.update(v)
+                                prop_attrs[k] = merged
+                    except Exception:
                         pass
-                    # Check for _node_widgets which may have items
-                    if hasattr(model, '_custom_prop_widgets'):
-                        wi = model._custom_prop_widgets.get(name, {})
-                        if isinstance(wi, dict) and 'items' in wi:
-                            combo_items = wi['items']
-                    # Alternative: check __property_widget
-                    if hasattr(node, '_BaseNode__property_widget'):
-                        pw = node._BaseNode__property_widget.get(name, {})
-                        if isinstance(pw, dict) and pw.get('widget_type') == 'combo':
-                            combo_items = pw.get('items', [])
-            except Exception:
-                pass
-            
-            # ALSO check if value looks like it could be from a known combo list
-            # This is a heuristic fallback for common patterns
-            known_combos = {
-                'operation': ['Union', 'Cut', 'Intersect'],
-                'preset': ['Custom', 'Steel (Structural)', 'Steel (Stainless 304)',
-                          'Aluminum 6061-T6', 'Aluminum 7075-T6', 'Titanium Ti-6Al-4V',
-                          'Copper (Annealed)', 'Brass', 'Cast Iron (Gray)', 'Magnesium AZ31',
-                          'Nickel Alloy 718', 'CFRP (Quasi-Isotropic)', 'GFRP (E-Glass)',
-                          'Concrete (Normal)', 'ABS Plastic', 'Nylon 6/6', 'PEEK', 'Wood (Oak)'],
-                'mesh_type': ['Tet', 'Tet10'],
-                'constraint_type': ['Fixed', 'Roller X', 'Roller Y', 'Roller Z',
-                                    'Pinned', 'Symmetry X', 'Symmetry Y', 'Symmetry Z', 'Displacement'],
-                # FIX #D: Removed 'Moment' and 'Remote Force' — not implemented, removed from node.
-                'load_type': ['Force', 'Gravity', 'Pressure'],
-                'gravity_direction': ['-Y', '-Z', '-X', '+Y', '+Z', '+X'],
-                'visualization': ['Density', 'Von Mises Stress', 'Displacement'],
-                'filter_type': ['sensitivity', 'density'],
-                'update_scheme': ['MMA', 'OC'],
-                'projection': ['None', 'Heaviside'],
-            }
-            
-            if combo_items is None and name in known_combos:
-                combo_items = known_combos[name]
-            
-            if combo_items:
-                # Create dropdown
-                widget = QtWidgets.QComboBox()
-                widget.addItems([str(item) for item in combo_items])
-                if val is not None:
-                    idx = widget.findText(str(val))
-                    if idx >= 0:
-                        widget.setCurrentIndex(idx)
-                widget.currentTextChanged.connect(lambda v, n=name: self.update_property(n, v))
+        except Exception:
+            pass
+
+        # Skip empty/optional properties so the inspector isn't a wall of blanks.
+        def _should_skip(name, val):
+            if name.startswith('_'):
+                return True
+            if name in self._PROPERTY_HIDE_IF_EMPTY:
+                if val is None or val == '' or val == 0 or val == 0.0:
+                    return True
+            return False
+
+        # Bucket properties into sections, preserving the section order above.
+        section_order = [t for t, _ in self._PROPERTY_SECTIONS] + ["General"]
+        buckets = {title: [] for title in section_order}
+        for name in sorted(props.keys()):
+            val = props[name]
+            if _should_skip(name, val):
+                continue
+            buckets[self._section_for(name)].append((name, val))
+
+        # Hard-coded fallback combo items for legacy nodes that don't declare
+        # their items via NodeGraphQt's metadata (kept as a safety net).
+        known_combos = {
+            'operation': ['Union', 'Cut', 'Intersect'],
+            'preset': ['Custom', 'Steel (Structural)', 'Steel (Stainless 304)',
+                       'Aluminum 6061-T6', 'Aluminum 7075-T6', 'Titanium Ti-6Al-4V',
+                       'Copper (Annealed)', 'Brass', 'Cast Iron (Gray)', 'Magnesium AZ31',
+                       'Nickel Alloy 718', 'CFRP (Quasi-Isotropic)', 'GFRP (E-Glass)',
+                       'Concrete (Normal)', 'ABS Plastic', 'Nylon 6/6', 'PEEK', 'Wood (Oak)'],
+            'mesh_type': ['Tet', 'Tet10'],
+            'constraint_type': ['Fixed', 'Roller X', 'Roller Y', 'Roller Z',
+                                'Pinned', 'Symmetry X', 'Symmetry Y', 'Symmetry Z', 'Displacement'],
+            'load_type': ['Force', 'Gravity', 'Pressure'],
+            'gravity_direction': ['-Y', '-Z', '-X', '+Y', '+Z', '+X'],
+            'visualization': ['Density', 'Von Mises Stress', 'Displacement'],
+            'filter_type': ['sensitivity', 'density'],
+            'update_scheme': ['MMA', 'OC'],
+            'projection': ['None', 'Heaviside'],
+            'solver_backend': ['Internal scikit-fem', 'CalculiX',
+                               'Internal PyLCSS', 'OpenRadioss (experimental)'],
+        }
+
+        rendered_any = False
+        for title in section_order:
+            entries = buckets[title]
+            if not entries:
+                continue
+            rendered_any = True
+            group = QtWidgets.QGroupBox(title)
+            layout = QtWidgets.QFormLayout()
+            layout.setLabelAlignment(QtCore.Qt.AlignRight)
+            layout.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
+
+            for name, val in entries:
+                label_text = name.replace('_', ' ').title()
+                attrs = prop_attrs.get(name, {})
+                combo_items = attrs.get('items') if isinstance(attrs, dict) else None
+                if not combo_items and name in known_combos:
+                    combo_items = known_combos[name]
+                value_range = attrs.get('range') if isinstance(attrs, dict) else None
+                tooltip = attrs.get('tooltip') if isinstance(attrs, dict) else None
+
+                if combo_items:
+                    widget = QtWidgets.QComboBox()
+                    widget.addItems([str(item) for item in combo_items])
+                    if val is not None:
+                        idx = widget.findText(str(val))
+                        if idx >= 0:
+                            widget.setCurrentIndex(idx)
+                    widget.currentTextChanged.connect(lambda v, n=name: self.update_property(n, v))
+                elif isinstance(val, bool):
+                    widget = QtWidgets.QCheckBox()
+                    widget.setChecked(val)
+                    widget.stateChanged.connect(lambda s, n=name: self.update_property(n, bool(s)))
+                elif isinstance(val, (int, float)) and value_range and len(value_range) == 2:
+                    # Range-bounded numerics get a slider+spin combo for clarity.
+                    lo, hi = float(value_range[0]), float(value_range[1])
+                    is_int = isinstance(val, int) and float(lo).is_integer() and float(hi).is_integer()
+                    container = QtWidgets.QWidget()
+                    h = QtWidgets.QHBoxLayout(container)
+                    h.setContentsMargins(0, 0, 0, 0)
+                    h.setSpacing(6)
+                    if is_int:
+                        spin = QtWidgets.QSpinBox()
+                        spin.setRange(int(lo), int(hi))
+                        spin.setValue(int(val))
+                    else:
+                        spin = QtWidgets.QDoubleSpinBox()
+                        spin.setDecimals(4)
+                        spin.setRange(lo, hi)
+                        spin.setValue(float(val))
+                    slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+                    slider_steps = 1000 if not is_int else max(1, int(hi - lo))
+                    slider.setRange(0, slider_steps)
+                    def _to_slider(v, lo=lo, hi=hi, steps=slider_steps):
+                        if hi <= lo:
+                            return 0
+                        return int(round((v - lo) / (hi - lo) * steps))
+                    def _from_slider(s, lo=lo, hi=hi, steps=slider_steps):
+                        return lo + (s / steps) * (hi - lo)
+                    slider.setValue(_to_slider(float(val)))
+                    def on_slider(s, n=name, sp=spin, conv=_from_slider, is_int=is_int):
+                        v = conv(s)
+                        if is_int:
+                            v = int(round(v))
+                        sp.blockSignals(True); sp.setValue(v); sp.blockSignals(False)
+                        self.update_property(n, v)
+                    def on_spin(v, n=name, sl=slider, conv=_to_slider):
+                        sl.blockSignals(True); sl.setValue(conv(float(v))); sl.blockSignals(False)
+                        self.update_property(n, v)
+                    slider.valueChanged.connect(on_slider)
+                    spin.valueChanged.connect(on_spin)
+                    h.addWidget(slider, 1)
+                    h.addWidget(spin)
+                    widget = container
+                elif isinstance(val, (int, float)):
+                    widget = ExpressionEdit(val)
+                    widget.value_changed.connect(lambda v, n=name: self.update_property(n, v))
+                elif self._looks_like_path_prop(name):
+                    widget = self._build_path_widget(name, val)
+                elif val is not None:
+                    widget = QtWidgets.QLineEdit(str(val))
+                    widget.editingFinished.connect(lambda n=name, w=widget: self.update_property(n, w.text()))
+                else:
+                    continue
+
+                if tooltip:
+                    widget.setToolTip(str(tooltip))
                 layout.addRow(label_text, widget)
-            elif isinstance(val, bool):
-                widget = QtWidgets.QCheckBox()
-                widget.setChecked(val)
-                widget.stateChanged.connect(lambda s, n=name: self.update_property(n, bool(s)))
-                layout.addRow(label_text, widget)
-            elif isinstance(val, (int, float)):
-                widget = ExpressionEdit(val)
-                widget.value_changed.connect(lambda v, n=name: self.update_property(n, v))
-                layout.addRow(label_text, widget)
-            elif val is not None:
-                widget = QtWidgets.QLineEdit(str(val))
-                widget.editingFinished.connect(lambda n=name, w=widget: self.update_property(n, w.text()))
-                layout.addRow(label_text, widget)
-                
-        group.setLayout(layout)
-        self.props_layout.addWidget(group)
+
+            group.setLayout(layout)
+            self.props_layout.addWidget(group)
+
+        if not rendered_any:
+            lbl = QtWidgets.QLabel("No editable properties")
+            lbl.setStyleSheet("color: #888; font-style: italic;")
+            self.props_layout.addWidget(lbl)
     
     # ──────────────────────────────────────────────────
     # Interactive Select Face UI
@@ -1140,18 +1335,18 @@ class PropertiesPanel(QtWidgets.QWidget):
 
 class TimelinePanel(QtWidgets.QWidget):
     """Timeline/History panel for tracking changes."""
-    
+
     def __init__(self):
         super(TimelinePanel, self).__init__()
         self.layout = QtWidgets.QVBoxLayout(self)
-        
+
         title = QtWidgets.QLabel("Timeline")
         title.setStyleSheet("font-weight: bold; font-size: 12px; padding: 5px;")
         self.layout.addWidget(title)
-        
+
         self.history_list = QtWidgets.QListWidget()
         self.layout.addWidget(self.history_list)
-    
+
     def add_event(self, event_text):
         """Add an event to the timeline."""
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -1160,27 +1355,253 @@ class TimelinePanel(QtWidgets.QWidget):
         self.history_list.scrollToBottom()
 
 
+class ResultsPanel(QtWidgets.QWidget):
+    """Summary of the most recent FEA / Crash / TopOpt solve.
+
+    Pulled from the result dict that the solver nodes already produce — so we
+    do not duplicate any computation; this is purely a presentation surface
+    for what otherwise only goes to stdout.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet(
+            """
+            QGroupBox { font-weight: bold; margin-top: 8px; padding-top: 10px; border: 1px solid #444; border-radius: 4px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; color: #BBDEFB; }
+            QLabel#empty { color: #888; font-style: italic; padding: 24px; }
+            QLabel.metric-key { color: #B0BEC5; }
+            QLabel.metric-val { color: #FAFAFA; font-weight: bold; }
+            """
+        )
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setSpacing(6)
+
+        self._empty = QtWidgets.QLabel("No solver results yet — run an FEA, Crash, or Topology node.")
+        self._empty.setObjectName("empty")
+        self._empty.setAlignment(QtCore.Qt.AlignCenter)
+        self._empty.setWordWrap(True)
+        outer.addWidget(self._empty)
+
+        self._scroll = QtWidgets.QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self._content = QtWidgets.QWidget()
+        self._content_layout = QtWidgets.QVBoxLayout(self._content)
+        self._content_layout.setContentsMargins(0, 0, 0, 0)
+        self._content_layout.setSpacing(8)
+        self._scroll.setWidget(self._content)
+        self._scroll.setVisible(False)
+        outer.addWidget(self._scroll, 1)
+
+    @staticmethod
+    def _fmt(value, unit=""):
+        if value is None:
+            return "—"
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if v == 0.0:
+            return f"0 {unit}".strip()
+        if abs(v) >= 1e3 or abs(v) < 1e-2:
+            return f"{v:.3e} {unit}".strip()
+        return f"{v:.4g} {unit}".strip()
+
+    def _clear(self):
+        while self._content_layout.count():
+            item = self._content_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+
+    def _add_section(self, title, rows):
+        """rows: list of (label, value-string)."""
+        group = QtWidgets.QGroupBox(title)
+        form = QtWidgets.QFormLayout(group)
+        form.setContentsMargins(10, 6, 10, 10)
+        form.setHorizontalSpacing(20)
+        form.setVerticalSpacing(4)
+        for label, val in rows:
+            lk = QtWidgets.QLabel(label)
+            lk.setProperty("class", "metric-key")
+            lk.setStyleSheet("color: #B0BEC5;")
+            lv = QtWidgets.QLabel(val)
+            lv.setStyleSheet("color: #FAFAFA; font-weight: bold;")
+            lv.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            form.addRow(lk, lv)
+        self._content_layout.addWidget(group)
+
+    def _add_warnings(self, warnings):
+        if not warnings:
+            return
+        group = QtWidgets.QGroupBox(f"Warnings ({len(warnings)})")
+        v = QtWidgets.QVBoxLayout(group)
+        v.setContentsMargins(10, 6, 10, 10)
+        for w in warnings:
+            label = QtWidgets.QLabel(f"• {w}")
+            label.setWordWrap(True)
+            label.setStyleSheet("color: #FFCC80;")
+            label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            v.addWidget(label)
+        self._content_layout.addWidget(group)
+
+    def show_result(self, data):
+        """Populate from a solver result dict.  Safe to call with None."""
+        if not isinstance(data, dict) or 'type' not in data:
+            self._empty.setVisible(True)
+            self._scroll.setVisible(False)
+            return
+        rtype = data.get('type')
+        if rtype not in ('fea', 'crash', 'topopt', 'external_solver'):
+            self._empty.setVisible(True)
+            self._scroll.setVisible(False)
+            return
+
+        self._clear()
+        self._empty.setVisible(False)
+        self._scroll.setVisible(True)
+
+        backend = data.get('backend') or ('Internal scikit-fem' if rtype == 'fea' else
+                                          'Internal PyLCSS' if rtype == 'crash' else '—')
+        meta_rows = [
+            ("Type",            rtype.upper()),
+            ("Backend",         str(backend)),
+        ]
+        if 'visualization_mode' in data:
+            meta_rows.append(("Visualization", str(data['visualization_mode'])))
+        if 'external_status' in data:
+            meta_rows.append(("Solver status", str(data['external_status'])))
+        if 'work_dir' in data:
+            meta_rows.append(("Work directory", str(data['work_dir'])))
+        self._add_section("Run", meta_rows)
+
+        if rtype == 'fea' or rtype == 'external_solver':
+            metrics = []
+            disp = data.get('displacement')
+            if disp is not None:
+                try:
+                    import numpy as np
+                    arr = np.asarray(disp, dtype=float)
+                    if arr.size:
+                        max_disp = float(np.max(np.abs(arr)))
+                        metrics.append(("Max |u|", self._fmt(max_disp, "mm")))
+                except Exception:
+                    pass
+            stress = data.get('stress')
+            if stress is not None:
+                try:
+                    import numpy as np
+                    arr = np.asarray(stress, dtype=float)
+                    if arr.size:
+                        metrics.append(("Peak stress (nodal)", self._fmt(float(np.max(arr)), "MPa")))
+                except Exception:
+                    pass
+            if 'max_stress_gauss' in data:
+                metrics.append(("Peak stress (Gauss)", self._fmt(data['max_stress_gauss'], "MPa")))
+            if 'deformation_scale' in data:
+                metrics.append(("Deformation scale", f"{float(data['deformation_scale']):.1f}×"))
+            if metrics:
+                self._add_section("Result", metrics)
+
+        if rtype == 'crash':
+            crash_rows = []
+            if 'peak_displacement' in data:
+                crash_rows.append(("Peak displacement", self._fmt(data['peak_displacement'], "mm")))
+            if 'peak_stress' in data:
+                crash_rows.append(("Peak Von Mises", self._fmt(data['peak_stress'], "MPa")))
+            if 'absorbed_energy' in data:
+                crash_rows.append(("Plastic dissipation", self._fmt(data['absorbed_energy'], "N·mm")))
+            if 'n_failed' in data:
+                crash_rows.append(("Failed elements", str(data['n_failed'])))
+            if 'frames' in data and data['frames']:
+                crash_rows.append(("Animation frames", str(len(data['frames']))))
+            if 'energy_balance_max_error' in data:
+                crash_rows.append(("Energy balance error", f"{float(data['energy_balance_max_error']) * 100:.1f}%"))
+            if crash_rows:
+                self._add_section("Crash result", crash_rows)
+
+        # Warnings from the external backends
+        warnings = data.get('warnings') or []
+        if warnings:
+            self._add_warnings(list(warnings))
+
+
 class LibraryPanel(QtWidgets.QWidget):
     """Component library with categorized nodes."""
-    
+
+    # QtAwesome icon names per category prefix.  The first prefix that matches
+    # wins, so order from most specific to most general.
+    _CATEGORY_ICONS = (
+        ("Sketcher",              "fa5s.pencil-ruler",   "#4FC3F7"),
+        ("Part Design - Primitives",     "fa5s.cube",            "#FFCA28"),
+        ("Part Design - Create",         "fa5s.industry",        "#FFCA28"),
+        ("Part Design - Modify",         "fa5s.tools",           "#FFCA28"),
+        ("Part Design - Hole Wizard",    "fa5s.dot-circle",      "#FFCA28"),
+        ("Part Design - Transform",      "fa5s.arrows-alt",      "#FFCA28"),
+        ("Simulation - Pre-Processing",  "fa5s.project-diagram", "#80CBC4"),
+        ("Simulation - Loads",           "fa5s.weight-hanging",  "#FF8A65"),
+        ("Simulation - Solve",           "fa5s.calculator",      "#9CCC65"),
+        ("Crash Simulation",      "fa5s.car-crash",       "#EF5350"),
+        ("Analysis",              "fa5s.balance-scale",   "#B39DDB"),
+        ("IO",                    "fa5s.file-export",     "#90A4AE"),
+    )
+
+    @staticmethod
+    def _icon_for(label: str):
+        try:
+            import qtawesome as qta
+        except Exception:
+            return None
+        for prefix, icon_name, color in LibraryPanel._CATEGORY_ICONS:
+            if label.startswith(prefix):
+                try:
+                    return qta.icon(icon_name, color=color)
+                except Exception:
+                    return None
+        return None
+
     def __init__(self, spawn_callback):
         super(LibraryPanel, self).__init__()
         self.spawn_callback = spawn_callback
         self.layout = QtWidgets.QVBoxLayout(self)
-        
-        title = QtWidgets.QLabel("Component Library")
-        title.setStyleSheet("font-weight: bold; font-size: 12px; padding: 5px;")
-        self.layout.addWidget(title)
-        
-        # Search box
+        self.layout.setContentsMargins(6, 6, 6, 6)
+        self.layout.setSpacing(4)
+
+        # Search box — title was redundant with the dock title, dropped.
         self.search = QtWidgets.QLineEdit()
         self.search.setPlaceholderText("Search components...")
+        self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._filter_tree)
         self.layout.addWidget(self.search)
-        
+
         # Tree view for categories
         self.tree = QtWidgets.QTreeWidget()
-        self.tree.setHeaderLabel("Components")
+        self.tree.setHeaderHidden(True)
+        self.tree.setIndentation(14)
+        self.tree.setUniformRowHeights(True)
+        self.tree.setAnimated(True)
+        self.tree.setStyleSheet(
+            """
+            QTreeWidget {
+                border: none;
+                background: transparent;
+                outline: none;
+            }
+            QTreeView::item {
+                padding: 4px 2px;
+                border: 0;
+            }
+            QTreeView::item:hover {
+                background: rgba(255, 255, 255, 18);
+            }
+            QTreeView::item:selected {
+                background: rgba(33, 150, 243, 60);
+                color: white;
+            }
+            """
+        )
         # enable dragging from the library into the graph
         self.tree.setDragEnabled(True)
         self.tree.itemPressed.connect(self._start_drag)
@@ -1253,7 +1674,7 @@ class LibraryPanel(QtWidgets.QWidget):
             # ═══════════════════════════════════════════════════════════════
             # WORKBENCH: SIMULATION (FEA)
             # ═══════════════════════════════════════════════════════════════
-            "Simulation - Pre-Procesing": [
+            "Simulation - Pre-Processing": [
                 ("Select Face", "com.cad.select_face", "Select face for BCs using text selectors (Direction, Index, Box…)"),
                 ("Select Face (Interactive)", "com.cad.select_face_interactive",
                  "Click faces directly in the 3D viewer to select them — no code required"),
@@ -1285,6 +1706,8 @@ class LibraryPanel(QtWidgets.QWidget):
                  "Explicit central-difference transient solver with J2 plasticity, element deletion and frame-by-frame playback"),
                 ("Crash Solver (GPU)",  "com.cad.sim.crash_solver_gpu",
                  "GPU-accelerated explicit crash solver (CUDA); falls back to CPU if no CUDA device is found)"),
+                ("Run Radioss Deck",    "com.cad.sim.radioss_deck",
+                 "Run an existing OpenRadioss/LS-DYNA `.k` or `.rad` deck (e.g. the Chrysler Neon HPC benchmark) end-to-end and play the animation in the viewer"),
             ],
 
             # ═══════════════════════════════════════════════════════════════
@@ -1305,19 +1728,27 @@ class LibraryPanel(QtWidgets.QWidget):
             ],
         }
         
+        cat_font = QtGui.QFont()
+        cat_font.setBold(True)
         for category, items in categories.items():
             cat_item = QtWidgets.QTreeWidgetItem([category])
-            cat_item.setIcon(0, QtGui.QIcon())
-            
+            cat_item.setFont(0, cat_font)
+            icon = self._icon_for(category)
+            if icon is not None:
+                cat_item.setIcon(0, icon)
+            # Category rows are not draggable / not selectable as a target.
+            cat_item.setFlags(cat_item.flags() & ~QtCore.Qt.ItemIsSelectable)
+
             for item_data in items:
                 label, node_id, tooltip = item_data
                 item = QtWidgets.QTreeWidgetItem([label])
                 item.setData(0, QtCore.Qt.UserRole, node_id)
                 item.setToolTip(0, tooltip)  # Show description on hover
                 cat_item.addChild(item)
-            
+
             self.tree.addTopLevelItem(cat_item)
-        
+
+        self.tree.expandAll()
         self.tree.itemDoubleClicked.connect(self._on_component_selected)
         self.layout.addWidget(self.tree)
     
@@ -1461,10 +1892,12 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             self.properties.property_changed.connect(self._on_property_changed)
         except Exception:
             pass
+        self.results = ResultsPanel()
         self.timeline = TimelinePanel()
         right_splitter.addWidget(self.properties)
+        right_splitter.addWidget(self.results)
         right_splitter.addWidget(self.timeline)
-        right_splitter.setSizes([400, 200])
+        right_splitter.setSizes([380, 280, 180])
         
         # Main splitter
         main_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
@@ -1499,29 +1932,72 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
     
     def _setup_toolbar(self):
         """Create toolbar and add to layout."""
+        try:
+            import qtawesome as qta
+        except Exception:
+            qta = None
+
+        def _icon(name, color="#E0E0E0"):
+            if qta is None:
+                return QtGui.QIcon()
+            try:
+                return qta.icon(name, color=color)
+            except Exception:
+                return QtGui.QIcon()
+
         self.toolbar = QtWidgets.QToolBar("Main Toolbar")
         self.toolbar.setMovable(False)
+        self.toolbar.setIconSize(QtCore.QSize(18, 18))
+        self.toolbar.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        self.toolbar.setStyleSheet(
+            """
+            QToolBar { spacing: 4px; padding: 4px; border: 0; }
+            QToolButton { padding: 4px 8px; border-radius: 4px; }
+            QToolButton:hover { background: rgba(255,255,255,18); }
+            QToolBar::separator { background: rgba(255,255,255,28); width: 1px; margin: 4px 4px; }
+            """
+        )
         self.addToolBar(self.toolbar)
-        
-        self.toolbar.addAction("New", self._new_project)
-        self.toolbar.addAction("Open", self._open_project)
-        self.toolbar.addAction("Save", self._save_project)
-        self.toolbar.addAction("Import CAD", self._import_cad)
+
+        # ── File / project ──────────────────────────────────────────────
+        self.toolbar.addAction(_icon("fa5s.file"),       "New",    self._new_project).setShortcut("Ctrl+N")
+        self.toolbar.addAction(_icon("fa5s.folder-open"),"Open",   self._open_project).setShortcut("Ctrl+O")
+        self.toolbar.addAction(_icon("fa5s.save"),       "Save",   self._save_project).setShortcut("Ctrl+S")
+        act_import = self.toolbar.addAction(_icon("fa5s.file-import"), "Import CAD", self._import_cad)
+        act_import.setToolTip("Import a STEP / IGES / STL / OBJ file as a node")
         self.toolbar.addSeparator()
-        self.toolbar.addAction("Undo", self._undo)
-        self.toolbar.addAction("Redo", self._redo)
+
+        # ── Edit (icon-only — short labels add noise) ───────────────────
+        act_undo = self.toolbar.addAction(_icon("fa5s.undo"), "", self._undo)
+        act_undo.setToolTip("Undo (Ctrl+Z)")
+        act_redo = self.toolbar.addAction(_icon("fa5s.redo"), "", self._redo)
+        act_redo.setToolTip("Redo (Ctrl+Y)")
         self.toolbar.addSeparator()
-        self.toolbar.addAction("▶ Run", self._execute_graph)
-        self.toolbar.addAction("✓ Validate", self._validate_model)
-        self.toolbar.addAction("📊 Report", self._generate_report)
-        self.toolbar.addAction("Export Results", self._export_simulation_results)
+
+        # ── Run is the most-used action — give it accent color via icon ─
+        run_act = self.toolbar.addAction(_icon("fa5s.play", "#66BB6A"), "Run", self._execute_graph)
+        run_act.setShortcut("F5")
+        run_act.setToolTip("Execute the node graph (F5)")
+
+        self.toolbar.addAction(_icon("fa5s.check-circle", "#4FC3F7"), "Validate", self._validate_model
+                               ).setToolTip("Check the graph for disconnected nodes and obvious mistakes")
+        self.toolbar.addAction(_icon("fa5s.clipboard-list"), "Report", self._generate_report
+                               ).setToolTip("Generate a text summary of the current model")
+        self.toolbar.addAction(_icon("fa5s.file-export"), "Export Results", self._export_simulation_results
+                               ).setToolTip("Save FEA / TopOpt / Crash results to disk")
         self.toolbar.addSeparator()
-        self.toolbar.addAction("Fit to View", self._fit_all)
-        
-        self.toolbar.addSeparator()
-        self.auto_update_cb = QtWidgets.QCheckBox("Auto-Update")
+
+        # ── View ────────────────────────────────────────────────────────
+        self.toolbar.addAction(_icon("fa5s.expand"), "", self._fit_all
+                               ).setToolTip("Fit view to all (F)")
+
+        # ── Right-aligned cluster: Auto-update toggle ───────────────────
+        spacer = QtWidgets.QWidget()
+        spacer.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        self.toolbar.addWidget(spacer)
+        self.auto_update_cb = QtWidgets.QCheckBox("Auto-update")
         self.auto_update_cb.setChecked(True)  # Default ON for CAD rendering
-        self.auto_update_cb.setToolTip("Automatically execute graph when properties change (skips FEA/TopOpt)")
+        self.auto_update_cb.setToolTip("Re-execute the graph automatically when properties change (skips FEA/TopOpt)")
         self.toolbar.addWidget(self.auto_update_cb)
     
     def _spawn_node(self, node_id, label, x=None, y=None):
@@ -1640,6 +2116,10 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
                 if is_sim:
                     self.viewer.render_simulation(geometry)
+                    try:
+                        self.results.show_result(geometry)
+                    except Exception:
+                        pass
                 elif self._is_2d_sketch(geometry):
                     self.viewer.render_sketch(geometry)
                 else:
@@ -2026,6 +2506,10 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
                     if isinstance(geom, dict) and ('mesh' in geom or 'displacement' in geom):
                         self.viewer.render_simulation(geom)
+                        try:
+                            self.results.show_result(geom)
+                        except Exception:
+                            pass
                     elif hasattr(geom, 'p') and hasattr(geom, 't'):
                         # Direct Mesh object from skfem
                         self.viewer.render_simulation(geom)

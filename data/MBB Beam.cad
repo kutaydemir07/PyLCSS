@@ -178,7 +178,7 @@
     "0x224317d4740": {
       "type_": "com.cad.sim.constraint.ConstraintNode",
       "icon": null,
-      "name": "Right Roller (Y only)",
+      "name": "Right Roller (X locked)",
       "color": [
         13,
         18,

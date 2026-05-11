@@ -13,6 +13,7 @@ from pylcss.cad.nodes import (
 
     # Crash / Impact Simulation
     CrashMaterialNode, ImpactConditionNode, CrashSolverNode, CrashSolverGPUNode,
+    RunRadiossDeckNode,
     
     # Sketching
     SketchNode, SplineNode, EllipseNode, PolylineNode,
@@ -150,11 +151,12 @@ NODE_CLASS_MAPPING = {
     'com.cad.sim.sizeopt': SizeOptimizationNode,
     'com.cad.sim.shapeopt': ShapeOptimizationNode,
 
-    # Crash / Impact Simulation (4)
+    # Crash / Impact Simulation (5)
     'com.cad.sim.crash_material':     CrashMaterialNode,
     'com.cad.sim.impact':             ImpactConditionNode,
     'com.cad.sim.crash_solver':       CrashSolverNode,
     'com.cad.sim.crash_solver_gpu':   CrashSolverGPUNode,
+    'com.cad.sim.radioss_deck':       RunRadiossDeckNode,
 
     # Import (2)
     'com.cad.import_step': ImportStepNode,

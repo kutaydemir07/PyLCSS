@@ -1,0 +1,532 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "0xNE01": {
+      "type_": "com.cad.box.BoxNode",
+      "icon": null,
+      "name": "Vehicle Frame (4400 x 1700 x 1400 mm)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 185.0,
+      "height": 180.0,
+      "pos": [
+        20.0,
+        200.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "box_length": 4400.0,
+        "box_width": 1700.0,
+        "box_depth": 1400.0,
+        "center_x": 0.0,
+        "center_y": 0.0,
+        "center_z": 0.0
+      }
+    },
+    "0xNE02": {
+      "type_": "com.cad.shell.ShellNode",
+      "icon": null,
+      "name": "Body-in-White Shell (3 mm)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 185.0,
+      "height": 120.0,
+      "pos": [
+        280.0,
+        280.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "thickness": -3.0
+      }
+    },
+    "0xNE03": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Front Bumper Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 185.0,
+      "height": 120.0,
+      "pos": [
+        540.0,
+        40.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "selector_type": "Direction",
+        "direction": "<X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "",
+        "face_index": 0,
+        "tag": "front_bumper"
+      }
+    },
+    "0xNE04": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Rigid Wall Contact (rear face stands in for barrier)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 185.0,
+      "height": 120.0,
+      "pos": [
+        540.0,
+        160.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "selector_type": "Direction",
+        "direction": ">X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "",
+        "face_index": 0,
+        "tag": "rigid_wall"
+      }
+    },
+    "0xNE05": {
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "icon": null,
+      "name": "Generate Crash Mesh",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 185.0,
+      "height": 120.0,
+      "pos": [
+        800.0,
+        200.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "mesh_type": "Tet",
+        "element_size": 90.0,
+        "refinement_size": 60.0
+      }
+    },
+    "0xNE06": {
+      "type_": "com.cad.sim.crash_material.CrashMaterialNode",
+      "icon": null,
+      "name": "DP780 Dual-Phase Steel (body)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 185.0,
+      "height": 220.0,
+      "pos": [
+        800.0,
+        380.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "preset": "DP780 Dual-Phase",
+        "youngs_modulus": 210000.0,
+        "poissons_ratio": 0.3,
+        "density": 7.83e-09,
+        "yield_strength": 560.0,
+        "tangent_modulus": 1800.0,
+        "failure_strain": 0.35,
+        "enable_fracture": true
+      }
+    },
+    "0xNE07": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "icon": null,
+      "name": "Rigid Wall (Roller X)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 185.0,
+      "height": 90.0,
+      "pos": [
+        1060.0,
+        40.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "constraint_type": "Roller X",
+        "displacement_x": 0.0,
+        "displacement_y": 0.0,
+        "displacement_z": 0.0,
+        "condition": ""
+      }
+    },
+    "0xNE08": {
+      "type_": "com.cad.sim.impact.ImpactConditionNode",
+      "icon": null,
+      "name": "56 km/h Frontal Impact (FMVSS 208)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 185.0,
+      "height": 140.0,
+      "pos": [
+        1060.0,
+        360.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "velocity_x": -15.56,
+        "velocity_y": 0.0,
+        "velocity_z": 0.0,
+        "node_tolerance": 5.0
+      }
+    },
+    "0xNE09": {
+      "type_": "com.cad.sim.crash_solver.CrashSolverNode",
+      "icon": null,
+      "name": "Neon-style Frontal Crash Solver",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 185.0,
+      "height": 200.0,
+      "pos": [
+        1320.0,
+        200.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "solver_backend": "Internal PyLCSS",
+        "openradioss_starter_path": "",
+        "openradioss_engine_path": "",
+        "external_work_dir": "",
+        "deck_only": false,
+        "external_timeout_s": 7200.0,
+        "end_time": 80.0,
+        "time_steps": 20000,
+        "damping_alpha": 5.0,
+        "visualization": "Plastic Strain",
+        "n_frames": 120,
+        "disp_scale": 1.0,
+        "enable_corotation": true,
+        "enable_contact": false,
+        "contact_stiffness": 0.1,
+        "contact_thickness": 0.2,
+        "contact_update_interval": 5,
+        "enable_mass_scaling": true,
+        "mass_scaling_threshold": 0.05
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "0xNE01",
+        "shape"
+      ],
+      "in": [
+        "0xNE02",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0xNE02",
+        "shape"
+      ],
+      "in": [
+        "0xNE03",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0xNE02",
+        "shape"
+      ],
+      "in": [
+        "0xNE04",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0xNE02",
+        "shape"
+      ],
+      "in": [
+        "0xNE05",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0xNE05",
+        "mesh"
+      ],
+      "in": [
+        "0xNE07",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0xNE04",
+        "workplane"
+      ],
+      "in": [
+        "0xNE07",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0xNE03",
+        "workplane"
+      ],
+      "in": [
+        "0xNE08",
+        "face_list"
+      ]
+    },
+    {
+      "out": [
+        "0xNE05",
+        "mesh"
+      ],
+      "in": [
+        "0xNE09",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0xNE06",
+        "crash_material"
+      ],
+      "in": [
+        "0xNE09",
+        "crash_material"
+      ]
+    },
+    {
+      "out": [
+        "0xNE07",
+        "constraints"
+      ],
+      "in": [
+        "0xNE09",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "0xNE08",
+        "impact"
+      ],
+      "in": [
+        "0xNE09",
+        "impact"
+      ]
+    }
+  ]
+}

@@ -9,10 +9,10 @@
     "reject_connection_types": "{}"
   },
   "nodes": {
-    "0x1f91132c610": {
-      "type_": "com.cad.box.BoxNode",
+    "0xNE10": {
+      "type_": "com.cad.import_step.ImportStepNode",
       "icon": null,
-      "name": "Box",
+      "name": "Import Vehicle Geometry (STEP)",
       "color": [
         13,
         18,
@@ -34,28 +34,23 @@
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 160,
-      "height": 165.6,
+      "width": 185.0,
+      "height": 120.0,
       "pos": [
-        -430.9374422711103,
-        -146.21567933465548
+        20.0,
+        200.0
       ],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
       "custom": {
-        "box_length": 20.0,
-        "box_width": 1.5,
-        "box_depth": 60.0,
-        "center_x": 0.0,
-        "center_y": 0.0,
-        "center_z": 0.0
+        "filepath": ""
       }
     },
-    "0x1f9115e2350": {
+    "0xNE11": {
       "type_": "com.cad.select_face.SelectFaceNode",
       "icon": null,
-      "name": "Select Face (Robust)",
+      "name": "Front Bumper Face",
       "color": [
         13,
         18,
@@ -77,29 +72,36 @@
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 160,
-      "height": 60,
+      "width": 185.0,
+      "height": 120.0,
       "pos": [
-        -55.8862717338622,
-        -117.09234482154692
+        280.0,
+        40.0
       ],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
       "custom": {
         "selector_type": "Direction",
-        "direction": "<Z",
+        "direction": "<X",
         "near_x": 0.0,
         "near_y": 0.0,
         "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "",
         "face_index": 0,
-        "tag": "left"
+        "tag": "front_bumper"
       }
     },
-    "0x1f91f989010": {
-      "type_": "com.cad.sim.mesh.MeshNode",
+    "0xNE12": {
+      "type_": "com.cad.select_face.SelectFaceNode",
       "icon": null,
-      "name": "Generate Mesh (Netgen)",
+      "name": "Rigid Wall Contact (rear face)",
       "color": [
         13,
         18,
@@ -121,25 +123,76 @@
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 170.0,
-      "height": 119.4,
+      "width": 185.0,
+      "height": 120.0,
       "pos": [
-        121.42836177511265,
-        -226.7055504038645
+        280.0,
+        160.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "selector_type": "Direction",
+        "direction": ">X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "",
+        "face_index": 0,
+        "tag": "rigid_wall"
+      }
+    },
+    "0xNE13": {
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "icon": null,
+      "name": "Generate Crash Mesh",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 185.0,
+      "height": 120.0,
+      "pos": [
+        540.0,
+        200.0
       ],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
       "custom": {
         "mesh_type": "Tet",
-        "element_size": 1.5,
-        "refinement_size": 0.5
+        "element_size": 90.0,
+        "refinement_size": 60.0
       }
     },
-    "0x1f91f989a10": {
-      "type_": "com.cad.sim.material.MaterialNode",
+    "0xNE14": {
+      "type_": "com.cad.sim.crash_material.CrashMaterialNode",
       "icon": null,
-      "name": "Material",
+      "name": "DP780 Dual-Phase Steel (body)",
       "color": [
         13,
         18,
@@ -161,26 +214,30 @@
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 182.0,
-      "height": 96.3,
+      "width": 185.0,
+      "height": 220.0,
       "pos": [
-        389.90824203216164,
-        155.98971562593604
+        540.0,
+        380.0
       ],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
       "custom": {
-        "preset": "Steel (Structural)",
+        "preset": "DP780 Dual-Phase",
         "youngs_modulus": 210000.0,
         "poissons_ratio": 0.3,
-        "density": 7.85e-09
+        "density": 7.83e-09,
+        "yield_strength": 560.0,
+        "tangent_modulus": 1800.0,
+        "failure_strain": 0.35,
+        "enable_fracture": true
       }
     },
-    "0x1f91f98a290": {
+    "0xNE15": {
       "type_": "com.cad.sim.constraint.ConstraintNode",
       "icon": null,
-      "name": "FEA Fixed Support (Face)",
+      "name": "Rigid Wall (Roller X)",
       "color": [
         13,
         18,
@@ -202,27 +259,27 @@
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 171.0,
-      "height": 73.2,
+      "width": 185.0,
+      "height": 90.0,
       "pos": [
-        399.0316171214986,
-        -101.41174350227082
+        820.0,
+        40.0
       ],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
       "custom": {
-        "constraint_type": "Fixed",
+        "constraint_type": "Roller X",
         "displacement_x": 0.0,
         "displacement_y": 0.0,
         "displacement_z": 0.0,
         "condition": ""
       }
     },
-    "0x1f91aabc1d0": {
-      "type_": "com.cad.sim.load.LoadNode",
+    "0xNE16": {
+      "type_": "com.cad.sim.impact.ImpactConditionNode",
       "icon": null,
-      "name": "FEA Load (Face)",
+      "name": "56 km/h Frontal Impact (FMVSS 208)",
       "color": [
         13,
         18,
@@ -244,32 +301,26 @@
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 160,
-      "height": 142.5,
+      "width": 185.0,
+      "height": 140.0,
       "pos": [
-        405.8937070301834,
-        -5.3294076007932745
+        820.0,
+        360.0
       ],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
       "custom": {
-        "load_type": "Force",
-        "condition": "(np.abs(x) < 2) & (np.abs(y) < 0.8) & (z > 29)",
-        "force_x": -100.0,
-        "force_y": 0.0,
-        "force_z": 0.0,
-        "moment_x": 0.0,
-        "moment_y": 0.0,
-        "moment_z": 0.0,
-        "gravity_accel": 9810.0,
-        "gravity_direction": "-Y"
+        "velocity_x": -15.56,
+        "velocity_y": 0.0,
+        "velocity_z": 0.0,
+        "node_tolerance": 5.0
       }
     },
-    "0x1f91fa14650": {
-      "type_": "com.cad.sim.topopt.TopologyOptimizationNode",
+    "0xNE17": {
+      "type_": "com.cad.sim.crash_solver.CrashSolverNode",
       "icon": null,
-      "name": "Topology Opt",
+      "name": "Neon Frontal Crash (STEP geometry)",
       "color": [
         13,
         18,
@@ -291,130 +342,137 @@
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 196.0,
-      "height": 119.4,
+      "width": 185.0,
+      "height": 200.0,
       "pos": [
-        686.5148275746717,
-        -67.03783987018676
+        1080.0,
+        200.0
       ],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
       "custom": {
-        "vol_frac": 0.4,
-        "iterations": 100,
-        "filter_radius": 1.5,
-        "density_cutoff": 0.3,
-        "shape_recovery": true,
-        "visualization": "Density",
-        "symmetry_x": 0.0,
-        "symmetry_y": 0.0,
-        "symmetry_z": null,
-        "penal": 3.0,
-        "move_limit": 0.2,
-        "min_density": 0.001,
-        "convergence_tol": 0.01,
-        "recovery_resolution": 60,
-        "smoothing_iterations": 3,
-        "filter_type": "density",
-        "update_scheme": "MMA",
-        "element_type": "Fast (Linear P1)",
-        "projection": "Heaviside",
-        "heaviside_beta": 4.0,
-        "heaviside_eta": 0.5,
-        "continuation": true
+        "solver_backend": "Internal PyLCSS",
+        "openradioss_starter_path": "",
+        "openradioss_engine_path": "",
+        "external_work_dir": "",
+        "deck_only": false,
+        "external_timeout_s": 7200.0,
+        "end_time": 80.0,
+        "time_steps": 20000,
+        "damping_alpha": 5.0,
+        "visualization": "Plastic Strain",
+        "n_frames": 120,
+        "disp_scale": 1.0,
+        "enable_corotation": true,
+        "enable_contact": false,
+        "contact_stiffness": 0.1,
+        "contact_thickness": 0.2,
+        "contact_update_interval": 5,
+        "enable_mass_scaling": true,
+        "mass_scaling_threshold": 0.05
       }
     }
   },
   "connections": [
     {
       "out": [
-        "0x1f91132c610",
+        "0xNE10",
         "shape"
       ],
       "in": [
-        "0x1f9115e2350",
+        "0xNE11",
         "shape"
       ]
     },
     {
       "out": [
-        "0x1f91132c610",
+        "0xNE10",
         "shape"
       ],
       "in": [
-        "0x1f91f989010",
+        "0xNE12",
         "shape"
       ]
     },
     {
       "out": [
-        "0x1f9115e2350",
+        "0xNE10",
+        "shape"
+      ],
+      "in": [
+        "0xNE13",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0xNE13",
+        "mesh"
+      ],
+      "in": [
+        "0xNE15",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0xNE12",
         "workplane"
       ],
       "in": [
-        "0x1f91f98a290",
+        "0xNE15",
         "target_face"
       ]
     },
     {
       "out": [
-        "0x1f91f989010",
+        "0xNE11",
+        "workplane"
+      ],
+      "in": [
+        "0xNE16",
+        "face_list"
+      ]
+    },
+    {
+      "out": [
+        "0xNE13",
         "mesh"
       ],
       "in": [
-        "0x1f91f98a290",
+        "0xNE17",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x1f91f989010",
-        "mesh"
+        "0xNE14",
+        "crash_material"
       ],
       "in": [
-        "0x1f91aabc1d0",
-        "mesh"
+        "0xNE17",
+        "crash_material"
       ]
     },
     {
       "out": [
-        "0x1f91f989010",
-        "mesh"
-      ],
-      "in": [
-        "0x1f91fa14650",
-        "mesh"
-      ]
-    },
-    {
-      "out": [
-        "0x1f91f989a10",
-        "material"
-      ],
-      "in": [
-        "0x1f91fa14650",
-        "material"
-      ]
-    },
-    {
-      "out": [
-        "0x1f91f98a290",
+        "0xNE15",
         "constraints"
       ],
       "in": [
-        "0x1f91fa14650",
+        "0xNE17",
         "constraints"
       ]
     },
     {
       "out": [
-        "0x1f91aabc1d0",
-        "loads"
+        "0xNE16",
+        "impact"
       ],
       "in": [
-        "0x1f91fa14650",
-        "loads"
+        "0xNE17",
+        "impact"
       ]
     }
   ]

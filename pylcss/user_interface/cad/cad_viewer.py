@@ -996,12 +996,21 @@ class CQ3DViewer(QtWidgets.QWidget):
             self.current_actor = None
 
         # Clear all actors in the list (excluding bc_overlay which were
-        # already removed above to avoid double-removal)
+        # already removed above to avoid double-removal).
+        # NB: vtkBillboardTextActor3D and other text actors do not have a
+        #     GetMapper() method, so guard the mapper teardown with hasattr.
         for actor in list(self.actors):
-            if not getattr(actor, '_bc_overlay', False):
-                self.renderer.RemoveActor(actor)
-                if actor.GetMapper():
-                    actor.GetMapper().RemoveAllInputConnections(0)
+            if getattr(actor, '_bc_overlay', False):
+                continue
+            self.renderer.RemoveActor(actor)
+            get_mapper = getattr(actor, 'GetMapper', None)
+            if callable(get_mapper):
+                mapper = get_mapper()
+                if mapper is not None:
+                    try:
+                        mapper.RemoveAllInputConnections(0)
+                    except Exception:
+                        pass
         self.actors = []
 
         self.scalar_bar.VisibilityOff()
@@ -1953,7 +1962,8 @@ class CQ3DViewer(QtWidgets.QWidget):
         self.actors.append(actor)
 
     def _add_cube_marker(self, pos, color=(1, 0, 0), size=1.0):
-        """Add a cube marker (e.g. for constraints)."""
+        """Add a cube marker (e.g. for constraints).  Legacy path; new code
+        should use ``_add_constraint_glyph`` for the industry-standard look."""
         source = vtk.vtkCubeSource()
         source.SetCenter(pos[0], pos[1], pos[2])
         source.SetXLength(size)
@@ -1969,6 +1979,126 @@ class CQ3DViewer(QtWidgets.QWidget):
 
         self.renderer.AddActor(actor)
         self.actors.append(actor)
+
+    def _add_constraint_glyph(self, pos, fixed_dofs=None, color=(0.16, 0.47, 1.0), size=2.5):
+        """Industry-standard BC glyph.
+
+        Renders different shapes per restraint type:
+            * Fixed (3 DOF)  → three orthogonal small cones converging on the
+              face point (clamp / ground-anchor convention).
+            * Roller / Symmetry (1 DOF) → cylinder lying perpendicular to the
+              restrained axis (the "free-to-roll" convention).
+            * Pinned (3 DOF for solids) → flat disc.
+
+        Falls back to a small sphere if the DOF pattern is unrecognised.
+        """
+        fixed_dofs = list(fixed_dofs or [])
+        # Axis basis vectors keyed by DOF index (0=X, 1=Y, 2=Z).
+        axis_vec = {0: (1.0, 0.0, 0.0), 1: (0.0, 1.0, 0.0), 2: (0.0, 0.0, 1.0)}
+
+        def _make_actor(source, transform=None):
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputConnection(source.GetOutputPort())
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            if transform is not None:
+                actor.SetUserTransform(transform)
+            actor.GetProperty().SetColor(color)
+            actor.GetProperty().SetAmbient(0.4)
+            actor.GetProperty().SetDiffuse(0.6)
+            self.renderer.AddActor(actor)
+            self.actors.append(actor)
+            return actor
+
+        if len(fixed_dofs) >= 3 or not fixed_dofs:
+            # Fully restrained — three short cones meeting at the point, plus
+            # a tiny ground square to make it look like a clamp.
+            for dof in (0, 1, 2):
+                dx, dy, dz = axis_vec[dof]
+                cone = vtk.vtkConeSource()
+                cone.SetHeight(size)
+                cone.SetRadius(size * 0.45)
+                cone.SetResolution(20)
+                t = vtk.vtkTransform()
+                t.Translate(pos[0] + dx * size * 0.6,
+                            pos[1] + dy * size * 0.6,
+                            pos[2] + dz * size * 0.6)
+                # vtkConeSource default points along +X; rotate to align with axis.
+                if dof == 1:
+                    t.RotateZ(90)
+                elif dof == 2:
+                    t.RotateY(-90)
+                # Make the cone tip point inward toward `pos`.
+                t.RotateZ(180)
+                _make_actor(cone, t)
+            return
+
+        if len(fixed_dofs) == 1:
+            dof = int(fixed_dofs[0])
+            # Cylinder lying along an axis perpendicular to the restrained one
+            # (a roller's axis is *not* the restrained direction).  Use the
+            # next axis cyclically so each roller looks distinct.
+            roller_axis = (dof + 1) % 3
+            cyl = vtk.vtkCylinderSource()
+            cyl.SetRadius(size * 0.5)
+            cyl.SetHeight(size * 2.5)
+            cyl.SetResolution(24)
+            t = vtk.vtkTransform()
+            t.Translate(pos[0], pos[1], pos[2])
+            # vtkCylinderSource is +Y aligned by default.
+            if roller_axis == 0:
+                t.RotateZ(-90)
+            elif roller_axis == 2:
+                t.RotateX(90)
+            _make_actor(cyl, t)
+            return
+
+        # Generic 2-DOF fall-through: small sphere.
+        sph = vtk.vtkSphereSource()
+        sph.SetCenter(pos[0], pos[1], pos[2])
+        sph.SetRadius(size * 0.6)
+        sph.SetThetaResolution(24)
+        sph.SetPhiResolution(16)
+        _make_actor(sph)
+
+    def _add_force_label(self, pos, magnitude_text, color=(1.0, 0.85, 0.2)):
+        """Add a billboard text label at a 3D point (used for force magnitudes)."""
+        try:
+            actor = vtk.vtkBillboardTextActor3D()
+            actor.SetPosition(pos[0], pos[1], pos[2])
+            actor.SetInput(str(magnitude_text))
+            prop = actor.GetTextProperty()
+            prop.SetFontSize(14)
+            prop.SetBold(True)
+            prop.SetColor(color)
+            prop.SetJustificationToCentered()
+            prop.SetVerticalJustificationToBottom()
+            prop.SetShadow(1)
+            prop.SetShadowOffset(1, -1)
+            self.renderer.AddActor(actor)
+            self.actors.append(actor)
+        except Exception:
+            # Older VTK fall-back: skip the label rather than crash.
+            pass
+
+    @staticmethod
+    def _format_force_magnitude(value):
+        """Format Newtons compactly: 9.8e-3 N -> '9.8 mN', 12345 N -> '12.3 kN'."""
+        try:
+            v = abs(float(value))
+        except Exception:
+            return ""
+        if v == 0.0:
+            return "0 N"
+        if v >= 1e6:
+            return f"{v / 1e6:.2f} MN"
+        if v >= 1e3:
+            return f"{v / 1e3:.2f} kN"
+        if v >= 1.0:
+            return f"{v:.1f} N"
+        if v >= 1e-3:
+            return f"{v * 1e3:.1f} mN"
+        return f"{v:.2e} N"
 
     def update_simulation_field(self, mesh, values, field_name="Density"):
         """Update scalar field on existing mesh for real-time visualization."""
@@ -2290,53 +2420,62 @@ class CQ3DViewer(QtWidgets.QWidget):
         # approximate centroid/bbox debug markers to avoid duplicate clutter.
         _has_exact_bc_overlay = self._cached_bc_data is not None
         if isinstance(data, dict) and not _has_exact_bc_overlay:
+            try:
+                _b = self.renderer.GetBounds()
+                _diag = ((_b[1] - _b[0]) ** 2 + (_b[3] - _b[2]) ** 2 + (_b[5] - _b[4]) ** 2) ** 0.5
+                base_len = max(5.0, 0.08 * _diag)
+                glyph_size = max(1.5, 0.025 * _diag)
+            except Exception:
+                base_len, glyph_size = 5.0, 2.0
+
+            def _hex_to_rgb(color, fallback):
+                if isinstance(color, str) and color.startswith('#'):
+                    c = color.lstrip('#')
+                    return tuple(int(c[i:i+2], 16) / 255.0 for i in (0, 2, 4))
+                return fallback
+
             if 'debug_loads' in data and data['debug_loads']:
-                import math as _math
                 for load in data['debug_loads']:
-                    # Reconstruct vector and compute normalized direction
-                    if 'vector' in load:
-                        raw_vec = np.array(load['vector'], dtype=float)
-                        raw_mag = float(np.linalg.norm(raw_vec))
-                        if raw_mag < 1e-9: continue
-                        norm_dir = raw_vec / raw_mag
-                    else: continue
-                    
+                    if 'vector' not in load:
+                        continue
+                    raw_vec = np.array(load['vector'], dtype=float)
+                    raw_mag = float(np.linalg.norm(raw_vec))
+                    if raw_mag < 1e-9:
+                        continue
+                    norm_dir = raw_vec / raw_mag
+
                     center = load.get('start') or load.get('pos')
                     if not center and 'bbox' in load:
                         bb = load['bbox']
-                        center = [(bb.xmin+bb.xmax)/2, (bb.ymin+bb.ymax)/2, (bb.zmin+bb.zmax)/2]
-                        
-                    if center:
-                        try:
-                            _b = self.renderer.GetBounds()
-                            _diag = ((_b[1]-_b[0])**2 + (_b[3]-_b[2])**2 + (_b[5]-_b[4])**2) ** 0.5
-                            base_len = max(5.0, 0.08 * _diag)
-                        except Exception:
-                            base_len = 5.0
-                        
-                        rel_mag = load.get('relative_mag', 1.0)
-                        arrow_len = base_len * max(0.2, min(1.0, rel_mag)) * 1.5
-                        color = load.get('color', '#ffff00')
-                        if isinstance(color, str) and color.startswith('#'):
-                            # Hex to tuple
-                            c = color.lstrip('#')
-                            c_rgb = tuple(int(c[i:i+2], 16)/255.0 for i in (0, 2, 4))
-                        else:
-                            c_rgb = (1, 1, 0)
-                            
-                        self._add_arrow(center, norm_dir, color=c_rgb, scale=arrow_len/5.0)
+                        center = [(bb.xmin + bb.xmax) / 2,
+                                  (bb.ymin + bb.ymax) / 2,
+                                  (bb.zmin + bb.zmax) / 2]
+                    if not center:
+                        continue
+
+                    rel_mag = load.get('relative_mag', 1.0)
+                    arrow_len = base_len * max(0.2, min(1.0, rel_mag)) * 1.5
+                    c_rgb = _hex_to_rgb(load.get('color', '#ffff00'), (1.0, 0.85, 0.2))
+                    self._add_arrow(center, norm_dir, color=c_rgb, scale=arrow_len / 5.0)
+
+                    # Magnitude label at the arrow tip (only for loads that
+                    # actually carry a magnitude; relative_mag * raw_mag
+                    # recovers the absolute Newton value used by the solver).
+                    label_pos = [center[i] + norm_dir[i] * arrow_len for i in range(3)]
+                    label = self._format_force_magnitude(raw_mag)
+                    if label:
+                        self._add_force_label(label_pos, label, color=c_rgb)
 
             if 'debug_constraints' in data and data['debug_constraints']:
                 for const in data['debug_constraints']:
                     center = const.get('pos')
-                    if center:
-                        color = const.get('color', '#ff0000')
-                        if isinstance(color, str) and color.startswith('#'):
-                            c = color.lstrip('#')
-                            c_rgb = tuple(int(c[i:i+2], 16)/255.0 for i in (0, 2, 4))
-                        else:
-                            c_rgb = (1, 0, 0)
-                        self._add_cube_marker(center, color=c_rgb, size=2.0)
+                    if not center:
+                        continue
+                    c_rgb = _hex_to_rgb(const.get('color', '#2979FF'), (0.16, 0.47, 1.0))
+                    fixed_dofs = const.get('fixed_dofs')
+                    self._add_constraint_glyph(
+                        center, fixed_dofs=fixed_dofs, color=c_rgb, size=glyph_size
+                    )
 
         # 5. Re-apply cached BC face overlays on top of the simulation result
         #    so they remain visible after FEA/TopOpt solve.

@@ -773,7 +773,7 @@
         "load_type": "Force",
         "condition": "",
         "force_x": 0.0,
-        "force_y": -1000.0,
+        "force_y": -10000.0,
         "force_z": 0.0,
         "moment_x": 0.0,
         "moment_y": 0.0,

@@ -137,6 +137,7 @@ from pylcss.cad.nodes.crash import (
     ImpactConditionNode,
     CrashSolverNode,
     CrashSolverGPUNode,
+    RunRadiossDeckNode,
 )
 
 # =============================================================================
@@ -196,5 +197,5 @@ __all__ = [
 
     # Crash / Impact
     "CrashMaterialNode", "ImpactConditionNode", "CrashSolverNode",
-    "CrashSolverGPUNode",
+    "CrashSolverGPUNode", "RunRadiossDeckNode",
 ]

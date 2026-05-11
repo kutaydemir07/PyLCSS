@@ -63,6 +63,19 @@ class CrashSolverNode(CadQueryNode):
         self.add_input('impact',         color=(255, 200,   0))
         self.add_output('crash_results', color=(0, 220, 255))
 
+        self.create_property(
+            'solver_backend', 'Internal PyLCSS',
+            widget_type='combo',
+            items=['Internal PyLCSS', 'OpenRadioss (experimental)'],
+        )
+        self.create_property('openradioss_starter_path', '', widget_type='text')
+        self.create_property('openradioss_engine_path', '', widget_type='text')
+        self.create_property('external_work_dir', '', widget_type='text')
+        # Selecting an external backend implies "run it" by default; this flag
+        # only suppresses the launch and writes the deck for inspection.
+        self.create_property('deck_only', False, widget_type='checkbox')
+        self.create_property('external_timeout_s', 3600.0, widget_type='float')
+
         # ── Simulation time ──────────────────────────────────────────────────
         # Total simulation duration in milliseconds.
         # Rule of thumb: use 2–10 × (L / c_wave) where c_wave ≈ √(E/ρ).
@@ -137,8 +150,109 @@ class CrashSolverNode(CadQueryNode):
 
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _run_external_backend(self):
+        """Prepare and optionally starter-check an OpenRadioss crash deck."""
+        print("Crash Solver: Routing to OpenRadioss external backend.")
+        from pylcss.solver_backends import (
+            ExternalRunConfig,
+            SolverBackendError,
+            run_openradioss_crash,
+        )
+        from pylcss.solver_backends.common import as_bool, flatten_inputs
+
+        mesh = self.get_input_value('mesh', None)
+        material = self.get_input_value('crash_material', None)
+        impact = self.get_input_value('impact', None)
+        constraints = flatten_inputs(self.get_input_list('constraints'))
+        print(
+            f"Crash Solver (external): mesh={mesh is not None}, "
+            f"material={material is not None}, "
+            f"impact={impact is not None}, "
+            f"constraints={len(constraints)}"
+        )
+
+        if mesh is None:
+            print("Crash Solver: OpenRadioss backend requires a connected mesh.")
+            self.set_error("OpenRadioss backend requires a connected mesh.")
+            return None
+        if material is None:
+            print("Crash Solver: OpenRadioss backend requires a connected crash material.")
+            self.set_error("OpenRadioss backend requires a connected crash material.")
+            return None
+        if impact is None:
+            print("Crash Solver: OpenRadioss backend requires a connected impact condition.")
+            self.set_error("OpenRadioss backend requires a connected impact condition.")
+            return None
+
+        n_frames = max(1, int(self.get_property('n_frames') or 1))
+        end_time = float(self.get_property('end_time') or 0.0)
+        output_dt = end_time / n_frames if end_time > 0 else 1.0
+
+        # Same auto-run semantics as the FEA solver: backend selection implies
+        # "launch the solver"; `deck_only` is the explicit opt-out.
+        deck_only = as_bool(self.get_property('deck_only'))
+        legacy_run = self.get_property('run_external_solver')
+        if legacy_run is not None and not as_bool(legacy_run):
+            deck_only = True
+        run_flag = not deck_only
+        print(
+            f"Crash Solver (external): deck_only={deck_only}, "
+            f"effective run_solver={run_flag}"
+        )
+
+        try:
+            config = ExternalRunConfig(
+                executable=(self.get_property('openradioss_starter_path') or None),
+                secondary_executable=(self.get_property('openradioss_engine_path') or None),
+                work_dir=(self.get_property('external_work_dir') or None),
+                keep_files=True,
+                run_solver=run_flag,
+                timeout_s=float(self.get_property('external_timeout_s') or 3600.0),
+                job_name='pylcss_openradioss',
+            )
+            print(
+                f"Crash Solver (external): run_solver={run_flag}, "
+                f"starter_override={config.executable!r}, "
+                f"engine_override={config.secondary_executable!r}"
+            )
+            result = run_openradioss_crash(
+                mesh=mesh,
+                material=material,
+                constraints=constraints,
+                impact=impact,
+                config=config,
+                end_time=end_time,
+                output_dt=output_dt,
+                visualization_mode=self.get_property('visualization'),
+                disp_scale=float(self.get_property('disp_scale') or 1.0),
+            )
+            warnings = result.get('warnings') or []
+            if warnings:
+                print("OpenRadioss backend warnings:\n  " + "\n  ".join(warnings))
+            print(
+                f"Crash Solver (external): status={result.get('external_status')}, "
+                f"type={result.get('type')}, "
+                f"work_dir={result.get('work_dir')}, "
+                f"starter_exe={result.get('solver_executable')}, "
+                f"engine_exe={result.get('secondary_solver_executable')}"
+            )
+            return result
+        except SolverBackendError as exc:
+            print(f"Crash Solver: OpenRadioss backend error: {exc}")
+            self.set_error(str(exc))
+            return None
+        except Exception as exc:
+            import traceback
+            print(f"Crash Solver: External backend raised {type(exc).__name__}: {exc}")
+            traceback.print_exc()
+            self.set_error(f"OpenRadioss backend crashed: {exc}")
+            return None
+
     def run(self):
         print("Crash Solver: Starting explicit transient crash simulation...")
+        backend_name = self.get_property('solver_backend')
+        if backend_name and backend_name != 'Internal PyLCSS':
+            return self._run_external_backend()
 
         # ── 1. Gather inputs ─────────────────────────────────────────────────
 

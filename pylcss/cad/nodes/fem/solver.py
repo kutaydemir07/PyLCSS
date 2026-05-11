@@ -37,14 +37,124 @@ class SolverNode(CadQueryNode):
         self.add_input('constraints', color=(255, 100, 100), multi_input=True)
         self.add_input('loads', color=(255, 255, 0), multi_input=True)
         self.add_output('results', color=(0, 255, 255))
+        self.create_property('solver_backend', 'Internal scikit-fem', widget_type='combo',
+                             items=['Internal scikit-fem', 'CalculiX'])
+        self.create_property('external_solver_path', '', widget_type='text')
+        self.create_property('external_work_dir', '', widget_type='text')
+        # Selecting an external backend implies "run it" by default; this flag
+        # only suppresses the launch and writes the deck for inspection.
+        self.create_property('deck_only', False, widget_type='checkbox')
+        self.create_property('external_timeout_s', 3600.0, widget_type='float')
         self.create_property('visualization', 'Von Mises Stress', widget_type='combo',
                              items=['Von Mises Stress', 'Displacement'])
         # Deformation scale for visualization (Auto scales so peak disp ≈ 5% of bbox)
         self.create_property('deformation_scale', 'Auto', widget_type='combo',
                              items=['Auto', '1x', '5x', '10x', '50x', '100x', '200x'])
 
+    def _run_external_backend(self, backend_name):
+        """Dispatch FEA preparation/execution to an external backend."""
+        print(f"FEA Solver: Routing to external backend '{backend_name}'.")
+        from pylcss.solver_backends import (
+            ExternalRunConfig,
+            SolverBackendError,
+            run_calculix_static,
+        )
+        from pylcss.solver_backends.common import as_bool, flatten_inputs
+
+        mesh = self.get_input_value('mesh', None)
+        material = self.get_input_value('material', None)
+        constraint_list = flatten_inputs(self.get_input_list('constraints'))
+        load_list = flatten_inputs(self.get_input_list('loads'))
+        print(
+            f"FEA Solver (external): mesh={mesh is not None}, "
+            f"material={material is not None}, "
+            f"constraints={len(constraint_list)}, loads={len(load_list)}"
+        )
+
+        # NOTE: a fresh skfem mesh evaluates truthy, but defensively check None
+        # explicitly so any future custom mesh wrapper with weird __bool__
+        # behaviour does not turn this into a silent no-op.
+        missing = []
+        if mesh is None:
+            missing.append('mesh')
+        if material is None:
+            missing.append('material')
+        if not constraint_list:
+            missing.append('at least one constraint')
+        if not load_list:
+            missing.append('at least one load')
+        if missing:
+            msg = (
+                "External FEA backend requires " + ", ".join(missing) + "."
+            )
+            print(f"FEA Solver: {msg}")
+            self.set_error(msg)
+            return None
+
+        # Selecting an external backend implicitly means "run it" — the user
+        # already expressed intent by picking CalculiX from the dropdown.  The
+        # `deck_only` checkbox is the explicit opt-out for users who only want
+        # the input deck.  We still honour the legacy `run_external_solver`
+        # property on projects saved before this change.
+        deck_only = as_bool(self.get_property('deck_only'))
+        legacy_run = self.get_property('run_external_solver')
+        if legacy_run is not None and not as_bool(legacy_run):
+            deck_only = True
+        run_flag = not deck_only
+        print(
+            f"FEA Solver (external): deck_only={deck_only}, "
+            f"effective run_solver={run_flag}"
+        )
+        try:
+            config = ExternalRunConfig(
+                executable=(self.get_property('external_solver_path') or None),
+                work_dir=(self.get_property('external_work_dir') or None),
+                keep_files=True,
+                run_solver=run_flag,
+                timeout_s=float(self.get_property('external_timeout_s') or 3600.0),
+                job_name='pylcss_calculix',
+            )
+            print(
+                f"FEA Solver (external): run_solver={run_flag}, "
+                f"executable_override={config.executable!r}"
+            )
+            result = run_calculix_static(
+                mesh=mesh,
+                material=material,
+                constraints=constraint_list,
+                loads=load_list,
+                config=config,
+                visualization_mode=self.get_property('visualization'),
+            )
+            warnings = result.get('warnings') or []
+            if warnings:
+                print("CalculiX backend warnings:\n  " + "\n  ".join(warnings))
+            print(
+                f"FEA Solver (external): status={result.get('external_status')}, "
+                f"type={result.get('type')}, "
+                f"work_dir={result.get('work_dir')}, "
+                f"solver_exe={result.get('solver_executable')}"
+            )
+            return result
+        except SolverBackendError as exc:
+            print(f"FEA Solver: CalculiX backend error: {exc}")
+            self.set_error(str(exc))
+            return None
+        except Exception as exc:
+            # Anything else (file I/O, parser bug) — surface it so the graph
+            # execution log shows what happened instead of returning silently.
+            import traceback
+            print(f"FEA Solver: External backend raised {type(exc).__name__}: {exc}")
+            traceback.print_exc()
+            self.set_error(f"CalculiX backend crashed: {exc}")
+            return None
+
     def run(self):
         print("FEA Solver: Node 'run' called.")
+        backend_name = self.get_property('solver_backend')
+        if backend_name and backend_name != 'Internal scikit-fem':
+            return self._run_external_backend(backend_name)
+
         mesh = self.get_input_value('mesh', None)
         material = self.get_input_value('material', None)
         

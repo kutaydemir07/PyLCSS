@@ -60,6 +60,11 @@ PyLCSS implements the **Solution Space** approach for robust design: instead of 
 - **Linear Elasticity** — Displacement, von Mises stress, compliance
 - **FEA Results Nodes** — Stress extraction, displacement, reaction forces
 - **Remeshing** — Surface-to-solid conversion for topology-optimised shapes (up to 20 000 faces)
+- **External CalculiX Backend** — Full round-trip: PyLCSS writes a CalculiX `.inp`, runs `ccx`, parses the `.frd` output, and displays displacement + Von Mises stress in the in-app VTK viewer (see [Installation](#installation) for the binary fetch step)
+
+### Crash / Impact Simulation
+- **Internal Explicit Solver** — Central-difference transient solid mechanics with plasticity, fracture, contact, and optional GPU path
+- **OpenRadioss Backend** — Full round-trip: PyLCSS writes an LS-DYNA-style keyword deck, runs Starter + Engine, converts the `A001`/`A002`… animation files via `anim_to_vtk`, and plays the frames in the crash viewer (requires the OpenRadioss binaries — see [Installation](#installation))
 
 ### Multi-Objective Optimisation (7 Solvers)
 | Algorithm | Type | Best For |
@@ -137,11 +142,26 @@ source .venv/bin/activate
 # Dependencies
 pip install -r requirements.txt
 
+# (Optional) Download CalculiX + OpenRadioss native binaries.
+# These are NOT pip-installable; the script fetches the upstream releases
+# into <repo>/external_solvers/ and writes the matching PYLCSS_* env vars.
+python scripts/install_solvers.py
+
 # Launch
 python scripts/main.py
 ```
 
 Or on Windows: double-click `run_gui.bat`.
+
+### External solver binaries
+
+| Backend | Provided by | How PyLCSS finds it |
+|---------|-------------|----------------------|
+| CalculiX (`ccx`) | `python scripts/install_solvers.py --only ccx` | `PYLCSS_CALCULIX_CCX`, `CALCULIX_CCX`, or `ccx`/`ccx.exe` on `PATH` |
+| OpenRadioss Starter/Engine | `python scripts/install_solvers.py --only radioss` | `PYLCSS_OPENRADIOSS_STARTER`, `PYLCSS_OPENRADIOSS_ENGINE`, or `starter_*`/`engine_*` on `PATH` |
+| OpenRadioss `anim_to_vtk` | Bundled with the Radioss install above | `PYLCSS_OPENRADIOSS_ANIM2VTK` or `anim_to_vtk*` on `PATH` |
+
+Structural optimization (Topology / Shape / Size) still runs on the in-process scikit-fem solver — the optimization nodes need a Jacobian/adjoint that the external decks do not provide. The external backends are for high-fidelity verification of single FEA / crash runs.
 
 ---
 
@@ -180,7 +200,7 @@ pylcss/
 |-------|-------------|
 | **UI** | PySide6, NodeGraphQt, QtAwesome |
 | **CAD** | CadQuery, OpenCASCADE (OCP), VTK |
-| **FEA** | scikit-fem, Netgen, meshio |
+| **FEA** | scikit-fem, Netgen, meshio, CalculiX (`ccx` + `.frd` round-trip), OpenRadioss (`starter`/`engine` + `anim_to_vtk` round-trip) |
 | **Computation** | NumPy, SciPy, Pandas |
 | **Visualisation** | VTK (3D), pyqtgraph (2D) |
 | **ML** | PyTorch, scikit-learn |
