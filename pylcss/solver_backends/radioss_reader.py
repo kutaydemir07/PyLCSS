@@ -232,6 +232,8 @@ def read_animation_frames(
 
     frames: List[Dict[str, object]] = []
     n_anim = max(len(anim_files), 1)
+    max_disp_seen = 0.0
+    max_vm_seen = 0.0
     for vtk_idx, vtk_path in enumerate(vtk_paths):
         try:
             mesh = meshio.read(str(vtk_path))
@@ -255,6 +257,21 @@ def read_animation_frames(
                 "stress_vm": np.asarray(vm, dtype=float),
                 "time": float(vtk_idx + 1) / float(n_anim),
             }
+        )
+        max_disp_seen = max(max_disp_seen, float(np.max(np.abs(disp))) if disp.size else 0.0)
+        max_vm_seen = max(max_vm_seen, float(np.max(vm)) if vm.size else 0.0)
+    print(f"OpenRadioss frames: parsed {len(frames)} VTK files, "
+          f"global max |u| = {max_disp_seen:.4e} mm, "
+          f"global max |VM| = {max_vm_seen:.4e}")
+    if max_disp_seen < 1e-6 and max_vm_seen < 1e-6:
+        warnings.append(
+            "All animation frames carry essentially zero displacement and stress.  "
+            "This usually means the impact velocity is far below yield onset for "
+            "the material+geometry combo — the simulation is purely elastic and "
+            "the deformation is microscopic relative to the box size.  Raise the "
+            "ImpactCondition velocity, or set disp_scale on the CrashSolver node "
+            "to a large value (e.g. 1000) to amplify the elastic vibration for "
+            "visualization."
         )
 
     if not frames:

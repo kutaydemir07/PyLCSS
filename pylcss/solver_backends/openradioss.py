@@ -221,6 +221,9 @@ def _build_keyword_deck(
         )
 
     velocity = np.asarray(impact.get("velocity", [0.0, 0.0, 0.0]), dtype=float)
+    print(f"OpenRadioss deck: impact velocity (mm/ms) = {velocity.tolist()!r}, "
+          f"|v|={float(np.linalg.norm(velocity)):.3f} mm/ms "
+          f"(= {float(np.linalg.norm(velocity)):.1f} m/s)")
     impact_faces = impact.get("face_list", [])
     if impact_faces:
         impact_nodes = nodes_matching_geometries(
