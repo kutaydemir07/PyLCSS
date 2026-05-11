@@ -422,6 +422,7 @@ def run_openradioss_existing_deck(
             timeout_s=config.timeout_s,
             extra_path_dirs=path_dirs,
             extra_env=env_extra,
+            stdout_file=work_dir / "_pylcss_starter.log",
         )
         print(f"OpenRadioss Starter: completed in {_time.time() - _t0:.1f}s "
               f"(exit={proc.returncode}).")
@@ -460,14 +461,18 @@ def run_openradioss_existing_deck(
     path_dirs, env_extra = _radioss_runtime_env(engine)
     import time as _time
     _t0 = _time.time()
-    print(f"OpenRadioss Engine: launching on {staged_engine.name}... "
+    import os as _os
+    nthread = max(1, _os.cpu_count() or 1)
+    print(f"OpenRadioss Engine: launching on {staged_engine.name} "
+          f"(SMP -nthread {nthread})... "
           "(this is where most of the wall-clock time goes)")
     proc_eng = run_process(
-        [engine, "-i", str(staged_engine)],
+        [engine, "-i", str(staged_engine), "-nthread", str(nthread)],
         cwd=work_dir,
         timeout_s=config.timeout_s,
         extra_path_dirs=path_dirs,
         extra_env=env_extra,
+        stdout_file=work_dir / "_pylcss_engine.log",
     )
     print(f"OpenRadioss Engine: completed in {_time.time() - _t0:.1f}s "
           f"(exit={proc_eng.returncode}).")
@@ -678,6 +683,10 @@ def run_openradioss_crash(
                 timeout_s=config.timeout_s,
                 extra_path_dirs=path_dirs,
                 extra_env=env_extra,
+                # Spool stdout to disk — Radioss prints per-cycle progress
+                # which overflows Windows' 4 KB pipe buffer and deadlocks
+                # the subprocess on long runs.
+                stdout_file=work_dir / "_pylcss_starter.log",
             )
             print(f"OpenRadioss Starter: completed in {_time.time() - _t0:.1f}s "
                   f"(exit={proc.returncode}).")
@@ -704,12 +713,16 @@ def run_openradioss_crash(
                 _t0 = _time.time()
                 print(f"OpenRadioss Engine: launching on {Path(engine_deck_path).name}... "
                       "(this is where most of the wall-clock time goes)")
+                import os as _os
+                nthread = max(1, (_os.cpu_count() or 1) // 1)
                 proc_eng = run_process(
-                    [engine, "-i", str(engine_deck_path)],
+                    [engine, "-i", str(engine_deck_path),
+                     "-nthread", str(nthread)],
                     cwd=work_dir,
                     timeout_s=config.timeout_s,
                     extra_path_dirs=path_dirs,
                     extra_env=env_extra,
+                    stdout_file=work_dir / "_pylcss_engine.log",
                 )
                 print(f"OpenRadioss Engine: completed in {_time.time() - _t0:.1f}s "
                       f"(exit={proc_eng.returncode}).")

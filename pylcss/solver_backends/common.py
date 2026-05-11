@@ -141,6 +141,7 @@ def run_process(
     timeout_s: float,
     extra_path_dirs: Sequence[str] = (),
     extra_env: Optional[dict] = None,
+    stdout_file: Optional[Path] = None,
 ) -> subprocess.CompletedProcess:
     """Run an external solver process and capture text output.
 
@@ -151,6 +152,12 @@ def run_process(
 
     ``extra_env`` adds / overrides individual environment variables (e.g.
     ``RAD_CFG_PATH`` for OpenRadioss).
+
+    ``stdout_file`` redirects stdout+stderr to a file on disk and avoids the
+    Python subprocess pipe-buffer deadlock that hits any solver which prints
+    more than the Windows pipe buffer (~4 KB) of progress info during its run.
+    The returned ``CompletedProcess.stdout`` is then populated from that file
+    so callers see the same string they'd otherwise have gotten from PIPE.
     """
     env = None
     if extra_path_dirs or extra_env:
@@ -163,6 +170,68 @@ def run_process(
         if extra_env:
             for k, v in extra_env.items():
                 env[str(k)] = str(v)
+
+    if stdout_file is not None:
+        stdout_file = Path(stdout_file)
+        stdout_file.parent.mkdir(parents=True, exist_ok=True)
+        # Start a watcher thread that periodically prints any new lines in the
+        # log file to stdout — this gives the user visible solver progress
+        # ("NC= 12300 T= 1.23E-04 ...") instead of staring at a frozen UI.
+        import threading
+        import time as _time
+
+        stop_event = threading.Event()
+
+        def _tail():
+            last_size = 0
+            last_emit = 0.0
+            while not stop_event.is_set():
+                try:
+                    cur = stdout_file.stat().st_size
+                except OSError:
+                    _time.sleep(0.5)
+                    continue
+                if cur > last_size and _time.time() - last_emit > 2.0:
+                    try:
+                        with open(stdout_file, "r", encoding="utf-8", errors="replace") as r:
+                            r.seek(last_size)
+                            tail_chunk = r.read()
+                    except OSError:
+                        tail_chunk = ""
+                    last_size = cur
+                    last_emit = _time.time()
+                    for line in tail_chunk.splitlines():
+                        s = line.strip()
+                        # Only echo meaningful solver progress lines, not the
+                        # huge banner blocks.  Radioss progress lines start
+                        # with "NC=" or contain "ELAPSED TIME".
+                        if s.startswith("NC=") or "ELAPSED TIME" in s or "TERMINATION" in s:
+                            print(f"  | {s}")
+                stop_event.wait(0.5)
+
+        watcher = threading.Thread(target=_tail, daemon=True)
+        watcher.start()
+        try:
+            with open(stdout_file, "w", encoding="utf-8", errors="replace") as fout:
+                proc = subprocess.run(
+                    list(args),
+                    cwd=str(cwd),
+                    text=True,
+                    stdout=fout,
+                    stderr=subprocess.STDOUT,
+                    timeout=timeout_s,
+                    check=False,
+                    env=env,
+                )
+        finally:
+            stop_event.set()
+            watcher.join(timeout=2.0)
+        try:
+            proc.stdout = stdout_file.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            proc.stdout = ""
+        return proc
+
     return subprocess.run(
         list(args),
         cwd=str(cwd),
