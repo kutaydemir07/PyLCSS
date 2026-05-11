@@ -412,6 +412,9 @@ def run_openradioss_existing_deck(
                 "PYLCSS_OPENRADIOSS_STARTER."
             )
         path_dirs, env_extra = _radioss_runtime_env(starter)
+        import time as _time
+        _t0 = _time.time()
+        print(f"OpenRadioss Starter: launching on {staged_deck.name}...")
         # Force single SPMD domain — see comment in run_openradioss_crash.
         proc = run_process(
             [starter, "-i", str(staged_deck), "-nspmd", "1"],
@@ -420,6 +423,8 @@ def run_openradioss_existing_deck(
             extra_path_dirs=path_dirs,
             extra_env=env_extra,
         )
+        print(f"OpenRadioss Starter: completed in {_time.time() - _t0:.1f}s "
+              f"(exit={proc.returncode}).")
         solver_log = tail(proc.stdout or "")
         if proc.returncode != 0:
             aux = _collect_radioss_failure_context(
@@ -453,6 +458,10 @@ def run_openradioss_existing_deck(
         )
 
     path_dirs, env_extra = _radioss_runtime_env(engine)
+    import time as _time
+    _t0 = _time.time()
+    print(f"OpenRadioss Engine: launching on {staged_engine.name}... "
+          "(this is where most of the wall-clock time goes)")
     proc_eng = run_process(
         [engine, "-i", str(staged_engine)],
         cwd=work_dir,
@@ -460,6 +469,8 @@ def run_openradioss_existing_deck(
         extra_path_dirs=path_dirs,
         extra_env=env_extra,
     )
+    print(f"OpenRadioss Engine: completed in {_time.time() - _t0:.1f}s "
+          f"(exit={proc_eng.returncode}).")
     solver_log = tail((proc_eng.stdout or "") + "\n" + solver_log)
     if proc_eng.returncode != 0:
         aux = _collect_radioss_failure_context(
@@ -653,6 +664,9 @@ def run_openradioss_crash(
             )
         else:
             path_dirs, env_extra = _radioss_runtime_env(starter)
+            import time as _time
+            _t0 = _time.time()
+            print(f"OpenRadioss Starter: launching on {Path(deck_path).name}...")
             # ``-nspmd 1`` forces a single domain decomposition so the bundled
             # non-hybrid ``engine_win64`` (which only handles 1 SPMD domain)
             # can read the restart file Starter writes.  Without this the
@@ -665,6 +679,8 @@ def run_openradioss_crash(
                 extra_path_dirs=path_dirs,
                 extra_env=env_extra,
             )
+            print(f"OpenRadioss Starter: completed in {_time.time() - _t0:.1f}s "
+                  f"(exit={proc.returncode}).")
             solver_log = tail(proc.stdout or "")
             if proc.returncode != 0:
                 aux = _collect_radioss_failure_context(
@@ -684,6 +700,10 @@ def run_openradioss_crash(
                 )
             else:
                 path_dirs, env_extra = _radioss_runtime_env(engine)
+                import time as _time
+                _t0 = _time.time()
+                print(f"OpenRadioss Engine: launching on {Path(engine_deck_path).name}... "
+                      "(this is where most of the wall-clock time goes)")
                 proc_eng = run_process(
                     [engine, "-i", str(engine_deck_path)],
                     cwd=work_dir,
@@ -691,6 +711,8 @@ def run_openradioss_crash(
                     extra_path_dirs=path_dirs,
                     extra_env=env_extra,
                 )
+                print(f"OpenRadioss Engine: completed in {_time.time() - _t0:.1f}s "
+                      f"(exit={proc_eng.returncode}).")
                 solver_log = tail((proc_eng.stdout or "") + "\n" + solver_log)
                 if proc_eng.returncode != 0:
                     aux = _collect_radioss_failure_context(
