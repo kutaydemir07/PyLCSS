@@ -1,7 +1,23 @@
 # PyLCSS Third-Party Notices
-Document Version: 1.2 Last Updated: February 10, 2026
+Document Version: 1.3 Last Updated: May 12, 2026
 
 This document outlines the third-party libraries and components used in PyLCSS, along with their respective licenses. PyLCSS is committed to respecting the intellectual property of all contributors and provides this information in accordance with open-source licensing requirements.
+
+## Optional Native Solver Binaries
+
+PyLCSS can launch native solver executables as separate external processes. These binaries are not Python dependencies and are not installed by `pip install -r requirements.txt`. The helper script `scripts/install_solvers.py` can download or locate them under `external_solvers/`, but each solver remains governed by its own upstream license.
+
+### CalculiX (`ccx`)
+- **Purpose**: Linear static FEA and CalculiX-in-the-loop optimization evaluations.
+- **License**: GNU General Public License v2 or later, per the official CalculiX project notice.
+- **Source**: [https://www.calculix.de/](https://www.calculix.de/)
+- **Packaging Note**: PyLCSS writes `.inp` decks and launches `ccx` as an external process. The Windows installer helper currently prefers `ccx_static.exe` from the CalculiX 2.23 Windows binary archive because it avoids the missing MKL runtime issue of the dynamic build.
+
+### OpenRadioss
+- **Purpose**: Explicit crash/impact solve and animation conversion via Starter, Engine, and `anim_to_vtk`.
+- **License**: GNU Affero General Public License v3 or later, per the OpenRadioss `COPYRIGHT.md` distributed with the upstream binaries.
+- **Source**: [https://github.com/OpenRadioss/OpenRadioss](https://github.com/OpenRadioss/OpenRadioss)
+- **Packaging Note**: PyLCSS writes or stages solver decks, launches OpenRadioss as an external process, and imports converted animation frames. OpenRadioss may include additional third-party runtime components in its `extlib/` directory.
 
 ## 1. LGPL Licensed Software
 

@@ -19,7 +19,6 @@ SIMULATION_NODE_IDENTIFIERS = {
     'com.cad.sim.crash_material',
     'com.cad.sim.impact',
     'com.cad.sim.crash_solver',
-    'com.cad.sim.crash_solver_gpu',
 }
 
 def _hash_value(value):

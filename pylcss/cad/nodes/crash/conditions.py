@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-"""Crash impact condition node — initial velocity field definition."""
+"""Crash impact condition node: initial velocity field definition."""
 import numpy as np
 from pylcss.cad.core.base_node import CadQueryNode
 
@@ -13,12 +13,12 @@ class ImpactConditionNode(CadQueryNode):
     is provided). This is the standard approach for drop tests and
     barrier-impact simulations.
 
-    Units: mm / ms = m/s  (consistent with mm–tonne–N–MPa–ms system).
+    Units: mm / ms = m/s (consistent with the mm-tonne-N-MPa-ms system).
 
     Tip:
-    - 10 km/h ≈ 2 778 mm/ms → velocity_z = -2.778
-    - 56 km/h (NCAP) ≈ 15 556 mm/ms → velocity_z = -15.556
-    - Keep magnitude ≤ ~50 mm/ms for typical structural crash.
+    - 10 km/h ~= 2.778 mm/ms -> velocity_z = -2.778
+    - 56 km/h (NCAP) ~= 15.556 mm/ms -> velocity_z = -15.556
+    - Keep magnitude <= ~50 mm/ms for typical structural crash.
     """
 
     __identifier__ = 'com.cad.sim.impact'
@@ -30,11 +30,16 @@ class ImpactConditionNode(CadQueryNode):
         self.add_output('impact', color=(255, 200, 0))
 
         # Velocity components in mm/ms (= m/s).
-        # Rule of thumb: 10 km/h ≈ 2.78 mm/ms  |  56 km/h (NCAP) ≈ 15.6 mm/ms
+        # Rule of thumb: 10 km/h ~= 2.78 mm/ms; 56 km/h ~= 15.6 mm/ms.
         self.create_property('velocity_x', 0.0,  widget_type='float')
         self.create_property('velocity_y', 0.0,  widget_type='float')
         self.create_property('velocity_z', -1.0, widget_type='float')
-        # Node-selection tolerance (mm) – nodes within this distance of the
+        self.create_property(
+            'application_scope', 'Impact Face',
+            widget_type='combo',
+            items=['Impact Face', 'Moving Body'],
+        )
+        # Node-selection tolerance (mm): nodes within this distance of the
         # impact face receive the initial velocity.
         self.create_property('node_tolerance', 2.0, widget_type='float')
 
@@ -60,6 +65,7 @@ class ImpactConditionNode(CadQueryNode):
                 float(self.get_property('velocity_y')),
                 float(self.get_property('velocity_z')),
             ]),
+            'application_scope': str(self.get_property('application_scope') or 'Impact Face'),
             'node_tolerance': float(self.get_property('node_tolerance')),
         }
 

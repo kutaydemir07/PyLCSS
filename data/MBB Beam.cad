@@ -9,10 +9,8 @@
     "reject_connection_types": "{}"
   },
   "nodes": {
-    "0x224318bd970": {
-      "type_": "com.cad.box.BoxNode",
+    "0x001": {
       "icon": null,
-      "name": "Box (MBB Beam)",
       "color": [
         13,
         18,
@@ -35,27 +33,35 @@
       "selected": false,
       "visible": true,
       "width": 160,
-      "height": 165.6,
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "name": "Box (MBB Beam)",
       "pos": [
         -600.0,
         -150.0
       ],
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
+      "height": 220.0,
       "custom": {
-        "box_length": 20.0,
-        "box_width": 3.0,
-        "box_depth": 120.0,
-        "center_x": 0.0,
-        "center_y": 0.0,
-        "center_z": 0.0
+        "code": "# MBB beam design domain: span along X, height along Y, thickness along Z.\n# Supports sit on the lower edge (Y < 0) and the load is a true downward -Y force.\nresult = cq.Workplane('XY').box(span, height, thickness)\n",
+        "parameters": "",
+        "param_1_name": "span",
+        "param_1_value": 120.0,
+        "param_2_name": "height",
+        "param_2_value": 20.0,
+        "param_3_name": "thickness",
+        "param_3_value": 3.0,
+        "param_4_name": "",
+        "param_4_value": 0.0,
+        "param_5_name": "",
+        "param_5_value": 0.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
       }
     },
-    "0x224317d4b00": {
-      "type_": "com.cad.sim.mesh.MeshNode",
+    "0x002": {
       "icon": null,
-      "name": "Generate Mesh (Netgen)",
       "color": [
         13,
         18,
@@ -77,25 +83,25 @@
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 164.375,
-      "height": 119.4,
+      "width": 160,
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "name": "Generate Mesh (Netgen)",
       "pos": [
         -350.0,
         -150.0
       ],
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
+      "height": 119.4,
       "custom": {
         "mesh_type": "Tet",
         "element_size": 1.5,
         "refinement_size": 1.5
       }
     },
-    "0x224317d63c0": {
-      "type_": "com.cad.sim.material.MaterialNode",
+    "0x003": {
       "icon": null,
-      "name": "Material",
       "color": [
         13,
         18,
@@ -117,15 +123,17 @@
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 174.25,
-      "height": 96.3,
-      "pos": [
-        100.0,
-        150.0
-      ],
+      "width": 160,
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
+      "type_": "com.cad.sim.material.MaterialNode",
+      "name": "Material",
+      "pos": [
+        -350.0,
+        60.0
+      ],
+      "height": 96.3,
       "custom": {
         "preset": "Steel (Structural)",
         "youngs_modulus": 210000.0,
@@ -133,10 +141,8 @@
         "density": 7.85e-09
       }
     },
-    "0x224145003e0": {
-      "type_": "com.cad.sim.constraint.ConstraintNode",
+    "0x004": {
       "icon": null,
-      "name": "Left Pin (Fixed)",
       "color": [
         13,
         18,
@@ -159,26 +165,26 @@
       "selected": false,
       "visible": true,
       "width": 160,
-      "height": 73.2,
-      "pos": [
-        100.0,
-        -220.0
-      ],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "name": "Left Bottom Pin (Fixed)",
+      "pos": [
+        -100.0,
+        -340.0
+      ],
+      "height": 73.2,
       "custom": {
         "constraint_type": "Fixed",
         "displacement_x": 0.0,
         "displacement_y": 0.0,
         "displacement_z": 0.0,
-        "condition": "(np.abs(z + 60) < 2.5) & (x < -8)"
+        "condition": "(np.abs(x + 60) < 2.5) & (y < -8)"
       }
     },
-    "0x224317d4740": {
-      "type_": "com.cad.sim.constraint.ConstraintNode",
+    "0x005": {
       "icon": null,
-      "name": "Right Roller (X locked)",
       "color": [
         13,
         18,
@@ -201,26 +207,26 @@
       "selected": false,
       "visible": true,
       "width": 160,
-      "height": 73.2,
-      "pos": [
-        100.0,
-        -120.0
-      ],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "name": "Right Bottom Roller (Y locked)",
+      "pos": [
+        -100.0,
+        -190.0
+      ],
+      "height": 73.2,
       "custom": {
-        "constraint_type": "Roller X",
+        "constraint_type": "Roller Y",
         "displacement_x": 0.0,
         "displacement_y": 0.0,
         "displacement_z": 0.0,
-        "condition": "(np.abs(z - 60) < 2.5) & (x < -8)"
+        "condition": "(np.abs(x - 60) < 2.5) & (y < -8)"
       }
     },
-    "0x224318c4740": {
-      "type_": "com.cad.sim.load.LoadNode",
+    "0x006": {
       "icon": null,
-      "name": "Mid-span Top Load",
       "color": [
         13,
         18,
@@ -243,19 +249,21 @@
       "selected": false,
       "visible": true,
       "width": 160,
-      "height": 142.5,
-      "pos": [
-        100.0,
-        -10.0
-      ],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
+      "type_": "com.cad.sim.load.LoadNode",
+      "name": "Mid-span Top Load",
+      "pos": [
+        -100.0,
+        -40.0
+      ],
+      "height": 142.5,
       "custom": {
         "load_type": "Force",
-        "condition": "(np.abs(z) < 1.5) & (x > 9)",
-        "force_x": -1000.0,
-        "force_y": 0.0,
+        "condition": "(np.abs(x) < 1.5) & (y > 9)",
+        "force_x": 0.0,
+        "force_y": -1000.0,
         "force_z": 0.0,
         "moment_x": 0.0,
         "moment_y": 0.0,
@@ -264,10 +272,8 @@
         "gravity_direction": "-Y"
       }
     },
-    "0x224318c6030": {
-      "type_": "com.cad.sim.topopt.TopologyOptimizationNode",
+    "0x007": {
       "icon": null,
-      "name": "Topology Opt",
       "color": [
         13,
         18,
@@ -287,17 +293,19 @@
         180
       ],
       "disabled": false,
-      "selected": true,
+      "selected": false,
       "visible": true,
-      "width": 187.125,
-      "height": 119.4,
-      "pos": [
-        448.8583270508333,
-        -100.0
-      ],
+      "width": 160,
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
+      "type_": "com.cad.sim.topopt.TopologyOptimizationNode",
+      "name": "Topology Opt",
+      "pos": [
+        200.0,
+        -150.0
+      ],
+      "height": 119.4,
       "custom": {
         "vol_frac": 0.3,
         "iterations": 150,
@@ -306,7 +314,7 @@
         "shape_recovery": true,
         "visualization": "Density",
         "symmetry_x": null,
-        "symmetry_y": 0.0,
+        "symmetry_y": null,
         "symmetry_z": 0.0,
         "penal": 3.0,
         "move_limit": 0.2,
@@ -327,91 +335,91 @@
   "connections": [
     {
       "out": [
-        "0x224318bd970",
+        "0x001",
         "shape"
       ],
       "in": [
-        "0x224317d4b00",
+        "0x002",
         "shape"
       ]
     },
     {
       "out": [
-        "0x224317d4b00",
+        "0x002",
         "mesh"
       ],
       "in": [
-        "0x224145003e0",
+        "0x004",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x224317d4b00",
+        "0x002",
         "mesh"
       ],
       "in": [
-        "0x224317d4740",
+        "0x005",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x224317d4b00",
+        "0x002",
         "mesh"
       ],
       "in": [
-        "0x224318c4740",
+        "0x006",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x224317d4b00",
+        "0x002",
         "mesh"
       ],
       "in": [
-        "0x224318c6030",
+        "0x007",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x224317d63c0",
+        "0x003",
         "material"
       ],
       "in": [
-        "0x224318c6030",
+        "0x007",
         "material"
       ]
     },
     {
       "out": [
-        "0x224145003e0",
+        "0x004",
         "constraints"
       ],
       "in": [
-        "0x224318c6030",
+        "0x007",
         "constraints"
       ]
     },
     {
       "out": [
-        "0x224317d4740",
+        "0x005",
         "constraints"
       ],
       "in": [
-        "0x224318c6030",
+        "0x007",
         "constraints"
       ]
     },
     {
       "out": [
-        "0x224318c4740",
+        "0x006",
         "loads"
       ],
       "in": [
-        "0x224318c6030",
+        "0x007",
         "loads"
       ]
     }

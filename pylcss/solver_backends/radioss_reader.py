@@ -138,7 +138,96 @@ def convert_anim_files(
     return vtk_paths
 
 
-def _vtk_point_data(mesh) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+def _von_mises_from_tensor(arr: np.ndarray) -> Optional[np.ndarray]:
+    """Return Von Mises stress from common tensor layouts."""
+    arr = np.asarray(arr, dtype=float)
+    if arr.ndim == 3 and arr.shape[1] >= 3 and arr.shape[2] >= 3:
+        sxx = arr[:, 0, 0]
+        syy = arr[:, 1, 1]
+        szz = arr[:, 2, 2]
+        sxy = 0.5 * (arr[:, 0, 1] + arr[:, 1, 0])
+        syz = 0.5 * (arr[:, 1, 2] + arr[:, 2, 1])
+        szx = 0.5 * (arr[:, 2, 0] + arr[:, 0, 2])
+    elif arr.ndim == 2 and arr.shape[1] >= 6:
+        sxx, syy, szz = arr[:, 0], arr[:, 1], arr[:, 2]
+        sxy, syz, szx = arr[:, 3], arr[:, 4], arr[:, 5]
+    else:
+        return None
+    return np.sqrt(
+        0.5
+        * (
+            (sxx - syy) ** 2
+            + (syy - szz) ** 2
+            + (szz - sxx) ** 2
+            + 6.0 * (sxy ** 2 + syz ** 2 + szx ** 2)
+        )
+    )
+
+
+def _cell_vm_to_point_vm(mesh) -> Optional[np.ndarray]:
+    """Average cell stress tensors onto VTK points when nodal VM is absent."""
+    cell_data = getattr(mesh, "cell_data_dict", {}) or {}
+    if not cell_data:
+        return None
+
+    n_points = int(mesh.points.shape[0]) if mesh.points is not None else 0
+    if n_points <= 0:
+        return None
+    accum = np.zeros(n_points, dtype=float)
+    counts = np.zeros(n_points, dtype=float)
+    found = False
+
+    # Sort field names so 3D-element Von Mises comes before 2D-element Von Mises.
+    # OpenRadioss VTK files carry both "2DELEM_Von_Mises" and "3DELEM_Von_Mises";
+    # iterating dict order would pick the 2D field first (all-zero for solid meshes),
+    # set found=True, and break — leaving VM permanently zero.
+    def _vm_sort_key(n: str) -> int:
+        nl = n.lower()
+        if "3delem" in nl and "von" in nl:
+            return 0
+        if "von" in nl or "stress" in nl:
+            return 1
+        return 2
+
+    for name, by_type in sorted(cell_data.items(), key=lambda kv: _vm_sort_key(kv[0])):
+        name_l = str(name).lower()
+        if "stress" not in name_l and "von" not in name_l:
+            continue
+        for cell_type, values in by_type.items():
+            arr = np.asarray(values, dtype=float)
+            if "von" in name_l and arr.ndim >= 1:
+                vm = arr.reshape(arr.shape[0], -1)[:, 0]
+            else:
+                vm = _von_mises_from_tensor(arr)
+            if vm is None or vm.size == 0:
+                continue
+            blocks = [block.data for block in mesh.cells if block.type == cell_type]
+            if not blocks:
+                continue
+            offset = 0
+            for conn in blocks:
+                n_cells = int(conn.shape[0])
+                block_vm = vm[offset : offset + n_cells]
+                offset += n_cells
+                if block_vm.size != n_cells:
+                    continue
+                flat_conn = np.asarray(conn, dtype=int).reshape(-1)
+                repeated = np.repeat(block_vm, conn.shape[1])
+                np.add.at(accum, flat_conn, repeated)
+                np.add.at(counts, flat_conn, 1.0)
+                found = True
+        if found:
+            break
+
+    if not found:
+        return None
+    vm_points = np.zeros(n_points, dtype=float)
+    valid = counts > 0
+    vm_points[valid] = accum[valid] / counts[valid]
+    return vm_points
+
+
+def _vtk_point_data(mesh) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
     """Extract displacement (N,3) and Von Mises (N,) from a meshio object.
 
     OpenRadioss's ``anim_to_vtk`` writes displacement under names that vary by
@@ -147,10 +236,13 @@ def _vtk_point_data(mesh) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
     """
     disp: Optional[np.ndarray] = None
     vm: Optional[np.ndarray] = None
+    node_ids: Optional[np.ndarray] = None
 
     point_data = getattr(mesh, "point_data", {}) or {}
     for key in point_data:
         kl = key.lower()
+        if node_ids is None and kl in ("node_id", "nodeid", "node ids", "node_ids"):
+            node_ids = np.asarray(point_data[key], dtype=int).reshape(-1)
         if disp is None and ("disp" in kl or "depla" in kl):
             arr = np.asarray(point_data[key], dtype=float)
             if arr.ndim == 2 and arr.shape[1] >= 3:
@@ -163,7 +255,7 @@ def _vtk_point_data(mesh) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
                 vm = arr
             elif arr.ndim == 2 and arr.shape[1] == 1:
                 vm = arr[:, 0]
-        if vm is None and kl in ("stress", "sigma", "p"):  # tensor → derive VM
+        if vm is None and kl in ("stress", "sigma", "p"):  # tensor to VM
             arr = np.asarray(point_data[key], dtype=float)
             if arr.ndim == 2 and arr.shape[1] >= 6:
                 sxx, syy, szz = arr[:, 0], arr[:, 1], arr[:, 2]
@@ -177,7 +269,9 @@ def _vtk_point_data(mesh) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
                         + 6.0 * (sxy ** 2 + syz ** 2 + szx ** 2)
                     )
                 )
-    return disp, vm
+    if vm is None:
+        vm = _cell_vm_to_point_vm(mesh)
+    return disp, vm, node_ids
 
 
 def read_animation_frames(
@@ -240,7 +334,7 @@ def read_animation_frames(
         except Exception as exc:
             warnings.append(f"Failed to read {vtk_path.name}: {exc}")
             continue
-        disp, vm = _vtk_point_data(mesh)
+        disp, vm, node_ids = _vtk_point_data(mesh)
         n_points = int(mesh.points.shape[0]) if mesh.points is not None else 0
         if disp is None:
             disp = np.zeros((n_points, 3), dtype=float)
@@ -255,6 +349,7 @@ def read_animation_frames(
             {
                 "displacement": flat_disp,
                 "stress_vm": np.asarray(vm, dtype=float),
+                "node_ids": node_ids,
                 "time": float(vtk_idx + 1) / float(n_anim),
             }
         )
@@ -262,7 +357,7 @@ def read_animation_frames(
         max_vm_seen = max(max_vm_seen, float(np.max(vm)) if vm.size else 0.0)
     print(f"OpenRadioss frames: parsed {len(frames)} VTK files, "
           f"global max |u| = {max_disp_seen:.4e} mm, "
-          f"global max |VM| = {max_vm_seen:.4e}")
+          f"global max |VM| raw = {max_vm_seen:.4e}")
     if max_disp_seen < 1e-6 and max_vm_seen < 1e-6:
         warnings.append(
             "All animation frames carry essentially zero displacement and stress.  "

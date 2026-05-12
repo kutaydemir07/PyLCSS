@@ -146,6 +146,7 @@ def read_frd(path: str | Path) -> Dict[str, object]:
     coords: Dict[int, Tuple[float, float, float]] = {}
     last_disp: Dict[int, List[float]] = {}
     last_stress: Dict[int, List[float]] = {}
+    last_ener: Dict[int, List[float]] = {}
     steps: List[Dict[str, float]] = []
 
     idx = 0
@@ -205,6 +206,8 @@ def read_frd(path: str | Path) -> Dict[str, object]:
                 last_disp = block_data
             elif current_block == "STRESS":
                 last_stress = block_data
+            elif current_block == "ENER":
+                last_ener = block_data
             current_block = None
             current_components = 0
             continue
@@ -248,12 +251,20 @@ def read_frd(path: str | Path) -> Dict[str, object]:
             )
         )
 
+    ener = np.zeros(n_nodes, dtype=float)
+    if last_ener:
+        for i, nid in enumerate(node_ids_sorted):
+            row = last_ener.get(nid)
+            if row:
+                ener[i] = float(row[0])
+
     return {
         "nodes": nodes,
         "node_ids": node_ids,
         "displacement": displacement,
         "stress": stress,
         "von_mises": von_mises,
+        "ener": ener,
         "steps": steps,
     }
 

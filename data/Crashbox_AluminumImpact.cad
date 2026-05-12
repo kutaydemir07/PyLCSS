@@ -9,155 +9,219 @@
     "reject_connection_types": "{}"
   },
   "nodes": {
-    "0xCX01": {
-      "type_": "com.cad.box.BoxNode",
+    "0x001": {
       "icon": null,
-      "name": "Crashbox Solid (Pre-Shell)",
-      "color": [13, 18, 23, 255],
-      "border_color": [74, 84, 85, 255],
-      "text_color": [255, 255, 255, 180],
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 180.0,
-      "height": 165.6,
-      "pos": [20.0, 200.0],
+      "width": 160,
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "name": "Aluminum Crush Rail",
+      "pos": [
+        -760.0,
+        -150.0
+      ],
+      "height": 220.0,
       "custom": {
-        "box_length": 150.0,
-        "box_width": 60.0,
-        "box_depth": 60.0,
-        "center_x": 0.0,
-        "center_y": 0.0,
-        "center_z": 0.0
+        "code": "# Aluminum crush rail: open-front rectangular tube with a clamped rear flange.\n# X is the crush axis, +X is the impact/front lip, and -X is the fixed mount.\nrail = cq.Workplane('XY').box(length, width, height)\nrail = rail.faces('>X').shell(-wall)\n\nflange = (\n    cq.Workplane('XY')\n    .box(flange_t, flange_w, flange_h)\n    .translate((-0.5 * length - 0.5 * flange_t, 0.0, 0.0))\n)\nresult = rail.union(flange)\n\nfor x0 in (0.5 * length - 35.0, 0.5 * length - 62.0):\n    right_cut = (\n        cq.Workplane('XY')\n        .box(trigger_width, trigger_depth, height + 6.0)\n        .translate((x0, 0.5 * width - 0.5 * trigger_depth, 0.0))\n    )\n    left_cut = (\n        cq.Workplane('XY')\n        .box(trigger_width, trigger_depth, height + 6.0)\n        .translate((x0, -0.5 * width + 0.5 * trigger_depth, 0.0))\n    )\n    result = result.cut(right_cut)\n    result = result.cut(left_cut)\n",
+        "parameters": "flange_h=76.0\ntrigger_width=8.0\ntrigger_depth=10.0",
+        "param_1_name": "length",
+        "param_1_value": 180.0,
+        "param_2_name": "width",
+        "param_2_value": 70.0,
+        "param_3_name": "height",
+        "param_3_value": 55.0,
+        "param_4_name": "wall",
+        "param_4_value": 2.5,
+        "param_5_name": "flange_t",
+        "param_5_value": 8.0,
+        "param_6_name": "flange_w",
+        "param_6_value": 92.0
       }
     },
-    "0xCX02": {
-      "type_": "com.cad.select_face.SelectFaceNode",
+    "0x002": {
       "icon": null,
-      "name": "Open Front End To Remove",
-      "color": [13, 18, 23, 255],
-      "border_color": [74, 84, 85, 255],
-      "text_color": [255, 255, 255, 180],
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 180.0,
-      "height": 60.0,
-      "pos": [280.0, 40.0],
+      "width": 160,
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "name": "Rear Mounting Flange",
+      "pos": [
+        -500.0,
+        -320.0
+      ],
+      "height": 119.4,
       "custom": {
         "selector_type": "Direction",
         "direction": "<X",
         "near_x": 0.0,
         "near_y": 0.0,
         "near_z": 0.0,
-        "box_min_x": -10.0,
-        "box_max_x": 10.0,
-        "box_min_y": -10.0,
-        "box_max_y": 10.0,
-        "box_min_z": -10.0,
-        "box_max_z": 10.0,
-        "range_expr": "(x > 0) & (y < 20)",
         "face_index": 0,
-        "tag": "open_end"
+        "tag": "rear_mount"
       }
     },
-    "0xCX03": {
-      "type_": "com.cad.shell.ShellNode",
+    "0x003": {
       "icon": null,
-      "name": "Shell (2 mm Wall)",
-      "color": [13, 18, 23, 255],
-      "border_color": [74, 84, 85, 255],
-      "text_color": [255, 255, 255, 180],
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 170.0,
-      "height": 60.0,
-      "pos": [280.0, 200.0],
+      "width": 160,
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
-      "custom": {
-        "thickness": -2.0
-      }
-    },
-    "0xCX04": {
       "type_": "com.cad.select_face.SelectFaceNode",
-      "icon": null,
-      "name": "Rear Wall Contact Face",
-      "color": [13, 18, 23, 255],
-      "border_color": [74, 84, 85, 255],
-      "text_color": [255, 255, 255, 180],
-      "disabled": false,
-      "selected": false,
-      "visible": true,
-      "width": 175.0,
-      "height": 60.0,
-      "pos": [540.0, 40.0],
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
+      "name": "Front Impact Lip",
+      "pos": [
+        -500.0,
+        -150.0
+      ],
+      "height": 119.4,
       "custom": {
         "selector_type": "Direction",
         "direction": ">X",
         "near_x": 0.0,
         "near_y": 0.0,
         "near_z": 0.0,
-        "box_min_x": -10.0,
-        "box_max_x": 10.0,
-        "box_min_y": -10.0,
-        "box_max_y": 10.0,
-        "box_min_z": -10.0,
-        "box_max_z": 10.0,
-        "range_expr": "(x > 0) & (y < 20)",
         "face_index": 0,
-        "tag": "rear_wall"
+        "tag": "front_lip"
       }
     },
-    "0xCX05": {
-      "type_": "com.cad.sim.mesh.MeshNode",
+    "0x004": {
       "icon": null,
-      "name": "Generate Mesh",
-      "color": [13, 18, 23, 255],
-      "border_color": [74, 84, 85, 255],
-      "text_color": [255, 255, 255, 180],
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 170.0,
-      "height": 119.4,
-      "pos": [540.0, 200.0],
+      "width": 160,
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "name": "Generate Mesh",
+      "pos": [
+        -500.0,
+        40.0
+      ],
+      "height": 119.4,
       "custom": {
         "mesh_type": "Tet",
         "element_size": 8.0,
         "refinement_size": 4.0
       }
     },
-    "0xCX06": {
-      "type_": "com.cad.sim.crash_material.CrashMaterialNode",
+    "0x005": {
       "icon": null,
-      "name": "Al 5052-H32 (No Fracture)",
-      "color": [13, 18, 23, 255],
-      "border_color": [74, 84, 85, 255],
-      "text_color": [255, 255, 255, 180],
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 185.0,
-      "height": 205.0,
-      "pos": [540.0, 420.0],
+      "width": 160,
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
+      "type_": "com.cad.sim.crash_material.CrashMaterialNode",
+      "name": "Al 5052-H32 Crush Material",
+      "pos": [
+        -230.0,
+        140.0
+      ],
+      "height": 119.4,
       "custom": {
         "preset": "Aluminum 5052-H32 (Crush)",
         "youngs_modulus": 70300.0,
@@ -165,78 +229,133 @@
         "density": 2.68e-09,
         "yield_strength": 193.0,
         "tangent_modulus": 500.0,
-        "failure_strain": 0.30,
+        "failure_strain": 0.14,
         "enable_fracture": false
       }
     },
-    "0xCX07": {
-      "type_": "com.cad.sim.constraint.ConstraintNode",
+    "0x006": {
       "icon": null,
-      "name": "Rigid Wall Contact Plane (Roller X)",
-      "color": [13, 18, 23, 255],
-      "border_color": [74, 84, 85, 255],
-      "text_color": [255, 255, 255, 180],
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 205.0,
-      "height": 73.2,
-      "pos": [820.0, 40.0],
+      "width": 160,
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "name": "Clamped Rear Mount",
+      "pos": [
+        -230.0,
+        -300.0
+      ],
+      "height": 73.2,
       "custom": {
-        "constraint_type": "Roller X",
+        "constraint_type": "Fixed",
         "displacement_x": 0.0,
         "displacement_y": 0.0,
         "displacement_z": 0.0,
         "condition": ""
       }
     },
-    "0xCX08": {
-      "type_": "com.cad.sim.impact.ImpactConditionNode",
+    "0x007": {
       "icon": null,
-      "name": "5 m/s Whole-Box Axial Impact",
-      "color": [13, 18, 23, 255],
-      "border_color": [74, 84, 85, 255],
-      "text_color": [255, 255, 255, 180],
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 190.0,
-      "height": 120.0,
-      "pos": [820.0, 360.0],
+      "width": 160,
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
+      "type_": "com.cad.sim.impact.ImpactConditionNode",
+      "name": "20 m/s Moving-Body Axial Impact (72 km/h)",
+        "pos": [
+        -230.0,
+        -100.0
+      ],
+      "height": 96.3,
       "custom": {
-        "velocity_x": 5.0,
+        "velocity_x": 20.0,
         "velocity_y": 0.0,
         "velocity_z": 0.0,
+        "application_scope": "Moving Body",
         "node_tolerance": 3.0
       }
     },
-    "0xCX09": {
-      "type_": "com.cad.sim.crash_solver.CrashSolverNode",
+    "0x008": {
       "icon": null,
-      "name": "Crashbox Wall Impact Solver",
-      "color": [13, 18, 23, 255],
-      "border_color": [74, 84, 85, 255],
-      "text_color": [255, 255, 255, 180],
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 200.0,
-      "height": 150.0,
-      "pos": [1080.0, 200.0],
+      "width": 160,
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
+      "type_": "com.cad.sim.crash_solver.CrashSolverNode",
+      "name": "OpenRadioss Axial Crush Solver",
+      "pos": [
+        130.0,
+        -150.0
+      ],
+      "height": 142.5,
       "custom": {
-        "end_time": 2.0,
-        "time_steps": 800,
+        "end_time": 20.0,
+        "time_steps": 150000,
         "damping_alpha": 1.0,
-        "visualization": "Plastic Strain",
+        "visualization": "Von Mises Stress",
         "n_frames": 80,
         "disp_scale": 1.0,
         "enable_corotation": true,
@@ -244,22 +363,112 @@
         "contact_stiffness": 0.1,
         "contact_thickness": 0.2,
         "contact_update_interval": 5,
-        "enable_mass_scaling": false,
-        "mass_scaling_threshold": 0.05
+        "enable_mass_scaling": true,
+        "mass_scaling_threshold": 0.03,
+        "impactor_mass_kg": 150.0
       }
     }
   },
   "connections": [
-    { "out": ["0xCX01", "shape"], "in": ["0xCX02", "shape"] },
-    { "out": ["0xCX01", "shape"], "in": ["0xCX03", "shape"] },
-    { "out": ["0xCX02", "workplane"], "in": ["0xCX03", "face_to_remove"] },
-    { "out": ["0xCX03", "shape"], "in": ["0xCX04", "shape"] },
-    { "out": ["0xCX03", "shape"], "in": ["0xCX05", "shape"] },
-    { "out": ["0xCX05", "mesh"], "in": ["0xCX07", "mesh"] },
-    { "out": ["0xCX04", "workplane"], "in": ["0xCX07", "target_face"] },
-    { "out": ["0xCX05", "mesh"], "in": ["0xCX09", "mesh"] },
-    { "out": ["0xCX06", "crash_material"], "in": ["0xCX09", "crash_material"] },
-    { "out": ["0xCX07", "constraints"], "in": ["0xCX09", "constraints"] },
-    { "out": ["0xCX08", "impact"], "in": ["0xCX09", "impact"] }
+    {
+      "out": [
+        "0x001",
+        "shape"
+      ],
+      "in": [
+        "0x002",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x001",
+        "shape"
+      ],
+      "in": [
+        "0x003",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x001",
+        "shape"
+      ],
+      "in": [
+        "0x004",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x003",
+        "workplane"
+      ],
+      "in": [
+        "0x004",
+        "refinement_faces"
+      ]
+    },
+    {
+      "out": [
+        "0x002",
+        "workplane"
+      ],
+      "in": [
+        "0x006",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x004",
+        "mesh"
+      ],
+      "in": [
+        "0x006",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x003",
+        "workplane"
+      ],
+      "in": [
+        "0x007",
+        "impact_face"
+      ]
+    },
+    {
+      "out": [
+        "0x004",
+        "mesh"
+      ],
+      "in": [
+        "0x008",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x005",
+        "crash_material"
+      ],
+      "in": [
+        "0x008",
+        "crash_material"
+      ]
+    },
+    {
+      "out": [
+        "0x007",
+        "impact"
+      ],
+      "in": [
+        "0x008",
+        "impact"
+      ]
+    }
   ]
 }

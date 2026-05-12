@@ -2,7 +2,7 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 """
-CAD GUI Components - Professional CAD Interface.
+Design GUI components - parametric geometry and simulation interface.
 
 Note: GUI components should be imported from pylcss.user_interface.cad 
 to avoid circular dependencies with the cad engine.

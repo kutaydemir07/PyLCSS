@@ -11,12 +11,15 @@ class NumberNode(CadQueryNode):
     def __init__(self):
         super(NumberNode, self).__init__()
         self.add_output('value', color=(180, 180, 0))
-        
+
         # Add input field directly on the node for easy access
         self.add_text_input('value_input', 'Value', text='10.0')
-        
+
         # Keep property for backward compatibility and property panel access
         self.create_property('value', 10.0, widget_type='float')
+        # When non-empty, this number becomes a named input on the cad runtime
+        # API (cad.fea("file.cad", <exposed_name>=value, ...)).
+        self.create_property('exposed_name', '', widget_type='text')
 
     def run(self):
         # Try to get value from the text input on the node first
@@ -38,13 +41,17 @@ class VariableNode(CadQueryNode):
     def __init__(self):
         super(VariableNode, self).__init__()
         self.add_output('value', color=(180, 180, 0))
-        
+
         # Add input fields directly on the node
         # Note: add_text_input already creates the property, so no need for create_property
         self.add_text_input('variable_name', 'Name', text='var1')
         self.add_text_input('value_input', 'Value', text='0.0')
-        
+
         self.create_property('value', 0.0, widget_type='float')
+        # When non-empty, this variable becomes a named input on the cad runtime
+        # API (cad.fea("file.cad", <exposed_name>=value, ...)). Defaults to the
+        # ``variable_name`` value when left blank.
+        self.create_property('exposed_name', '', widget_type='text')
 
     def run(self):
         # Try to get value from the text input on the node first

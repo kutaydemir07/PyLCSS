@@ -217,10 +217,12 @@ VOICE_COMMANDS: Dict[str, Dict] = {
     "page down": {"action": "scroll", "direction": -10},
     
     # Navigation - Tab switching (FIXED indices to match MainWindow)
-    # Tab 0: Modeling, Tab 1: CAD, Tab 2: Surrogate, Tab 3: Solution Space
+    # Tab 0: Modeling, Tab 1: Design Studio, Tab 2: Surrogate, Tab 3: Solution Space
     # Tab 4: Optimization, Tab 5: Sensitivity, Tab 6: Help
     "go to modeling": {"action": "switch_tab", "tab": 0},
     "go to cad": {"action": "switch_tab", "tab": 1},
+    "go to design": {"action": "switch_tab", "tab": 1},
+    "go to design studio": {"action": "switch_tab", "tab": 1},
     "go to surrogate": {"action": "switch_tab", "tab": 2},
     "go to solution space": {"action": "switch_tab", "tab": 3},
     "go to optimization": {"action": "switch_tab", "tab": 4},
@@ -470,12 +472,13 @@ COMMAND_ALIASES: Dict[str, str] = {
     # Tab navigation variations
     "modeling tab": "go to modeling",
     "cad tab": "go to cad",
+    "design tab": "go to design",
     "solution tab": "go to solution space",
     "surrogate tab": "go to surrogate",
     "optimization tab": "go to optimization",
     "sensitivity tab": "go to sensitivity",
     "model": "go to modeling",
-    "design": "go to cad",
+    "design": "go to design",
     "samples": "go to solution space",
     "training": "go to surrogate",
     "optimize": "go to optimization",

@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""Professional CAD Software - Full-Featured Simulink-like Interface.
+"""Engineering design studio - full-featured Simulink-like interface.
 
 Features:
 - Advanced node library (Sketches, Constraints, Assembly, Analysis, Simulation)
@@ -36,6 +36,281 @@ except ImportError:
 # Import all node types
 from pylcss.cad.nodes import NODE_REGISTRY, NumberNode, ExportStepNode, ExportStlNode
 from pylcss.cad.nodes.modeling import InteractiveSelectFaceNode
+
+# Reuse the Python-aware editor widget from the system-modeling tab so the
+# CAD code editor matches the look-and-feel users already know.
+from pylcss.user_interface.system_modeling.system_node_types import CodeEditor as _CodeEditor
+
+
+class CadCodeEditorDialog(QtWidgets.QDialog):
+    """Full-screen CadQuery script editor for ``CadQueryCodeNode``.
+
+    Same UX as the function-block editor in the system-modeling tab:
+    Python syntax highlighting, line numbers, double-click-to-insert sidebar.
+    Sidebar lists the node's exposed parameter names (so the user can drop
+    them into the script without retyping) plus a small CadQuery cheat-sheet
+    of the most common building blocks.
+    """
+
+    # (display, snippet, tooltip).  Snippet is inserted at cursor on double-click.
+    _CHEATSHEET = (
+        ("— Primitives —", None, None),
+        ("cq.Workplane('XY')",
+         "cq.Workplane('XY')",
+         "Start a workplane on the XY plane (X-right, Y-up, Z-out)."),
+        (".box(L, W, H)",
+         ".box(L, W, H)",
+         "Centered rectangular block — L along X, W along Y, H along Z."),
+        (".circle(R).extrude(H)",
+         ".circle(R).extrude(H)",
+         "Circle of radius R, extruded by H along the workplane normal."),
+        (".sphere(R)",
+         ".sphere(R)",
+         "Sphere of radius R centred at the workplane origin."),
+        (".cylinder(H, R)",
+         ".cylinder(H, R)",
+         "Cylinder along Z with height H and radius R, centred at origin."),
+        ("— Sketch & extrude —", None, None),
+        (".polyline([(x,y),…]).close().extrude(H)",
+         ".polyline([(0,0),(1,0),(1,1),(0,1)]).close().extrude(H)",
+         "Sketch a closed polygon from 2-D points, then extrude by H."),
+        (".workplane(offset=z)",
+         ".workplane(offset=z)",
+         "Move the workplane along its normal by `z` (useful for stacking layers)."),
+        ("— Modifications —", None, None),
+        (".faces('>Z').workplane().hole(d)",
+         ".faces('>Z').workplane().hole(d)",
+         "Drill a through-hole of diameter `d` from the top face."),
+        (".edges('|Z').fillet(r)",
+         ".edges('|Z').fillet(r)",
+         "Round vertical edges with radius `r`."),
+        (".edges('|Z').chamfer(c)",
+         ".edges('|Z').chamfer(c)",
+         "Chamfer vertical edges by `c`."),
+        (".shell(-t)",
+         ".faces('>Z').shell(-t)",
+         "Hollow the solid leaving wall thickness `t` (negative = inward)."),
+        (".translate((x,y,z))",
+         ".translate((x, y, z))",
+         "Move by (x, y, z)."),
+        (".rotate((0,0,0),(0,0,1), deg)",
+         ".rotate((0,0,0), (0,0,1), deg)",
+         "Rotate `deg` degrees about the Z-axis through the origin."),
+        ("— Boolean / Compose —", None, None),
+        (".union(other)",
+         ".union(other)",
+         "Boolean union with another shape."),
+        (".cut(other)",
+         ".cut(other)",
+         "Boolean subtract."),
+        (".intersect(other)",
+         ".intersect(other)",
+         "Boolean intersection."),
+        ("cq.Assembly()",
+         "asm = cq.Assembly()\nasm.add(part, name='name')\nresult = asm",
+         "Build a multi-part assembly — no boolean unions, every child is\n"
+         "addressable downstream."),
+        ("— Result —", None, None),
+        ("result = …",
+         "result = ",
+         "The node looks for `result`, then `shape`, then `assembly` in the\n"
+         "evaluated namespace.  Assign a CadQuery Workplane, Shape, or Assembly."),
+    )
+
+    def __init__(self, code: str, node=None, parent: QtWidgets.QWidget | None = None):
+        super().__init__(parent)
+        self.node = node
+        self.setWindowTitle("CAD Code Editor")
+        self.resize(1200, 720)
+        self.showMaximized()
+
+        main_layout = QtWidgets.QHBoxLayout(self)
+
+        # ── Left: editor + buttons ─────────────────────────────────────
+        editor_panel = QtWidgets.QWidget()
+        ev = QtWidgets.QVBoxLayout(editor_panel)
+        self.editor = _CodeEditor([])
+        self.editor.setPlainText(code or '')
+        ev.addWidget(self.editor)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        help_btn = QtWidgets.QPushButton("?")
+        help_btn.setFixedSize(30, 30)
+        help_btn.setToolTip("Open the CadQuery cheat-sheet")
+        help_btn.clicked.connect(self._show_help)
+        btn_row.addWidget(help_btn)
+        find_btn = QtWidgets.QPushButton("Find / Replace")
+        find_btn.clicked.connect(self._show_find_replace)
+        btn_row.addWidget(find_btn)
+        btn_row.addStretch()
+        ok_cancel = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        ok_cancel.accepted.connect(self.accept)
+        ok_cancel.rejected.connect(self.reject)
+        btn_row.addWidget(ok_cancel)
+        ev.addLayout(btn_row)
+
+        # ── Right: sidebar ─────────────────────────────────────────────
+        sidebar = QtWidgets.QWidget()
+        sidebar.setFixedWidth(320)
+        sv = QtWidgets.QVBoxLayout(sidebar)
+
+        sv.addWidget(QtWidgets.QLabel("<b>Available Parameters:</b>"))
+        self.params_list = QtWidgets.QListWidget()
+        self.params_list.setToolTip("Double-click to insert a parameter name")
+        sv.addWidget(self.params_list)
+        self.params_list.itemDoubleClicked.connect(self._insert_param)
+
+        sv.addWidget(QtWidgets.QLabel("<b>CadQuery cheat-sheet:</b>"))
+        self.cheat_list = QtWidgets.QListWidget()
+        self.cheat_list.setToolTip("Double-click to insert a snippet")
+        self._populate_cheat_sheet(self.cheat_list)
+        sv.addWidget(self.cheat_list)
+        self.cheat_list.itemDoubleClicked.connect(self._insert_cheat)
+
+        if node is not None:
+            self._refresh_params()
+
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        splitter.addWidget(editor_panel)
+        splitter.addWidget(sidebar)
+        splitter.setStretchFactor(0, 1)
+        main_layout.addWidget(splitter)
+
+    # ──────────────────────────────────────────────────────────────
+    def _refresh_params(self):
+        self.params_list.clear()
+        names = []
+        for i in range(1, 7):
+            try:
+                name = (self.node.get_property(f'param_{i}_name') or '').strip()
+            except Exception:
+                name = ''
+            if name:
+                names.append(name)
+                self.params_list.addItem(name)
+        self.editor.update_variables(names)
+
+    def _populate_cheat_sheet(self, list_widget: QtWidgets.QListWidget) -> None:
+        header_flags = QtCore.Qt.ItemFlags(QtCore.Qt.NoItemFlags)
+        header_font = list_widget.font()
+        header_font.setBold(True)
+        for display, snippet, tooltip in self._CHEATSHEET:
+            item = QtWidgets.QListWidgetItem(display)
+            if snippet is None:
+                item.setFlags(header_flags)
+                item.setFont(header_font)
+                item.setForeground(QtGui.QColor("#9aa0a6"))
+            else:
+                item.setData(QtCore.Qt.UserRole, snippet)
+                if tooltip:
+                    item.setToolTip(tooltip)
+            list_widget.addItem(item)
+
+    def _insert_param(self, item: QtWidgets.QListWidgetItem) -> None:
+        self.editor.insertPlainText(item.text())
+        self.editor.setFocus()
+
+    def _insert_cheat(self, item: QtWidgets.QListWidgetItem) -> None:
+        snippet = item.data(QtCore.Qt.UserRole)
+        if not snippet:
+            return
+        self.editor.insertPlainText(snippet)
+        self.editor.setFocus()
+
+    # ──────────────────────────────────────────────────────────────
+    def _show_help(self) -> None:
+        QtWidgets.QMessageBox.information(
+            self, "CadQuery quick reference",
+            "# CAD CODE EDITOR\n"
+            "# ===============\n"
+            "# \n"
+            "# Set `result = <CadQuery shape or Assembly>` somewhere in the\n"
+            "# script.  The node then exposes that on its 'shape' output.\n"
+            "# \n"
+            "# Available in the namespace:\n"
+            "#   cq, math, np, params\n"
+            "#   plus your 6 parameter names (e.g. L, W, H, …)\n"
+            "# \n"
+            "# Inside helper functions, capture parameters as default args:\n"
+            "#     def make_part(L=L, W=W):   # <-- default-arg capture\n"
+            "#         return cq.Workplane('XY').box(L, W, 5)\n"
+            "# Top-level free-variable lookup is not visible to inner\n"
+            "# functions because the node runs under exec() with separate\n"
+            "# locals/globals dicts.\n"
+            "# \n"
+            "# Assembly approach (recommended for multi-part models):\n"
+            "#     asm = cq.Assembly()\n"
+            "#     asm.add(part_a, name='a')\n"
+            "#     asm.add(part_b, name='b')\n"
+            "#     result = asm\n"
+            "# \n"
+            "# Sidebar:\n"
+            "#   - 'Available Parameters' — double-click to insert a param name.\n"
+            "#   - 'CadQuery cheat-sheet' — double-click to insert a snippet.\n"
+        )
+
+    def _show_find_replace(self) -> None:
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Find & Replace")
+        dlg.resize(400, 150)
+        layout = QtWidgets.QVBoxLayout(dlg)
+
+        find_row = QtWidgets.QHBoxLayout()
+        find_row.addWidget(QtWidgets.QLabel("Find:"))
+        find_edit = QtWidgets.QLineEdit()
+        find_row.addWidget(find_edit)
+        layout.addLayout(find_row)
+
+        repl_row = QtWidgets.QHBoxLayout()
+        repl_row.addWidget(QtWidgets.QLabel("Replace:"))
+        repl_edit = QtWidgets.QLineEdit()
+        repl_row.addWidget(repl_edit)
+        layout.addLayout(repl_row)
+
+        btns = QtWidgets.QHBoxLayout()
+        find_btn = QtWidgets.QPushButton("Find")
+        replace_btn = QtWidgets.QPushButton("Replace")
+        replace_all_btn = QtWidgets.QPushButton("Replace All")
+        btns.addWidget(find_btn)
+        btns.addWidget(replace_btn)
+        btns.addWidget(replace_all_btn)
+        layout.addLayout(btns)
+
+        def do_find():
+            txt = find_edit.text()
+            if not txt:
+                return
+            if not self.editor.find(txt):
+                cursor = self.editor.textCursor()
+                cursor.movePosition(QtGui.QTextCursor.Start)
+                self.editor.setTextCursor(cursor)
+                self.editor.find(txt)
+
+        def do_replace():
+            txt = find_edit.text()
+            new = repl_edit.text()
+            cursor = self.editor.textCursor()
+            if txt and cursor.hasSelection():
+                cursor.insertText(new)
+                do_find()
+
+        def do_replace_all():
+            txt = find_edit.text()
+            new = repl_edit.text()
+            if not txt:
+                return
+            content = self.editor.toPlainText().replace(txt, new)
+            self.editor.setPlainText(content)
+
+        find_btn.clicked.connect(do_find)
+        replace_btn.clicked.connect(do_replace)
+        replace_all_btn.clicked.connect(do_replace_all)
+        dlg.exec()
+
+    def get_code(self) -> str:
+        return self.editor.toPlainText()
 
 
 class GraphExecutionWorker(QtCore.QThread):
@@ -172,12 +447,136 @@ class PropertiesPanel(QtWidgets.QWidget):
         node_class = node.__class__.__name__
         if node_class == 'TopologyOptimizationNode':
             self._build_topopt_ui(node)
+        elif node_class == 'CadQueryCodeNode':
+            self._build_code_part_ui(node)
         elif node_class == 'InteractiveSelectFaceNode':
             self._build_interactive_select_ui(node)
+        elif node_class == 'SelectFaceNode':
+            self._build_select_face_ui(node)
         elif node_class in ('ConstraintNode', 'LoadNode', 'PressureLoadNode'):
             self._build_fea_bc_ui(node)
         else:
             self._build_generic_ui(node)
+
+    def _build_code_part_ui(self, node):
+        """Inspector for the code-based parametric geometry node.
+
+        The full CadQuery script lives in a separate dialog (opened by the
+        ``Edit Code…`` button below, or by double-clicking the node on the
+        graph).  Keeping it out of the inspector lets the script grow
+        without squeezing everything else into a postage stamp.
+        """
+        # ── Code-edit launcher ───────────────────────────────────────
+        code_group = QtWidgets.QGroupBox("CadQuery Code")
+        code_layout = QtWidgets.QVBoxLayout()
+        hint = QtWidgets.QLabel(
+            "Double-click the node on the graph — or click the button below — "
+            "to open the CAD code editor."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #9aa0a6; font-size: 11px;")
+        code_layout.addWidget(hint)
+        btn_edit = QtWidgets.QPushButton("Edit Code…")
+        btn_edit.setStyleSheet(
+            "QPushButton {"
+            "  background: #1e5aab; color: white; border-radius: 4px;"
+            "  padding: 7px 12px; font-weight: bold;"
+            "}"
+            "QPushButton:hover { background: #2673cc; }"
+        )
+        btn_edit.clicked.connect(lambda _checked=False, n=node: self._open_cad_code_editor(n))
+        code_layout.addWidget(btn_edit)
+        btn_preview = QtWidgets.QPushButton("Preview in 3D")
+        btn_preview.setToolTip(
+            "Run the graph (CAD only — skips FEA/crash) and render this part."
+        )
+        btn_preview.clicked.connect(
+            lambda _checked=False, n=node: self._preview_cad_part(n)
+        )
+        code_layout.addWidget(btn_preview)
+        code_group.setLayout(code_layout)
+        self.props_layout.addWidget(code_group)
+
+        # ── Parameters (small, named scalars that flow into the script) ──
+        param_group = QtWidgets.QGroupBox("Parameters")
+        param_group.setToolTip(
+            "Up to six named scalars.  Each becomes a top-level variable inside\n"
+            "the CadQuery script.  Set 'exposed_name' on Number/Variable nodes\n"
+            "upstream to drive these via cad.fea(...) from the sysmod tab."
+        )
+        param_layout = QtWidgets.QFormLayout()
+        for idx in range(1, 7):
+            name_prop = f'param_{idx}_name'
+            value_prop = f'param_{idx}_value'
+            row = QtWidgets.QWidget()
+            row_layout = QtWidgets.QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(4)
+
+            name_edit = QtWidgets.QLineEdit(str(node.get_property(name_prop) or ''))
+            name_edit.setPlaceholderText("name")
+            value_edit = ExpressionEdit(node.get_property(value_prop) or 0.0)
+            name_edit.editingFinished.connect(
+                lambda n=name_prop, w=name_edit: self.update_property(n, w.text())
+            )
+            value_edit.value_changed.connect(
+                lambda v, n=value_prop: self.update_property(n, v)
+            )
+            row_layout.addWidget(name_edit, 1)
+            row_layout.addWidget(value_edit, 1)
+            param_layout.addRow(f"P{idx}:", row)
+        param_group.setLayout(param_layout)
+        self.props_layout.addWidget(param_group)
+
+        # ── Extra parameters (free-form dict / k=v lines) ────────────
+        extra_group = QtWidgets.QGroupBox("Extra Parameters")
+        extra_group.setToolTip(
+            "Free-form parameters in 'name=value' lines (one per line) or a\n"
+            "Python dict.  These override the 6 numbered slots if they collide."
+        )
+        extra_layout = QtWidgets.QVBoxLayout()
+        extra_editor = QtWidgets.QPlainTextEdit(str(node.get_property('parameters') or ''))
+        extra_editor.setPlaceholderText("name=value lines or a Python dict")
+        mono = QtGui.QFont("Consolas")
+        mono.setStyleHint(QtGui.QFont.Monospace)
+        extra_editor.setFont(mono)
+        extra_editor.setMinimumHeight(90)
+        extra_editor.focusOutEvent = (
+            lambda ev, w=extra_editor, _orig=extra_editor.focusOutEvent:
+                (self.update_property('parameters', w.toPlainText()), _orig(ev))[-1]
+        )
+        extra_layout.addWidget(extra_editor)
+        extra_group.setLayout(extra_layout)
+        self.props_layout.addWidget(extra_group)
+
+    # ── helpers shared with the double-click handler ────────────────
+    def _open_cad_code_editor(self, node) -> None:
+        """Open the full-screen CadQuery script editor for ``node``."""
+        current = str(node.get_property('code') or '')
+        dlg = CadCodeEditorDialog(current, node=node, parent=self)
+        if dlg.exec() == QtWidgets.QDialog.Accepted:
+            new_code = dlg.get_code()
+            if new_code != current:
+                self.update_property('code', new_code)
+
+    def _preview_cad_part(self, node) -> None:
+        app = self._get_main_app()
+        if app is None:
+            return
+        # Force re-execution of this node next run.
+        try:
+            setattr(node, '_dirty', True)
+            setattr(node, '_force_execute', True)
+        except Exception:
+            pass
+        app._last_rendered_node = node
+        try:
+            app._execute_graph(skip_simulation=True)
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Preview failed",
+                f"Code part couldn't be evaluated:\n\n{exc}"
+            )
             
     def _build_topopt_ui(self, node):
         """Custom UI for Topology Optimization."""
@@ -332,12 +731,9 @@ class PropertiesPanel(QtWidgets.QWidget):
         combo_scheme.currentTextChanged.connect(lambda v: self.update_property('update_scheme', v))
         layout_adv.addRow("Update Scheme:", combo_scheme)
         
-        # Element Type
-        combo_elem = QtWidgets.QComboBox()
-        combo_elem.addItems(['Fast (Linear P1)', 'Accurate (Quadratic P2)'])
-        combo_elem.setCurrentText(str(node.get_property('element_type') or 'Fast (Linear P1)'))
-        combo_elem.currentTextChanged.connect(lambda v: self.update_property('element_type', v))
-        layout_adv.addRow("Element Type:", combo_elem)
+        # NOTE: 'Element Type' combo removed — CalculiX uses C3D4 (linear tet)
+        # always now that the in-house skfem path is gone.  The property is
+        # still declared on the node for backward-compat with old .cad files.
 
         # Projection
         combo_proj = QtWidgets.QComboBox()
@@ -471,179 +867,14 @@ class PropertiesPanel(QtWidgets.QWidget):
         if hasattr(self.window(), 'statusBar') and self.window().statusBar():
             self.window().statusBar().showMessage(f"\u2713 Exported {len(faces)} triangles to {path}")
 
-    def _build_primitive_ui(self, node):
-        """UI for Primitive nodes (Box, Cylinder, Sphere, etc.)."""
-        group = QtWidgets.QGroupBox("Dimensions")
-        layout = QtWidgets.QFormLayout()
-        
-        # Actual property names from node implementations
-        dim_props = [
-            'box_length', 'box_width', 'box_depth',  # BoxNode
-            'cyl_radius', 'cyl_height',  # CylinderNode
-            'sphere_radius',  # SphereNode
-            'bottom_radius', 'top_radius', 'cone_height',  # ConeNode
-            'major_radius', 'minor_radius',  # TorusNode
-        ]
-        props = node.model.properties
-        
-        for prop in dim_props:
-            if prop in props:
-                val = props[prop]
-                spin = QtWidgets.QDoubleSpinBox()
-                spin.setRange(0.001, 10000)
-                spin.setDecimals(3)
-                spin.setValue(float(val) if val else 1.0)
-                spin.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
-                label = prop.replace('_', ' ').replace('box ', '').replace('cyl ', '').replace('sphere ', '').title()
-                layout.addRow(f"{label}:", spin)
-        
-        group.setLayout(layout)
-        self.props_layout.addWidget(group)
-        
-        # Position group
-        group_pos = QtWidgets.QGroupBox("Position")
-        layout_pos = QtWidgets.QFormLayout()
-        
-        for axis in ['center_x', 'center_y', 'center_z']:
-            if axis in props:
-                spin = QtWidgets.QDoubleSpinBox()
-                spin.setRange(-10000, 10000)
-                spin.setValue(float(props[axis]) if props[axis] else 0.0)
-                spin.valueChanged.connect(lambda v, p=axis: self.update_property(p, v))
-                layout_pos.addRow(f"{axis.replace('center_', '').upper()}:", spin)
-        
-        if layout_pos.rowCount() > 0:
-            group_pos.setLayout(layout_pos)
-            self.props_layout.addWidget(group_pos)
-    
-    def _build_simulation_ui(self, node):
-        """UI for Simulation nodes (Material, Mesh, Solver, etc.)."""
-        node_class = node.__class__.__name__
-        props = node.model.properties
-        
-        if node_class == 'MaterialNode':
-            group = QtWidgets.QGroupBox("Material Properties")
-            layout = QtWidgets.QFormLayout()
-            
-            for prop in ['youngs_modulus', 'poissons_ratio', 'density']:
-                if prop in props:
-                    spin = QtWidgets.QDoubleSpinBox()
-                    spin.setDecimals(6)
-                    if prop == 'youngs_modulus':
-                        spin.setRange(1e3, 1e12)
-                        spin.setSingleStep(1e9)
-                    elif prop == 'poissons_ratio':
-                        spin.setRange(0.0, 0.5)
-                        spin.setSingleStep(0.01)
-                    else:
-                        spin.setRange(0.1, 100000)
-                    spin.setValue(float(props[prop]))
-                    spin.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
-                    layout.addRow(f"{prop.replace('_', ' ').title()}:", spin)
-            
-            group.setLayout(layout)
-            self.props_layout.addWidget(group)
-            
-        elif node_class == 'MeshNode':
-            group = QtWidgets.QGroupBox("Mesh Settings")
-            layout = QtWidgets.QFormLayout()
-            
-            if 'mesh_size' in props:
-                spin = QtWidgets.QDoubleSpinBox()
-                spin.setRange(0.01, 100)
-                spin.setDecimals(2)
-                spin.setValue(float(props['mesh_size']))
-                spin.valueChanged.connect(lambda v: self.update_property('mesh_size', v))
-                layout.addRow("Mesh Size:", spin)
-            
-            if 'order' in props:
-                spin_ord = QtWidgets.QSpinBox()
-                spin_ord.setRange(1, 2)
-                spin_ord.setValue(int(props['order']))
-                spin_ord.valueChanged.connect(lambda v: self.update_property('order', v))
-                layout.addRow("Element Order:", spin_ord)
-            
-            group.setLayout(layout)
-            self.props_layout.addWidget(group)
-            
-        elif node_class == 'SolverNode':
-            group = QtWidgets.QGroupBox("Solver Settings")
-            layout = QtWidgets.QFormLayout()
-            
-            if 'visualization' in props:
-                combo = QtWidgets.QComboBox()
-                combo.addItems(['Displacement', 'Von Mises Stress'])
-                combo.setCurrentText(str(props['visualization']))
-                combo.currentTextChanged.connect(lambda v: self.update_property('visualization', v))
-                layout.addRow("Display:", combo)
-            
-            group.setLayout(layout)
-            self.props_layout.addWidget(group)
-            
-        else:
-            self._build_generic_ui(node)
-    
-    def _build_operation_ui(self, node):
-        """UI for Operation nodes (Extrude, Revolve, etc.)."""
-        group = QtWidgets.QGroupBox("Operation Parameters")
-        layout = QtWidgets.QFormLayout()
-        props = node.model.properties
-        
-        for prop in ['extrude_distance', 'pocket_depth', 'angle', 'direction']:
-            if prop in props:
-                val = props[prop]
-                if isinstance(val, (int, float)):
-                    spin = QtWidgets.QDoubleSpinBox()
-                    spin.setRange(-10000, 10000)
-                    spin.setDecimals(2)
-                    spin.setValue(float(val))
-                    spin.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
-                    layout.addRow(f"{prop.replace('_', ' ').title()}:", spin)
-                else:
-                    edit = QtWidgets.QLineEdit(str(val))
-                    edit.editingFinished.connect(lambda p=prop: self.update_property(p, edit.text()))
-                    layout.addRow(f"{prop.replace('_', ' ').title()}:", edit)
-        
-        group.setLayout(layout)
-        self.props_layout.addWidget(group)
-    
-    def _build_modification_ui(self, node):
-        """UI for Modification nodes (Fillet, Chamfer, Shell)."""
-        group = QtWidgets.QGroupBox("Modification")
-        layout = QtWidgets.QFormLayout()
-        props = node.model.properties
-        
-        for prop in ['radius', 'fillet_radius', 'chamfer_distance', 'thickness', 'offset']:
-            if prop in props:
-                spin = QtWidgets.QDoubleSpinBox()
-                spin.setRange(0.001, 1000)
-                spin.setDecimals(3)
-                spin.setValue(float(props[prop]))
-                spin.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
-                layout.addRow(f"{prop.replace('_', ' ').title()}:", spin)
-        
-        group.setLayout(layout)
-        self.props_layout.addWidget(group)
-    
-    def _build_transform_ui(self, node):
-        """UI for Transform nodes (Translate, Rotate, Scale, Mirror)."""
-        group = QtWidgets.QGroupBox("Transform")
-        layout = QtWidgets.QFormLayout()
-        props = node.model.properties
-        
-        # Translation / Rotation / Scale components
-        for prop in ['x', 'y', 'z', 'dx', 'dy', 'dz', 'angle', 'scale_x', 'scale_y', 'scale_z', 'uniform_scale']:
-            if prop in props:
-                val = props[prop]
-                spin = QtWidgets.QDoubleSpinBox()
-                spin.setRange(-10000, 10000)
-                spin.setDecimals(3)
-                spin.setValue(float(val) if val else 0.0)
-                spin.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
-                layout.addRow(f"{prop.replace('_', ' ').title()}:", spin)
-        
-        group.setLayout(layout)
-        self.props_layout.addWidget(group)
+    # NOTE: Five legacy node-class-specific builders used to live here
+    # (_build_primitive_ui / _build_simulation_ui / _build_operation_ui /
+    # _build_modification_ui / _build_transform_ui).  They were never reached:
+    # display_node only dispatches to TopologyOptimizationNode, CadQueryCodeNode,
+    # InteractiveSelectFaceNode, SelectFaceNode, and the FEA-BC trio; every
+    # other node falls through to _build_generic_ui (which renders correctly
+    # via the sectioned, items-aware widget loop).  Removed to keep this file
+    # focused on the UI that's actually displayed.
 
     # Ordered list of (section title, prefix list) — first match wins.
     # Properties that match no section land in "General".
@@ -670,6 +901,167 @@ class PropertiesPanel(QtWidgets.QWidget):
     _PROPERTY_HIDE_IF_EMPTY = ("condition", "range_expr", "tag", "external_solver_path",
                                "external_work_dir", "openradioss_starter_path",
                                "openradioss_engine_path")
+
+    # Hide these *always* — they exist on the node only so projects saved
+    # before the CalculiX-only / OpenRadioss-only cut keep deserialising.  The
+    # node code ignores them; showing them in the inspector just confuses the
+    # user with knobs that look meaningful but do nothing.
+    _PROPERTY_HIDE_ALWAYS = frozenset({
+        # Solver-backend selectors collapsed to a single backend.
+        'solver_backend', 'run_external_solver',
+        # In-house topology-opt element choice (CalculiX uses C3D4 always).
+        'element_type',
+        # In-house crash-solver tuning knobs (OpenRadioss has its own; we
+        # surface only the mass-scaling toggle, which IS wired up).
+        'time_steps', 'damping_alpha',
+        'enable_corotation', 'enable_contact',
+        'contact_stiffness', 'contact_thickness', 'contact_update_interval',
+        'mass_scaling_threshold',
+        # Duplicate of the on-canvas value_input text field — kept for
+        # NodeGraphQt back-compat but redundant in the inspector.
+        'value',
+        # Carried on legacy nodes but not honoured by the new solver paths:
+        # 'min_safety_factor' is computed by the optimiser, not set by user;
+        # 'fixed_faces' was a JSON-string condition list — the new ShapeOpt
+        #   only supports SelectFaceNode-driven constraints (logged warning);
+        # 'moment_x/y/z' on LoadNode were never wired to either CalculiX
+        #   *CLOAD or OpenRadioss; only force_x/y/z are exported.
+        'min_safety_factor',
+        'fixed_faces',
+        'moment_x', 'moment_y', 'moment_z',
+    })
+
+    # Tooltips for properties that aren't self-explanatory.  Looked up by
+    # exact property name in the generic-UI builder.  Plain English so a
+    # mechanical engineer reading the inspector knows what to change.
+    _PROPERTY_TOOLTIPS = {
+        'analysis_type':
+            "Linear           — fastest, valid for small deflections and elastic only.\n"
+            "Nonlinear (Geometric) — large rotations / deflections (NLGEOM).\n"
+            "Nonlinear (Plastic)   — plastic yielding too (requires yield_strength on Material).",
+        'analysis_mode': "Same as analysis_type — legacy alias.",
+        'visualization': "Field used to colour the result mesh in the 3-D viewer.",
+        'deformation_scale':
+            "Multiplier on the displayed displacement (visual only). "
+            "'Auto' scales so the peak motion is ~5 % of the bounding box.",
+        'disp_scale': "Multiplier on the displayed displacement (visual only).",
+        'n_frames': "Number of animation frames recorded for playback.",
+        'end_time': "Simulation duration. For crash: milliseconds.",
+        'enable_mass_scaling':
+            "Hold the explicit time step at end_time / time_steps by adding mass to\n"
+            "nodes whose CFL bound is below that value (Radioss /DT/NODA/CST).\n"
+            "Prevents the 'estimated remaining time' from drifting upward during\n"
+            "the run.  Slight artificial inertia is added — turn off for inertia-\n"
+            "sensitive impact studies.",
+        'deck_only':
+            "Write the solver deck (.inp for CalculiX / .k+.rad for OpenRadioss)\n"
+            "but do NOT launch the solver — useful for inspecting the deck.",
+        'external_solver_path':  "Override the auto-discovered CalculiX ccx binary path.",
+        'external_work_dir':     "Solver working directory.  Empty = a temp dir is created per run.",
+        'external_timeout_s':    "Wall-clock timeout for the external solver run (seconds).",
+        'openradioss_starter_path': "Override the auto-discovered OpenRadioss starter binary.",
+        'openradioss_engine_path':  "Override the auto-discovered OpenRadioss engine binary.",
+        'preset':           "Pick a material from the built-in database, or 'Custom' to set fields manually.",
+        'youngs_modulus':   "Young's modulus E (MPa in the standard mm/t/s unit system).",
+        'poissons_ratio':   "Poisson's ratio ν (typical 0.27–0.34 for metals).",
+        'density':          "Mass density ρ (tonne/mm³ — 7.85e-9 for steel).",
+        'yield_strength':   "Initial yield stress σ_y (MPa).  Non-zero triggers *PLASTIC in CalculiX.",
+        'tangent_modulus':  "Bilinear hardening slope after yield (MPa).  Set to 0 for perfectly plastic.",
+        'failure_strain':   "Equivalent plastic strain at element deletion (crash only).",
+        'exposed_name':
+            "Name this Number/Variable becomes when the .cad file is called from\n"
+            "the system-modeling tab via cad.fea(...)/cad.crash(...)/cad.topopt(...).\n"
+            "Empty = not exposed; for VariableNode it defaults to 'variable_name'.",
+
+        # ── SizeOptimization ───────────────────────────────────────────
+        'parameters':
+            "JSON list of upstream-shape property names to optimise, e.g.\n"
+            '    ["wall_thickness", "fillet_r"]',
+        'bounds':
+            "JSON dict of (min, max) per parameter, e.g.\n"
+            '    {"wall_thickness": [1.0, 20.0], "fillet_r": [0.5, 5.0]}',
+        'optimizer':
+            "SciPy optimiser. COBYLA is the safest gradient-free choice for 1–5\n"
+            "parameters when meshing topology may change between evaluations.\n"
+            "SLSQP / L-BFGS-B / trust-constr use finite-difference gradients —\n"
+            "each step costs (n_params+1) full CAD→mesh→CalculiX evaluations.",
+        'gradient_step':
+            "FD step size for the gradient-based optimisers (SLSQP / L-BFGS-B /\n"
+            "trust-constr).  Ignored by COBYLA and Nelder-Mead.",
+        'max_iterations': "Outer iteration cap on the optimiser.",
+        'tolerance':      "Convergence tolerance for the optimiser.",
+        'element_size':   "Target element size [mm] used when re-meshing each evaluation.",
+        'max_stress':     "Stress constraint [MPa] — used when chosen optimiser supports inequality constraints.",
+        'max_volume':     "Volume constraint [mm³].  Zero disables the constraint.",
+        'objective':
+            "What the optimiser minimises.  For SizeOpt: Min Weight = volume,\n"
+            "Min Compliance = u·f, Min Max Stress = peak Von Mises.",
+
+        # ── ShapeOptimization ──────────────────────────────────────────
+        'sensitivity_method':
+            "Biological Stress Leveling: heuristic — moves boundary inward at\n"
+            "low-stress nodes, outward at high-stress nodes.  Reduces stress\n"
+            "concentrations.\n"
+            "Adjoint Compliance: rigorous shape derivative −2·W(u).  Drives the\n"
+            "boundary toward uniform strain-energy density (minimum compliance).",
+        'volume_preservation':
+            "If checked, rescale boundary motion each iteration so total volume\n"
+            "stays equal to the initial volume.  Recommended for compliance opt.",
+        'step_size':        "Per-iteration boundary motion scale (mm).",
+        'smoothing_weight': "Laplacian sensitivity smoothing — higher = smoother boundary updates.",
+        'max_displacement': "Cap on per-node motion across the whole optimisation [mm].",
+        'convergence_tol':  "Relative-objective change below which the optimiser stops.",
+
+        # ── TopologyOptimization (advanced) ────────────────────────────
+        'penal':             "SIMP penalisation p.  Higher = sharper 0/1 split (3.0 is standard).",
+        'min_density':       "Ersatz minimum density ρ_min.  Prevents singular stiffness.",
+        'move_limit':        "Max change in ρ_e per iteration (0.2 = ±20 %).",
+        'filter_radius':     "Density / sensitivity filter radius [mm] — controls minimum feature size.",
+        'filter_type':       "density: physical density filter (preferred).\nsensitivity: heuristic sensitivity smoothing.",
+        'projection':        "Heaviside projection sharpens grey densities into crisp 0/1 designs.",
+        'heaviside_beta':    "Heaviside sharpness β.  Higher = crisper, but harder to converge.",
+        'heaviside_eta':     "Heaviside threshold η (default 0.5).",
+        'continuation':      "Gradually ramp β from 1 → heaviside_beta over the run.",
+        'update_scheme':     "MMA: gradient-based, robust.  OC: simpler optimality-criteria update.",
+        'simp_bins':         "Number of discrete moduli the CalculiX deck quantises into per iteration.",
+        'shape_recovery':    "Run marching-cubes shape recovery on the final density field.",
+        'recovery_resolution': "Marching-cubes grid resolution.",
+        'smoothing_iterations': "Gaussian smoothing passes on the recovered shape.",
+        'density_cutoff':    "Density threshold below which material is removed in the recovered shape.",
+        'vol_frac':          "Target volume fraction (kept / total) — the SIMP constraint.",
+        'symmetry_x':        "Mirror-plane X coordinate [mm].  None = no X-symmetry.",
+        'symmetry_y':        "Mirror-plane Y coordinate [mm].  None = no Y-symmetry.",
+        'symmetry_z':        "Mirror-plane Z coordinate [mm].  None = no Z-symmetry.",
+        'iterations':        "Outer iteration cap on the SIMP loop.",
+
+        # ── Mesh / Remesh / Impact ─────────────────────────────────────
+        'mesh_type':         "Tet:  linear C3D4 (fast).  Tet10: quadratic C3D10 (more accurate, ~4× slower).",
+        'refinement_size':   "Local element size at refinement zones [mm].  0 = no local refinement.",
+        'close_holes':       "Cap small holes during remesh — helps surface watertightness.",
+        'repair_surface':    "Run topological repair before remeshing.",
+        'mesh_quality':      "Target mesh-quality factor for remeshing.",
+        'velocity_x':        "Initial impactor velocity along X [mm/ms = m/s].",
+        'velocity_y':        "Initial impactor velocity along Y [mm/ms = m/s].",
+        'velocity_z':        "Initial impactor velocity along Z [mm/ms = m/s].",
+        'node_tolerance':    "Distance [mm] within which a mesh node is treated as belonging to the impact face.",
+        'enable_fracture':   "Delete elements whose plastic strain exceeds failure_strain.",
+
+        # ── Constraint / Load extras ───────────────────────────────────
+        'condition':
+            "Optional NumPy boolean expression over the mesh-node coordinates\n"
+            "x, y, z (mm).  Used only when no SelectFace node is connected.\n"
+            "Example:  z < 0.01   or   (x < 1) & (y > 9).",
+        'displacement_x':    "Prescribed X-displacement [mm] (only when constraint_type = Displacement).",
+        'displacement_y':    "Prescribed Y-displacement [mm] (only when constraint_type = Displacement).",
+        'displacement_z':    "Prescribed Z-displacement [mm] (only when constraint_type = Displacement).",
+        'gravity_accel':     "Gravity magnitude [mm/s²].  9810 = standard Earth gravity.",
+        'gravity_direction': "Sign and axis of the gravity vector.",
+        'pressure':          "Surface pressure [Pa].  Positive = outward, negative = inward.",
+
+        # ── SelectFace ─────────────────────────────────────────────────
+        'selector_type':     "How this node picks faces (see the dropdown's own tooltip).",
+        'direction':         "Outward-normal direction the selected face(s) must point in.",
+    }
 
     @classmethod
     def _section_for(cls, prop_name):
@@ -817,6 +1209,8 @@ class PropertiesPanel(QtWidgets.QWidget):
         def _should_skip(name, val):
             if name.startswith('_'):
                 return True
+            if name in self._PROPERTY_HIDE_ALWAYS:
+                return True
             if name in self._PROPERTY_HIDE_IF_EMPTY:
                 if val is None or val == '' or val == 0 or val == 0.0:
                     return True
@@ -831,8 +1225,10 @@ class PropertiesPanel(QtWidgets.QWidget):
                 continue
             buckets[self._section_for(name)].append((name, val))
 
-        # Hard-coded fallback combo items for legacy nodes that don't declare
-        # their items via NodeGraphQt's metadata (kept as a safety net).
+        # Hard-coded fallback combo items for nodes whose ``items`` metadata
+        # is missing from NodeGraphQt's per-instance attrs (happens for older
+        # saved files and for properties created via add_text_input()).  The
+        # entry whose superset value list covers the saved string wins.
         known_combos = {
             'operation': ['Union', 'Cut', 'Intersect'],
             'preset': ['Custom', 'Steel (Structural)', 'Steel (Stainless 304)',
@@ -845,12 +1241,23 @@ class PropertiesPanel(QtWidgets.QWidget):
                                 'Pinned', 'Symmetry X', 'Symmetry Y', 'Symmetry Z', 'Displacement'],
             'load_type': ['Force', 'Gravity', 'Pressure'],
             'gravity_direction': ['-Y', '-Z', '-X', '+Y', '+Z', '+X'],
-            'visualization': ['Density', 'Von Mises Stress', 'Displacement'],
+            # Union of every solver node's visualization vocabulary.
+            'visualization': ['Von Mises Stress', 'Displacement',
+                              'Plastic Strain', 'Failed Elements', 'Density',
+                              'Recovered Shape'],
             'filter_type': ['sensitivity', 'density'],
             'update_scheme': ['MMA', 'OC'],
             'projection': ['None', 'Heaviside'],
-            'solver_backend': ['Internal scikit-fem', 'CalculiX',
-                               'Internal PyLCSS', 'OpenRadioss (experimental)'],
+            # New combos introduced by the CalculiX / OpenRadioss rewrites.
+            'analysis_type': ['Linear', 'Nonlinear (Geometric)', 'Nonlinear (Plastic)'],
+            'deformation_scale': ['Auto', '1x', '5x', '10x', '50x', '100x', '200x'],
+            # Optimisation-node combos that were always there but worth pinning.
+            'objective': ['Min Weight', 'Min Compliance', 'Min Max Stress',
+                          'Uniform Stress'],
+            'optimizer':  ['COBYLA', 'Nelder-Mead', 'SLSQP', 'L-BFGS-B',
+                           'trust-constr', 'Powell'],
+            'sensitivity_method': ['Biological Stress Leveling', 'Adjoint Compliance'],
+            'element_type': ['Fast (Linear P1)', 'Accurate (Quadratic P2)'],
         }
 
         rendered_any = False
@@ -937,6 +1344,11 @@ class PropertiesPanel(QtWidgets.QWidget):
                 else:
                     continue
 
+                # Fall back to the panel's static tooltip table when the
+                # node itself didn't ship one.  Lets us document the meaning
+                # of obscure knobs without touching every node class.
+                if not tooltip:
+                    tooltip = self._PROPERTY_TOOLTIPS.get(name)
                 if tooltip:
                     widget.setToolTip(str(tooltip))
                 layout.addRow(label_text, widget)
@@ -952,6 +1364,123 @@ class PropertiesPanel(QtWidgets.QWidget):
     # ──────────────────────────────────────────────────
     # Interactive Select Face UI
     # ──────────────────────────────────────────────────
+
+    def _build_select_face_ui(self, node):
+        """Selector-aware UI for SelectFaceNode.
+
+        SelectFaceNode is a swiss-army-knife with seven different selection
+        strategies (bounding box, nearest point, face index, direction tag,
+        range expression…).  The generic inspector shows *all* of their
+        fields at once which is overwhelming.  Here we render only the
+        fields relevant to the currently chosen ``selector_type``.
+        """
+        # The selector type drives which field group is shown.
+        sel_type = node.get_property('selector_type') or 'Bounding Box'
+        type_options = [
+            'Bounding Box', 'Nearest Point', 'Direction', 'Face Index',
+            'Range Expression', 'Tag',
+        ]
+
+        # ── 1. Selector type combo ──────────────────────────────────────
+        grp_type = QtWidgets.QGroupBox("Selector")
+        lay_type = QtWidgets.QFormLayout()
+        combo = QtWidgets.QComboBox()
+        combo.addItems(type_options)
+        if sel_type in type_options:
+            combo.blockSignals(True)
+            combo.setCurrentText(sel_type)
+            combo.blockSignals(False)
+        combo.setToolTip(
+            "How this node picks faces:\n"
+            "  Bounding Box     — every face whose centroid is inside the box\n"
+            "  Nearest Point    — the single face closest to (near_x, near_y, near_z)\n"
+            "  Direction        — every face whose normal is +X / −Z / …\n"
+            "  Face Index       — pick by integer face id (1-based, brittle)\n"
+            "  Range Expression — Python boolean over x, y, z of the face centroid\n"
+            "  Tag              — match a user-set tag string on the upstream node"
+        )
+        combo.currentTextChanged.connect(
+            lambda v: (self.update_property('selector_type', v),
+                       self.display_node(node))  # rebuild panel for the new type
+        )
+        lay_type.addRow("Type:", combo)
+        grp_type.setLayout(lay_type)
+        self.props_layout.addWidget(grp_type)
+
+        # ── 2. Type-specific field group ────────────────────────────────
+        grp = QtWidgets.QGroupBox("Parameters")
+        lay = QtWidgets.QFormLayout()
+
+        def _spin(prop, lo=-1e4, hi=1e4, dec=3):
+            val = float(node.get_property(prop) or 0.0)
+            w = QtWidgets.QDoubleSpinBox()
+            w.setRange(lo, hi); w.setDecimals(dec); w.setValue(val)
+            w.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
+            return w
+
+        def _intspin(prop, lo=0, hi=10_000):
+            try: val = int(node.get_property(prop) or 0)
+            except Exception: val = 0
+            w = QtWidgets.QSpinBox()
+            w.setRange(lo, hi); w.setValue(val)
+            w.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
+            return w
+
+        def _line(prop, placeholder=''):
+            val = node.get_property(prop) or ''
+            w = QtWidgets.QLineEdit(str(val))
+            w.setPlaceholderText(placeholder)
+            w.editingFinished.connect(lambda p=prop, ww=w: self.update_property(p, ww.text()))
+            return w
+
+        if sel_type == 'Bounding Box':
+            lay.addRow("Min X:", _spin('box_min_x'))
+            lay.addRow("Min Y:", _spin('box_min_y'))
+            lay.addRow("Min Z:", _spin('box_min_z'))
+            lay.addRow("Max X:", _spin('box_max_x'))
+            lay.addRow("Max Y:", _spin('box_max_y'))
+            lay.addRow("Max Z:", _spin('box_max_z'))
+        elif sel_type == 'Nearest Point':
+            lay.addRow("Near X:", _spin('near_x'))
+            lay.addRow("Near Y:", _spin('near_y'))
+            lay.addRow("Near Z:", _spin('near_z'))
+        elif sel_type == 'Direction':
+            dir_combo = QtWidgets.QComboBox()
+            dir_combo.addItems(['+X', '-X', '+Y', '-Y', '+Z', '-Z'])
+            dir_combo.setToolTip(
+                "Pick every face whose outward normal points in this direction "
+                "(within ~10° tolerance)."
+            )
+            cur = node.get_property('direction') or '+Z'
+            if cur in [dir_combo.itemText(i) for i in range(dir_combo.count())]:
+                dir_combo.setCurrentText(cur)
+            dir_combo.currentTextChanged.connect(
+                lambda v: self.update_property('direction', v)
+            )
+            lay.addRow("Normal:", dir_combo)
+        elif sel_type == 'Face Index':
+            w = _intspin('face_index', 0, 100_000)
+            w.setToolTip(
+                "Zero-based face index from CadQuery's `faces()` iteration order.\n"
+                "Fragile — adding a fillet or boolean upstream renumbers faces."
+            )
+            lay.addRow("Index:", w)
+        elif sel_type == 'Range Expression':
+            w = _line('range_expr', placeholder='e.g. z > 0.99 * z_max')
+            w.setToolTip(
+                "Python boolean over the face-centroid coordinates x, y, z.\n"
+                "Face is picked when this expression is True for its centroid."
+            )
+            lay.addRow("Expr:", w)
+        elif sel_type == 'Tag':
+            w = _line('tag', placeholder='e.g. top_face')
+            w.setToolTip(
+                "Match faces that were tagged with this string on the upstream node."
+            )
+            lay.addRow("Tag:", w)
+
+        grp.setLayout(lay)
+        self.props_layout.addWidget(grp)
 
     def _build_interactive_select_ui(self, node):
         """Dedicated Properties Panel UI for InteractiveSelectFaceNode."""
@@ -1256,7 +1785,10 @@ class PropertiesPanel(QtWidgets.QWidget):
         if node_class in ('ConstraintNode', 'LoadNode'):
             btn_preview = QtWidgets.QPushButton("👁  Preview in 3D")
             btn_preview.setToolTip(
-                "Highlight this load / support face in the 3D viewer"
+                "Run the CAD graph (geometry only — no FEA/crash solve) and "
+                "highlight the faces selected by the SelectFace node upstream\n"
+                "of this BC.  Requires a SelectFace → Constraint / Load link;\n"
+                "a bare condition-string BC has no face to highlight."
             )
             btn_preview.setStyleSheet(
                 "QPushButton {"
@@ -1266,23 +1798,76 @@ class PropertiesPanel(QtWidgets.QWidget):
                 "}"
                 "QPushButton:hover { background: #2673cc; }"
             )
-            # Use a local default so the closure captures the right node.
+
             def _on_preview(checked=False, _node=node):
                 app = self._get_main_app()
-                if app:
-                    # Render the upstream shape first, then overlay BCs.
-                    shape = app._get_upstream_shape(_node)
-                    if shape is None:
-                        # Maybe the node itself has a cached shape in a parent
-                        shape = getattr(_node, '_last_result', None)
-                    if shape and hasattr(shape, 'tessellate'):
-                        app.viewer.render_shape(shape)
-                    elif shape and isinstance(shape, dict) and 'mesh' in shape:
-                        app.viewer.render_simulation(shape)
+                if app is None:
+                    QtWidgets.QMessageBox.warning(
+                        self, "No viewer",
+                        "Cannot reach the main CAD widget; preview unavailable."
+                    )
+                    return
+
+                # 1. Render the upstream geometry first.  Many bugs reported as
+                # "Preview does nothing" turn out to be that the user never ran
+                # the graph — _last_result is None on every upstream node, so
+                # the viewer has no shape to draw the overlay on.
+                source, renderable = app._get_render_context_for_node(_node)
+                if renderable is None:
+                    app._last_rendered_node = _node
                     try:
-                        app._show_bc_for_node(_node)
-                    except Exception:
-                        pass
+                        app._execute_graph(skip_simulation=True)
+                    except Exception as exc:
+                        QtWidgets.QMessageBox.critical(
+                            self, "Graph execution failed",
+                            f"Couldn't preview because the CAD graph errored:\n\n{exc}"
+                        )
+                        return
+                    source, renderable = app._get_render_context_for_node(_node)
+                if renderable is not None:
+                    app._render_result_in_viewer(renderable)
+                else:
+                    QtWidgets.QMessageBox.information(
+                        self, "Nothing to preview",
+                        "No upstream geometry is connected to this BC, or the "
+                        "CAD graph hasn't produced one yet.\n\n"
+                        "Connect a primitive / sketch / import node → … → this "
+                        "BC and try again."
+                    )
+                    return
+
+                # 2. Now draw the BC overlay on top of the shape.
+                try:
+                    app._show_bc_for_node(_node)
+                except Exception as exc:
+                    # _show_bc_for_node has its own try/except; this is belt-
+                    # and-suspenders.  We still want the user to see *why*.
+                    QtWidgets.QMessageBox.warning(
+                        self, "Overlay failed",
+                        f"Geometry rendered, but the BC overlay couldn't be "
+                        f"drawn:\n\n{exc}\n\n"
+                        "Most common cause: the SelectFace node upstream of "
+                        "this BC hasn't selected any faces yet."
+                    )
+                    return
+
+                # 3. Verify the overlay actually had something to draw.
+                # _collect_bc_for_node is cheap; surface a friendly hint when
+                # the overlay was a no-op (e.g. the BC uses a condition
+                # string that doesn't match any nodes).
+                try:
+                    c_faces, l_faces, l_vecs = app._collect_bc_for_node(_node)
+                    if not (c_faces or l_faces or l_vecs):
+                        sb = getattr(app, 'statusBar', lambda: None)()
+                        if sb is not None:
+                            sb.showMessage(
+                                "Preview: geometry rendered, but no BC face/vector "
+                                "to highlight (connect a SelectFace upstream).",
+                                6000,
+                            )
+                except Exception:
+                    pass
+
             btn_preview.clicked.connect(_on_preview)
             self.props_layout.addWidget(btn_preview)
 
@@ -1463,8 +2048,8 @@ class ResultsPanel(QtWidgets.QWidget):
         self._empty.setVisible(False)
         self._scroll.setVisible(True)
 
-        backend = data.get('backend') or ('Internal scikit-fem' if rtype == 'fea' else
-                                          'Internal PyLCSS' if rtype == 'crash' else '—')
+        backend = data.get('backend') or ('CalculiX' if rtype == 'fea' else
+                                          'OpenRadioss' if rtype == 'crash' else '—')
         meta_rows = [
             ("Type",            rtype.upper()),
             ("Backend",         str(backend)),
@@ -1534,18 +2119,13 @@ class LibraryPanel(QtWidgets.QWidget):
     # QtAwesome icon names per category prefix.  The first prefix that matches
     # wins, so order from most specific to most general.
     _CATEGORY_ICONS = (
-        ("Sketcher",              "fa5s.pencil-ruler",   "#4FC3F7"),
-        ("Part Design - Primitives",     "fa5s.cube",            "#FFCA28"),
-        ("Part Design - Create",         "fa5s.industry",        "#FFCA28"),
-        ("Part Design - Modify",         "fa5s.tools",           "#FFCA28"),
-        ("Part Design - Hole Wizard",    "fa5s.dot-circle",      "#FFCA28"),
-        ("Part Design - Transform",      "fa5s.arrows-alt",      "#FFCA28"),
+        ("Geometry",                     "fa5s.code",            "#81C784"),
         ("Simulation - Pre-Processing",  "fa5s.project-diagram", "#80CBC4"),
         ("Simulation - Loads",           "fa5s.weight-hanging",  "#FF8A65"),
         ("Simulation - Solve",           "fa5s.calculator",      "#9CCC65"),
-        ("Crash Simulation",      "fa5s.car-crash",       "#EF5350"),
-        ("Analysis",              "fa5s.balance-scale",   "#B39DDB"),
-        ("IO",                    "fa5s.file-export",     "#90A4AE"),
+        ("Crash Simulation",             "fa5s.car-crash",       "#EF5350"),
+        ("Analysis",                     "fa5s.balance-scale",   "#B39DDB"),
+        ("IO",                           "fa5s.file-export",     "#90A4AE"),
     )
 
     @staticmethod
@@ -1606,69 +2186,23 @@ class LibraryPanel(QtWidgets.QWidget):
         self.tree.setDragEnabled(True)
         self.tree.itemPressed.connect(self._start_drag)
         
-        # Component categories - Professional CAD/FEA/TopOpt Library
+        # Component categories — only entries reachable in the new code-first
+        # workflow are listed.  Hand-placed primitives / sketches / 3-D ops /
+        # transforms / patterns have been removed; geometry is created either
+        # in a Code Part / Assembly node (one readable CadQuery script) or
+        # imported from a STEP / mesh file.
         # Format: (Label, node_id, tooltip_description)
         categories = {
-            # ═══════════════════════════════════════════════════════════════
-            # WORKBENCH: SKETCHER
-            # ═══════════════════════════════════════════════════════════════
-            "Sketcher": [
-                ("Create Sketch", "com.cad.sketch", "Start a new 2D sketch on a plane"),
-                ("Line", "com.cad.sketch.line", "Draw a straight line segment"),
-                ("Rectangle", "com.cad.sketch.rectangle", "Draw a rectangle"),
-                ("Circle", "com.cad.sketch.circle", "Draw a circle"),
-                ("Arc", "com.cad.sketch.arc", "Draw an arc"),
-                ("Polygon", "com.cad.sketch.polygon", "Draw a regular polygon"),
-                ("Ellipse", "com.cad.ellipse", "Draw an ellipse"),
-                ("Spline", "com.cad.spline", "Draw a smooth B-spline curve"),
-            ],
-            
-            # ═══════════════════════════════════════════════════════════════
-            # WORKBENCH: PART DESIGN
-            # ═══════════════════════════════════════════════════════════════
-            "Part Design - Primitives": [
-                ("Box", "com.cad.box", "Create a rectangular block"),
-                ("Cylinder", "com.cad.cylinder", "Create a cylinder"),
-                ("Sphere", "com.cad.sphere", "Create a sphere"),
-                ("Cone", "com.cad.cone", "Create a cone"),
-                ("Torus", "com.cad.torus", "Create a torus (donut)"),
-                ("Wedge", "com.cad.wedge", "Create a wedge"),
-                ("Pyramid", "com.cad.pyramid", "Create a pyramid"),
-            ],
-            "Part Design - Create": [
-                ("Extrude", "com.cad.extrude", "Extrude 2D sketch to 3D"),
-                ("Twisted Extrude", "com.cad.twisted_extrude", "Extrude with helical twist"),
-                ("Revolve", "com.cad.revolve", "Revolve sketch around axis"),
-                ("Sweep", "com.cad.sweep", "Sweep profile along path"),
-                ("Loft", "com.cad.loft", "Loft between profiles"),
-                ("Helix", "com.cad.helix", "Create a helix/spiral"),
-            ],
-            "Part Design - Modify": [
-                ("Boolean", "com.cad.boolean", "Union, Cut, or Intersect shapes"),
-                ("Fillet", "com.cad.fillet", "Round edges"),
-                ("Chamfer", "com.cad.chamfer", "Bevel edges"),
-                ("Shell", "com.cad.shell", "Hollow out part"),
-                ("Offset", "com.cad.offset", "Offset 3D shape"),
-            ],
-            "Part Design - Hole Wizard": [
-                ("Hole (Point)", "com.cad.hole_at_coords", "Drill hole at coordinates"),
-                ("Multi-Hole", "com.cad.multi_hole", "Drill multiple holes"),
-                ("Pocket", "com.cad.pocket", "Extrude cut"),
-                ("Slot", "com.cad.slot_cut", "Cut a slot"),
-                ("Rectangular Cut", "com.cad.rectangular_cut", "Square cut"),
-                ("Cylinder Cut", "com.cad.cylinder_cut", "Cylindrical cut"),
-                ("Array Holes", "com.cad.array_holes", "Pattern of holes"),
-            ],
-            "Part Design - Transform & Pattern": [
-                ("Translate", "com.cad.translate", "Move object"),
-                ("Rotate", "com.cad.rotate", "Rotate object"),
-                ("Scale", "com.cad.scale", "Resize object"),
-                ("Mirror", "com.cad.mirror", "Mirror object"),
-                ("Linear Pattern", "com.cad.linear_pattern", "Linear repetition"),
-                ("Circular Pattern", "com.cad.circular_pattern", "Circular repetition"),
-                ("Radial Pattern", "com.cad.pattern.radial", "Radial repetition"),
-                ("Mirror Pattern", "com.cad.pattern.mirror", "Mirror pattern"),
-                ("Grid Pattern", "com.cad.pattern.grid", "Grid repetition"),
+            "Geometry": [
+                ("Code Part / Assembly", "com.cad.code_part",
+                 "Parametric CAD as one readable CadQuery script.\n"
+                 "Set up to 6 named parameters (with optional inputs from Number / Variable\n"
+                 "nodes) and write `result = cq.Workplane(...)...`.  The output 'shape' port\n"
+                 "feeds straight into Mesh / Select Face / Assembly nodes."),
+                ("Import STEP", "com.cad.import_step",
+                 "Import a STEP / IGES CAD file as the upstream geometry."),
+                ("Import Mesh", "com.cad.import_stl",
+                 "Import an STL / OBJ surface mesh."),
             ],
 
             # ═══════════════════════════════════════════════════════════════
@@ -1702,10 +2236,8 @@ class LibraryPanel(QtWidgets.QWidget):
                  "Elasto-plastic material with yield strength, hardening and failure strain (presets: A36, DP780, UHSS 1500, Al 6061, Al 5052, CFRP)"),
                 ("Impact Condition",  "com.cad.sim.impact",
                  "Define initial velocity (mm/ms = m/s) applied to impact face nodes"),
-                ("Crash Solver (CPU)", "com.cad.sim.crash_solver",
-                 "Explicit central-difference transient solver with J2 plasticity, element deletion and frame-by-frame playback"),
-                ("Crash Solver (GPU)",  "com.cad.sim.crash_solver_gpu",
-                 "GPU-accelerated explicit crash solver (CUDA); falls back to CPU if no CUDA device is found)"),
+                ("Crash Solver",       "com.cad.sim.crash_solver",
+                 "Explicit transient crash solver — runs OpenRadioss on the connected mesh, material, constraints and impact condition"),
                 ("Run Radioss Deck",    "com.cad.sim.radioss_deck",
                  "Run an existing OpenRadioss/LS-DYNA `.k` or `.rad` deck (e.g. the Chrysler Neon HPC benchmark) end-to-end and play the animation in the viewer"),
             ],
@@ -1719,12 +2251,12 @@ class LibraryPanel(QtWidgets.QWidget):
                 ("Bounding Box", "com.cad.bounding_box", "Measure dimensions"),
             ],
             "IO & Parameters": [
-                ("Number", "com.cad.number", "Numeric constant"),
-                ("Variable", "com.cad.variable", "Named variable"),
-                ("Import STEP", "com.cad.import_step", "Import a STEP/IGES CAD file"),
-                ("Import Mesh", "com.cad.import_stl", "Import an STL/OBJ mesh file"),
-                ("Export STEP", "com.cad.export_step", "Export to .step"),
-                ("Export STL", "com.cad.export_stl", "Export to .stl"),
+                ("Number", "com.cad.number",
+                 "Numeric constant.  Set its `exposed_name` to make it a kwarg on cad.fea / cad.crash / cad.topopt from the system-modeling tab."),
+                ("Variable", "com.cad.variable",
+                 "Named variable.  Like Number but with a label; falls back to `variable_name` if `exposed_name` is blank."),
+                ("Export STEP", "com.cad.export_step", "Export the current shape to a .step file"),
+                ("Export STL", "com.cad.export_stl",  "Export the current mesh / shape to a .stl file"),
             ],
         }
         
@@ -1793,12 +2325,12 @@ class LibraryPanel(QtWidgets.QWidget):
 
 
 class ProfessionalCadApp(QtWidgets.QMainWindow):
-    """Main Application Window (formerly CADWidget)."""
+    """Main application window for parametric design and simulation."""
     
     def __init__(self, parent=None):
         super(ProfessionalCadApp, self).__init__(parent)
         
-        self.setWindowTitle("Professional CAD")
+        self.setWindowTitle("Engineering Design Studio")
         self.resize(1200, 800)
         
         # Initialize data
@@ -1963,7 +2495,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         self.toolbar.addAction(_icon("fa5s.file"),       "New",    self._new_project).setShortcut("Ctrl+N")
         self.toolbar.addAction(_icon("fa5s.folder-open"),"Open",   self._open_project).setShortcut("Ctrl+O")
         self.toolbar.addAction(_icon("fa5s.save"),       "Save",   self._save_project).setShortcut("Ctrl+S")
-        act_import = self.toolbar.addAction(_icon("fa5s.file-import"), "Import CAD", self._import_cad)
+        act_import = self.toolbar.addAction(_icon("fa5s.file-import"), "Import Geometry", self._import_cad)
         act_import.setToolTip("Import a STEP / IGES / STL / OBJ file as a node")
         self.toolbar.addSeparator()
 
@@ -2038,11 +2570,11 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             return None
             
     def _import_cad(self):
-        """Prompt user for a CAD file, add an import node, and set its filepath."""
+        """Prompt user for a geometry file, add an import node, and set its filepath."""
         try:
             from pylcss.io_manager.cad_io import CADImporter
             filepath, _ = QtWidgets.QFileDialog.getOpenFileName(
-                self, "Import CAD File", "", CADImporter.get_filter_string()
+                self, "Import Geometry File", "", CADImporter.get_filter_string()
             )
             if not filepath:
                 return
@@ -2061,8 +2593,127 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             else:
                 QtWidgets.QMessageBox.warning(self, "Unsupported Format", f"Format {ext} not supported for direct node importing.")
         except Exception as e:
-            self.statusBar().showMessage(f"Error importing CAD: {e}") 
+            self.statusBar().showMessage(f"Error importing geometry: {e}")
     
+    def _is_simulation_render_result(self, obj):
+        """Return True for objects that should be drawn via render_simulation()."""
+        if obj is None:
+            return False
+        if hasattr(obj, 'p') and hasattr(obj, 't'):
+            return True
+        if isinstance(obj, dict):
+            return 'mesh' in obj or (obj.get('type') == 'crash' and bool(obj.get('frames')))
+        return False
+
+    def _is_renderable_result(self, obj):
+        """Return True when the viewer can draw *obj* directly."""
+        if obj is None:
+            return False
+        if self._is_simulation_render_result(obj):
+            return True
+        if hasattr(obj, 'tessellate') or hasattr(obj, 'val') or hasattr(obj, 'toCompound'):
+            return True
+        if hasattr(obj, 'ctx') and hasattr(obj.ctx, 'pendingWires'):
+            return bool(obj.ctx.pendingWires)
+        return False
+
+    def _render_result_in_viewer(self, obj):
+        """Render a previously resolved object using the right viewer path."""
+        if obj is None:
+            return
+        if self._is_simulation_render_result(obj):
+            self.viewer.render_simulation(obj)
+            if isinstance(obj, dict):
+                try:
+                    self.results.show_result(obj)
+                except Exception:
+                    pass
+        elif self._is_2d_sketch(obj):
+            self.viewer.render_sketch(obj)
+        else:
+            self.viewer.render_shape(obj)
+
+    @staticmethod
+    def _port_name(port):
+        try:
+            return port.name()
+        except Exception:
+            return ''
+
+    def _preferred_render_ports(self, node):
+        cls = node.__class__.__name__
+        if cls in ('ConstraintNode', 'LoadNode', 'PressureLoadNode'):
+            return ('target_face', 'mesh', 'shape')
+        if cls == 'ImpactConditionNode':
+            return ('impact_face', 'mesh', 'shape')
+        if cls in ('SelectFaceNode', 'InteractiveSelectFaceNode', 'MeshNode'):
+            return ('shape',)
+        return ()
+
+    def _ordered_input_ports(self, node, preferred_names=()):
+        try:
+            ports = node.input_ports()
+            if isinstance(ports, dict):
+                ports = list(ports.values())
+            else:
+                ports = list(ports)
+        except Exception:
+            return []
+        preferred = []
+        rest = []
+        preferred_names = tuple(preferred_names or ())
+        for port in ports:
+            if self._port_name(port) in preferred_names:
+                preferred.append(port)
+            else:
+                rest.append(port)
+        preferred.sort(key=lambda p: preferred_names.index(self._port_name(p)))
+        return preferred + rest
+
+    def _find_upstream_renderable(self, node, visited=None, preferred_ports=()):
+        """Walk upstream and return (source_node, renderable_result)."""
+        if node is None:
+            return None, None
+        if visited is None:
+            visited = set()
+        marker = id(node)
+        if marker in visited:
+            return None, None
+        visited.add(marker)
+
+        result = getattr(node, '_last_result', None)
+        if self._is_renderable_result(result):
+            return node, result
+
+        ports = self._ordered_input_ports(
+            node,
+            preferred_ports or self._preferred_render_ports(node),
+        )
+        for port in ports:
+            try:
+                connected_ports = list(port.connected_ports())
+            except Exception:
+                connected_ports = []
+            for conn_port in connected_ports:
+                upstream = conn_port.node()
+                upstream_result = getattr(upstream, '_last_result', None)
+                if self._is_renderable_result(upstream_result):
+                    return upstream, upstream_result
+                source, renderable = self._find_upstream_renderable(upstream, visited)
+                if renderable is not None:
+                    return source, renderable
+        return None, None
+
+    def _get_render_context_for_node(self, node):
+        """Return the best render target for a selected graph node."""
+        result = getattr(node, '_last_result', None)
+        if self._is_renderable_result(result):
+            return node, result
+        return self._find_upstream_renderable(
+            node,
+            preferred_ports=self._preferred_render_ports(node),
+        )
+
     def _on_node_selected(self, node):
         """Handle node selection."""
         if node:
@@ -2095,35 +2746,11 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"Selected: {node.name}")
 
 
-            # Only render if we have a CACHED result.
-            # Do NOT call execute_graph() here to avoid freezing on selection.
-            geometry = getattr(node, '_last_result', None)
+            _, geometry = self._get_render_context_for_node(node)
 
-            # If the result is a face-selection dict (from SelectFaceNode /
-            # InteractiveSelectFaceNode), render the upstream shape instead so
-            # the user can see the full 3D model and pick faces on it.
-            if isinstance(geometry, dict) and 'faces' in geometry and 'mesh' not in geometry:
-                geometry = self._get_upstream_shape(node)
-
-            if geometry:
-                # Check if it's simulation data or mesh object
-                is_sim = False
-                if isinstance(geometry, dict) and 'mesh' in geometry:
-                    is_sim = True
-                elif hasattr(geometry, 'p') and hasattr(geometry, 't'):
-                    # Direct Mesh object from skfem
-                    is_sim = True
-
-                if is_sim:
-                    self.viewer.render_simulation(geometry)
-                    try:
-                        self.results.show_result(geometry)
-                    except Exception:
-                        pass
-                elif self._is_2d_sketch(geometry):
-                    self.viewer.render_sketch(geometry)
-                else:
-                    self.viewer.render_shape(geometry)
+            if geometry is not None:
+                self._last_rendered_node = node
+                self._render_result_in_viewer(geometry)
 
                 # Re-apply face highlights if it's the interactive picker
                 if node.__class__.__name__ == 'InteractiveSelectFaceNode':
@@ -2142,11 +2769,18 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 # No cached result yet — execute the shape pipeline automatically
                 # (skip_simulation=True means heavy FEA/TopOpt nodes are skipped,
                 # so this is fast and behaves the same as when any property changes).
-                if hasattr(self, 'auto_update_cb') and self.auto_update_cb.isChecked():
-                    self._execute_graph(skip_simulation=True)
+                self._last_rendered_node = node
+                self._execute_graph(skip_simulation=True)
 
     def _get_upstream_shape(self, node):
         """Walk input ports to find the first cached shape result upstream."""
+        _, result = self._find_upstream_renderable(
+            node,
+            preferred_ports=self._preferred_render_ports(node),
+        )
+        if result is not None and not self._is_simulation_render_result(result):
+            return result
+        return None
         try:
             for port in node.input_ports():
                 for conn_port in port.connected_ports():
@@ -2249,6 +2883,50 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
             return faces
 
+        def _get_mesh_for_bc_node(bc_node):
+            """Return the mesh connected to a BC node, if it has already run."""
+            try:
+                mesh_port = bc_node.get_input('mesh')
+                if mesh_port:
+                    for conn_port in mesh_port.connected_ports():
+                        upstream = conn_port.node()
+                        mesh = getattr(upstream, '_last_result', None)
+                        if mesh is not None and hasattr(mesh, 'p') and hasattr(mesh, 't'):
+                            return mesh
+            except Exception:
+                pass
+            return None
+
+        def _condition_centroid_and_points(bc_node):
+            """Centroid/sample points for legacy condition-expression BCs."""
+            condition = ''
+            try:
+                condition = str(bc_node.get_property('condition') or '').strip()
+            except Exception:
+                condition = ''
+            if not condition:
+                return None, []
+            mesh = _get_mesh_for_bc_node(bc_node)
+            if mesh is None:
+                return None, []
+            try:
+                import numpy as _np
+                from pylcss.solver_backends.common import nodes_matching_condition
+
+                node_ids = nodes_matching_condition(mesh, condition)
+                if node_ids.size == 0:
+                    return None, []
+                pts = _np.asarray(mesh.p, dtype=float).T[node_ids]
+                centroid = _np.mean(pts, axis=0).tolist()
+                if len(pts) <= 5:
+                    samples = pts.tolist()
+                else:
+                    order = _np.linspace(0, len(pts) - 1, 5, dtype=int)
+                    samples = pts[order].tolist()
+                return centroid, samples
+            except Exception:
+                return None, []
+
         for node in self.graph.all_nodes():
             cls = node.__class__.__name__
 
@@ -2265,6 +2943,24 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 viz_meta = (result.get('viz') if isinstance(result, dict) else None) or {}
                 for g in faces:
                     constraint_faces.append({'face': g, 'viz': viz_meta})
+                if not faces:
+                    centroid, samples = _condition_centroid_and_points(node)
+                    if centroid is not None:
+                        if not viz_meta:
+                            try:
+                                fixed_dofs = list((result or {}).get('fixed_dofs') or [])
+                            except Exception:
+                                fixed_dofs = []
+                            viz_meta = {
+                                'constraint_type': node.get_property('constraint_type') or 'Fixed',
+                                'color': '#2979FF',
+                                'fixed_dofs': fixed_dofs or [0, 1, 2],
+                            }
+                        constraint_faces.append({
+                            'pos': centroid,
+                            'points': samples,
+                            'viz': viz_meta,
+                        })
 
             # ---- LoadNode ----
             elif cls == 'LoadNode':
@@ -2290,6 +2986,15 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                             'vector': vec,
                             'magnitude_N': force_mag,
                         })
+                    if not faces and force_mag > 1e-9:
+                        centroid, samples = _condition_centroid_and_points(node)
+                        if centroid is not None:
+                            load_vectors.append({
+                                'centroid': centroid,
+                                'points': samples,
+                                'vector': vec,
+                                'magnitude_N': force_mag,
+                            })
                 except Exception:
                     pass
 
@@ -2350,6 +3055,19 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         render_simulation() — overlays are layered on top.
         """
         try:
+            cls = node.__class__.__name__
+            if cls in ('SelectFaceNode', 'InteractiveSelectFaceNode'):
+                result = getattr(node, '_last_result', None)
+                faces = []
+                if isinstance(result, dict):
+                    faces = [f for f in (result.get('faces') or []) if f is not None]
+                    if not faces and result.get('face') is not None:
+                        faces = [result.get('face')]
+                if faces:
+                    self.viewer.set_bc_overlay_data(load_faces=faces)
+                    self.viewer.render_bc_overlays(load_faces=faces)
+                    return
+
             c_faces, l_faces, l_vecs = self._collect_bc_for_node(node)
             has_any = bool(c_faces or l_faces or l_vecs)
             if has_any:
@@ -2371,12 +3089,27 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             pass
 
     def _on_node_double_clicked(self, node):
+        """Handle a double-click on a node on the graph canvas.
+
+        For ``CadQueryCodeNode`` this opens the full-screen CAD code editor —
+        the same one the inspector's *Edit Code…* button uses.  Other node
+        types swallow the double-click so NodeGraphQt's default subgraph
+        popup doesn't appear.
         """
-        Handle double-click.
-        Intentionally left empty (or just log) to consume the event and prevent
-        any default popup/dialog from appearing.
-        """
-        self.timeline.add_event(f"Double-clicked {node.name} (Popup disabled)")
+        try:
+            if node.__class__.__name__ == 'CadQueryCodeNode':
+                # The inspector holds the editor-open helper.
+                self.properties._open_cad_code_editor(node)
+                self.timeline.add_event(f"Opened code editor for {node.name()}")
+                return
+        except Exception:
+            # Fall through to the silent default behaviour on any error.
+            pass
+        try:
+            node_label = node.name() if callable(node.name) else node.name
+        except Exception:
+            node_label = '<unknown>'
+        self.timeline.add_event(f"Double-clicked {node_label} (Popup disabled)")
 
 
     def _on_graph_property_changed(self, node, prop_name, prop_value):
@@ -2400,6 +3133,10 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 # Re-render with updated visualization mode
                 try:
                     self.viewer.render_simulation(cached_result)
+                    try:
+                        self._show_bc_for_node(node)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 
@@ -2491,6 +3228,10 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
                     if is_renderable(res):
                         target_node = selected
+                    else:
+                        _, upstream_geom = self._get_render_context_for_node(selected)
+                        if upstream_geom is not None:
+                            target_node = selected
 
                 # Fallback to last rendered
                 if target_node is None:
@@ -2503,21 +3244,10 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                     self._last_rendered_node = target_node
                     # Get result from the results dict or the node cache
                     geom = results.get(target_node, getattr(target_node, '_last_result', None))
+                    if not self._is_renderable_result(geom):
+                        _, geom = self._get_render_context_for_node(target_node)
 
-                    if isinstance(geom, dict) and ('mesh' in geom or 'displacement' in geom):
-                        self.viewer.render_simulation(geom)
-                        try:
-                            self.results.show_result(geom)
-                        except Exception:
-                            pass
-                    elif hasattr(geom, 'p') and hasattr(geom, 't'):
-                        # Direct Mesh object from skfem
-                        self.viewer.render_simulation(geom)
-                    elif self._is_2d_sketch(geom):
-                        # 2D sketch - render as polylines
-                        self.viewer.render_sketch(geom)
-                    else:
-                        self.viewer.render_shape(geom)
+                    self._render_result_in_viewer(geom)
 
                     # Re-collect and cache BC overlays so they show on the
                     # freshly rendered shape / simulation result.
@@ -2757,7 +3487,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         sim_nodes = []
         for node in self.graph.all_nodes():
             node_class = node.__class__.__name__
-            if node_class in ['SolverNode', 'TopologyOptimizationNode', 'MeshNode', 'CrashSolverNode', 'CrashSolverGPUNode']:
+            if node_class in ['SolverNode', 'TopologyOptimizationNode', 'MeshNode', 'CrashSolverNode']:
                 sim_nodes.append(node)
         
         if not sim_nodes:
@@ -2977,7 +3707,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             return
 
         fname, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Open Project", "", "CAD Projects (*.cad);;All Files (*)"
+            self, "Open Project", "", "Design Projects (*.cad);;All Files (*)"
         )
         if fname:
             # Disable auto-update and set loading flag to suppress events
@@ -3335,6 +4065,10 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                             self.viewer.render_simulation(cached_result)
                         else:
                             self.viewer.render_shape(cached_result)
+                        try:
+                            self._show_bc_for_node(node)
+                        except Exception:
+                            pass
                         if hasattr(self.window(), 'statusBar') and self.window().statusBar():
                             self.window().statusBar().showMessage(f"✓ Updated {prop_name} display")
                         return  # Skip full graph execution
@@ -3389,7 +4123,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             return
 
         fname, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Save Project As", "", "CAD Projects (*.cad);;All Files (*)"
+            self, "Save Project As", "", "Design Projects (*.cad);;All Files (*)"
         )
         if fname:
             # Ensure .cad extension
@@ -3419,7 +4153,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         # self.toolbar.setEnabled(False)  # Removed for real-time viz
         
         if skip_simulation:
-            self.statusBar().showMessage("⏳ Updating CAD preview...")
+            self.statusBar().showMessage("⏳ Updating design preview...")
         else:
             self.statusBar().showMessage("⏳ Computing... (watch 3D viewer for live updates)")
             self.timeline.add_event("Graph execution started (Full)")
@@ -3460,7 +4194,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 'density': densities,
                 'type': 'topopt',
                 'visualization_mode': 'Density',
-                'density_cutoff': 0.3  # Use default cutoff for preview
+                'density_cutoff': 0.3,  # Use default cutoff for preview
+                '_preview': True,
             }
             self.viewer.render_simulation(result)
             

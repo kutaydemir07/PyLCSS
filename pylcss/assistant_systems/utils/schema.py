@@ -197,7 +197,7 @@ def get_simplified_schema_string() -> str:
         lines.append(f"- **{node['name']}** (`{node['type']}`): Inputs={node['inputs']}, Outputs={node['outputs']}, Props={{ {props} }}")
     
     # CAD section
-    lines.append("\n### CAD Environment Nodes")
+    lines.append("\n### Design Studio Nodes")
     lines.append("Use these in the CAD tab (tab 1) for 3D solid modeling.")
     lines.append("Categories: Primitives, Sketching, Operations, Transforms, Patterns, Assembly, Analysis, Simulation, IO\n")
     
@@ -262,4 +262,3 @@ if __name__ == "__main__":
     nodes = generate_node_schema()
     print(f"Generated schema for {len(nodes)} nodes")
     print("\n" + get_simplified_schema_string())
-

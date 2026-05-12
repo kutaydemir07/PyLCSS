@@ -9,10 +9,8 @@
     "reject_connection_types": "{}"
   },
   "nodes": {
-    "0x1f91132c610": {
-      "type_": "com.cad.box.BoxNode",
+    "0x001": {
       "icon": null,
-      "name": "Box",
       "color": [
         13,
         18,
@@ -35,27 +33,35 @@
       "selected": false,
       "visible": true,
       "width": 160,
-      "height": 165.6,
-      "pos": [
-        -430.9374422711103,
-        -146.21567933465548
-      ],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "name": "Box",
+      "pos": [
+        -700.0,
+        -150.0
+      ],
+      "height": 220.0,
       "custom": {
-        "box_length": 20.0,
-        "box_width": 1.5,
-        "box_depth": 60.0,
-        "center_x": 0.0,
-        "center_y": 0.0,
-        "center_z": 0.0
+        "code": "# Robust cantilever \u2014 slim bar with the \u2212Z face fixed.\nresult = cq.Workplane('XY').box(L, W, D)\n",
+        "parameters": "",
+        "param_1_name": "L",
+        "param_1_value": 20.0,
+        "param_2_name": "W",
+        "param_2_value": 1.5,
+        "param_3_name": "D",
+        "param_3_value": 60.0,
+        "param_4_name": "",
+        "param_4_value": 0.0,
+        "param_5_name": "",
+        "param_5_value": 0.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
       }
     },
-    "0x1f9115e2350": {
-      "type_": "com.cad.select_face.SelectFaceNode",
+    "0x002": {
       "icon": null,
-      "name": "Select Face (Robust)",
       "color": [
         13,
         18,
@@ -78,14 +84,16 @@
       "selected": false,
       "visible": true,
       "width": 160,
-      "height": 60,
-      "pos": [
-        -55.8862717338622,
-        -117.09234482154692
-      ],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "name": "Select Face (Robust)",
+      "pos": [
+        -450.0,
+        -300.0
+      ],
+      "height": 119.4,
       "custom": {
         "selector_type": "Direction",
         "direction": "<Z",
@@ -96,133 +104,8 @@
         "tag": "left"
       }
     },
-    "0x1f91f989010": {
-      "type_": "com.cad.sim.mesh.MeshNode",
+    "0x003": {
       "icon": null,
-      "name": "Generate Mesh (Netgen)",
-      "color": [
-        13,
-        18,
-        23,
-        255
-      ],
-      "border_color": [
-        74,
-        84,
-        85,
-        255
-      ],
-      "text_color": [
-        255,
-        255,
-        255,
-        180
-      ],
-      "disabled": false,
-      "selected": false,
-      "visible": true,
-      "width": 170.0,
-      "height": 119.4,
-      "pos": [
-        121.42836177511265,
-        -226.7055504038645
-      ],
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
-      "custom": {
-        "mesh_type": "Tet",
-        "element_size": 1.5,
-        "refinement_size": 0.5
-      }
-    },
-    "0x1f91f989a10": {
-      "type_": "com.cad.sim.material.MaterialNode",
-      "icon": null,
-      "name": "Material",
-      "color": [
-        13,
-        18,
-        23,
-        255
-      ],
-      "border_color": [
-        74,
-        84,
-        85,
-        255
-      ],
-      "text_color": [
-        255,
-        255,
-        255,
-        180
-      ],
-      "disabled": false,
-      "selected": false,
-      "visible": true,
-      "width": 182.0,
-      "height": 96.3,
-      "pos": [
-        389.90824203216164,
-        155.98971562593604
-      ],
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
-      "custom": {
-        "preset": "Steel (Structural)",
-        "youngs_modulus": 210000.0,
-        "poissons_ratio": 0.3,
-        "density": 7.85e-09
-      }
-    },
-    "0x1f91f98a290": {
-      "type_": "com.cad.sim.constraint.ConstraintNode",
-      "icon": null,
-      "name": "FEA Fixed Support (Face)",
-      "color": [
-        13,
-        18,
-        23,
-        255
-      ],
-      "border_color": [
-        74,
-        84,
-        85,
-        255
-      ],
-      "text_color": [
-        255,
-        255,
-        255,
-        180
-      ],
-      "disabled": false,
-      "selected": false,
-      "visible": true,
-      "width": 171.0,
-      "height": 73.2,
-      "pos": [
-        399.0316171214986,
-        -101.41174350227082
-      ],
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
-      "custom": {
-        "constraint_type": "Fixed",
-        "displacement_x": 0.0,
-        "displacement_y": 0.0,
-        "displacement_z": 0.0,
-        "condition": ""
-      }
-    },
-    "0x1f91aabc1d0": {
-      "type_": "com.cad.sim.load.LoadNode",
-      "icon": null,
-      "name": "FEA Load (Face)",
       "color": [
         13,
         18,
@@ -245,14 +128,139 @@
       "selected": false,
       "visible": true,
       "width": 160,
-      "height": 142.5,
-      "pos": [
-        405.8937070301834,
-        -5.3294076007932745
-      ],
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "name": "Generate Mesh (Netgen)",
+      "pos": [
+        -450.0,
+        -100.0
+      ],
+      "height": 119.4,
+      "custom": {
+        "mesh_type": "Tet",
+        "element_size": 1.5,
+        "refinement_size": 0.5
+      }
+    },
+    "0x004": {
+      "icon": null,
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "type_": "com.cad.sim.material.MaterialNode",
+      "name": "Material",
+      "pos": [
+        -450.0,
+        120.0
+      ],
+      "height": 96.3,
+      "custom": {
+        "preset": "Steel (Structural)",
+        "youngs_modulus": 210000.0,
+        "poissons_ratio": 0.3,
+        "density": 7.85e-09
+      }
+    },
+    "0x005": {
+      "icon": null,
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "name": "FEA Fixed Support (Face)",
+      "pos": [
+        -180.0,
+        -280.0
+      ],
+      "height": 73.2,
+      "custom": {
+        "constraint_type": "Fixed",
+        "displacement_x": 0.0,
+        "displacement_y": 0.0,
+        "displacement_z": 0.0,
+        "condition": ""
+      }
+    },
+    "0x006": {
+      "icon": null,
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "type_": "com.cad.sim.load.LoadNode",
+      "name": "FEA Load (Face)",
+      "pos": [
+        -180.0,
+        -60.0
+      ],
+      "height": 142.5,
       "custom": {
         "load_type": "Force",
         "condition": "(np.abs(x) < 2) & (np.abs(y) < 0.8) & (z > 29)",
@@ -266,10 +274,8 @@
         "gravity_direction": "-Y"
       }
     },
-    "0x1f91fa14650": {
-      "type_": "com.cad.sim.topopt.TopologyOptimizationNode",
+    "0x007": {
       "icon": null,
-      "name": "Topology Opt",
       "color": [
         13,
         18,
@@ -291,15 +297,17 @@
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 196.0,
-      "height": 119.4,
-      "pos": [
-        686.5148275746717,
-        -67.03783987018676
-      ],
+      "width": 160,
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
+      "type_": "com.cad.sim.topopt.TopologyOptimizationNode",
+      "name": "Topology Opt",
+      "pos": [
+        150.0,
+        -150.0
+      ],
+      "height": 119.4,
       "custom": {
         "vol_frac": 0.4,
         "iterations": 100,
@@ -329,91 +337,91 @@
   "connections": [
     {
       "out": [
-        "0x1f91132c610",
+        "0x001",
         "shape"
       ],
       "in": [
-        "0x1f9115e2350",
+        "0x002",
         "shape"
       ]
     },
     {
       "out": [
-        "0x1f91132c610",
+        "0x001",
         "shape"
       ],
       "in": [
-        "0x1f91f989010",
+        "0x003",
         "shape"
       ]
     },
     {
       "out": [
-        "0x1f9115e2350",
+        "0x002",
         "workplane"
       ],
       "in": [
-        "0x1f91f98a290",
+        "0x005",
         "target_face"
       ]
     },
     {
       "out": [
-        "0x1f91f989010",
+        "0x003",
         "mesh"
       ],
       "in": [
-        "0x1f91f98a290",
+        "0x005",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x1f91f989010",
+        "0x003",
         "mesh"
       ],
       "in": [
-        "0x1f91aabc1d0",
+        "0x006",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x1f91f989010",
+        "0x003",
         "mesh"
       ],
       "in": [
-        "0x1f91fa14650",
+        "0x007",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x1f91f989a10",
+        "0x004",
         "material"
       ],
       "in": [
-        "0x1f91fa14650",
+        "0x007",
         "material"
       ]
     },
     {
       "out": [
-        "0x1f91f98a290",
+        "0x005",
         "constraints"
       ],
       "in": [
-        "0x1f91fa14650",
+        "0x007",
         "constraints"
       ]
     },
     {
       "out": [
-        "0x1f91aabc1d0",
+        "0x006",
         "loads"
       ],
       "in": [
-        "0x1f91fa14650",
+        "0x007",
         "loads"
       ]
     }

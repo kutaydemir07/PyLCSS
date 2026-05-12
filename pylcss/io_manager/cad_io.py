@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 """
-CAD file import and export with multi-format support.
+Geometry file import and export with multi-format support.
 Supports: STEP, IGES, STL, OBJ, BREP, 3MF
 """
 
@@ -42,7 +42,7 @@ CAD_EXPORT_FORMATS = {
 
 
 class CADImporter:
-    """Import CAD geometry from various file formats."""
+    """Import geometry from various file formats."""
 
     @staticmethod
     def get_supported_formats() -> Dict[str, str]:
@@ -52,7 +52,7 @@ class CADImporter:
     def get_filter_string() -> str:
         """File dialog filter string."""
         all_exts = " ".join(f"*{ext}" for ext in CAD_IMPORT_FORMATS)
-        parts = [f"All CAD Files ({all_exts})"]
+        parts = [f"All Geometry Files ({all_exts})"]
         seen = set()
         for ext, name in CAD_IMPORT_FORMATS.items():
             if name not in seen:
@@ -66,7 +66,7 @@ class CADImporter:
     @staticmethod
     def import_file(filepath: str, **kwargs) -> Any:
         """
-        Import CAD file and return CadQuery shape or mesh data.
+        Import geometry file and return CadQuery shape or mesh data.
         
         Returns:
             CadQuery Workplane, shape, or dict with mesh data

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import shutil
@@ -355,6 +356,165 @@ def dict_geometries(data: dict) -> List[Any]:
     return normalize_geometries(geoms)
 
 
+_ALLOWED_CONDITION_FUNCS = {
+    "abs": np.abs,
+    "sqrt": np.sqrt,
+    "sin": np.sin,
+    "cos": np.cos,
+    "tan": np.tan,
+    "arcsin": np.arcsin,
+    "arccos": np.arccos,
+    "arctan": np.arctan,
+    "minimum": np.minimum,
+    "maximum": np.maximum,
+    "where": np.where,
+    "isclose": np.isclose,
+}
+_ALLOWED_NP_ATTRS = {
+    "abs": np.abs,
+    "sqrt": np.sqrt,
+    "sin": np.sin,
+    "cos": np.cos,
+    "tan": np.tan,
+    "arcsin": np.arcsin,
+    "arccos": np.arccos,
+    "arctan": np.arctan,
+    "minimum": np.minimum,
+    "maximum": np.maximum,
+    "where": np.where,
+    "isclose": np.isclose,
+    "logical_and": np.logical_and,
+    "logical_or": np.logical_or,
+    "logical_not": np.logical_not,
+    "pi": np.pi,
+}
+
+
+class _SafeNumpy:
+    """Tiny namespace for condition expressions such as ``np.abs(z) < 1``."""
+
+    def __getattr__(self, name: str) -> Any:
+        if name not in _ALLOWED_NP_ATTRS:
+            raise AttributeError(name)
+        return _ALLOWED_NP_ATTRS[name]
+
+
+class _ConditionValidator(ast.NodeVisitor):
+    """Whitelist the expression subset used by legacy CAD condition strings."""
+
+    _ALLOWED_NODES = (
+        ast.Expression,
+        ast.BoolOp,
+        ast.BinOp,
+        ast.UnaryOp,
+        ast.Compare,
+        ast.Name,
+        ast.Load,
+        ast.Constant,
+        ast.Call,
+        ast.Attribute,
+        ast.And,
+        ast.Or,
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.Div,
+        ast.FloorDiv,
+        ast.Mod,
+        ast.Pow,
+        ast.BitAnd,
+        ast.BitOr,
+        ast.BitXor,
+        ast.Invert,
+        ast.Not,
+        ast.UAdd,
+        ast.USub,
+        ast.Eq,
+        ast.NotEq,
+        ast.Lt,
+        ast.LtE,
+        ast.Gt,
+        ast.GtE,
+    )
+    _ALLOWED_NAMES = {"x", "y", "z", "np", *tuple(_ALLOWED_CONDITION_FUNCS)}
+
+    def generic_visit(self, node: ast.AST) -> None:
+        if not isinstance(node, self._ALLOWED_NODES):
+            raise ValueError(f"unsupported expression element: {node.__class__.__name__}")
+        super().generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if node.id not in self._ALLOWED_NAMES:
+            raise ValueError(f"unsupported name: {node.id!r}")
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if not isinstance(node.value, ast.Name) or node.value.id != "np":
+            raise ValueError("only np.<function> attributes are allowed")
+        if node.attr not in _ALLOWED_NP_ATTRS:
+            raise ValueError(f"unsupported numpy function: np.{node.attr}")
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if isinstance(node.func, ast.Name):
+            if node.func.id not in _ALLOWED_CONDITION_FUNCS:
+                raise ValueError(f"unsupported function: {node.func.id!r}")
+        elif isinstance(node.func, ast.Attribute):
+            self.visit_Attribute(node.func)
+        else:
+            raise ValueError("unsupported function call")
+        for arg in node.args:
+            self.visit(arg)
+        for keyword in node.keywords:
+            if keyword.arg is None:
+                raise ValueError("condition expressions do not support **kwargs")
+            self.visit(keyword.value)
+
+
+def nodes_matching_condition(
+    mesh: Any,
+    condition: str,
+    warnings: Optional[List[str]] = None,
+    label: str = "condition",
+) -> np.ndarray:
+    """Find mesh node indices selected by a legacy ``x/y/z`` condition string."""
+    expr = str(condition or "").strip()
+    if not expr:
+        return np.array([], dtype=int)
+    if mesh is None or not hasattr(mesh, "p"):
+        raise SolverBackendError("Condition-based selection expected a mesh with node coordinates.")
+
+    p = np.asarray(mesh.p, dtype=float)
+    x, y, z = p[0], p[1], p[2]
+    try:
+        expr_ast = ast.parse(expr, mode="eval")
+        _ConditionValidator().visit(expr_ast)
+        mask = eval(
+            compile(expr_ast, "<pylcss-condition>", "eval"),
+            {"__builtins__": {}},
+            {
+                "x": x,
+                "y": y,
+                "z": z,
+                "np": _SafeNumpy(),
+                **_ALLOWED_CONDITION_FUNCS,
+            },
+        )
+    except Exception as exc:
+        raise SolverBackendError(f"{label} expression {expr!r} could not be evaluated: {exc}") from exc
+
+    mask = np.asarray(mask, dtype=bool)
+    if mask.shape == ():
+        mask = np.full(x.shape, bool(mask), dtype=bool)
+    if mask.shape != x.shape:
+        raise SolverBackendError(
+            f"{label} expression {expr!r} returned shape {mask.shape}, expected {x.shape}."
+        )
+
+    node_ids = np.where(mask)[0].astype(int)
+    if warnings is not None and node_ids.size == 0:
+        warnings.append(f"{label} expression {expr!r} matched no mesh nodes.")
+    return node_ids
+
+
 def nodes_matching_geometries(
     mesh: Any,
     geometries: Sequence[Any],
@@ -439,7 +599,14 @@ def tet_face_sets_for_geometries(
         return []
 
     p = np.asarray(mesh.p, dtype=float)             # (3, N_nodes)
-    t = np.asarray(mesh.t[:4, :], dtype=int)         # (4, N_elem)
+    # Match the connectivity emitted by ``mesh_to_tet4``.  Pressure surfaces
+    # use CalculiX local face ids, so their numbering must follow the same
+    # reorientation used in the exported *ELEMENT block.
+    try:
+        _, cells = mesh_to_tet4(mesh, [])
+        t = np.asarray(cells, dtype=int).T
+    except Exception:
+        t = np.asarray(mesh.t[:4, :], dtype=int)
     n_elem = t.shape[1]
 
     # Local face nodes — CalculiX face f uses the three corners excluding f-1.

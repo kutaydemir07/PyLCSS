@@ -10,13 +10,11 @@ continue to work unchanged.
 from pylcss.cad.nodes.crash.materials     import CrashMaterialNode
 from pylcss.cad.nodes.crash.conditions    import ImpactConditionNode
 from pylcss.cad.nodes.crash.solver        import CrashSolverNode
-from pylcss.cad.nodes.crash.solver_gpu    import CrashSolverGPUNode
 from pylcss.cad.nodes.crash.radioss_deck  import RunRadiossDeckNode
 
 __all__ = [
     'CrashMaterialNode',
     'ImpactConditionNode',
     'CrashSolverNode',
-    'CrashSolverGPUNode',
     'RunRadiossDeckNode',
 ]

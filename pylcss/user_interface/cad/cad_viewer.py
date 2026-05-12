@@ -1843,6 +1843,27 @@ class CQ3DViewer(QtWidgets.QWidget):
             for item in constraint_faces:
                 if item is None:
                     continue
+                if isinstance(item, dict) and item.get('pos') is not None:
+                    viz_meta = item.get('viz', {}) or {}
+                    hex_col = viz_meta.get('color', '#2979FF')
+                    try:
+                        r = int(hex_col[1:3], 16) / 255.0
+                        g = int(hex_col[3:5], 16) / 255.0
+                        b = int(hex_col[5:7], 16) / 255.0
+                    except Exception:
+                        r, g, b = 0.16, 0.47, 1.0
+                    fixed_dofs = viz_meta.get('fixed_dofs') or [0, 1, 2]
+                    points = item.get('points') or [item.get('pos')]
+                    for point in points:
+                        before_count = len(self.actors)
+                        self._add_constraint_glyph(
+                            point, fixed_dofs=fixed_dofs, color=(r, g, b),
+                            size=max(1.2, 0.65 * _overlay_scale()),
+                        )
+                        for actor in self.actors[before_count:]:
+                            actor._bc_overlay = True
+                            self._bc_overlay_actors.append(actor)
+                    continue
                 # item can be a bare OCC face (legacy) or a dict with 'face' + 'viz' keys
                 if isinstance(item, dict):
                     occ_face = item.get('face')
@@ -1908,6 +1929,8 @@ class CQ3DViewer(QtWidgets.QWidget):
                 unit_vec  = vec / (np.linalg.norm(vec) + 1e-12)
                 vis_vec   = unit_vec * arrow_len
                 sample_points = _sample_face_points(occ_face, max_points=5) if occ_face is not None else []
+                if not sample_points and isinstance(entry, dict):
+                    sample_points = entry.get('points') or []
                 if sample_points:
                     scaled_vec = unit_vec * max(0.45 * arrow_len, 0.8 * _overlay_scale())
                     for point in sample_points:
@@ -2481,7 +2504,11 @@ class CQ3DViewer(QtWidgets.QWidget):
         #    so they remain visible after FEA/TopOpt solve.
         #    Skip only for TopOpt iteration previews (keep frame rate high).
         #    Crash frames DO replay overlays so supports/impact face stay visible.
-        skip_bc_replay = isinstance(data, dict) and data.get('type') == 'topopt'
+        skip_bc_replay = (
+            isinstance(data, dict)
+            and data.get('type') == 'topopt'
+            and bool(data.get('_preview', False))
+        )
         if not skip_bc_replay and self._cached_bc_data is not None:
             c_faces, l_faces, l_vecs = self._cached_bc_data
             self.render_bc_overlays(

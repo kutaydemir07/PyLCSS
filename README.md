@@ -23,8 +23,8 @@
 *Visual Modeling · Parametric CAD · Topology Optimisation · FEA · Solution Spaces · Sensitivity Analysis · Surrogate AI · Multi-Objective Optimization*
 
 [![License](https://img.shields.io/badge/License-PolyForm_Shield_1.0.0-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.8%2B-green.svg)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/Version-2.0.0-orange.svg)]()
+[![Python](https://img.shields.io/badge/Python-3.10%2B-green.svg)](https://www.python.org/)
+[![Version](https://img.shields.io/badge/Version-2.1.0-orange.svg)]()
 
 </div>
 
@@ -34,7 +34,9 @@
 
 **PyLCSS** (Python Low-Code System Solutions) is a professional engineering design platform. It allows engineers to model complex multidisciplinary systems through a node-based visual interface, run parametric CAD and FEA simulations, explore high-dimensional **Solution Spaces**, and optimise designs using 7 different algorithms — all within a single desktop application.
 
-Built for real-world engineering workflows, PyLCSS features a crash-free multi-threaded architecture, vectorised computation kernels, comprehensive file I/O, and an integrated AI coding assistant.
+Built for real-world engineering workflows, PyLCSS features a crash-free multi-threaded architecture, vectorised computation kernels, comprehensive file I/O, external solver integration, and an integrated AI coding assistant.
+
+PyLCSS is more than a standalone CAD environment: the CAD graph is the parametric source of truth for downstream simulation and design optimisation. STEP is supported for exchange, but `.cad` graphs and exposed parameters are required when a model must be rebuilt, swept, or optimised.
 
 ---
 
@@ -48,23 +50,26 @@ PyLCSS implements the **Solution Space** approach for robust design: instead of 
 
 ## Key Features
 
-### Parametric CAD Environment
+### Parametric Engineering Design Environment
 - **70+ Node Types** — Primitives, Booleans, Fillets, Chamfers, Sweeps, Lofts, Shells, Patterns, Imports
+- **Code-Assisted Modeling Direction** — Parts and assemblies should remain reproducible through graph nodes, exposed parameters, imported STEP/STL geometry, or code-based creation blocks rather than hidden manual edits
 - **Topology Optimisation** — SIMP with MMA/OC solvers, density/sensitivity filtering, Heaviside projection, symmetry constraints, shape recovery with marching cubes, and **direct STL/OBJ export** of optimised shapes
 - **Advanced Nodes** — Thicken, Pipe, Split, Text emboss, Math Expression evaluator, Import STEP/STL
 - **Real-Time 3D Viewer** — VTK-based with density cutoff preview during optimisation
 - **Measurement** — Distance, surface area, and volume nodes
 
 ### Finite Element Analysis (FEA)
-- **scikit-fem** + **Netgen** meshing — Tetrahedral/triangular elements
-- **Linear Elasticity** — Displacement, von Mises stress, compliance
+- **Netgen Meshing + scikit-fem Mesh Containers** — Tetrahedral/triangular mesh generation and internal mesh representation
+- **CalculiX Static Solver Backend** — PyLCSS writes a CalculiX `.inp`, runs `ccx`, parses `.frd`, and displays displacement + Von Mises stress in the in-app VTK viewer
+- **Linear Elasticity Results** — Displacement, von Mises stress, compliance, volume, and mass
 - **FEA Results Nodes** — Stress extraction, displacement, reaction forces
 - **Remeshing** — Surface-to-solid conversion for topology-optimised shapes (up to 20 000 faces)
-- **External CalculiX Backend** — Full round-trip: PyLCSS writes a CalculiX `.inp`, runs `ccx`, parses the `.frd` output, and displays displacement + Von Mises stress in the in-app VTK viewer (see [Installation](#installation) for the binary fetch step)
+- **CalculiX-Coupled Optimisation** — Topology, shape, and size optimisation now run through repeated CalculiX evaluations instead of the removed in-process scikit-fem solver path
 
 ### Crash / Impact Simulation
-- **Internal Explicit Solver** — Central-difference transient solid mechanics with plasticity, fracture, contact, and optional GPU path
-- **OpenRadioss Backend** — Full round-trip: PyLCSS writes an LS-DYNA-style keyword deck, runs Starter + Engine, converts the `A001`/`A002`… animation files via `anim_to_vtk`, and plays the frames in the crash viewer (requires the OpenRadioss binaries — see [Installation](#installation))
+- **OpenRadioss Backend** — PyLCSS writes an LS-DYNA-style keyword deck, runs Starter + Engine, converts the `A001`/`A002`… animation files via `anim_to_vtk`, and plays the frames in the crash viewer
+- **Run Radioss Deck Node** — Existing OpenRadioss/LS-DYNA `.rad`/`.k` decks can be launched and imported
+- **Current Limitation** — The generated crash deck is still a thin integration layer. Even simple explicit simulations can run slowly when the mesh has tiny elements, the end time/output frequency is high, or animation conversion dominates.
 
 ### Multi-Objective Optimisation (7 Solvers)
 | Algorithm | Type | Best For |
@@ -122,7 +127,7 @@ PyLCSS implements the **Solution Space** approach for robust design: instead of 
 ## Installation
 
 ### Prerequisites
-- **Python** 3.8+
+- **Python** 3.10+
 - **OS** Windows 10/11 (macOS and Linux: experimental)
 
 ### Quick Install
@@ -144,7 +149,7 @@ pip install -r requirements.txt
 
 # (Optional) Download CalculiX + OpenRadioss native binaries.
 # These are NOT pip-installable; the script fetches the upstream releases
-# into <repo>/external_solvers/ and writes the matching PYLCSS_* env vars.
+# into <repo>/external_solvers/ and writes solver_paths.json.
 python scripts/install_solvers.py
 
 # Launch
@@ -157,18 +162,18 @@ Or on Windows: double-click `run_gui.bat`.
 
 | Backend | Provided by | How PyLCSS finds it |
 |---------|-------------|----------------------|
-| CalculiX (`ccx`) | `python scripts/install_solvers.py --only ccx` | `PYLCSS_CALCULIX_CCX`, `CALCULIX_CCX`, or `ccx`/`ccx.exe` on `PATH` |
+| CalculiX (`ccx`) | `python scripts/install_solvers.py --only ccx` | `PYLCSS_CALCULIX_CCX`, `CALCULIX_CCX`, `ccx_static`, `ccx`, or `ccx.exe` on `PATH` |
 | OpenRadioss Starter/Engine | `python scripts/install_solvers.py --only radioss` | `PYLCSS_OPENRADIOSS_STARTER`, `PYLCSS_OPENRADIOSS_ENGINE`, or `starter_*`/`engine_*` on `PATH` |
 | OpenRadioss `anim_to_vtk` | Bundled with the Radioss install above | `PYLCSS_OPENRADIOSS_ANIM2VTK` or `anim_to_vtk*` on `PATH` |
 
-Structural optimization (Topology / Shape / Size) still runs on the in-process scikit-fem solver — the optimization nodes need a Jacobian/adjoint that the external decks do not provide. The external backends are for high-fidelity verification of single FEA / crash runs.
+CalculiX and OpenRadioss are launched as external native processes. They are not pip dependencies and remain governed by their own upstream licenses.
 
 ---
 
 ## Quick Start
 
 1. **Launch** — `python scripts/main.py`
-2. **Load a Model** — `File → Open` → select `data/Gear Unit.json`
+2. **Load a Model** — `File → Open` → select a project from `data/`
 3. **Validate** — Click "Validate" to check units and connections
 4. **Solution Space** — Switch to Solution Space tab → "Compute"
 5. **Visualise** — Plot Weight vs. Safety Factor
@@ -180,10 +185,12 @@ Structural optimization (Topology / Shape / Size) still runs on the in-process s
 
 ```
 pylcss/
-├── cad/                  # Parametric CAD kernel (CadQuery + OCC)
-│   ├── nodes/            # 50+ node types (primitives, booleans, FEA, TopOpt)
+├── cad/                  # Parametric design graph (CadQuery + OCC)
+│   ├── nodes/            # 50+ node types (modeling, meshing, FEA, TopOpt, crash)
 │   ├── engine.py         # Graph execution engine
+│   ├── runtime.py        # cad.fea / cad.crash / cad.topopt API
 │   └── node_library.py   # Node registry
+├── solver_backends/      # CalculiX and OpenRadioss deck/run/result adapters
 ├── optimization/         # 7 solvers (SciPy, Nevergrad, NSGA-II, Multi-Start)
 ├── sensitivity/          # 4 methods (Sobol, Morris, FAST, Delta)
 ├── solution_space/       # Monte Carlo, step analysis, product families
@@ -199,8 +206,8 @@ pylcss/
 | Layer | Technologies |
 |-------|-------------|
 | **UI** | PySide6, NodeGraphQt, QtAwesome |
-| **CAD** | CadQuery, OpenCASCADE (OCP), VTK |
-| **FEA** | scikit-fem, Netgen, meshio, CalculiX (`ccx` + `.frd` round-trip), OpenRadioss (`starter`/`engine` + `anim_to_vtk` round-trip) |
+| **Parametric Design** | CadQuery, OpenCASCADE (OCP), VTK |
+| **FEA / Crash** | Netgen, scikit-fem mesh containers, meshio, CalculiX (`ccx` + `.frd` round-trip), OpenRadioss (`starter`/`engine` + `anim_to_vtk` round-trip) |
 | **Computation** | NumPy, SciPy, Pandas |
 | **Visualisation** | VTK (3D), pyqtgraph (2D) |
 | **ML** | PyTorch, scikit-learn |
@@ -216,7 +223,7 @@ Licensed under the **PolyForm Shield License 1.0.0**.
 **Allowed:** Personal use, academic research, internal business use.
 **Restricted:** You cannot use this software to build a competing product or service.
 
-See [LICENSE](LICENSE) for full details.
+See [LICENSE](LICENSE) and [NOTICE](NOTICE) for full details.
 
 <div align="center">
 <sub>Copyright © 2026 Kutay Demir. All rights reserved.</sub>

@@ -42,7 +42,7 @@ class GraphBuilder:
         if clean and clean[0].isdigit():
             clean = "_" + clean
         # Add internal variable names to this list
-        reserved = keyword.kwlist + ['inputs', 'outputs', 'results', 'np']
+        reserved = keyword.kwlist + ['inputs', 'outputs', 'results', 'np', 'cad', 'joblib', 'os', 'sys']
         if clean in reserved:
             clean = f"var_{clean}"
         return clean
@@ -181,6 +181,12 @@ class GraphBuilder:
         code_lines.append("import os")
         code_lines.append("import sys") # Added sys for path manipulation if needed
         code_lines.append("from sklearn.preprocessing import StandardScaler")
+        # `cad` is the headless CAD-graph evaluator. Function-block code can call
+        # cad.fea(path, **inputs) / cad.crash(...) / cad.topopt(...) to evaluate
+        # an external .cad file as part of the system model. Each call returns a
+        # CadResult exposing standardised scalars (max_stress, compliance,
+        # mass, ...). See pylcss/cad/runtime.py for the full contract.
+        code_lines.append("from pylcss.cad import runtime as cad")
         code_lines.append("# Auto-generated model code")
         code_lines.append("")
         code_lines.append("# Base directory for relative paths")

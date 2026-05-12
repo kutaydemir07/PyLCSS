@@ -22,6 +22,7 @@ from pylcss.solver_backends.common import (
     id_lines,
     make_work_dir,
     mesh_to_tet4,
+    nodes_matching_condition,
     nodes_matching_geometries,
     resolve_executable,
     run_process,
@@ -29,6 +30,13 @@ from pylcss.solver_backends.common import (
 )
 from pylcss.solver_backends.radioss_reader import read_animation_frames, resolve_anim_to_vtk
 from typing import Optional
+
+
+# PyLCSS crash material nodes expose stiffness and strength in MPa while the
+# generated Radioss deck uses the consistent tonne-mm-ms unit system.
+# In that system 1 MPa = 1 N/mm^2 = 1e-6 tonne/(mm*ms^2).
+_MPA_TO_TONNE_MM_MS2 = 1.0e-6
+_TONNE_MM_MS2_TO_MPA = 1.0 / _MPA_TO_TONNE_MM_MS2
 
 
 def _radioss_runtime_env(binary_path: str) -> tuple:
@@ -140,16 +148,23 @@ def _build_keyword_deck(
     output_dt: float,
     gravity: dict | None,
     warnings: List[str],
+    impactor_mass: float = 0.0,
 ) -> str:
     """Create a minimal LS-DYNA keyword deck for OpenRadioss Starter."""
     points, tets = mesh_to_tet4(mesh, warnings)
 
-    e = float(material.get("E", 210000.0))
+    e_mpa = float(material.get("E", 210000.0))
     nu = float(material.get("nu", material.get("poissons_ratio", 0.3)))
     rho = float(material.get("rho", material.get("density", 7.85e-9)))
-    yield_strength = float(material.get("yield_strength", 250.0))
-    tangent_modulus = float(material.get("tangent_modulus", 2000.0))
+    yield_strength_mpa = float(material.get("yield_strength", 250.0))
+    tangent_modulus_mpa = float(material.get("tangent_modulus", 2000.0))
     failure_strain = float(material.get("failure_strain", 0.0))
+    if not material.get("enable_fracture", True):
+        failure_strain = 0.0
+    
+    e = e_mpa * _MPA_TO_TONNE_MM_MS2
+    yield_strength = yield_strength_mpa * _MPA_TO_TONNE_MM_MS2
+    tangent_modulus = tangent_modulus_mpa * _MPA_TO_TONNE_MM_MS2
 
     lines: List[str] = [
         "*KEYWORD",
@@ -195,37 +210,71 @@ def _build_keyword_deck(
     )
 
     next_set_id = 100
-    for idx, constraint in enumerate(constraints, start=1):
-        geoms = dict_geometries(constraint)
-        if not geoms:
-            warnings.append(f"Crash constraint {idx} has no face geometry; skipped.")
-            continue
-        node_ids = nodes_matching_geometries(mesh, geoms) + 1
-        if len(node_ids) == 0:
-            warnings.append(f"Crash constraint {idx} did not match any mesh nodes.")
-            continue
-        set_id = next_set_id
-        next_set_id += 1
-        _node_set(lines, set_id, node_ids)
-
-        fixed = set(int(v) for v in constraint.get("fixed_dofs", [0, 1, 2]))
-        dofx = 1 if 0 in fixed else 0
-        dofy = 1 if 1 in fixed else 0
-        dofz = 1 if 2 in fixed else 0
-        lines.extend(
-            [
-                "*BOUNDARY_SPC_SET",
-                "$#     nsid       cid      dofx      dofy      dofz     dofrx     dofry     dofrz",
-                f"{set_id}, 0, {dofx}, {dofy}, {dofz}, 0, 0, 0",
-            ]
-        )
 
     velocity = np.asarray(impact.get("velocity", [0.0, 0.0, 0.0]), dtype=float)
+    scope = str(impact.get("application_scope") or "Impact Face").strip().lower()
+    moving_body = scope.replace("_", " ").startswith("moving")
+
+    # ── SPC constraints (Impact Face scope only) ────────────────────────────
+    # For the Moving Body scope the entire structure is a free-flying projectile:
+    # there must be NO kinematic constraints — the rigid wall provides the only
+    # reaction force.  Adding SPCs here would turn the free-flight crash into a
+    # "hammer blow on a fixed-end bar", which gives elastic oscillations at
+    # ~0.7 mm amplitude instead of the expected 30–70 mm of progressive crush.
+    constrained_node_ids: List[int] = []
+    if not moving_body:
+        for idx, constraint in enumerate(constraints, start=1):
+            geoms = dict_geometries(constraint)
+            condition = str(constraint.get("condition") or "").strip()
+            if geoms:
+                node_ids = nodes_matching_geometries(mesh, geoms) + 1
+            elif condition:
+                node_ids = nodes_matching_condition(
+                    mesh,
+                    condition,
+                    warnings=warnings,
+                    label=f"Crash constraint {idx}",
+                ) + 1
+            else:
+                warnings.append(f"Crash constraint {idx} has no face geometry or condition; skipped.")
+                continue
+            if len(node_ids) == 0:
+                warnings.append(f"Crash constraint {idx} did not match any mesh nodes.")
+                continue
+            constrained_node_ids.extend(int(v) for v in node_ids)
+            set_id = next_set_id
+            next_set_id += 1
+            _node_set(lines, set_id, node_ids)
+
+            fixed = set(int(v) for v in constraint.get("fixed_dofs", [0, 1, 2]))
+            dofx = 1 if 0 in fixed else 0
+            dofy = 1 if 1 in fixed else 0
+            dofz = 1 if 2 in fixed else 0
+            lines.extend(
+                [
+                    "*BOUNDARY_SPC_SET",
+                    "$#     nsid       cid      dofx      dofy      dofz     dofrx     dofry     dofrz",
+                    f"{set_id}, 0, {dofx}, {dofy}, {dofz}, 0, 0, 0",
+                ]
+            )
+    elif constraints:
+        warnings.append(
+            "Moving Body crash: SPC constraints are ignored in this scope — the "
+            "entire body is a free-flying projectile and the rigid wall provides "
+            "the only reaction.  To model a fixed-rear laboratory test, switch "
+            "the ImpactCondition to 'Impact Face' scope and apply the velocity "
+            "only to the front face nodes."
+        )
+
+    # ── Initial velocity ─────────────────────────────────────────────────────
     print(f"OpenRadioss deck: impact velocity (mm/ms) = {velocity.tolist()!r}, "
           f"|v|={float(np.linalg.norm(velocity)):.3f} mm/ms "
           f"(= {float(np.linalg.norm(velocity)):.1f} m/s)")
     impact_faces = impact.get("face_list", [])
-    if impact_faces:
+    if moving_body:
+        # ALL nodes get the initial velocity — the body is a free-flying mass.
+        impact_nodes = np.arange(1, points.shape[0] + 1, dtype=int)
+    elif impact_faces:
         impact_nodes = nodes_matching_geometries(
             mesh,
             impact_faces,
@@ -237,6 +286,11 @@ def _build_keyword_deck(
     if len(impact_nodes) == 0:
         warnings.append("Impact condition did not match any nodes; no initial velocity exported.")
     elif np.linalg.norm(velocity) > 0.0:
+        print(
+            "OpenRadioss deck: applying initial velocity to "
+            f"{len(impact_nodes)} node(s) with scope="
+            f"{'Moving Body' if moving_body else 'Impact Face'}"
+        )
         # OpenRadioss's LS-DYNA reader does not implement
         # ``*INITIAL_VELOCITY_NODE_SET`` — only the per-node
         # ``*INITIAL_VELOCITY_NODE`` form.  Emit one row per impact node.
@@ -248,6 +302,59 @@ def _build_keyword_deck(
                 f"{velocity[0]:.12g}, {velocity[1]:.12g}, {velocity[2]:.12g}, "
                 "0, 0, 0"
             )
+
+    # ── Rigid wall (Moving Body scope only) ──────────────────────────────────
+    # The wall is placed just in front of the leading face of the body in the
+    # velocity direction.  The wall normal points back toward the body so that
+    # nodes moving in the impact direction are pushed back when they make contact.
+    if moving_body and len(impact_nodes) > 0 and np.linalg.norm(velocity) > 0.0:
+        v_mag = float(np.linalg.norm(velocity))
+        v_hat = velocity / v_mag
+        all_pos = points                                  # (N_nodes, 3)
+        projs = all_pos @ v_hat                           # scalar projection per node
+        max_proj = float(np.max(projs))                   # leading-edge projection
+        bbox_diag = float(np.linalg.norm(
+            np.max(all_pos, axis=0) - np.min(all_pos, axis=0)
+        ))
+        gap = max(bbox_diag * 0.005, 0.1)                 # 0.5 % of extent, min 0.1 mm
+        # Wall anchor point: on the plane perpendicular to v_hat passing through
+        # the leading edge + gap.  Centroid keeps it in the middle of the body.
+        centroid = np.mean(all_pos, axis=0)
+        wall_pt = centroid + v_hat * (max_proj + gap - float(centroid @ v_hat))
+        # Wall normal opposes the impact direction so the body bounces off.
+        wall_normal = -v_hat
+        # LS-DYNA *RIGIDWALL_PLANAR: Card 2 is XT,YT,ZT (tail = point on wall)
+        # followed by XH,YH,ZH (head = second point; tail→head = outward normal).
+        wall_head = wall_pt + wall_normal
+        lines.extend([
+            "*RIGIDWALL_PLANAR",
+            "$# nsid    nsidex  boxid   fric    wvel",
+            "0, 0, 0, 0.0, 0.0",
+            "$# xt            yt            zt            xh            yh            zh            foffset",
+            (f"{wall_pt[0]:.12g}, {wall_pt[1]:.12g}, {wall_pt[2]:.12g}, "
+             f"{wall_head[0]:.12g}, {wall_head[1]:.12g}, {wall_head[2]:.12g}, 0.0"),
+        ])
+        print(
+            f"OpenRadioss deck: added RIGIDWALL_PLANAR at "
+            f"[{wall_pt[0]:.3g}, {wall_pt[1]:.3g}, {wall_pt[2]:.3g}] "
+            f"normal=[{wall_normal[0]:.3g}, {wall_normal[1]:.3g}, {wall_normal[2]:.3g}] "
+            f"(Moving Body barrier, gap={gap:.3f} mm)"
+        )
+        # Warn if the named impact face is at the trailing edge — common sign
+        # that the velocity direction is wrong (e.g. -20 instead of +20 mm/ms
+        # for a frontal-crash geometry where +X is the impact face).
+        if impact_faces:
+            face_nodes_idx = nodes_matching_geometries(mesh, impact_faces)
+            if len(face_nodes_idx) > 0:
+                face_max_proj = float(np.max(points[face_nodes_idx] @ v_hat))
+                if max_proj - face_max_proj > bbox_diag * 0.2:
+                    warnings.append(
+                        "Moving Body crash: the named impact face is at the TRAILING "
+                        "edge in the velocity direction — the rear of the body will hit "
+                        "the wall first, not the intended impact face.  For a frontal "
+                        "crash where the +X face hits the barrier first, set "
+                        "velocity_x to a POSITIVE value (e.g. +20 mm/ms)."
+                    )
 
     # Gravity body force via *LOAD_BODY_X/Y/Z (LS-DYNA syntax accepted by Radioss).
     if gravity and float(gravity.get("accel", 0.0)) != 0.0:
@@ -276,21 +383,104 @@ def _build_keyword_deck(
             ]
         )
 
+    # ── Impactor Mass (Sled) ─────────────────────────────────────────────────
+    if float(impactor_mass) > 0.0:
+        added_mass_tonnes = float(impactor_mass) * 1e-3
+        # Identify trailing nodes (opposite to impact direction).
+        # We find nodes at the minimum projection along the velocity vector.
+        if np.linalg.norm(velocity) > 0.0:
+            v_hat = velocity / float(np.linalg.norm(velocity))
+            projs = points @ v_hat
+            min_proj = float(np.min(projs))
+            # Find nodes within 5 mm of the trailing edge
+            rear_nodes = np.where(projs < min_proj + 5.0)[0] + 1
+        else:
+            # Fallback if no velocity: distribute over all nodes
+            rear_nodes = np.arange(1, points.shape[0] + 1, dtype=int)
+            
+        if len(rear_nodes) > 0:
+            mass_per_node = added_mass_tonnes / len(rear_nodes)
+            lines.append("*ELEMENT_MASS")
+            lines.append("$#   eid     nid    mass")
+            # Start mass element IDs high to avoid clash with solid elements
+            start_eid = points.shape[0] * 10 + 1000000
+            for i, nid in enumerate(rear_nodes):
+                lines.append(f"{start_eid + i}, {nid}, {mass_per_node:.12g}")
+            print(
+                f"OpenRadioss deck: Added {float(impactor_mass):.1f} kg sled mass "
+                f"distributed over {len(rear_nodes)} trailing node(s)."
+            )
+
     lines.append("*END")
     return "\n".join(lines) + "\n"
 
 
-def _build_engine_deck(job_name: str, end_time: float) -> str:
-    """Write a minimal OpenRadioss ``<job>_0001.rad`` engine deck."""
-    return "\n".join(
+def _build_engine_deck(
+    job_name: str,
+    end_time: float,
+    output_dt: float,
+    mass_scaling_dt: float = 0.0,
+    mass_scaling_scale: float = 0.9,
+) -> str:
+    """Write the OpenRadioss ``<job>_0001.rad`` engine deck.
+
+    Beyond the bare ``/RUN`` + termination time, three blocks materially affect
+    how the run reports progress and what comes back as animation:
+
+    1.  ``/ANIM/DT`` + ``/ANIM/ELEM/*`` - without these the Engine writes no
+        animation files at the user-requested frequency, so the viewer ends up
+        with one or two frames and the "expected remaining time" line in the
+        log is the only signal of progress.
+
+    2.  ``/DT/NODA/CST`` - explicit dynamics' default time step shrinks as
+        contact engages or stiff regions activate, which makes the Engine's
+        per-cycle ``REMAINING TIME ESTIMATE`` grow upward over the run.  When
+        ``mass_scaling_dt > 0`` we ask Radioss to hold the time step at that
+        value by adding mass to nodes whose CFL bound drops below it.  This is
+        the standard industry trick for keeping crash sims wall-clock-bounded.
+
+    Parameters
+    ----------
+    mass_scaling_dt
+        Target nodal time step.  ``0`` disables ``/DT/NODA/CST`` entirely so
+        the run uses pure CFL - physics is unchanged, but dt may drift and
+        the estimated-remaining-time line will grow during the run.
+    mass_scaling_scale
+        Safety factor on the critical time step.  ``0.9`` is the
+        Altair-documented default.
+    """
+    out_dt = float(max(output_dt, 1e-12))
+    lines: List[str] = [
+        "#RADIOSS ENGINE INPUT",
+        f"/RUN/{job_name}/1",
+        f"{float(end_time):.6g}",
+    ]
+
+    # Optional nodal-mass time-step control (keeps dt approximately constant).
+    if float(mass_scaling_dt) > 0.0:
+        lines.extend(
+            [
+                "/DT/NODA/CST/0",
+                f"{float(mass_scaling_scale):.6g}  {float(mass_scaling_dt):.6g}",
+            ]
+        )
+
+    # Animation output: explicit frequency + the fields the viewer renders.
+    lines.extend(
         [
-            "#RADIOSS ENGINE INPUT",
-            f"/RUN/{job_name}/1",
-            f"{float(end_time):.6g}",
-            "/STOP",
+            "/ANIM/DT",
+            f"0.  {out_dt:.6g}",
+            "/ANIM/VECT/DISP",
+            "/ANIM/VECT/VEL",
+            "/ANIM/VECT/ACC",
+            "/ANIM/ELEM/VONM",   # Von Mises stress field
+            "/ANIM/ELEM/EPSP",   # equivalent plastic strain
+            "/ANIM/ELEM/ENER",
+            "/ANIM/BRICK/TENS/STRESS",
             "",
         ]
     )
+    return "\n".join(lines)
 
 
 def run_openradioss_existing_deck(
@@ -581,12 +771,33 @@ def _build_animation_frames_with_mesh(mesh: Any, frames: list) -> list:
     fixed: list = []
     for frame in frames:
         flat = np.asarray(frame.get("displacement", []), dtype=float).reshape(-1)
-        vm = np.asarray(frame.get("stress_vm", []), dtype=float).reshape(-1)
-        # Ensure length 3*N and N respectively.
+        vm = (
+            np.asarray(frame.get("stress_vm", []), dtype=float).reshape(-1)
+            * _TONNE_MM_MS2_TO_MPA
+        )
+        node_ids = np.asarray(frame.get("node_ids", []), dtype=int).reshape(-1)
+
+        # Ensure length 3*N and N respectively. anim_to_vtk may reorder points,
+        # but it emits NODE_ID, so scatter back to the source mesh ids first.
+        target_disp_3 = np.zeros((n_points, 3), dtype=float)
+        disp_3 = flat.reshape((-1, 3)) if flat.size % 3 == 0 else np.zeros((0, 3))
+        if node_ids.size == disp_3.shape[0]:
+            valid = (node_ids >= 1) & (node_ids <= n_points)
+            target_disp_3[node_ids[valid] - 1] = disp_3[valid]
+        elif disp_3.size:
+            n_copy = min(disp_3.shape[0], n_points)
+            target_disp_3[:n_copy] = disp_3[:n_copy]
         target_disp = np.zeros(3 * n_points, dtype=float)
-        target_disp[: min(flat.size, target_disp.size)] = flat[: target_disp.size]
+        target_disp[0::3] = target_disp_3[:, 0]
+        target_disp[1::3] = target_disp_3[:, 1]
+        target_disp[2::3] = target_disp_3[:, 2]
+
         target_vm = np.zeros(n_points, dtype=float)
-        target_vm[: min(vm.size, target_vm.size)] = vm[: target_vm.size]
+        if node_ids.size == vm.size:
+            valid = (node_ids >= 1) & (node_ids <= n_points)
+            target_vm[node_ids[valid] - 1] = vm[valid]
+        else:
+            target_vm[: min(vm.size, target_vm.size)] = vm[: target_vm.size]
         fixed.append(
             {
                 "displacement": target_disp,
@@ -610,6 +821,9 @@ def run_openradioss_crash(
     visualization_mode: str = "Von Mises Stress",
     disp_scale: float = 1.0,
     gravity: dict | None = None,
+    mass_scaling_dt: float = 0.0,
+    mass_scaling_scale: float = 0.9,
+    impactor_mass: float = 0.0,
 ) -> dict:
     """Write deck, run Starter + Engine, then import animation frames."""
     if impact is None:
@@ -629,12 +843,28 @@ def run_openradioss_crash(
             output_dt=output_dt,
             gravity=gravity,
             warnings=warnings,
+            impactor_mass=impactor_mass,
         ),
         encoding="utf-8",
     )
 
     engine_deck_path = work_dir / f"{job_name}_0001.rad"
-    engine_deck_path.write_text(_build_engine_deck(job_name, end_time), encoding="utf-8")
+
+    def _write_engine_deck() -> None:
+        engine_deck_path.write_text(
+            _build_engine_deck(
+                job_name,
+                end_time,
+                output_dt,
+                mass_scaling_dt=mass_scaling_dt,
+                mass_scaling_scale=mass_scaling_scale,
+            ),
+            encoding="utf-8",
+        )
+
+    # Starter rewrites <job>_0001.rad. Keep a useful deck-only artifact, then
+    # rewrite the engine controls after Starter succeeds and before Engine runs.
+    _write_engine_deck()
 
     starter = resolve_executable(
         config.executable,
@@ -711,6 +941,7 @@ def run_openradioss_crash(
                     "skipping the dynamic solve."
                 )
             else:
+                _write_engine_deck()
                 path_dirs, env_extra = _radioss_runtime_env(engine)
                 import time as _time
                 _t0 = _time.time()
@@ -747,6 +978,21 @@ def run_openradioss_crash(
                 )
                 warnings.extend(anim_warnings)
                 frames = _build_animation_frames_with_mesh(mesh, raw_frames)
+                if frames:
+                    max_disp = 0.0
+                    max_vm = 0.0
+                    for frame in frames:
+                        disp = np.asarray(frame.get("displacement", []), dtype=float)
+                        if disp.size:
+                            max_disp = max(max_disp, float(np.max(np.abs(disp))))
+                        vm = np.asarray(frame.get("stress_vm", []), dtype=float)
+                        if vm.size:
+                            max_vm = max(max_vm, float(np.max(vm)))
+                    print(
+                        "OpenRadioss import: viewer fields ready, "
+                        f"global max |u| = {max_disp:.4e} mm, "
+                        f"global max |VM| = {max_vm:.4e} MPa"
+                    )
 
     # Choose result type based on what we managed to import.
     if frames:

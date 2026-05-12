@@ -2,175 +2,92 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 """
-Central registry for all CAD nodes.
-Maps node identifiers (com.cad.*) to their Python classes.
+Central registry for CAD nodes.
+
+PyLCSS is code-first: parametric geometry is authored in a
+:class:`~pylcss.cad.nodes.code_part.CadQueryCodeNode` (one readable CadQuery
+script per part / assembly), or imported via STEP / STL.  The hand-placed
+primitive / sketch / 3-D-op / transform / pattern nodes that used to live
+here have been retired — they're still on disk under ``pylcss/cad/nodes/``
+but are no longer wired into the toolbar, the registry, or the inspector.
+
+Maps node identifiers (``com.cad.*``) to their Python classes.
 """
 
 from pylcss.cad.nodes import (
-    # Primitives
-    BoxNode, CylinderNode, SphereNode, ConeNode, TorusNode, 
-    WedgeNode, PyramidNode,
+    # Code-based geometry — the primary authoring path.
+    CadQueryCodeNode,
 
-    # Crash / Impact Simulation
-    CrashMaterialNode, ImpactConditionNode, CrashSolverNode, CrashSolverGPUNode,
-    RunRadiossDeckNode,
-    
-    # Sketching
-    SketchNode, SplineNode, EllipseNode, PolylineNode,
-    LineSketchNode, ArcSketchNode, ParametricCircleSketchNode,
-    ParametricRectangleSketchNode, PolygonSketchNode,
-    
-    # Operations
-    ExtrudeNode, PocketNode, FilletNode, SelectFaceNode, InteractiveSelectFaceNode,
-    CutExtrudeNode, BooleanNode, RevolveNode, CylinderCutNode,
-    ChamferNode, ShellNode, SweepNode, LoftNode, HelixNode,
-    TwistedExtrudeNode,
-    
-    # Cutting
-    HoleAtCoordinatesNode, MultiHoleNode, RectangularCutNode,
-    SlotCutNode, ArrayHolesNode,
-    
-    # Modifications
-    OffsetNode,
-    
-    # Transforms
-    TranslateNode, RotateNode, ScaleNode, MirrorNode,
-    
-    # Patterns
-    LinearPatternNode, CircularPatternNode,
-    RadialPatternNode, MirrorPatternNode, GridPatternNode,
-    
-    # Assembly
+    # Face / surface selection (still needed for boundary-condition wiring).
+    SelectFaceNode, InteractiveSelectFaceNode,
+
+    # Assembly of multiple shapes (still a useful aggregator).
     AssemblyNode,
-    
-    # Analysis
+
+    # Analysis utilities.
     MassPropertiesNode, BoundingBoxNode,
-    
-    # Simulation
+    MathExpressionNode, MeasureDistanceNode, SurfaceAreaNode,
+
+    # FEA / Simulation.
     MaterialNode, MeshNode, ConstraintNode, LoadNode, PressureLoadNode,
     SolverNode, TopologyOptimizationNode,
-    
-    # Advanced FEA
     RemeshNode, SizeOptimizationNode, ShapeOptimizationNode,
-    
-    # Advanced CAD
-    ImportStepNode, ImportStlNode, ThickenNode, SplitNode,
-    PipeNode, TextNode, MathExpressionNode,
-    MeasureDistanceNode, SurfaceAreaNode,
-    
-    # IO
-    ExportStepNode, ExportStlNode, NumberNode, VariableNode,
+
+    # Crash / Impact.
+    CrashMaterialNode, ImpactConditionNode, CrashSolverNode, RunRadiossDeckNode,
+
+    # IO — geometry import / export and named parameter scalars.
+    ImportStepNode, ImportStlNode,
+    ExportStepNode, ExportStlNode,
+    NumberNode, VariableNode,
 )
 
-# Master mapping of Node ID -> Node Class (58 nodes)
+# Master mapping of Node ID -> Node Class.  Keep this in lockstep with the
+# LibraryPanel toolbar in pylcss/user_interface/cad/cad_widget.py.
 NODE_CLASS_MAPPING = {
-    # Primitives (7)
-    'com.cad.box': BoxNode,
-    'com.cad.cylinder': CylinderNode,
-    'com.cad.sphere': SphereNode,
-    'com.cad.cone': ConeNode,
-    'com.cad.torus': TorusNode,
-    'com.cad.wedge': WedgeNode,
-    'com.cad.pyramid': PyramidNode,
+    # Geometry — code-first.
+    'com.cad.code_part': CadQueryCodeNode,
+    'com.cad.import_step': ImportStepNode,
+    'com.cad.import_stl':  ImportStlNode,
 
-    # Sketching (8)
-    'com.cad.sketch': SketchNode,
-    'com.cad.sketch.line': LineSketchNode,
-    'com.cad.sketch.arc': ArcSketchNode,
-    'com.cad.sketch.circle': ParametricCircleSketchNode,
-    'com.cad.sketch.rectangle': ParametricRectangleSketchNode,
-    'com.cad.sketch.polygon': PolygonSketchNode,
-    'com.cad.spline': SplineNode,
-    'com.cad.polyline': PolylineNode,
-    'com.cad.ellipse': EllipseNode,
+    # Face / surface selection — needed by FEA / Crash BC wiring.
+    'com.cad.select_face':              SelectFaceNode,
+    'com.cad.select_face_interactive':  InteractiveSelectFaceNode,
 
-    # 3D Operations (13)
-    'com.cad.extrude': ExtrudeNode,
-    'com.cad.revolve': RevolveNode,
-    'com.cad.sweep': SweepNode,
-    'com.cad.loft': LoftNode,
-    'com.cad.helix': HelixNode,
-    'com.cad.twisted_extrude': TwistedExtrudeNode,
-    'com.cad.pocket': PocketNode,
-    'com.cad.cut_extrude': CutExtrudeNode,
-    'com.cad.cylinder_cut': CylinderCutNode,
-    'com.cad.fillet': FilletNode,
-    'com.cad.chamfer': ChamferNode,
-    'com.cad.shell': ShellNode,
-    'com.cad.boolean': BooleanNode,
-    'com.cad.select_face': SelectFaceNode,
-    'com.cad.select_face_interactive': InteractiveSelectFaceNode,
-
-    # Cutting Operations (5)
-    'com.cad.hole_at_coords': HoleAtCoordinatesNode,
-    'com.cad.multi_hole': MultiHoleNode,
-    'com.cad.rectangular_cut': RectangularCutNode,
-    'com.cad.slot_cut': SlotCutNode,
-    'com.cad.array_holes': ArrayHolesNode,
-
-    # Modifications (1)
-    'com.cad.offset': OffsetNode,
-
-    # Transformations (4)
-    'com.cad.translate': TranslateNode,
-    'com.cad.rotate': RotateNode,
-    'com.cad.scale': ScaleNode,
-    'com.cad.mirror': MirrorNode,
-
-    # Patterns (5)
-    'com.cad.linear_pattern': LinearPatternNode,
-    'com.cad.circular_pattern': CircularPatternNode,
-    'com.cad.pattern.radial': RadialPatternNode,
-    'com.cad.pattern.mirror': MirrorPatternNode,
-    'com.cad.pattern.grid': GridPatternNode,
-
-    # Assembly (1)
+    # Assembly aggregator.
     'com.cad.assembly': AssemblyNode,
 
-    # Analysis (2)
-    'com.cad.mass_properties': MassPropertiesNode,
-    'com.cad.bounding_box': BoundingBoxNode,
-
-    # FEA Simulation (7)
-    'com.cad.sim.material': MaterialNode,
-    'com.cad.sim.mesh': MeshNode,
-    'com.cad.sim.constraint': ConstraintNode,
-    'com.cad.sim.load': LoadNode,
-    'com.cad.sim.pressure_load': PressureLoadNode,
-    'com.cad.sim.solver': SolverNode,
-    'com.cad.sim.topopt': TopologyOptimizationNode,
-
-    # IO (4)
-    'com.cad.number': NumberNode,
-    'com.cad.variable': VariableNode,
-    'com.cad.export_step': ExportStepNode,
-    'com.cad.export_stl': ExportStlNode,
-
-    # Advanced FEA (3)
-    'com.cad.sim.remesh': RemeshNode,
-    'com.cad.sim.sizeopt': SizeOptimizationNode,
-    'com.cad.sim.shapeopt': ShapeOptimizationNode,
-
-    # Crash / Impact Simulation (5)
-    'com.cad.sim.crash_material':     CrashMaterialNode,
-    'com.cad.sim.impact':             ImpactConditionNode,
-    'com.cad.sim.crash_solver':       CrashSolverNode,
-    'com.cad.sim.crash_solver_gpu':   CrashSolverGPUNode,
-    'com.cad.sim.radioss_deck':       RunRadiossDeckNode,
-
-    # Import (2)
-    'com.cad.import_step': ImportStepNode,
-    'com.cad.import_stl': ImportStlNode,
-
-    # Advanced CAD (7)
-    'com.cad.thicken': ThickenNode,
-    'com.cad.split': SplitNode,
-    'com.cad.pipe': PipeNode,
-    'com.cad.text': TextNode,
-    'com.cad.math_expression': MathExpressionNode,
+    # Analysis utilities.
+    'com.cad.mass_properties':  MassPropertiesNode,
+    'com.cad.bounding_box':     BoundingBoxNode,
+    'com.cad.math_expression':  MathExpressionNode,
     'com.cad.measure_distance': MeasureDistanceNode,
-    'com.cad.surface_area': SurfaceAreaNode,
+    'com.cad.surface_area':     SurfaceAreaNode,
+
+    # FEA Simulation.
+    'com.cad.sim.material':       MaterialNode,
+    'com.cad.sim.mesh':           MeshNode,
+    'com.cad.sim.constraint':     ConstraintNode,
+    'com.cad.sim.load':           LoadNode,
+    'com.cad.sim.pressure_load':  PressureLoadNode,
+    'com.cad.sim.solver':         SolverNode,
+    'com.cad.sim.topopt':         TopologyOptimizationNode,
+    'com.cad.sim.remesh':         RemeshNode,
+    'com.cad.sim.sizeopt':        SizeOptimizationNode,
+    'com.cad.sim.shapeopt':       ShapeOptimizationNode,
+
+    # Crash / Impact Simulation.
+    'com.cad.sim.crash_material': CrashMaterialNode,
+    'com.cad.sim.impact':         ImpactConditionNode,
+    'com.cad.sim.crash_solver':   CrashSolverNode,
+    'com.cad.sim.radioss_deck':   RunRadiossDeckNode,
+
+    # IO — named scalar parameters + geometry / mesh export.
+    'com.cad.number':      NumberNode,
+    'com.cad.variable':    VariableNode,
+    'com.cad.export_step': ExportStepNode,
+    'com.cad.export_stl':  ExportStlNode,
 }
 
-# Mapping of Class Name -> Node Class (for legacy loading)
+# Mapping of Class Name -> Node Class (for legacy class-name-based loading).
 NODE_NAME_MAPPING = {cls.__name__: cls for cls in NODE_CLASS_MAPPING.values()}

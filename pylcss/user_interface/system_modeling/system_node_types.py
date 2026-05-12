@@ -327,11 +327,23 @@ class CodeEditorDialog(QtWidgets.QDialog):
         self.output_var_list.setToolTip("Double-click to insert variable")
         sidebar_layout.addWidget(self.output_var_list)
 
+        sidebar_layout.addWidget(QtWidgets.QLabel("<b>CAD Commands:</b>"))
+        self.cad_command_list = QtWidgets.QListWidget()
+        self.cad_command_list.setToolTip(
+            "Double-click to insert a cad.* template.\n"
+            "Each call evaluates a .cad graph file headlessly and returns a "
+            "CadResult exposing standardised scalars (max_stress, compliance, "
+            "mass, volume, peak_disp, …)."
+        )
+        self._populate_cad_commands(self.cad_command_list)
+        sidebar_layout.addWidget(self.cad_command_list)
+
         if node:
             self._refresh_var_list()
 
         self.input_var_list.itemDoubleClicked.connect(self.insert_variable)
         self.output_var_list.itemDoubleClicked.connect(self.insert_variable)
+        self.cad_command_list.itemDoubleClicked.connect(self.insert_cad_command)
         
         # Add to splitter or layout
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
@@ -344,6 +356,149 @@ class CodeEditorDialog(QtWidgets.QDialog):
     def insert_variable(self, item: QtWidgets.QListWidgetItem) -> None:
         var_name = item.text()
         self.editor.insertPlainText(var_name)
+        self.editor.setFocus()
+
+    # ── CAD-runtime helpers ────────────────────────────────────────────
+    # Catalogue of cad.* commands AND every standardised CadResult field
+    # exposed via the sidebar. Each entry is (display, snippet, tooltip).
+    # When ``snippet`` is None the entry renders as a non-selectable section
+    # header. The user double-clicks any selectable row to insert ``snippet``
+    # at the cursor.
+    _CAD_COMMANDS = (
+        # ── Commands ───────────────────────────────────────────────────
+        ("— Commands —", None, None),
+        (
+            "cad.fea(path, **inputs)",
+            'cad.fea("file.cad", param=value)',
+            "Run CalculiX linear-static FEA on a .cad graph file.\n"
+            "Args:  cad_path (str), then **inputs matched against\n"
+            "       'exposed_name' on Number/Variable nodes in the graph.\n"
+            "Returns CadResult — see the 'FEA result' rows below.",
+        ),
+        (
+            "cad.crash(path, **inputs)",
+            'cad.crash("file.cad", param=value)',
+            "Run OpenRadioss explicit crash on a .cad graph file.\n"
+            "Args:  cad_path (str), then **inputs matched against\n"
+            "       'exposed_name' on Number/Variable nodes in the graph.\n"
+            "Returns CadResult — see the 'Crash result' rows below.",
+        ),
+        (
+            "cad.topopt(path, **inputs)",
+            'cad.topopt("file.cad", param=value)',
+            "Run SIMP topology optimisation through a .cad graph file.\n"
+            "Args:  cad_path (str), then **inputs matched against\n"
+            "       'exposed_name' on Number/Variable nodes in the graph.\n"
+            "Returns CadResult — see the 'TopOpt result' rows below.",
+        ),
+
+        # ── Helpers ────────────────────────────────────────────────────
+        ("— Helpers —", None, None),
+        (
+            "result.pick(...)",
+            '.pick("max_stress", "mass")',
+            "Tuple-unpack helper:\n"
+            "    s, m = cad.fea(...).pick('max_stress', 'mass')",
+        ),
+        (
+            "result[\"key\"]",
+            '["max_stress"]',
+            "Dict access. Same fields as attribute access, plus any raw key\n"
+            "produced by the underlying solver result (mesh, frd_file, …).",
+        ),
+        (
+            "result.raw()",
+            ".raw()",
+            "Full raw result dict from the solver — useful when you need\n"
+            "fields outside the standard set (mesh, FRD file path, ENER fields…).",
+        ),
+
+        # ── FEA standard fields ────────────────────────────────────────
+        ("— FEA result (cad.fea) —", None, None),
+        (".max_stress",
+         ".max_stress",
+         "Peak Von Mises stress at Gauss points [MPa].\n"
+         "Conservative (un-smoothed) — use for safety-factor calcs."),
+        (".compliance",
+         ".compliance",
+         "Compliance C = u·f = u·K·u [N·mm].\n"
+         "Smaller = stiffer.  C = 2 × total elastic strain energy."),
+        (".strain_energy",
+         ".strain_energy",
+         "Total elastic strain energy ∫ ½σ:ε dV  [N·mm].\n"
+         "Equals compliance / 2 for linear elastic materials."),
+        (".mass",
+         ".mass",
+         "Total mass [t in the standard mm/t/s unit system].\n"
+         "= volume × material.rho from the connected MaterialNode."),
+        (".volume",
+         ".volume",
+         "Total mesh volume Σ V_e  [mm³]."),
+        (".peak_disp",
+         ".peak_disp",
+         "Max |u| across all mesh nodes [mm]."),
+
+        # ── Crash standard fields ──────────────────────────────────────
+        ("— Crash result (cad.crash) —", None, None),
+        (".max_stress",
+         ".max_stress",
+         "Peak Von Mises stress over the whole transient [MPa]."),
+        (".peak_disp",
+         ".peak_disp",
+         "Max nodal displacement magnitude over the whole transient [mm]."),
+        (".absorbed_energy",
+         ".absorbed_energy",
+         "Plastic dissipation Σ_e ∫ σ_y · dε_p · V_e [N·mm].\n"
+         "Standard crashworthiness metric — bigger = more energy soaked up."),
+        (".n_failed",
+         ".n_failed",
+         "Number of elements deleted via the failure criterion."),
+
+        # ── TopOpt standard fields ─────────────────────────────────────
+        ("— TopOpt result (cad.topopt) —", None, None),
+        (".final_vol_frac",
+         ".final_vol_frac",
+         "Mean of the final physical density field — should match the\n"
+         "vol_frac target set on the Topology Opt node."),
+        (".compliance",
+         ".compliance",
+         "Compliance at the final density field [N·mm]."),
+        (".mass",
+         ".mass",
+         "Effective mass = Σ ρ_e · V_e · material.rho  [t]."),
+        (".volume",
+         ".volume",
+         "Total mesh volume [mm³] (unchanged by topology optimisation)."),
+    )
+
+    def _populate_cad_commands(self, list_widget: QtWidgets.QListWidget) -> None:
+        """Fill the CAD-commands list widget from the static catalogue.
+
+        Rows whose ``snippet`` is ``None`` are rendered as non-selectable,
+        bold section headers so the standardised result fields per solver
+        type are visually grouped.
+        """
+        header_flags = QtCore.Qt.ItemFlags(QtCore.Qt.NoItemFlags)
+        header_font = list_widget.font()
+        header_font.setBold(True)
+        for display, snippet, tooltip in self._CAD_COMMANDS:
+            item = QtWidgets.QListWidgetItem(display)
+            if snippet is None:
+                # Section header — non-selectable, non-clickable, slightly muted.
+                item.setFlags(header_flags)
+                item.setFont(header_font)
+                item.setForeground(QtGui.QColor("#9aa0a6"))
+            else:
+                item.setData(QtCore.Qt.UserRole, snippet)
+                if tooltip:
+                    item.setToolTip(tooltip)
+            list_widget.addItem(item)
+
+    def insert_cad_command(self, item: QtWidgets.QListWidgetItem) -> None:
+        snippet = item.data(QtCore.Qt.UserRole)
+        if not snippet:
+            return  # section header — ignore.
+        self.editor.insertPlainText(snippet)
         self.editor.setFocus()
     
     def _refresh_var_list(self) -> None:
@@ -375,8 +530,23 @@ class CodeEditorDialog(QtWidgets.QDialog):
             "# LIBRARIES:\n"
             "# - numpy as np (pre-imported)\n"
             "# - math module (pre-imported)\n"
+            "# - cad runtime (pre-imported) - run external CAD/FEA/crash graphs\n"
             "# - Import others: import pandas as pd\n"
             "# - Available: pandas, sklearn, tensorflow, requests, opencv, etc.\n"
+            "# \n"
+            "# CAD COMMANDS:\n"
+            "#   r = cad.fea(\"part.cad\", thickness=t, fillet_r=ro)\n"
+            "#   r = cad.crash(\"part.cad\", thickness=t)\n"
+            "#   r = cad.topopt(\"part.cad\", vol_frac=0.3)\n"
+            "#   # Inputs are matched against Number/Variable nodes whose\n"
+            "#   # `exposed_name` property equals the kwarg name.\n"
+            "#   # Results expose standard scalars + raw dict access:\n"
+            "#   #   FEA   : max_stress, compliance, mass, volume, peak_disp\n"
+            "#   #   crash : max_stress, peak_disp, absorbed_energy, n_failed\n"
+            "#   #   topopt: final_vol_frac, compliance, mass, volume\n"
+            "#   s = r.max_stress           # attribute access\n"
+            "#   m = r[\"mass\"]            # dict access\n"
+            "#   s, m = r.pick(\"max_stress\", \"mass\")  # tuple unpack\n"
             "# \n"
             "# EXAMPLES:\n"
             "#   # Simple math:\n"
@@ -386,6 +556,10 @@ class CodeEditorDialog(QtWidgets.QDialog):
             "#   import pandas as pd\n"
             "#   data = pd.read_csv('file.csv')\n"
             "#   out_1 = data['col'].mean() * in_1\n"
+            "# \n"
+            "#   # CAD-coupled evaluation:\n"
+            "#   r = cad.fea(\"bracket.cad\", thickness=t, hole_r=hr)\n"
+            "#   stress, mass = r.pick(\"max_stress\", \"mass\")\n"
         )
         QtWidgets.QMessageBox.information(self, "Function Block Help", help_text)
         

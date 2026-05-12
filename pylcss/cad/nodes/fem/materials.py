@@ -27,10 +27,17 @@ class MaterialNode(CadQueryNode):
         self.create_property('poissons_ratio', 0.3, widget_type='float')
         self.create_property('density', 7.85e-9, widget_type='float')  # tonne/mm^3
 
+        # Optional plasticity — pure elastic when yield_strength == 0.
+        # When > 0 the CalculiX backend writes a *PLASTIC card (isotropic
+        # bilinear hardening) and CCX automatically enables NLGEOM, giving
+        # a nonlinear material+geometric static solve.
+        self.create_property('yield_strength',  0.0, widget_type='float')   # MPa
+        self.create_property('tangent_modulus', 0.0, widget_type='float')   # MPa
+
     def run(self):
         # Check if using preset or custom
         preset = self.get_property('preset')
-        
+
         if preset != 'Custom' and preset in MATERIAL_DATABASE:
             mat = MATERIAL_DATABASE[preset]
             E = mat['E']
@@ -41,10 +48,20 @@ class MaterialNode(CadQueryNode):
             E = self.get_input_value('youngs_modulus', 'youngs_modulus')
             nu = self.get_input_value('poissons_ratio', 'poissons_ratio')
             rho = self.get_input_value('density', 'density')
-        
-        return {
-            'E': float(E),
-            'nu': float(nu),
-            'rho': float(rho)
+
+        # Plasticity is independent of the preset choice — surface as
+        # explicit overrides so a user can mix Steel (preset) + custom
+        # yield strength without typing all the elastic fields.
+        sigma_y = float(self.get_property('yield_strength')  or 0.0)
+        Et      = float(self.get_property('tangent_modulus') or 0.0)
+
+        out = {
+            'E':   float(E),
+            'nu':  float(nu),
+            'rho': float(rho),
         }
+        if sigma_y > 0.0:
+            out['yield_strength']  = sigma_y
+            out['tangent_modulus'] = Et
+        return out
 
