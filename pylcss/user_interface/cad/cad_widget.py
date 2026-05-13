@@ -891,16 +891,15 @@ class PropertiesPanel(QtWidgets.QWidget):
         ("Material",        ("preset", "E", "nu", "rho", "density", "poissons_ratio", "yield_strength",
                              "tangent_modulus", "failure_strain", "enable_fracture")),
         ("Mesh",            ("mesh_type", "element_size", "max_size", "min_size", "order")),
+        ("Impact",          ("velocity_", "application_scope", "node_tolerance", "impactor_mass_kg")),
         ("Geometry",        ("box_", "length", "width", "depth", "height", "radius", "thickness",
                              "near_", "selector_type", "tag", "range_expr", "direction")),
         ("Load",            ("load_type", "force_", "vector", "magnitude", "pressure", "gravity_",
-                             "accel", "velocity_", "node_tolerance")),
+                             "accel")),
         ("Constraint",      ("constraint_type", "fixed_dofs", "displacement_")),
     ]
     # Hide these unless they have a meaningful value (truthy non-empty).
-    _PROPERTY_HIDE_IF_EMPTY = ("condition", "range_expr", "tag", "external_solver_path",
-                               "external_work_dir", "openradioss_starter_path",
-                               "openradioss_engine_path")
+    _PROPERTY_HIDE_IF_EMPTY = ("condition", "range_expr", "tag")
 
     # Hide these *always* — they exist on the node only so projects saved
     # before the CalculiX-only / OpenRadioss-only cut keep deserialising.  The
@@ -911,9 +910,10 @@ class PropertiesPanel(QtWidgets.QWidget):
         'solver_backend', 'run_external_solver',
         # In-house topology-opt element choice (CalculiX uses C3D4 always).
         'element_type',
-        # In-house crash-solver tuning knobs (OpenRadioss has its own; we
-        # surface only the mass-scaling toggle, which IS wired up).
-        'time_steps', 'damping_alpha',
+        # In-house crash-solver tuning knobs (OpenRadioss has its own).  The
+        # `time_steps` property remains visible because the OpenRadioss path
+        # uses it as the mass-scaling cycle target (end_time / time_steps).
+        'damping_alpha',
         'enable_corotation', 'enable_contact',
         'contact_stiffness', 'contact_thickness', 'contact_update_interval',
         'mass_scaling_threshold',
@@ -947,6 +947,10 @@ class PropertiesPanel(QtWidgets.QWidget):
         'disp_scale': "Multiplier on the displayed displacement (visual only).",
         'n_frames': "Number of animation frames recorded for playback.",
         'end_time': "Simulation duration. For crash: milliseconds.",
+        'time_steps':
+            "Crash only: when mass scaling is enabled, the OpenRadioss target\n"
+            "time step is end_time / time_steps.  Higher = less added mass but\n"
+            "a slower run; lower = faster but more artificial inertia.",
         'enable_mass_scaling':
             "Hold the explicit time step at end_time / time_steps by adding mass to\n"
             "nodes whose CFL bound is below that value (Radioss /DT/NODA/CST).\n"
@@ -1043,7 +1047,16 @@ class PropertiesPanel(QtWidgets.QWidget):
         'velocity_x':        "Initial impactor velocity along X [mm/ms = m/s].",
         'velocity_y':        "Initial impactor velocity along Y [mm/ms = m/s].",
         'velocity_z':        "Initial impactor velocity along Z [mm/ms = m/s].",
+        'application_scope':
+            "Impact Face: a moving rigid wall/impactor drives the selected\n"
+            "face; connected constraints stay active (fixed-rear crush tests).\n"
+            "Moving Body: the whole mesh receives velocity and hits a generated\n"
+            "rigid wall; connected constraints are intentionally ignored.",
         'node_tolerance':    "Distance [mm] within which a mesh node is treated as belonging to the impact face.",
+        'impactor_mass_kg':
+            "Optional sled/impactor mass [kg].  In Impact Face scope this is\n"
+            "the moving rigid wall mass.  In Moving Body scope it is lumped on\n"
+            "the trailing edge of the projectile.",
         'enable_fracture':   "Delete elements whose plastic strain exceeds failure_strain.",
 
         # ── Constraint / Load extras ───────────────────────────────────
@@ -1061,6 +1074,31 @@ class PropertiesPanel(QtWidgets.QWidget):
         # ── SelectFace ─────────────────────────────────────────────────
         'selector_type':     "How this node picks faces (see the dropdown's own tooltip).",
         'direction':         "Outward-normal direction the selected face(s) must point in.",
+    }
+
+    _PROPERTY_LABELS = {
+        'application_scope': 'Impact Setup',
+        'velocity_x': 'Velocity X (mm/ms)',
+        'velocity_y': 'Velocity Y (mm/ms)',
+        'velocity_z': 'Velocity Z (mm/ms)',
+        'node_tolerance': 'Node Tolerance (mm)',
+        'impactor_mass_kg': 'Sled Mass (kg)',
+        'end_time': 'End Time (ms)',
+        'time_steps': 'Mass-Scaling Steps',
+        'n_frames': 'Animation Frames',
+        'disp_scale': 'Display Scale',
+        'enable_mass_scaling': 'Mass Scaling',
+        'external_timeout_s': 'Solver Timeout (s)',
+        'openradioss_starter_path': 'Starter Path',
+        'openradioss_engine_path': 'Engine Path',
+        'external_work_dir': 'Work Directory',
+        'deck_only': 'Deck Only',
+        'youngs_modulus': "Young's Modulus (MPa)",
+        'poissons_ratio': "Poisson's Ratio",
+        'density': 'Density (t/mm^3)',
+        'yield_strength': 'Yield Strength (MPa)',
+        'tangent_modulus': 'Tangent Modulus (MPa)',
+        'failure_strain': 'Failure Strain',
     }
 
     @classmethod
@@ -1251,6 +1289,7 @@ class PropertiesPanel(QtWidgets.QWidget):
             # New combos introduced by the CalculiX / OpenRadioss rewrites.
             'analysis_type': ['Linear', 'Nonlinear (Geometric)', 'Nonlinear (Plastic)'],
             'deformation_scale': ['Auto', '1x', '5x', '10x', '50x', '100x', '200x'],
+            'application_scope': ['Impact Face', 'Moving Body'],
             # Optimisation-node combos that were always there but worth pinning.
             'objective': ['Min Weight', 'Min Compliance', 'Min Max Stress',
                           'Uniform Stress'],
@@ -1259,6 +1298,21 @@ class PropertiesPanel(QtWidgets.QWidget):
             'sensitivity_method': ['Biological Stress Leveling', 'Adjoint Compliance'],
             'element_type': ['Fast (Linear P1)', 'Accurate (Quadratic P2)'],
         }
+        if node.__class__.__name__ == 'CrashMaterialNode':
+            try:
+                from pylcss.cad.nodes.crash.materials import CRASH_MATERIAL_PRESETS
+                known_combos['preset'] = list(CRASH_MATERIAL_PRESETS.keys())
+            except Exception:
+                known_combos['preset'] = [
+                    'Custom',
+                    'Steel (Structural A36)',
+                    'Steel (High-Strength DP780)',
+                    'DP780 Dual-Phase',
+                    'Steel (Ultra-High UHSS 1500)',
+                    'Aluminum 6061-T6',
+                    'Aluminum 5052-H32 (Crush)',
+                    'CFRP (Quasi-Isotropic)',
+                ]
 
         rendered_any = False
         for title in section_order:
@@ -1272,7 +1326,7 @@ class PropertiesPanel(QtWidgets.QWidget):
             layout.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
 
             for name, val in entries:
-                label_text = name.replace('_', ' ').title()
+                label_text = self._PROPERTY_LABELS.get(name, name.replace('_', ' ').title())
                 attrs = prop_attrs.get(name, {})
                 combo_items = attrs.get('items') if isinstance(attrs, dict) else None
                 if not combo_items and name in known_combos:
@@ -1282,7 +1336,10 @@ class PropertiesPanel(QtWidgets.QWidget):
 
                 if combo_items:
                     widget = QtWidgets.QComboBox()
-                    widget.addItems([str(item) for item in combo_items])
+                    item_texts = [str(item) for item in combo_items]
+                    if val is not None and str(val) not in item_texts:
+                        item_texts.append(str(val))
+                    widget.addItems(item_texts)
                     if val is not None:
                         idx = widget.findText(str(val))
                         if idx >= 0:
@@ -2900,6 +2957,33 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         load_vectors = []
 
         anchor_cls = anchor_node.__class__.__name__
+        solver_overlay_scope = None
+        if anchor_cls in ('SolverNode', 'CrashSolverNode', 'TopologyOptimizationNode'):
+            solver_overlay_scope = set()
+
+            def _walk_upstream(n):
+                marker = id(n)
+                if marker in solver_overlay_scope:
+                    return
+                solver_overlay_scope.add(marker)
+                try:
+                    ports = n.input_ports()
+                    if isinstance(ports, dict):
+                        ports = list(ports.values())
+                except Exception:
+                    ports = []
+                for port in ports:
+                    try:
+                        connected = list(port.connected_ports())
+                    except Exception:
+                        connected = []
+                    for conn_port in connected:
+                        try:
+                            _walk_upstream(conn_port.node())
+                        except Exception:
+                            pass
+
+            _walk_upstream(anchor_node)
 
         def _get_faces_for_bc_node(bc_node, extra_port_names=None):
             """Try two sources: (1) _last_result geometries, (2) named input port to SelectFaceNode.
@@ -2995,6 +3079,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
         for node in self.graph.all_nodes():
             cls = node.__class__.__name__
+            if solver_overlay_scope is not None and id(node) not in solver_overlay_scope:
+                continue
 
             # ---- ConstraintNode ----
             if cls == 'ConstraintNode':

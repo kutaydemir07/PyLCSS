@@ -8,10 +8,12 @@ class ImpactConditionNode(CadQueryNode):
     """
     Defines the crash / impact loading condition.
 
-    The impact is represented as an **initial velocity field** applied to
-    the nodes of the specified impact face (or the whole body if no face
-    is provided). This is the standard approach for drop tests and
-    barrier-impact simulations.
+    In ``Impact Face`` scope, the selected face is struck by a moving rigid
+    wall/impactor while connected constraints remain active.  In
+    ``Moving Body`` scope, the whole mesh receives an initial velocity and
+    hits a generated rigid wall.  This covers fixed-rear crush tests and
+    free-body barrier/drop tests without using the same boundary model for
+    both cases.
 
     Units: mm / ms = m/s (consistent with the mm-tonne-N-MPa-ms system).
 

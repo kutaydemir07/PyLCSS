@@ -54,16 +54,27 @@ class CrashSolverNode(CadQueryNode):
         self.create_property('solver_backend', 'OpenRadioss', widget_type='combo',
                              items=['OpenRadioss'])
         self.create_property('run_external_solver', True, widget_type='checkbox')
+
+        # OpenRadioss mass-scaling target.  When enable_mass_scaling is true,
+        # the engine deck requests /DT/NODA/CST with dt = end_time / time_steps.
         self.create_property('time_steps', 500, widget_type='int')
+
+        # Deprecated in-house solver tuning knobs retained for old project
+        # files.  They are hidden in the inspector and ignored by OpenRadioss.
         self.create_property('damping_alpha', 10.0, widget_type='float')
         self.create_property('enable_corotation', True, widget_type='checkbox')
         self.create_property('enable_contact', False, widget_type='checkbox')
         self.create_property('contact_stiffness', 0.1, widget_type='float')
         self.create_property('contact_thickness', 0.2, widget_type='float')
         self.create_property('contact_update_interval', 10, widget_type='int')
-        self.create_property('enable_mass_scaling', False, widget_type='checkbox')
         self.create_property('mass_scaling_threshold', 0.05, widget_type='float')
-        # Impactor (sled) mass in kg added to the crashbox inertia.
+
+        # OpenRadioss /DT/NODA/CST toggle.  Uses time_steps above to derive
+        # the target timestep.
+        self.create_property('enable_mass_scaling', False, widget_type='checkbox')
+        # Impactor (sled) mass in kg.  In Impact Face scope this becomes the
+        # moving rigid wall mass; in Moving Body scope it is lumped onto the
+        # projectile's trailing edge.
         # Without a sled mass the crashbox (~250 g) has too little KE to crush
         # plastically at realistic velocities — it bounces elastically.
         # Set to 0 to disable; typical component test values: 25–200 kg.

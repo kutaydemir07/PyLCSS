@@ -212,6 +212,8 @@ def _build_keyword_deck(
     next_set_id = 100
 
     velocity = np.asarray(impact.get("velocity", [0.0, 0.0, 0.0]), dtype=float)
+    v_mag = float(np.linalg.norm(velocity))
+    v_hat = velocity / v_mag if v_mag > 0.0 else np.array([1.0, 0.0, 0.0])
     scope = str(impact.get("application_scope") or "Impact Face").strip().lower()
     moving_body = scope.replace("_", " ").startswith("moving")
 
@@ -266,10 +268,10 @@ def _build_keyword_deck(
             "only to the front face nodes."
         )
 
-    # ── Initial velocity ─────────────────────────────────────────────────────
+    # ── Impact node set / moving-wall contact ────────────────────────────────
     print(f"OpenRadioss deck: impact velocity (mm/ms) = {velocity.tolist()!r}, "
-          f"|v|={float(np.linalg.norm(velocity)):.3f} mm/ms "
-          f"(= {float(np.linalg.norm(velocity)):.1f} m/s)")
+          f"|v|={v_mag:.3f} mm/ms "
+          f"(= {v_mag:.1f} m/s)")
     impact_faces = impact.get("face_list", [])
     if moving_body:
         # ALL nodes get the initial velocity — the body is a free-flying mass.
@@ -283,33 +285,91 @@ def _build_keyword_deck(
     else:
         impact_nodes = np.arange(1, points.shape[0] + 1, dtype=int)
 
+    moving_rigid_wall = (
+        (not moving_body)
+        and bool(impact_faces)
+        and len(impact_nodes) > 0
+        and v_mag > 0.0
+    )
+
     if len(impact_nodes) == 0:
         warnings.append("Impact condition did not match any nodes; no initial velocity exported.")
-    elif np.linalg.norm(velocity) > 0.0:
-        print(
-            "OpenRadioss deck: applying initial velocity to "
-            f"{len(impact_nodes)} node(s) with scope="
-            f"{'Moving Body' if moving_body else 'Impact Face'}"
-        )
-        # OpenRadioss's LS-DYNA reader does not implement
-        # ``*INITIAL_VELOCITY_NODE_SET`` — only the per-node
-        # ``*INITIAL_VELOCITY_NODE`` form.  Emit one row per impact node.
-        lines.append("*INITIAL_VELOCITY_NODE")
-        lines.append("$#     nid        vx        vy        vz       vxr       vyr       vzr")
-        for node_id in impact_nodes:
-            lines.append(
-                f"{int(node_id)}, "
-                f"{velocity[0]:.12g}, {velocity[1]:.12g}, {velocity[2]:.12g}, "
-                "0, 0, 0"
+    elif v_mag > 0.0:
+        if not moving_body:
+            travel = v_mag * float(end_time)
+            if travel > 0.0:
+                if constrained_node_ids:
+                    impact_proj = points[np.asarray(impact_nodes, dtype=int) - 1] @ v_hat
+                    constrained_idx = np.asarray(constrained_node_ids, dtype=int) - 1
+                    constrained_idx = constrained_idx[
+                        (constrained_idx >= 0) & (constrained_idx < points.shape[0])
+                    ]
+                    if constrained_idx.size:
+                        support_proj = points[constrained_idx] @ v_hat
+                        downstream = (
+                            support_proj[:, None] - impact_proj[None, :]
+                        ).reshape(-1)
+                        downstream = downstream[downstream > 0.0]
+                        if downstream.size:
+                            available = float(np.min(downstream))
+                            if travel > 0.85 * available:
+                                warnings.append(
+                                    "Impact Face crash: |velocity| * end_time is "
+                                    f"{travel:.1f} mm, but the nearest constrained "
+                                    f"support is only {available:.1f} mm along the "
+                                    "impact direction.  The moving wall can overrun "
+                                    "the supported end in the animation.  "
+                                    "Reduce end_time, velocity, or sled mass, or use "
+                                    "Moving Body scope for a free-body wall impact."
+                                )
+                else:
+                    bbox_span = float(np.ptp(points @ v_hat))
+                    if bbox_span > 0.0 and travel > 0.85 * bbox_span:
+                        warnings.append(
+                            "Impact Face crash has no active constraints and the "
+                            f"requested stroke ({travel:.1f} mm) is close to or "
+                            "larger than the part length in the impact direction.  "
+                            "For a wall/barrier event, use Moving Body scope."
+                        )
+        if moving_rigid_wall:
+            print(
+                "OpenRadioss deck: Impact Face scope uses a moving rigid wall; "
+                "the deformable mesh starts at rest."
             )
+        else:
+            print(
+                "OpenRadioss deck: applying initial velocity to "
+                f"{len(impact_nodes)} node(s) with scope="
+                f"{'Moving Body' if moving_body else 'Impact Face'}"
+            )
+            # OpenRadioss's LS-DYNA reader does not implement
+            # ``*INITIAL_VELOCITY_NODE_SET`` — only the per-node
+            # ``*INITIAL_VELOCITY_NODE`` form.  Emit one row per impact node.
+            lines.append("*INITIAL_VELOCITY_NODE")
+            lines.append("$#     nid        vx        vy        vz       vxr       vyr       vzr")
+            for node_id in impact_nodes:
+                lines.append(
+                    f"{int(node_id)}, "
+                    f"{velocity[0]:.12g}, {velocity[1]:.12g}, {velocity[2]:.12g}, "
+                    "0, 0, 0"
+                )
+
+    # Standard tube-crush decks use automatic single-surface contact so folds
+    # do not pass through each other as the structure collapses.  Keep it on
+    # for all crash decks; SSID=0 means "all external segments".
+    lines.extend([
+        "*CONTACT_AUTOMATIC_SINGLE_SURFACE",
+        "$#    ssid      msid     sstyp     mstyp    sboxid    mboxid       spr       mpr",
+        "0",
+        "$#      fs        fd        dc        vc       vdc    penchk        bt        dt",
+        "0.08, 0.08",
+    ])
 
     # ── Rigid wall (Moving Body scope only) ──────────────────────────────────
     # The wall is placed just in front of the leading face of the body in the
     # velocity direction.  The wall normal points back toward the body so that
     # nodes moving in the impact direction are pushed back when they make contact.
-    if moving_body and len(impact_nodes) > 0 and np.linalg.norm(velocity) > 0.0:
-        v_mag = float(np.linalg.norm(velocity))
-        v_hat = velocity / v_mag
+    if moving_body and len(impact_nodes) > 0 and v_mag > 0.0:
         all_pos = points                                  # (N_nodes, 3)
         projs = all_pos @ v_hat                           # scalar projection per node
         max_proj = float(np.max(projs))                   # leading-edge projection
@@ -356,6 +416,52 @@ def _build_keyword_deck(
                         "velocity_x to a POSITIVE value (e.g. +20 mm/ms)."
                     )
 
+    # ── Moving rigid wall (fixed-rear Impact Face scope) ─────────────────────
+    # This is the industry-standard tube/crashbox crush setup: fixed support via
+    # SPCs, structure initially at rest, and a massive rigid wall moving into
+    # the selected impact face.
+    if moving_rigid_wall:
+        face_nodes_idx = np.asarray(impact_nodes, dtype=int) - 1
+        face_nodes_idx = face_nodes_idx[
+            (face_nodes_idx >= 0) & (face_nodes_idx < points.shape[0])
+        ]
+        face_pos = points[face_nodes_idx] if face_nodes_idx.size else points
+        bbox_diag = float(np.linalg.norm(
+            np.max(points, axis=0) - np.min(points, axis=0)
+        ))
+        gap = max(bbox_diag * 0.003, 0.05)
+        face_centroid = np.mean(face_pos, axis=0)
+        face_proj = face_pos @ v_hat
+        # Put the wall just outside the selected face on the side opposite the
+        # velocity vector; then move it along v_hat into the part.
+        wall_proj = float(np.min(face_proj)) - gap
+        wall_pt = face_centroid + v_hat * (wall_proj - float(face_centroid @ v_hat))
+        wall_normal = v_hat
+        wall_head = wall_pt + wall_normal
+        wall_mass = max(float(impactor_mass), 0.0) * 1e-3  # kg -> tonne
+        lines.extend([
+            "*RIGIDWALL_PLANAR_MOVING",
+            "$#    nsid    nsidex   dsearch",
+            "0, 0, 0",
+            "$#     xt            yt            zt            xh            yh            zh          fric",
+            (f"{wall_pt[0]:.12g}, {wall_pt[1]:.12g}, {wall_pt[2]:.12g}, "
+             f"{wall_head[0]:.12g}, {wall_head[1]:.12g}, {wall_head[2]:.12g}, 0.08"),
+            "$#   mass          v0",
+            f"{wall_mass:.12g}, {v_mag:.12g}",
+        ])
+        if wall_mass <= 0.0:
+            warnings.append(
+                "Impact Face crash uses a moving rigid wall with Mass=0, so "
+                "V0 is an imposed velocity.  Set impactor_mass_kg on the Crash "
+                "Solver for an inertial sled impact."
+            )
+        print(
+            f"OpenRadioss deck: added moving RIGIDWALL_PLANAR at "
+            f"[{wall_pt[0]:.3g}, {wall_pt[1]:.3g}, {wall_pt[2]:.3g}] "
+            f"normal=[{wall_normal[0]:.3g}, {wall_normal[1]:.3g}, {wall_normal[2]:.3g}], "
+            f"v0={v_mag:.3g} mm/ms, mass={wall_mass:.3g} tonne"
+        )
+
     # Gravity body force via *LOAD_BODY_X/Y/Z (LS-DYNA syntax accepted by Radioss).
     if gravity and float(gravity.get("accel", 0.0)) != 0.0:
         direction = gravity.get("direction", "-Y")
@@ -383,32 +489,35 @@ def _build_keyword_deck(
             ]
         )
 
-    # ── Impactor Mass (Sled) ─────────────────────────────────────────────────
-    if float(impactor_mass) > 0.0:
+    # ── Impactor Mass (Sled, Moving Body scope only) ─────────────────────────
+    if moving_body and float(impactor_mass) > 0.0:
         added_mass_tonnes = float(impactor_mass) * 1e-3
-        # Identify trailing nodes (opposite to impact direction).
-        # We find nodes at the minimum projection along the velocity vector.
-        if np.linalg.norm(velocity) > 0.0:
-            v_hat = velocity / float(np.linalg.norm(velocity))
+        mass_nodes = np.array([], dtype=int)
+        mass_label = "node(s)"
+        if v_mag > 0.0:
+            # Moving-body wall impact: add sled inertia to the trailing edge,
+            # opposite to the direction of travel.
             projs = points @ v_hat
             min_proj = float(np.min(projs))
             # Find nodes within 5 mm of the trailing edge
-            rear_nodes = np.where(projs < min_proj + 5.0)[0] + 1
+            mass_nodes = np.where(projs < min_proj + 5.0)[0] + 1
+            mass_label = "trailing node(s)"
         else:
             # Fallback if no velocity: distribute over all nodes
-            rear_nodes = np.arange(1, points.shape[0] + 1, dtype=int)
+            mass_nodes = np.arange(1, points.shape[0] + 1, dtype=int)
+            mass_label = "node(s)"
             
-        if len(rear_nodes) > 0:
-            mass_per_node = added_mass_tonnes / len(rear_nodes)
+        if len(mass_nodes) > 0:
+            mass_per_node = added_mass_tonnes / len(mass_nodes)
             lines.append("*ELEMENT_MASS")
             lines.append("$#   eid     nid    mass")
             # Start mass element IDs high to avoid clash with solid elements
             start_eid = points.shape[0] * 10 + 1000000
-            for i, nid in enumerate(rear_nodes):
+            for i, nid in enumerate(mass_nodes):
                 lines.append(f"{start_eid + i}, {nid}, {mass_per_node:.12g}")
             print(
                 f"OpenRadioss deck: Added {float(impactor_mass):.1f} kg sled mass "
-                f"distributed over {len(rear_nodes)} trailing node(s)."
+                f"distributed over {len(mass_nodes)} {mass_label}."
             )
 
     lines.append("*END")
