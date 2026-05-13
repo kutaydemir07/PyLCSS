@@ -10,6 +10,8 @@
   <img src="https://img.youtube.com/vi/fQuLZ5LnxQs/maxresdefault.jpg" width="100%" alt="PyLCSS Video Review">
 </a>
 
+<img src="pylcss/user_interface/1778627783968.gif" width="100%" alt="PyLCSS Crash Demo">
+
 <img src="pylcss/user_interface/topopt.png" width="48%" alt="Topology Optimization Simulation">
 <img src="pylcss/user_interface/fea.png" width="48%" alt="Finite Element Analysis Solver">
 
@@ -20,11 +22,12 @@
 
 **Source-Available Engineering Simulation & Optimization Platform**
 
-*Visual Modeling · Parametric CAD · Topology Optimisation · FEA · Solution Spaces · Sensitivity Analysis · Surrogate AI · Multi-Objective Optimization*
+*Visual Modeling · Parametric CAD · Topology Optimization · FEA · Solution Spaces · Sensitivity Analysis · Surrogate AI · Multi-Objective Optimization*
 
 [![License](https://img.shields.io/badge/License-PolyForm_Shield_1.0.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-green.svg)](https://www.python.org/)
 [![Version](https://img.shields.io/badge/Version-2.1.0-orange.svg)]()
+[![Slides](https://img.shields.io/badge/Slides-PDF-red.svg)](pylcss/user_interface/1773249914176.pdf)
 
 </div>
 
@@ -32,11 +35,9 @@
 
 ## Overview
 
-**PyLCSS** (Python Low-Code System Solutions) is a professional engineering design platform. It allows engineers to model complex multidisciplinary systems through a node-based visual interface, run parametric CAD and FEA simulations, explore high-dimensional **Solution Spaces**, and optimise designs using 7 different algorithms — all within a single desktop application.
+**PyLCSS** (Python Low-Code System Solutions) is an integrated product development environment that eliminates these handoffs. Engineers model multidisciplinary systems through a node-based visual interface, run parametric CAD and FEA simulations, explore high-dimensional **Solution Spaces**, and optimize designs using 7 algorithms — all within a single desktop application.
 
-Built for real-world engineering workflows, PyLCSS features a crash-free multi-threaded architecture, vectorised computation kernels, comprehensive file I/O, external solver integration, and an integrated AI coding assistant.
-
-PyLCSS is more than a standalone CAD environment: the CAD graph is the parametric source of truth for downstream simulation and design optimisation. STEP is supported for exchange, but `.cad` graphs and exposed parameters are required when a model must be rebuilt, swept, or optimised.
+Visual, low-code workflows make advanced simulation methods — topology optimization, surrogate ML, global sensitivity analysis — accessible to engineers without a coding background. PyLCSS features a crash-free multi-threaded architecture, vectorised computation kernels, comprehensive file I/O, external solver integration, and an integrated AI assistant.
 
 ---
 
@@ -53,9 +54,9 @@ PyLCSS implements the **Solution Space** approach for robust design: instead of 
 ### Parametric Engineering Design Environment
 - **70+ Node Types** — Primitives, Booleans, Fillets, Chamfers, Sweeps, Lofts, Shells, Patterns, Imports
 - **Code-Assisted Modeling Direction** — Parts and assemblies should remain reproducible through graph nodes, exposed parameters, imported STEP/STL geometry, or code-based creation blocks rather than hidden manual edits
-- **Topology Optimisation** — SIMP with MMA/OC solvers, density/sensitivity filtering, Heaviside projection, symmetry constraints, shape recovery with marching cubes, and **direct STL/OBJ export** of optimised shapes
+- **Topology Optimization** — SIMP with MMA/OC solvers, density/sensitivity filtering, Heaviside projection, symmetry constraints, shape recovery with marching cubes, and **direct STL/OBJ export** of optimized shapes
 - **Advanced Nodes** — Thicken, Pipe, Split, Text emboss, Math Expression evaluator, Import STEP/STL
-- **Real-Time 3D Viewer** — VTK-based with density cutoff preview during optimisation
+- **Real-Time 3D Viewer** — VTK-based with density cutoff preview during optimization
 - **Measurement** — Distance, surface area, and volume nodes
 
 ### Finite Element Analysis (FEA)
@@ -63,22 +64,22 @@ PyLCSS implements the **Solution Space** approach for robust design: instead of 
 - **CalculiX Static Solver Backend** — PyLCSS writes a CalculiX `.inp`, runs `ccx`, parses `.frd`, and displays displacement + Von Mises stress in the in-app VTK viewer
 - **Linear Elasticity Results** — Displacement, von Mises stress, compliance, volume, and mass
 - **FEA Results Nodes** — Stress extraction, displacement, reaction forces
-- **Remeshing** — Surface-to-solid conversion for topology-optimised shapes (up to 20 000 faces)
-- **CalculiX-Coupled Optimisation** — Topology, shape, and size optimisation now run through repeated CalculiX evaluations instead of the removed in-process scikit-fem solver path
+- **Remeshing** — Surface-to-solid conversion for topology-optimized shapes (up to 20 000 faces)
+- **CalculiX-Coupled Optimization** — Topology, shape, and size optimization now run through repeated CalculiX evaluations instead of the removed in-process scikit-fem solver path
 
 ### Crash / Impact Simulation
 - **OpenRadioss Backend** — PyLCSS writes an LS-DYNA-style keyword deck, runs Starter + Engine, converts the `A001`/`A002`… animation files via `anim_to_vtk`, and plays the frames in the crash viewer
 - **Run Radioss Deck Node** — Existing OpenRadioss/LS-DYNA `.rad`/`.k` decks can be launched and imported
 - **Current Limitation** — The generated crash deck is still a thin integration layer. Even simple explicit simulations can run slowly when the mesh has tiny elements, the end time/output frequency is high, or animation conversion dominates.
 
-### Multi-Objective Optimisation (7 Solvers)
+### Multi-Objective Optimization (7 Solvers)
 | Algorithm | Type | Best For |
 |-----------|------|----------|
-| SLSQP | Gradient-based | Fast local optimisation with constraints |
+| SLSQP | Gradient-based | Fast local optimization with constraints |
 | COBYLA | Derivative-free | Noisy or non-differentiable models |
 | trust-constr | Interior point | Large-scale constrained problems |
 | Differential Evolution | Population-based | Global search, black-box functions |
-| Nevergrad | Meta-optimiser | Algorithm-agnostic global search |
+| Nevergrad | Meta-optimizer | Algorithm-agnostic global search |
 | **NSGA-II** | Multi-objective evolutionary | Pareto fronts with 2–5 objectives |
 | **Multi-Start** | Hybrid global+local | Avoiding local minima via LHS starts |
 
@@ -97,7 +98,7 @@ PyLCSS implements the **Solution Space** approach for robust design: instead of 
 - **Cross-Validation** — K-Fold (2–20 folds) and Leave-One-Out
 - **Model Comparison** — Automated comparison of all 5 algorithms on same dataset
 - **Feature Importance** — Permutation-based and tree-based importance analysis
-- **Hyperparameter Optimisation** — Grid search and random search with built-in search spaces
+- **Hyperparameter Optimization** — Grid search and random search with built-in search spaces
 
 ### Solution Space Exploration
 - **Monte Carlo Sampling** — Vectorised evaluation of thousands of design variants
@@ -121,6 +122,10 @@ PyLCSS implements the **Solution Space** approach for robust design: instead of 
 - **Local STT** — Faster-Whisper for real-time speech recognition
 - **Multi-Provider LLM** — OpenAI, Claude, Gemini, LM-Studio
 - **Privacy-First** — Optional fully local execution
+
+### Black-Box Integration
+- **Any Python-accessible tool** — ANSYS, MATLAB, LS-DYNA, in-house solvers, and HPC scripts can be wrapped in a simple `evaluate(x)` function
+- **Orchestrator, not replacement** — PyLCSS passes design variables in and receives objectives / constraints back; your existing solvers remain unchanged
 
 ---
 
@@ -177,9 +182,23 @@ CalculiX and OpenRadioss are launched as external native processes. They are not
 3. **Validate** — Click "Validate" to check units and connections
 4. **Solution Space** — Switch to Solution Space tab → "Compute"
 5. **Visualise** — Plot Weight vs. Safety Factor
-6. **Optimise** — Go to Optimisation tab → select objectives → Run
+6. **Optimize** — Go to Optimization tab → select objectives → Run
 
 ---
+
+## Workflow
+
+PyLCSS follows a four-phase product development cycle that mirrors the **V-model** — supporting every level from system requirements to component validation and back:
+
+| Phase | Action | PyLCSS Tools |
+|-------|--------|--------------|
+| **1. Define** | System architecture, functional requirements, load cases, interface definitions | System Model editor, node editor |
+| **2. Parameterise** | Design variables *x*, objectives *f(x)*, bounds, sensitivity screening | Variable manager, Sobol / Morris screening |
+| **3. Evaluate** | CAD rebuild, FEA / crash runs, surrogate predictions, DOE sampling | CAD engine, CalculiX, OpenRadioss, ML surrogate |
+| **4. Decide** | Feasible solution box, Pareto front, robust margin, platform intersection | Solution Space explorer, NSGA-II, Multi-Start |
+
+---
+
 
 ## Architecture
 
@@ -211,10 +230,12 @@ pylcss/
 | **Computation** | NumPy, SciPy, Pandas |
 | **Visualisation** | VTK (3D), pyqtgraph (2D) |
 | **ML** | PyTorch, scikit-learn |
-| **Optimisation** | SciPy, Nevergrad, SALib |
+| **Optimization** | SciPy, Nevergrad, SALib |
 | **Units** | pint |
 | **Serialisation** | h5py, dill, joblib |
 | **AI Assistant** | Faster-Whisper, OpenAI, Edge-TTS |
+
+---
 
 ## License
 
