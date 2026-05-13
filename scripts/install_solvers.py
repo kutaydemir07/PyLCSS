@@ -1,11 +1,10 @@
-#!/usr/bin/env python3
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-"""Download and install the external solver binaries PyLCSS can launch.
+"""Download and install the external solver components PyLCSS can launch.
 
-CalculiX (``ccx``) and OpenRadioss (``starter_*`` / ``engine_*`` / ``anim_to_vtk``)
-are native binaries, not Python packages, so they cannot ship in
-``requirements.txt``.  This script fetches the upstream release archives,
+CalculiX (``ccx``), OpenRadioss (``starter_*`` / ``engine_*`` / ``anim_to_vtk``) are external solver
+components, not Python packages that ship in ``requirements.txt``.  This script
+fetches the upstream release archives,
 unpacks them under ``<repo>/external_solvers/<solver>``, and writes the
 matching environment variables to ``<repo>/external_solvers/env.txt``.
 
@@ -16,7 +15,7 @@ Usage
     python scripts/install_solvers.py --only radioss # OpenRadioss only
     python scripts/install_solvers.py --list         # show what would be installed
 
-Once the binaries are unpacked, point PyLCSS at them either by sourcing the
+Once the components are unpacked, point PyLCSS at them either by sourcing the
 written env file or by setting these variables yourself:
 
     PYLCSS_CALCULIX_CCX             -> full path to ``ccx`` / ``ccx.exe``
@@ -33,7 +32,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 import platform
 import shutil
 import sys
@@ -144,7 +142,7 @@ SOLVERS: Dict[str, Dict[str, SolverAsset]] = {
             binary_glob="starter_*",
             env_var="PYLCSS_OPENRADIOSS_STARTER",
         ),
-    },
+    }
 }
 
 
@@ -216,7 +214,7 @@ def _print_manual_instructions(asset: SolverAsset) -> None:
         print("  (You may need to tap a third-party formula; CalculiX is not in core homebrew.)")
     elif scheme == "manual":
         print(f"  {payload}")
-    print(f"  Then export {asset.env_var}=/full/path/to/binary  for PyLCSS to pick it up.")
+    print(f"  Then export {asset.env_var}=/full/path/to/component  for PyLCSS to pick it up.")
 
 
 def _ensure_executable(path: Path) -> None:
@@ -310,113 +308,11 @@ def write_env_file(env: Dict[str, str]) -> None:
     print(f"Wrote {ENV_FILE}  (optional - only needed if you launch CCX/Radioss outside PyLCSS).")
 
 
-NEON_BENCHMARK = {
-    "name":     "Chrysler Neon HPC benchmark",
-    # Stable Confluence attachment URL (verified 2026-05).
-    "url":      "https://openradioss.atlassian.net/wiki/download/attachments/47546369/Neon1m11_2017.zip?version=5&modificationDate=1702908315811&cacheVersion=1&api=v2",
-    "archive":  "Neon1m11_2017.zip",
-    # Repo-relative install location — referenced by data/Neon_FrontalCrash_RadiossDeck.cad.
-    "dest_rel": "data/benchmarks/neon",
-    # File patterns to expose to the .cad as the "deck to run".  The first
-    # match wins; the script auto-patches the example .cad with the resolved
-    # path so the user gets a one-click run.
-    "deck_globs": ("**/*_0000.rad", "**/*.rad", "**/*.k", "**/*.key"),
-    # The .cad file whose deck_path we update on a successful install.
-    "cad_patch":  "data/Neon_FrontalCrash_RadiossDeck.cad",
-}
-
-
-def install_neon_benchmark(force: bool) -> None:
-    """Download + unpack the OpenRadioss Neon HPC benchmark.
-
-    Writes into ``<repo>/data/benchmarks/neon/`` and, on success, edits the
-    bundled Neon example ``.cad`` to point ``deck_path`` at the resolved deck
-    so the user can open the file and hit Run.
-    """
-    dest = REPO_ROOT / NEON_BENCHMARK["dest_rel"]
-    archive_path = dest / NEON_BENCHMARK["archive"]
-    extract_dir = dest / "unpacked"
-
-    if extract_dir.exists() and not force:
-        print(f"[{NEON_BENCHMARK['name']}] already installed at {extract_dir} "
-              "(use --force to redo).")
-    else:
-        if extract_dir.exists():
-            shutil.rmtree(extract_dir)
-        if archive_path.exists() and not force:
-            print(f"[{NEON_BENCHMARK['name']}] reusing cached archive "
-                  f"{archive_path.name}")
-        else:
-            _download(NEON_BENCHMARK["url"], archive_path, expected_sha256=None)
-        _extract(archive_path, extract_dir)
-
-    # Locate the deck file inside whatever folder layout the zip used.
-    resolved_deck: Optional[Path] = None
-    for pattern in NEON_BENCHMARK["deck_globs"]:
-        match = _find_first(extract_dir, pattern)
-        if match is not None:
-            resolved_deck = match
-            break
-
-    if resolved_deck is None:
-        print("  ! Could not auto-detect the Neon deck file inside the archive.")
-        print(f"  ! Look under {extract_dir} and set deck_path manually on the")
-        print(f"    'Chrysler Neon Frontal Crash' node in {NEON_BENCHMARK['cad_patch']}.")
-        return
-
-    rel_deck = resolved_deck.resolve().relative_to(REPO_ROOT.resolve())
-    rel_deck_str = str(rel_deck).replace(os.sep, "/")
-    print(f"  Neon deck detected: {rel_deck_str}")
-
-    cad_path = REPO_ROOT / NEON_BENCHMARK["cad_patch"]
-    # Also detect a paired engine file (``_0001.rad``) so we can pre-fill
-    # ``engine_path``.  When present, our Radioss adapter skips Starter and
-    # runs Engine directly on the upstream-prepared engine deck — much faster
-    # and matches the official Neon workflow.
-    engine_file: Optional[Path] = None
-    if resolved_deck.suffix.lower() == ".rad" and resolved_deck.stem.endswith("_0000"):
-        candidate = resolved_deck.with_name(resolved_deck.stem.replace("_0000", "_0001") + ".rad")
-        if candidate.is_file():
-            engine_file = candidate
-
-    if cad_path.is_file():
-        import json
-        try:
-            data = json.loads(cad_path.read_text(encoding="utf-8"))
-            for node in data.get("nodes", {}).values():
-                if node.get("type_", "").endswith(".RunRadiossDeckNode"):
-                    custom = node.setdefault("custom", {})
-                    custom["deck_path"] = rel_deck_str
-                    if engine_file is not None:
-                        rel_engine = engine_file.resolve().relative_to(REPO_ROOT.resolve())
-                        custom["engine_path"] = str(rel_engine).replace(os.sep, "/")
-            cad_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-            print(f"  Patched {cad_path.relative_to(REPO_ROOT)} deck_path -> {rel_deck_str}")
-            if engine_file is not None:
-                print(f"  Patched {cad_path.relative_to(REPO_ROOT)} engine_path -> {engine_file.name}")
-        except Exception as exc:
-            print(f"  ! Could not patch {cad_path.name}: {exc}")
-    else:
-        print(f"  ! Example .cad {cad_path} not found; you'll have to set "
-              f"deck_path manually on a Run Radioss Deck node.")
-
-
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--only", choices=sorted(SOLVERS.keys()), help="Install one solver instead of all.")
     parser.add_argument("--force", action="store_true", help="Reinstall even if already extracted.")
     parser.add_argument("--list", action="store_true", help="Show the URLs that would be downloaded.")
-    parser.add_argument(
-        "--with-neon", action="store_true",
-        help=(
-            "Also download the OpenRadioss Chrysler Neon HPC benchmark (~30 MB zipped) "
-            "into data/benchmarks/neon/ and auto-patch the example .cad to point at it."
-        ),
-    )
-    parser.add_argument(
-        "--only-neon", action="store_true",
-        help="Skip the solver downloads and only fetch the Neon benchmark.",
-    )
     parser.add_argument(
         "--url-override",
         help="Replace the upstream URL for the selected solver (use with --only).",
@@ -435,22 +331,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"{key} [{plat}] -> manual: {asset.url}")
             else:
                 print(f"{key} [{plat}] -> {asset.url}")
-        print(f"neon -> {NEON_BENCHMARK['url']}")
         return 0
 
     env: Dict[str, str] = {}
-    if not args.only_neon:
-        for key in keys:
-            print(f"\n=== Installing {key} ===")
-            env.update(install_solver(key, force=args.force, url_override=args.url_override))
-
-    if args.with_neon or args.only_neon:
-        print("\n=== Installing Neon HPC benchmark ===")
-        install_neon_benchmark(force=args.force)
+    for key in keys:
+        print(f"\n=== Installing {key} ===")
+        env.update(install_solver(key, force=args.force, url_override=args.url_override))
 
     if env:
         write_env_file(env)
-    elif not (args.with_neon or args.only_neon):
+    else:
         print("Nothing installed.")
     return 0
 

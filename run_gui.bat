@@ -73,6 +73,29 @@ if errorlevel 1 (
     echo.
 )
 
+REM Optional external solver setup for CalculiX, OpenRadioss
+set "SOLVER_CONFIG=%PYLCSS_DIR%\external_solvers\solver_paths.json"
+if not exist "%SOLVER_CONFIG%" (
+    echo External solver paths are not configured.
+    echo PyLCSS can still start, but FEA/crash/topology solver nodes need CalculiX, OpenRadioss.
+    choice /C YN /N /M "Install CalculiX, OpenRadioss now? [Y/N] "
+    if errorlevel 2 goto SKIP_SOLVER_INSTALL
+
+    echo.
+    echo Installing external solver components...
+    python "%PYLCSS_DIR%\scripts\install_solvers.py"
+    if errorlevel 1 (
+        echo.
+        echo WARNING: Solver installation did not complete.
+        echo You can retry later with: python scripts\install_solvers.py
+        echo The GUI will start anyway.
+    ) else (
+        echo External solver components configured successfully.
+    )
+    echo.
+)
+:SKIP_SOLVER_INSTALL
+
 REM Run the PyLCSS GUI
 echo Starting PyLCSS GUI...
 set "PYTHONPATH=%PYLCSS_DIR%;%PYTHONPATH%"

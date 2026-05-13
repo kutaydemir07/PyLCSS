@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-# Markus Zimmermann, Johannes Edler von Hoessle 
-# Computing solution spaces for robust design 
+# Markus Zimmermann, Johannes Edler von Hoessle
+# Computing solution spaces for robust design
 # https://doi.org/10.1002/nme.4450
 
 """
@@ -15,13 +15,13 @@ for visualization, and product family analysis.
 import numpy as np
 import logging
 from .solver_engine import SolutionSpaceSolver
-from .monte_carlo_sampling import monte_carlo
+from .monte_carlo import monte_carlo
 
 logger = logging.getLogger(__name__)
 
-def compute_solution_space(problem, weight, dsl, dsu, l, u, reqU, reqL, parameters, sample_size=1000, callback=None, solver_type='pymoo'):
+def compute_solution_space(problem, weight, dsl, dsu, l, u, reqU, reqL, parameters, sample_size=1000, callback=None, solver_type='goal_attainment'):
     """
-    Compute the maximal box-shaped solution space using evolutionary optimization.
+    Compute the maximal box-shaped solution space.
 
     Uses the SolutionSpaceSolver to find the largest hyper-rectangle in the
     design space that satisfies all constraints. The algorithm evolves box
@@ -39,7 +39,7 @@ def compute_solution_space(problem, weight, dsl, dsu, l, u, reqU, reqL, paramete
         parameters: Parameter matrix defining fixed vs variable parameters
         sample_size: Number of Monte Carlo samples for validation
         callback: Optional progress callback function
-        solver_type: Solver type for feasible point finding ('pymoo' or 'goal_attainment')
+        solver_type: Solver type for feasible point finding
 
     Returns:
         tuple: (final_box, convergence_data, population_data, samples)
@@ -55,7 +55,18 @@ def compute_solution_space(problem, weight, dsl, dsu, l, u, reqU, reqL, paramete
     # Run solver
     return solver.solve(callback=callback)
 
-def resample_solution_space(problem, dv_par_box, dsl, dsu, reqU, reqL, parameters, sample_size=1000, active_plots=None):
+def resample_solution_space(
+    problem,
+    dv_par_box,
+    dsl,
+    dsu,
+    reqU,
+    reqL,
+    parameters,
+    sample_size=1000,
+    active_plots=None,
+    center_slice=False,
+):
     """
     Resample the solution space for visualization and analysis.
 
@@ -73,6 +84,8 @@ def resample_solution_space(problem, dv_par_box, dsl, dsu, reqU, reqL, parameter
         parameters: Parameter matrix
         sample_size: Number of samples per slice
         active_plots: List of (idx1, idx2) tuples for plot axes
+        center_slice: When True, non-plotted design variables are fixed to
+            the center of the current solution box for 2D slice plots.
 
     Returns:
         list: List of sample dictionaries, one per active plot
@@ -110,6 +123,12 @@ def resample_solution_space(problem, dv_par_box, dsl, dsu, reqU, reqL, parameter
             if idx1 < num_dv and idx2 < num_dv:
                 # DV-DV slice sampling
                 slice_box = dv_par_box.copy()
+                if center_slice:
+                    for d in range(dim):
+                        if d != idx1 and d != idx2:
+                            center = (slice_box[d, 0] + slice_box[d, 1]) / 2.0
+                            slice_box[d, 0] = center
+                            slice_box[d, 1] = center
                 slice_box[idx1, 0] = dsl[idx1]
                 slice_box[idx1, 1] = dsu[idx1]
                 slice_box[idx2, 0] = dsl[idx2]
@@ -120,6 +139,14 @@ def resample_solution_space(problem, dv_par_box, dsl, dsu, reqU, reqL, parameter
             else:
                 # DV-QoI full space sampling
                 full_box = dv_par_box.copy()
+                if center_slice:
+                    dv_idx = idx1 if idx1 < num_dv else idx2
+                    if dv_idx < num_dv:
+                        for d in range(dim):
+                            if d != dv_idx:
+                                center = (full_box[d, 0] + full_box[d, 1]) / 2.0
+                                full_box[d, 0] = center
+                                full_box[d, 1] = center
                 PA, m, PB, samp, viol, y = monte_carlo(
                     problem, full_box, parameters, reqL, reqU, dv_norm, dv_norm_l, ind_parameters, sample_size, dim
                 )
@@ -338,10 +365,6 @@ def calculate_variable_communality(variant_boxes, platform_box):
             )
     
     return communality
-
-
-
-
 
 
 

@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-# Markus Zimmermann, Johannes Edler von Hoessle 
-# Computing solution spaces for robust design 
+# Markus Zimmermann, Johannes Edler von Hoessle
+# Computing solution spaces for robust design
 # https://doi.org/10.1002/nme.4450
 
 """
@@ -1031,9 +1031,17 @@ class PlotWidget(QtWidgets.QWidget):
                     return float(v)
 
                 if self.roi_item is None:
+                    pen_style = QtCore.Qt.SolidLine
+                    center_slice = bool(
+                        hasattr(self.parent_widget, 'chk_center_slice')
+                        and self.parent_widget.chk_center_slice.isChecked()
+                    )
+                    if center_slice:
+                        pen_style = QtCore.Qt.DashLine
+
                     # Create draggable ROI rectangle
                     roi = pg.ROI([bx_min, by_min], [bx_max - bx_min, by_max - by_min], 
-                                pen=pg.mkPen('black', width=2), rotatable=False)
+                                pen=pg.mkPen('black', width=2, style=pen_style), rotatable=False)
                     roi.maxBounds = QtCore.QRectF(_s(x_min), _s(y_min), _s(x_max - x_min), _s(y_max - y_min))
                     roi.addScaleHandle([1, 1], [0, 0])  # Bottom-right
                     roi.addScaleHandle([0, 0], [1, 1])  # Top-left
@@ -1044,6 +1052,18 @@ class PlotWidget(QtWidgets.QWidget):
                     roi.setZValue(10) # Ensure on top
                     self.plot_widget.addItem(roi)
                     self.roi_item = roi
+
+                    if center_slice:
+                        center_item = pg.ScatterPlotItem(
+                            x=[(bx_min + bx_max) / 2.0],
+                            y=[(by_min + by_max) / 2.0],
+                            pen=pg.mkPen('black', width=2),
+                            brush=pg.mkBrush('black'),
+                            size=12,
+                            symbol='+',
+                        )
+                        center_item.setZValue(11)
+                        self.plot_widget.addItem(center_item)
                 else:
                     self.roi_item.maxBounds = QtCore.QRectF(_s(x_min), _s(y_min), _s(x_max - x_min), _s(y_max - y_min))
                     
@@ -1575,7 +1595,6 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         self.solver_combo = QtWidgets.QComboBox()
         self.solver_combo.addItem("SLSQP", "goal_attainment")
         self.solver_combo.addItem("Nevergrad", "nevergrad")
-        self.solver_combo.addItem("Diff. Evol.", "differential_evolution")
         self.solver_combo.setToolTip("Choose optimization solver")
         row2.addWidget(self.solver_combo, stretch=1)
         
@@ -1606,6 +1625,14 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         self.btn_resample.clicked.connect(self.resample_box)
         self.btn_resample.setEnabled(False)
         row4.addWidget(self.btn_resample)
+
+        self.chk_center_slice = QtWidgets.QCheckBox("Center Slice")
+        self.chk_center_slice.setToolTip(
+            "Fix non-plotted design variables to the center of the current box "
+            "when resampling 2D plots."
+        )
+        self.chk_center_slice.toggled.connect(lambda: self.trigger_debounced_resample())
+        row4.addWidget(self.chk_center_slice)
         
         actions_layout.addLayout(row4)
         
@@ -1669,8 +1696,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         self.family_solver_combo = QtWidgets.QComboBox()
         self.family_solver_combo.addItem("SLSQP (fast)", "goal_attainment")
         self.family_solver_combo.addItem("Nevergrad (robust)", "nevergrad")
-        self.family_solver_combo.addItem("Differential Evolution (evolutionary)", "differential_evolution")
-        self.family_solver_combo.setToolTip("Choose optimization solver:\n- SLSQP: Fast and reliable (recommended)\n- Nevergrad: Gradient-free optimization with native constraint support\n- Differential Evolution: Population-based evolutionary algorithm")
+        self.family_solver_combo.setToolTip("Choose optimization solver:\n- SLSQP: Fast and reliable (recommended)\n- Nevergrad: Gradient-free optimization with native constraint support")
         family_solver_layout.addWidget(self.family_solver_combo)
         solver_layout.addLayout(family_solver_layout)
         
@@ -2913,8 +2939,21 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                 self.status_msg = None
             
             # Pass the COPIED box to the thread
+            center_slice = bool(
+                hasattr(self, 'chk_center_slice') and self.chk_center_slice.isChecked()
+            )
             self.resample_thread = ResampleThread(
-                self.problem, dv_par_box_copy, dsl, dsu, reqU, reqL, parameters, sample_size, active_plots, None
+                self.problem,
+                dv_par_box_copy,
+                dsl,
+                dsu,
+                reqU,
+                reqL,
+                parameters,
+                sample_size,
+                active_plots,
+                None,
+                center_slice=center_slice,
             )
             self.resample_thread.finished.connect(lambda s: self.on_resample_finished(s, silent))
             self.resample_thread.error.connect(self.on_resample_error)

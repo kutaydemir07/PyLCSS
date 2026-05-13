@@ -2397,6 +2397,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         # CENTER AREA
         center_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         self.viewer = CQ3DViewer()
+        self.viewer.face_picking_requested.connect(self._start_viewer_face_picking)
         center_splitter.addWidget(self.viewer)
         
         graph_widget = self.graph.widget
@@ -2442,6 +2443,71 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         
         # Set central widget for QMainWindow
         self.setCentralWidget(content_widget)
+
+    def _active_interactive_face_node(self):
+        """Return the interactive face-selection node implied by the current UI."""
+        candidates = []
+        try:
+            candidates.extend(list(self.graph.selected_nodes()))
+        except Exception:
+            pass
+
+        for attr in ('current_node',):
+            node = getattr(self.properties, attr, None)
+            if node is not None and node not in candidates:
+                candidates.append(node)
+
+        last = getattr(self, '_last_rendered_node', None)
+        if last is not None and last not in candidates:
+            candidates.append(last)
+
+        for node in candidates:
+            if node is not None and node.__class__.__name__ == 'InteractiveSelectFaceNode':
+                return node
+
+        try:
+            all_interactive = [
+                n for n in self.graph.all_nodes()
+                if n.__class__.__name__ == 'InteractiveSelectFaceNode'
+            ]
+        except Exception:
+            all_interactive = []
+
+        if len(all_interactive) == 1:
+            return all_interactive[0]
+        return None
+
+    def _start_viewer_face_picking(self):
+        """Start face picking from the VTK viewer toolbar."""
+        if self._execution_is_active():
+            message = "Wait for the current CAD preview to finish before picking faces."
+            self.statusBar().showMessage(message)
+            QtWidgets.QMessageBox.information(self, "Preview In Progress", message)
+            return
+
+        node = self._active_interactive_face_node()
+        if node is None:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Select Face Picking Node",
+                "Add or select a Select Face (Interactive) node connected to the shape, "
+                "then click Pick Faces again.",
+            )
+            return
+
+        self.properties.display_node(node)
+        self._last_rendered_node = node
+
+        _, geometry = self._get_render_context_for_node(node)
+        if geometry is None:
+            self._execute_graph(skip_simulation=True)
+            self.statusBar().showMessage(
+                "Updating CAD preview for face picking; click Pick Faces again when it finishes."
+            )
+            return
+
+        self._render_result_in_viewer(geometry)
+        self.properties._start_picking_session(node)
     
     def _setup_shortcuts(self):
         """Setup keyboard shortcuts."""

@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-# Markus Zimmermann, Johannes Edler von Hoessle 
-# Computing solution spaces for robust design 
+# Markus Zimmermann, Johannes Edler von Hoessle
+# Computing solution spaces for robust design
 # https://doi.org/10.1002/nme.4450
 
 import time
@@ -112,7 +112,6 @@ class ProductFamilyWorker(QtCore.QThread):
             return
         # Emit variant progress with message (e.g., "Phase I - Iter 5")
         self.progress_signal.emit(variant_name, self.current_variant, self.total_variants, progress_msg)
-
 
 
 

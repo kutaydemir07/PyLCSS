@@ -312,6 +312,7 @@ class CQ3DViewer(QtWidgets.QWidget):
     # Signals emitted during interactive picking
     face_picked = QtCore.Signal(list)      # list of OCC face objects
     picking_cancelled = QtCore.Signal()
+    face_picking_requested = QtCore.Signal()
 
     def __init__(self, parent=None):
         super(CQ3DViewer, self).__init__(parent)
@@ -330,6 +331,13 @@ class CQ3DViewer(QtWidgets.QWidget):
         vtb_layout = QtWidgets.QHBoxLayout(self._view_toolbar)
         vtb_layout.setContentsMargins(5, 2, 5, 2)
         vtb_layout.addStretch()
+
+        self._btn_pick_faces = QtWidgets.QPushButton("Pick Faces")
+        self._btn_pick_faces.setToolTip(
+            "Start face picking for the selected Select Face (Interactive) node"
+        )
+        self._btn_pick_faces.clicked.connect(self.face_picking_requested.emit)
+        vtb_layout.addWidget(self._btn_pick_faces)
 
         btn_grid = QtWidgets.QPushButton("Grid")
         btn_grid.setCheckable(True)
@@ -820,6 +828,7 @@ class CQ3DViewer(QtWidgets.QWidget):
         # Show toolbar
         self._picking_toolbar.show()
         self._pick_count_lbl.setText("0 selected")
+        self._btn_pick_faces.setEnabled(False)
 
         # Install VTK left-button press callback
         self._pick_callback_id = self.interactor.AddObserver(
@@ -843,6 +852,7 @@ class CQ3DViewer(QtWidgets.QWidget):
             self._pick_callback_id = None
 
         self.vtkWidget.setCursor(QtGui.QCursor(QtCore.Qt.ArrowCursor))
+        self._btn_pick_faces.setEnabled(True)
 
     def _on_vtk_pick(self, obj, event):
         """VTK callback: called on left-button press in picking mode."""

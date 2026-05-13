@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-# Markus Zimmermann, Johannes Edler von Hoessle 
-# Computing solution spaces for robust design 
+# Markus Zimmermann, Johannes Edler von Hoessle
+# Computing solution spaces for robust design
 # https://doi.org/10.1002/nme.4450
 
 from PySide6 import QtCore
@@ -11,7 +11,20 @@ class ResampleThread(QtCore.QThread):
     finished = QtCore.Signal(object) # samples
     error = QtCore.Signal(str)
 
-    def __init__(self, problem, dv_par_box, dsl, dsu, reqU, reqL, parameters, sample_size, active_plots=None, dv_par_box_mutex=None):
+    def __init__(
+        self,
+        problem,
+        dv_par_box,
+        dsl,
+        dsu,
+        reqU,
+        reqL,
+        parameters,
+        sample_size,
+        active_plots=None,
+        dv_par_box_mutex=None,
+        center_slice=False,
+    ):
         super().__init__()
         self.problem = problem
         # Make a thread-safe copy of dv_par_box
@@ -30,6 +43,7 @@ class ResampleThread(QtCore.QThread):
         self.parameters = parameters
         self.sample_size = sample_size
         self.active_plots = active_plots
+        self.center_slice = center_slice
 
     def run(self):
         try:
@@ -37,13 +51,12 @@ class ResampleThread(QtCore.QThread):
             samples = resample_solution_space(
                 self.problem,
                 self.dv_par_box, self.dsl, self.dsu, self.reqU, self.reqL, self.parameters, self.sample_size,
-                active_plots=self.active_plots
+                active_plots=self.active_plots,
+                center_slice=self.center_slice
             )
             self.finished.emit(samples)
         except Exception as e:
             self.error.emit(str(e))
-
-
 
 
 
