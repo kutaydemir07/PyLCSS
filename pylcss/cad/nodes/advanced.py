@@ -2,14 +2,11 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 """
 Advanced CAD nodes for professional workflows:
-    - ImportStepNode: Import STEP/IGES/STL/OBJ files into the graph
+    - ImportStepNode: Import STEP/IGES files into the graph
     - ImportStlNode: Import STL mesh files
-    - ThickenNode: Thicken a shell/surface into a solid
-    - SplitNode: Split a solid by a plane
-    - TextNode: 3D text geometry
-    - PipeNode: Pipe/tube from path curve
-    - ThreadNode: Helical thread feature
     - MathExpressionNode: Evaluate math expressions
+    - MeasureDistanceNode: Measure distance between two shapes
+    - SurfaceAreaNode: Compute surface area of a shape
 """
 
 import logging
@@ -85,185 +82,6 @@ class ImportStlNode(CadQueryNode):
             return None
 
 
-class ThickenNode(CadQueryNode):
-    """Thicken a surface/shell into a solid by offsetting."""
-
-    __identifier__ = "com.cad"
-    NODE_NAME = "Thicken"
-
-    def __init__(self):
-        super().__init__()
-        self.add_input("shape_in")
-        self.add_output("shape_out")
-        self.add_text_input("thickness", "Thickness", text="2.0")
-        self.set_color(80, 130, 200)
-
-    def run(self, **kwargs):
-        self.clear_error()
-        try:
-            import cadquery as cq
-
-            shape = resolve_shape_input(self.input(0))
-            if shape is None:
-                self.set_error("No input shape")
-                return None
-
-            thickness = float(self.get_property("thickness") or "2.0")
-
-            if isinstance(shape, cq.Workplane):
-                result = shape.shell(thickness)
-            else:
-                result = cq.Workplane("XY").newObject([shape]).shell(thickness)
-
-            self._last_result = result
-            return result
-        except Exception as e:
-            self.set_error(str(e))
-            return None
-
-
-class SplitNode(CadQueryNode):
-    """Split a solid body along a plane."""
-
-    __identifier__ = "com.cad"
-    NODE_NAME = "Split Body"
-
-    def __init__(self):
-        super().__init__()
-        self.add_input("shape_in")
-        self.add_output("shape_out")
-        self.add_combo_menu(
-            "plane", "Split Plane", items=["XY", "XZ", "YZ"]
-        )
-        self.add_text_input("offset", "Offset", text="0.0")
-        self.add_combo_menu("keep", "Keep", items=["Both", "Positive", "Negative"])
-        self.set_color(200, 100, 100)
-
-    def run(self, **kwargs):
-        self.clear_error()
-        try:
-            import cadquery as cq
-            from OCP.BRepAlgoAPI import BRepAlgoAPI_Section
-            from OCP.gp import gp_Pln, gp_Pnt, gp_Dir
-
-            shape = resolve_shape_input(self.input(0))
-            if shape is None:
-                self.set_error("No input shape")
-                return None
-
-            plane = self.get_property("plane") or "XY"
-            offset = float(self.get_property("offset") or "0.0")
-            keep = self.get_property("keep") or "Both"
-
-            if isinstance(shape, cq.Workplane):
-                wp = shape
-            else:
-                wp = cq.Workplane("XY").newObject([shape])
-
-            # Use CadQuery's cut with a large box as splitting tool
-            bb = wp.val().BoundingBox()
-            size = max(bb.xlen, bb.ylen, bb.zlen) * 2
-
-            if plane == "XY":
-                tool = cq.Workplane("XY").transformed(offset=(0, 0, offset)).box(size, size, size, centered=(True, True, False))
-            elif plane == "XZ":
-                tool = cq.Workplane("XZ").transformed(offset=(0, 0, offset)).box(size, size, size, centered=(True, True, False))
-            else:
-                tool = cq.Workplane("YZ").transformed(offset=(0, 0, offset)).box(size, size, size, centered=(True, True, False))
-
-            if keep == "Positive":
-                result = wp.cut(tool)
-            elif keep == "Negative":
-                result = wp.intersect(tool)
-            else:
-                result = wp  # Return the full shape for "Both"
-
-            self._last_result = result
-            return result
-        except Exception as e:
-            self.set_error(str(e))
-            return None
-
-
-class PipeNode(CadQueryNode):
-    """Create a pipe/tube along a path."""
-
-    __identifier__ = "com.cad"
-    NODE_NAME = "Pipe"
-
-    def __init__(self):
-        super().__init__()
-        self.add_input("path_in")
-        self.add_output("shape_out")
-        self.add_text_input("outer_radius", "Outer Radius", text="5.0")
-        self.add_text_input("inner_radius", "Inner Radius", text="3.0")
-        self.set_color(80, 160, 180)
-
-    def run(self, **kwargs):
-        self.clear_error()
-        try:
-            import cadquery as cq
-
-            path = resolve_shape_input(self.input(0))
-            if path is None:
-                self.set_error("No path input")
-                return None
-
-            outer_r = float(self.get_property("outer_radius") or "5.0")
-            inner_r = float(self.get_property("inner_radius") or "3.0")
-
-            # Create annular profile
-            profile = (
-                cq.Workplane("YZ")
-                .circle(outer_r)
-                .circle(inner_r)
-            )
-
-            if isinstance(path, cq.Workplane):
-                result = profile.sweep(path)
-            else:
-                result = profile.sweep(cq.Workplane("XY").newObject([path]))
-
-            self._last_result = result
-            return result
-        except Exception as e:
-            self.set_error(str(e))
-            return None
-
-
-class TextNode(CadQueryNode):
-    """Create 3D text geometry."""
-
-    __identifier__ = "com.cad"
-    NODE_NAME = "3D Text"
-
-    def __init__(self):
-        super().__init__()
-        self.add_output("shape_out")
-        self.add_text_input("text_content", "Text", text="pylcss")
-        self.add_text_input("font_size", "Font Size", text="10.0")
-        self.add_text_input("depth", "Depth", text="2.0")
-        self.set_color(180, 140, 80)
-
-    def run(self, **kwargs):
-        self.clear_error()
-        try:
-            import cadquery as cq
-
-            text = self.get_property("text_content") or "pylcss"
-            font_size = float(self.get_property("font_size") or "10.0")
-            depth = float(self.get_property("depth") or "2.0")
-
-            result = (
-                cq.Workplane("XY")
-                .text(text, fontsize=font_size, distance=depth)
-            )
-
-            self._last_result = result
-            return result
-        except Exception as e:
-            self.set_error(str(e))
-            return None
 
 
 class MathExpressionNode(CadQueryNode):
@@ -342,7 +160,6 @@ class MeasureDistanceNode(CadQueryNode):
                 self.set_error("Two input shapes required")
                 return None
 
-            # Get OCC shapes
             if isinstance(shape_a, cq.Workplane):
                 occ_a = shape_a.val().wrapped
             else:

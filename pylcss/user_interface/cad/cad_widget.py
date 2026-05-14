@@ -3910,10 +3910,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                         has_output = True
                         break
                 
-                # Primitive nodes don't need inputs
+                # Code-first and scalar nodes don't need inputs
                 node_class = node.__class__.__name__
-                is_primitive = node_class in ['BoxNode', 'CylinderNode', 'SphereNode', 
-                                               'ConeNode', 'TorusNode', 'NumberNode']
+                is_primitive = node_class in ['CadQueryCodeNode', 'NumberNode', 'VariableNode']
                 is_export = 'Export' in node_class
                 
                 if not is_primitive and not has_input:

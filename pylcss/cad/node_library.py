@@ -7,9 +7,7 @@ Central registry for CAD nodes.
 PyLCSS is code-first: parametric geometry is authored in a
 :class:`~pylcss.cad.nodes.code_part.CadQueryCodeNode` (one readable CadQuery
 script per part / assembly), or imported via STEP / STL.  The hand-placed
-primitive / sketch / 3-D-op / transform / pattern nodes that used to live
-here have been retired — they're still on disk under ``pylcss/cad/nodes/``
-but are no longer wired into the toolbar, the registry, or the inspector.
+primitive / sketch / 3-D-op / transform / pattern nodes have been removed.
 
 Maps node identifiers (``com.cad.*``) to their Python classes.
 """

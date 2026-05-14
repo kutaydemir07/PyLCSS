@@ -4,21 +4,17 @@
 """
 CAD Nodes — code-first authoring + the FEA / crash / optimisation surface.
 
-PyLCSS used to ship a long menu of hand-placed primitive / sketch / 3-D-op /
-transform / pattern / hole-wizard nodes (Box, Cylinder, Sketch, Extrude,
-Fillet, Boolean, Translate, Linear Pattern, …).  Those are retired in favour
-of a single :class:`CadQueryCodeNode` that hosts one readable parametric
-CadQuery script.  The source files for the retired nodes still live under
-``pylcss/cad/nodes/`` so any in-tree code that historically imported them
-keeps working, but they are no longer re-exported here, no longer in
-``pylcss.cad.node_library.NODE_CLASS_MAPPING``, and no longer in the toolbar.
+PyLCSS is code-first: parametric geometry is authored in a
+:class:`CadQueryCodeNode` (one readable CadQuery script per part / assembly),
+or imported via STEP / STL.  The hand-placed primitive / sketch / 3-D-op /
+transform / pattern nodes have been removed.
 
-Structure that is still part of the active surface:
+Active node modules:
     nodes/
     ├── code_part.py    # CadQueryCodeNode — primary authoring node
     ├── analysis.py     # MassPropertiesNode, BoundingBoxNode
     ├── assembly.py     # AssemblyNode (combine multiple shapes)
-    ├── values.py       # NumberNode, VariableNode (with exposed_name)
+    ├── values.py       # NumberNode, VariableNode
     ├── io.py           # ExportStepNode, ExportStlNode
     ├── advanced.py     # ImportStep/Stl + MathExpression/MeasureDistance/SurfaceArea
     ├── modeling.py     # SelectFaceNode + InteractiveSelectFaceNode
