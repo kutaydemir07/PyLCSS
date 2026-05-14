@@ -345,6 +345,7 @@ class TopologyOptimizationNode(CadQueryNode):
             float(np.sum(densities_final * elem_vol) / total_vol),
         )
         final_volume = float(np.sum(densities_final * elem_vol))
+        final_vol_frac = final_volume / total_vol if total_vol > 0.0 else 0.0
         material_density = float(material.get('rho', material.get('density', 0.0)))
         return {
             'mesh':            mesh,
@@ -355,6 +356,11 @@ class TopologyOptimizationNode(CadQueryNode):
             'type':            'topopt',
             'compliance':      final_compliance,
             'volume':          final_volume,
+            'total_volume':    total_vol,
+            'target_volume':   target_vol,
+            'final_vol_frac':  final_vol_frac,
+            'target_vol_frac': vol_frac,
+            'element_volumes': elem_vol,
             'mass':            final_volume * material_density,
             'visualization_mode': self.get_property('visualization'),
             'density_cutoff':  density_cutoff,

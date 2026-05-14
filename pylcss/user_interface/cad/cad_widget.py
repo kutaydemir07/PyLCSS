@@ -1028,8 +1028,8 @@ class PropertiesPanel(QtWidgets.QWidget):
         'continuation':      "Gradually ramp β from 1 → heaviside_beta over the run.",
         'update_scheme':     "MMA: gradient-based, robust.  OC: simpler optimality-criteria update.",
         'simp_bins':         "Number of discrete moduli the CalculiX deck quantises into per iteration.",
-        'shape_recovery':    "Run marching-cubes shape recovery on the final density field.",
-        'recovery_resolution': "Marching-cubes grid resolution.",
+        'shape_recovery':    "Run marching-cubes shape recovery with Taubin smoothing on the final density field.",
+        'recovery_resolution': "Marching-cubes voxel-grid resolution for recovered shape extraction.",
         'smoothing_iterations': "Gaussian smoothing passes on the recovered shape.",
         'density_cutoff':    "Density threshold below which material is removed in the recovered shape.",
         'vol_frac':          "Target volume fraction (kept / total) — the SIMP constraint.",
@@ -2163,6 +2163,43 @@ class ResultsPanel(QtWidgets.QWidget):
                 crash_rows.append(("Energy balance error", f"{float(data['energy_balance_max_error']) * 100:.1f}%"))
             if crash_rows:
                 self._add_section("Crash result", crash_rows)
+
+        if rtype == 'topopt':
+            topopt_rows = []
+            if 'final_vol_frac' in data:
+                topopt_rows.append(("Final volume fraction", f"{float(data['final_vol_frac']) * 100:.1f}%"))
+            elif data.get('density') is not None:
+                try:
+                    import numpy as np
+                    density = np.asarray(data.get('density'), dtype=float)
+                    elem_vol = np.asarray(data.get('element_volumes'), dtype=float)
+                    if density.size and elem_vol.size == density.size:
+                        denom = float(np.sum(elem_vol))
+                        if denom > 0.0:
+                            vf = float(np.sum(density * elem_vol) / denom)
+                            topopt_rows.append(("Final volume fraction", f"{vf * 100:.1f}%"))
+                except Exception:
+                    pass
+            if 'target_vol_frac' in data:
+                topopt_rows.append(("Target volume fraction", f"{float(data['target_vol_frac']) * 100:.1f}%"))
+            if 'compliance' in data:
+                topopt_rows.append(("Compliance", self._fmt(data['compliance'], "N·mm")))
+            if 'volume' in data:
+                topopt_rows.append(("Retained volume", self._fmt(data['volume'], "mm³")))
+            if 'total_volume' in data:
+                topopt_rows.append(("Design-domain volume", self._fmt(data['total_volume'], "mm³")))
+            if 'mass' in data:
+                topopt_rows.append(("Effective mass", self._fmt(data['mass'], "t")))
+            recovered = data.get('recovered_shape')
+            if isinstance(recovered, dict):
+                verts = recovered.get('vertices')
+                faces = recovered.get('faces')
+                try:
+                    topopt_rows.append(("Recovered surface", f"{len(verts)} vertices / {len(faces)} faces"))
+                except Exception:
+                    pass
+            if topopt_rows:
+                self._add_section("Topology result", topopt_rows)
 
         # Warnings from the external backends
         warnings = data.get('warnings') or []

@@ -47,7 +47,7 @@ networkx==3.3
 # Tabular I/O
 openpyxl==3.1.5
 
-# Optional assistant / voice services
+# Optional AI assistant speech/TTS services
 faster-whisper==1.2.1
 edge-tts==7.2.7
 pyaudio==0.2.14

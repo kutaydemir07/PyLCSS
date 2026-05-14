@@ -2,10 +2,10 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 """
-Voice Controller Module using Faster-Whisper for high-quality speech recognition.
+Voice Controller Module using Faster-Whisper for assistant speech input.
 
-Provides continuous voice command recognition for hands-free control
-using local Whisper models and energy-based VAD.
+Provides continuous speech recognition for natural-language assistant
+interaction using local Whisper models and energy-based VAD.
 """
 
 import os
@@ -20,9 +20,8 @@ import wave
 import struct
 import math
 import numpy as np
-from typing import Optional, Callable, Dict, Any, List, Tuple
+from typing import Optional, Callable, Dict, Any, List
 from pathlib import Path
-from difflib import SequenceMatcher
 
 try:
     from faster_whisper import WhisperModel
@@ -36,7 +35,7 @@ try:
 except ImportError:
     PYAUDIO_AVAILABLE = False
 
-from pylcss.assistant_systems.config import VoiceControlConfig, VOICE_COMMANDS, COMMAND_ALIASES
+from pylcss.assistant_systems.config import VoiceControlConfig
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +56,7 @@ def _play_beep(frequency: int = 800, duration_ms: int = 100) -> None:
 
 class VoiceController:
     """
-    Voice command recognition using Faster-Whisper.
+    Natural-language speech recognition using Faster-Whisper.
     
     Implementes energy-based VAD to detect speech segments and transcribes them
     using a local Whisper model.
@@ -97,9 +96,6 @@ class VoiceController:
         self._on_partial: Optional[Callable[[str], None]] = None
         self._on_status: Optional[Callable[[str], None]] = None
         self._on_llm_request: Optional[Callable[[str], None]] = None
-        
-        # Commands
-        self._commands = VOICE_COMMANDS.copy()
         
         # Load model lazily
         
@@ -348,67 +344,27 @@ class VoiceController:
             logger.error(f"Transcription failed: {e}")
 
     def _process_text(self, text: str) -> None:
-        """Process recognized text (Hybrid: Command First, LLM Fallback)."""
-        # Clean text
+        """Route recognized speech directly to assistant input."""
         text = re.sub(r'[^\w\s]', '', text).lower().strip()
-        
+
         if not text:
             return
-            
-        # 1. ALWAYS Try to match a predefined command FIRST
-        # This ensures fast execution for known commands ("Rotate Left", "Stop")
-        matched_cmd, cmd_data = self._match_command(text)
-        if matched_cmd:
-            if self._on_command:
-                self._on_command(matched_cmd, cmd_data)
-            if self._on_status:
-                self._on_status(f"✓ {matched_cmd}")
-            _play_beep(1000, 50)
-            return
 
-        # 2. If valid command NOT found, Fallback to LLM ("Always-on Assistant")
-        # If the manager has hooked up the LLM request callback, use it.
         if self._on_llm_request:
-            # Handle control commands locally if needed, but usually LLM can handle "exit" too
-            # or we map "exit" to a predefined command in config.
-            
-            # Pause immediately to prevent self-hearing during processing/TTS
             self.pause()
-            
             if self._on_status:
-                 self._on_status(f"🤖 AI: {text}")
-                 
+                self._on_status(f"AI: {text}")
             self._on_llm_request(text)
             _play_beep(600, 100)
             return
-             
-        # 3. No command and no LLM handler
-        # Just show what was heard
-        if self._on_status:
-             self._on_status(f"? {text}")
 
-    def _match_command(self, text: str) -> Tuple[Optional[str], Optional[Dict]]:
-        """Simple exact or fuzzy match."""
-        # 1. Exact match
-        if text in self._commands:
-            return text, self._commands[text]
-            
-        # 2. Fuzzy match
-        best_match = None
-        best_score = 0.0
-        
-        for cmd in self._commands:
-            score = SequenceMatcher(None, text, cmd).ratio()
-            if score > best_score:
-                best_score = score
-                best_match = cmd
-                
-        if best_score > 0.6: # Configurable threshold
-            return best_match, self._commands[best_match]
-            
-        return None, None
+        if self._dictation_mode and self._on_text:
+            self._on_text(text)
+            return
+
+        if self._on_status:
+            self._on_status(f"? {text}")
 
     # Callbacks for dictation, etc can be added back if needed
     def start_dictation(self): pass
     def stop_dictation(self): pass
-

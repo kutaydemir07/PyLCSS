@@ -5,7 +5,7 @@
 LLM Command Interpreter for PyLCSS.
 
 Parses LLM responses and translates them into executable commands
-for both the Modeling environment and CAD environment.
+for both the Modeling environment and Design Studio.
 """
 
 import json

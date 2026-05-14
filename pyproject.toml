@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pylcss"
 version = "2.1.0"
-description = "Professional Engineering Design Optimization Platform - Parametric CAD, CalculiX FEA, OpenRadioss Crash, Topology Optimisation, Sensitivity Analysis, Solution Spaces, Surrogate AI"
+description = "Professional Engineering Design Optimization Platform - Design Studio, Parametric CAD, CalculiX FEA, OpenRadioss Crash, Topology Optimisation, Sensitivity Analysis, Solution Spaces, Surrogate AI"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "PolyForm Shield License 1.0.0"}
@@ -16,6 +16,7 @@ keywords = [
     "engineering",
     "optimization",
     "parametric-design",
+    "design-studio",
     "simulation",
     "CAD",
     "FEA",
@@ -78,7 +79,7 @@ dependencies = [
     # Tabular I/O
     "openpyxl==3.1.5",
 
-    # Optional assistant / voice services
+    # Optional AI assistant speech/TTS services
     "faster-whisper==1.2.1",
     "edge-tts==7.2.7",
     "pyaudio==0.2.14",

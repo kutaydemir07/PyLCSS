@@ -280,12 +280,12 @@ class CodeEditorDialog(QtWidgets.QDialog):
         super(CodeEditorDialog, self).__init__(parent)
         self.node = node  # Store the node reference
         self.setWindowTitle("Function Block Code Editor")
-        self.resize(1200, 700) # Increased width for sidebar
+        self.resize(1000, 700)
         self.showMaximized()
         
-        main_layout = QtWidgets.QHBoxLayout(self)
+        main_layout = QtWidgets.QVBoxLayout(self)
         
-        # --- LEFT: Editor Area ---
+        # --- Editor Area ---
         editor_panel = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(editor_panel)
         
@@ -296,6 +296,7 @@ class CodeEditorDialog(QtWidgets.QDialog):
         btn_layout = QtWidgets.QHBoxLayout()
         help_btn = QtWidgets.QPushButton("?")
         help_btn.setFixedSize(30, 30)
+        help_btn.setToolTip("Show function-block and Design Studio CAD connection help")
         help_btn.clicked.connect(self.show_help)
         btn_layout.addWidget(help_btn)
         
@@ -312,46 +313,10 @@ class CodeEditorDialog(QtWidgets.QDialog):
         
         layout.addLayout(btn_layout)
         
-        # --- RIGHT: Sidebar ---
-        sidebar = QtWidgets.QWidget()
-        sidebar.setFixedWidth(300)
-        sidebar_layout = QtWidgets.QVBoxLayout(sidebar)
-        
-        sidebar_layout.addWidget(QtWidgets.QLabel("<b>Available Inputs:</b>"))
-        self.input_var_list = QtWidgets.QListWidget()
-        self.input_var_list.setToolTip("Double-click to insert variable")
-        sidebar_layout.addWidget(self.input_var_list)
-
-        sidebar_layout.addWidget(QtWidgets.QLabel("<b>Available Outputs:</b>"))
-        self.output_var_list = QtWidgets.QListWidget()
-        self.output_var_list.setToolTip("Double-click to insert variable")
-        sidebar_layout.addWidget(self.output_var_list)
-
-        sidebar_layout.addWidget(QtWidgets.QLabel("<b>CAD Commands:</b>"))
-        self.cad_command_list = QtWidgets.QListWidget()
-        self.cad_command_list.setToolTip(
-            "Double-click to insert a cad.* template.\n"
-            "Each call evaluates a .cad graph file headlessly and returns a "
-            "CadResult exposing standardised scalars (max_stress, compliance, "
-            "mass, volume, peak_disp, …)."
-        )
-        self._populate_cad_commands(self.cad_command_list)
-        sidebar_layout.addWidget(self.cad_command_list)
-
         if node:
             self._refresh_var_list()
 
-        self.input_var_list.itemDoubleClicked.connect(self.insert_variable)
-        self.output_var_list.itemDoubleClicked.connect(self.insert_variable)
-        self.cad_command_list.itemDoubleClicked.connect(self.insert_cad_command)
-        
-        # Add to splitter or layout
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
-        splitter.addWidget(editor_panel)
-        splitter.addWidget(sidebar)
-        splitter.setStretchFactor(0, 1)
-        
-        main_layout.addWidget(splitter)
+        main_layout.addWidget(editor_panel)
         
     def insert_variable(self, item: QtWidgets.QListWidgetItem) -> None:
         var_name = item.text()
@@ -360,10 +325,8 @@ class CodeEditorDialog(QtWidgets.QDialog):
 
     # ── CAD-runtime helpers ────────────────────────────────────────────
     # Catalogue of cad.* commands AND every standardised CadResult field
-    # exposed via the sidebar. Each entry is (display, snippet, tooltip).
-    # When ``snippet`` is None the entry renders as a non-selectable section
-    # header. The user double-clicks any selectable row to insert ``snippet``
-    # at the cursor.
+    # displayed in the help dialog. Each entry is (display, snippet, tooltip).
+    # When ``snippet`` is None the entry renders as a section header.
     _CAD_COMMANDS = (
         # ── Commands ───────────────────────────────────────────────────
         ("— Commands —", None, None),
@@ -458,7 +421,7 @@ class CodeEditorDialog(QtWidgets.QDialog):
         ("— TopOpt result (cad.topopt) —", None, None),
         (".final_vol_frac",
          ".final_vol_frac",
-         "Mean of the final physical density field — should match the\n"
+         "Volume-weighted final physical density fraction; should match the\n"
          "vol_frac target set on the Topology Opt node."),
         (".compliance",
          ".compliance",
@@ -468,7 +431,10 @@ class CodeEditorDialog(QtWidgets.QDialog):
          "Effective mass = Σ ρ_e · V_e · material.rho  [t]."),
         (".volume",
          ".volume",
-         "Total mesh volume [mm³] (unchanged by topology optimisation)."),
+         "Retained material volume after topology optimisation [mm3]."),
+        (".total_volume",
+         ".total_volume",
+         "Original design-domain mesh volume before material removal [mm3]."),
     )
 
     def _populate_cad_commands(self, list_widget: QtWidgets.QListWidget) -> None:
@@ -502,66 +468,107 @@ class CodeEditorDialog(QtWidgets.QDialog):
         self.editor.setFocus()
     
     def _refresh_var_list(self) -> None:
-        """Refresh the variable lists from current node inputs and outputs"""
-        self.input_var_list.clear()
-        self.output_var_list.clear()
+        """Refresh syntax-highlighting variables from current node ports."""
         variables = []
         if self.node:
             for port in self.node.input_ports():
                 name = port.name()
-                self.input_var_list.addItem(name)
                 variables.append(name)
             for port in self.node.output_ports():
                 name = port.name()
-                self.output_var_list.addItem(name)
                 variables.append(name)
         self.editor.update_variables(variables)
 
+    def _current_port_names(self) -> tuple[list[str], list[str]]:
+        """Return current function-block input and output port names."""
+        inputs: list[str] = []
+        outputs: list[str] = []
+        if self.node:
+            for port in self.node.input_ports():
+                inputs.append(port.name())
+            for port in self.node.output_ports():
+                outputs.append(port.name())
+        return inputs, outputs
+
+    def _show_help_dialog(self, help_text: str) -> None:
+        """Show a scrollable help dialog instead of an always-visible sidebar."""
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Function Block Help")
+        dialog.resize(780, 620)
+        layout = QtWidgets.QVBoxLayout(dialog)
+
+        text = QtWidgets.QTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText(help_text)
+        text.setFont(QFont("Consolas", 10))
+        layout.addWidget(text)
+
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec_()
+
+    def _build_help_text(self) -> str:
+        input_names, output_names = self._current_port_names()
+        inputs = ", ".join(input_names) if input_names else "(no input ports yet)"
+        outputs = ", ".join(output_names) if output_names else "(no output ports yet)"
+
+        command_lines = []
+        for display, snippet, tooltip in self._CAD_COMMANDS:
+            if snippet is None:
+                command_lines.append("")
+                command_lines.append(display)
+                continue
+            command_lines.append(f"{display}")
+            command_lines.append(f"    insert: {snippet}")
+            if tooltip:
+                command_lines.extend(f"    {line}" for line in tooltip.splitlines())
+
+        return "\n".join([
+            "FUNCTION BLOCK CODE EDITOR",
+            "",
+            "Current ports",
+            f"  Inputs : {inputs}",
+            f"  Outputs: {outputs}",
+            "",
+            "Basics",
+            "  - Use input ports as normal Python variables.",
+            "  - Assign every connected output variable in the code body.",
+            "  - Do not write return statements; PyLCSS adds returns from the output ports.",
+            "  - numpy is available as np, math is imported, and the Design Studio runtime is available as cad.",
+            "",
+            "Design Studio connection",
+            "  1. Build and save a .cad graph in Design Studio.",
+            "  2. Add the terminal solver node you want to call: FEA Solver, Crash Solver, or Topology Opt.",
+            "  3. On Number/Variable nodes inside that .cad graph, set exposed_name to the parameter name.",
+            "  4. Call cad.fea(...), cad.crash(...), or cad.topopt(...) from this function block.",
+            "  5. Pass keyword args matching exposed_name values. PyLCSS pushes them into the saved .cad graph.",
+            "  6. The call returns CadResult with stable scalar fields plus raw solver data through raw().",
+            "",
+            "Examples",
+            '  r = cad.fea("bracket.cad", thickness=t, hole_r=hr)',
+            '  stress, mass = r.pick("max_stress", "mass")',
+            '  safety_factor = yield_strength / max(stress, 1e-9)',
+            "",
+            '  c = cad.topopt("mbb_beam.cad", vol_frac=0.35).compliance',
+            "",
+            "Result access",
+            "  - Attribute: r.max_stress",
+            '  - Dict style: r["mass"]',
+            '  - Tuple helper: stress, mass = r.pick("max_stress", "mass")',
+            "  - Raw solver dict: raw = r.raw()",
+            "",
+            "CAD commands and standard fields",
+            *command_lines,
+            "",
+            "Notes",
+            "  - Repeated cad.* calls are cached by .cad path, file mtime, solver kind, and inputs.",
+            "  - Relative .cad paths resolve from the current PyLCSS process working directory.",
+            "  - For topology optimization, volume is retained material volume; total_volume is the original design-domain volume.",
+        ])
+
     def show_help(self) -> None:
-        help_text = (
-            "# FUNCTION BLOCK CODE EDITOR\n"
-            "# ==========================\n"
-            "# \n"
-            "# BASICS:\n"
-            "# - Set output variables by connected node names (e.g. a_x = ...)\n"
-            "# - Access inputs by connected node names (e.g. z_1)\n"
-            "# - NO return statements - added automatically\n"
-            "# \n"
-            "# LIBRARIES:\n"
-            "# - numpy as np (pre-imported)\n"
-            "# - math module (pre-imported)\n"
-            "# - cad runtime (pre-imported) - run external CAD/FEA/crash graphs\n"
-            "# - Import others: import pandas as pd\n"
-            "# - Available: pandas, sklearn, tensorflow, requests, opencv, etc.\n"
-            "# \n"
-            "# CAD COMMANDS:\n"
-            "#   r = cad.fea(\"part.cad\", thickness=t, fillet_r=ro)\n"
-            "#   r = cad.crash(\"part.cad\", thickness=t)\n"
-            "#   r = cad.topopt(\"part.cad\", vol_frac=0.3)\n"
-            "#   # Inputs are matched against Number/Variable nodes whose\n"
-            "#   # `exposed_name` property equals the kwarg name.\n"
-            "#   # Results expose standard scalars + raw dict access:\n"
-            "#   #   FEA   : max_stress, compliance, mass, volume, peak_disp\n"
-            "#   #   crash : max_stress, peak_disp, absorbed_energy, n_failed\n"
-            "#   #   topopt: final_vol_frac, compliance, mass, volume\n"
-            "#   s = r.max_stress           # attribute access\n"
-            "#   m = r[\"mass\"]            # dict access\n"
-            "#   s, m = r.pick(\"max_stress\", \"mass\")  # tuple unpack\n"
-            "# \n"
-            "# EXAMPLES:\n"
-            "#   # Simple math:\n"
-            "#   a_x = in_1 * 2 + np.sin(in_2)\n"
-            "# \n"
-            "#   # External data:\n"
-            "#   import pandas as pd\n"
-            "#   data = pd.read_csv('file.csv')\n"
-            "#   out_1 = data['col'].mean() * in_1\n"
-            "# \n"
-            "#   # CAD-coupled evaluation:\n"
-            "#   r = cad.fea(\"bracket.cad\", thickness=t, hole_r=hr)\n"
-            "#   stress, mass = r.pick(\"max_stress\", \"mass\")\n"
-        )
-        QtWidgets.QMessageBox.information(self, "Function Block Help", help_text)
+        self._show_help_dialog(self._build_help_text())
         
     def show_find_replace(self):
         # Simple find/replace dialog

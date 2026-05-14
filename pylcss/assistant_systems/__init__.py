@@ -5,7 +5,7 @@
 Assistant Control System for PyLCSS.
 
 This module provides assistant control capabilities using:
-- Offline speech recognition via Vosk for voice commands
+- Offline speech recognition via Faster-Whisper for assistant voice input
 - LLM-powered assistant
 - System control via PyAutoGUI for mouse/keyboard simulation
 

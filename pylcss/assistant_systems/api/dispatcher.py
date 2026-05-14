@@ -285,7 +285,7 @@ class CommandDispatcher:
             "select_all_nodes": self._select_all_nodes,
             "delete_selected": self._delete_selected,
             
-            # CAD environment
+            # Design Studio environment
             "cad_add_box": self._add_cad_node,
             "cad_add_cylinder": self._add_cad_node,
             "cad_add_sphere": self._add_cad_node,
@@ -1017,7 +1017,7 @@ class CommandDispatcher:
             logger.info("Voice command: Validating graph")
     
     def _add_cad_node(self, command: str) -> None:
-        """Add a node in the CAD environment."""
+        """Add a node in the Design Studio environment."""
         if not self.main_window:
             return
         if not hasattr(self.main_window, 'cad_widget'):

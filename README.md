@@ -51,12 +51,12 @@ PyLCSS implements the **Solution Space** approach for robust design: instead of 
 
 ## Key Features
 
-### Parametric Engineering Design Environment
+### Design Studio: Parametric Engineering Design
 - **70+ Node Types** — Primitives, Booleans, Fillets, Chamfers, Sweeps, Lofts, Shells, Patterns, Imports
 - **Code-Assisted Modeling Direction** — Parts and assemblies should remain reproducible through graph nodes, exposed parameters, imported STEP/STL geometry, or code-based creation blocks rather than hidden manual edits
 - **Topology Optimization** — SIMP with MMA/OC solvers, density/sensitivity filtering, Heaviside projection, symmetry constraints, shape recovery with marching cubes, and **direct STL/OBJ export** of optimized shapes
 - **Advanced Nodes** — Thicken, Pipe, Split, Text emboss, Math Expression evaluator, Import STEP/STL
-- **Real-Time 3D Viewer** — VTK-based with density cutoff preview during optimization
+- **Real-Time 3D Viewer** — VTK-based with density cutoff preview during optimization, NavCube orientation, world X/Y/Z grid labels, and crash playback overlay management
 - **Measurement** — Distance, surface area, and volume nodes
 
 ### Finite Element Analysis (FEA)
@@ -113,15 +113,20 @@ PyLCSS implements the **Solution Space** approach for robust design: instead of 
 | **Data Export** | CSV, Images (PNG, SVG, PDF) |
 | **Project** | Project Folder (JSON-based `.cad` files + data) |
 
+### `.cad` Path Resolution
+`.cad` paths used from the Modeling Environment are resolved relative to the current working directory or active project folder. The `data/` folder is a repository convention, not an automatic search root. Use `data/example.cad` for bundled examples or an absolute path when the file lives elsewhere.
+
 ### Engineering Utilities
 - **Expression-Aware Inputs** — Safe AST-based evaluation (sin, cos, sqrt, log, variables) in input fields
 - **Unit-Aware Inputs** — Physical unit support via pint (SI, Imperial, CGS) in simulation nodes
 
-### LLM-Powered Voice Assistant
-- **Natural Language Control** — "Zoom in", "Create a helical gear", "Go to properties"
-- **Local STT** — Faster-Whisper for real-time speech recognition
+### Compact AI Assistant
+- **Top-Right Entry Point** — A small assistant button opens a right-side panel that pushes the workspace left instead of covering it
+- **Fixed Side Panel** — Opens at a stable width and pushes the workspace left
+- **Text + Voice Input** — Typed prompts and Faster-Whisper speech input are routed to the same natural-language assistant path
+- **No Hardcoded Voice Commands** — Speech is treated as assistant input; UI actions are resolved through the LLM/tool layer rather than a fixed phrase table
 - **Multi-Provider LLM** — OpenAI, Claude, Gemini, LM-Studio
-- **Privacy-First** — Optional fully local execution
+- **Privacy-First** — Optional local speech recognition and local model workflows
 
 ### Black-Box Integration
 - **Any Python-accessible tool** — ANSYS, MATLAB, LS-DYNA, in-house solvers, and HPC scripts can be wrapped in a simple `evaluate(x)` function
@@ -216,7 +221,7 @@ pylcss/
 ├── surrogate_modeling/   # 5 ML algorithms + CV + HPO + feature importance
 ├── io_manager/           # CAD/mesh/data/project I/O (15+ formats)
 ├── system_modeling/      # Graph-based system model builder
-├── assistant_systems/    # LLM voice assistant & tools
+├── assistant_systems/    # AI assistant, speech input, and LLM tools
 └── user_interface/       # PySide6 + VTK desktop application
 ```
 

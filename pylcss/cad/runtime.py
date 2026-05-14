@@ -143,10 +143,26 @@ def _standardize(kind: str, raw: Mapping[str, Any]) -> Dict[str, Any]:
 
     elif kind == "topopt":
         density = raw.get("density", None)
-        std["final_vol_frac"] = float(np.mean(density)) if density is not None and len(density) else 0.0
+        if "final_vol_frac" in raw:
+            final_vol_frac = float(raw.get("final_vol_frac") or 0.0)
+        else:
+            elem_vol = raw.get("element_volumes", None)
+            if density is not None and elem_vol is not None and len(density) == len(elem_vol):
+                density_arr = np.asarray(density, dtype=float)
+                elem_vol_arr = np.asarray(elem_vol, dtype=float)
+                denom = float(np.sum(elem_vol_arr))
+                final_vol_frac = (
+                    float(np.sum(density_arr * elem_vol_arr) / denom)
+                    if denom > 0.0 else 0.0
+                )
+            else:
+                final_vol_frac = float(np.mean(density)) if density is not None and len(density) else 0.0
+        std["final_vol_frac"] = final_vol_frac
+        std["target_vol_frac"] = float(raw.get("target_vol_frac", 0.0))
         std["compliance"]     = float(raw.get("compliance", 0.0))
         std["mass"]           = float(raw.get("mass", 0.0))
         std["volume"]         = float(raw.get("volume", 0.0))
+        std["total_volume"]   = float(raw.get("total_volume", 0.0))
 
     return std
 

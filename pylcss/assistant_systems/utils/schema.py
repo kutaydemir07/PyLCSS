@@ -198,7 +198,7 @@ def get_simplified_schema_string() -> str:
     
     # CAD section
     lines.append("\n### Design Studio Nodes")
-    lines.append("Use these in the CAD tab (tab 1) for 3D solid modeling.")
+    lines.append("Use these in the Design Studio tab (tab 1) for 3D solid modeling.")
     lines.append("Categories: Primitives, Sketching, Operations, Transforms, Patterns, Assembly, Analysis, Simulation, IO\n")
     
     # Group CAD nodes by category (first part of identifier)

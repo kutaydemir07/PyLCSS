@@ -79,6 +79,7 @@ class NavCubeWidget(QtWidgets.QWidget):
         self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
         self.setAutoFillBackground(False)
         self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setToolTip("Click a face, edge, or corner to set the view orientation")
         self._rot = np.eye(3)
         self._hovered = None
 
@@ -332,12 +333,7 @@ class CQ3DViewer(QtWidgets.QWidget):
         vtb_layout.setContentsMargins(5, 2, 5, 2)
         vtb_layout.addStretch()
 
-        self._btn_pick_faces = QtWidgets.QPushButton("Pick Faces")
-        self._btn_pick_faces.setToolTip(
-            "Start face picking for the selected Select Face (Interactive) node"
-        )
-        self._btn_pick_faces.clicked.connect(self.face_picking_requested.emit)
-        vtb_layout.addWidget(self._btn_pick_faces)
+        self._btn_pick_faces = None
 
         btn_grid = QtWidgets.QPushButton("Grid")
         btn_grid.setCheckable(True)
@@ -446,6 +442,7 @@ class CQ3DViewer(QtWidgets.QWidget):
         # Initialize Grid state
         self._grid_actor = None
         self._axes_actor = None
+        self._axis_label_actors = []
 
         # State
         self.current_actor = None
@@ -490,6 +487,7 @@ class CQ3DViewer(QtWidgets.QWidget):
         self._nav_cube.roll_requested.connect(self._roll_camera)
         self._nav_cube.raise_()
         self._nav_cube.show()
+
         self._position_nav_cube()
         self.vtkWidget.GetRenderWindow().AddObserver("EndEvent", lambda o, e: self._on_vtk_render())
 
@@ -642,6 +640,7 @@ class CQ3DViewer(QtWidgets.QWidget):
 
         # Show panel
         self._crash_panel.show()
+        self._position_nav_cube()
 
         # Render first frame (camera is already positioned — never reset it again)
         self._render_crash_frame(0)
@@ -653,6 +652,7 @@ class CQ3DViewer(QtWidgets.QWidget):
         self._crash_playing = False
         self._play_btn.setText("\u25B6")
         self._crash_panel.hide()
+        self._position_nav_cube()
         self._crash_frames      = []
         self._crash_base_data   = None
 
@@ -828,7 +828,8 @@ class CQ3DViewer(QtWidgets.QWidget):
         # Show toolbar
         self._picking_toolbar.show()
         self._pick_count_lbl.setText("0 selected")
-        self._btn_pick_faces.setEnabled(False)
+        if self._btn_pick_faces is not None:
+            self._btn_pick_faces.setEnabled(False)
 
         # Install VTK left-button press callback
         self._pick_callback_id = self.interactor.AddObserver(
@@ -852,7 +853,8 @@ class CQ3DViewer(QtWidgets.QWidget):
             self._pick_callback_id = None
 
         self.vtkWidget.setCursor(QtGui.QCursor(QtCore.Qt.ArrowCursor))
-        self._btn_pick_faces.setEnabled(True)
+        if self._btn_pick_faces is not None:
+            self._btn_pick_faces.setEnabled(True)
 
     def _on_vtk_pick(self, obj, event):
         """VTK callback: called on left-button press in picking mode."""
@@ -1036,8 +1038,16 @@ class CQ3DViewer(QtWidgets.QWidget):
     def _position_nav_cube(self):
         """Keep the NavCube anchored to the bottom-left of the VTK area."""
         margin = 8
-        y = self.height() - NavCubeWidget.SIZE - margin
+        playback_clearance = self._bottom_overlay_clearance(margin)
+        y = self.height() - NavCubeWidget.SIZE - margin - playback_clearance
+        y = max(margin, y)
         self._nav_cube.move(margin, y)
+
+    def _bottom_overlay_clearance(self, margin):
+        if not hasattr(self, '_crash_panel') or not self._crash_panel.isVisible():
+            return 0
+        panel_height = max(self._crash_panel.height(), self._crash_panel.sizeHint().height())
+        return panel_height + margin
 
     def _on_vtk_render(self):
         """Sync NavCube rotation to camera after every VTK render."""
@@ -1050,13 +1060,17 @@ class CQ3DViewer(QtWidgets.QWidget):
         """Toggle grid visibility."""
         if state:
             if not self._grid_actor:
-                self._grid_actor, self._axes_actor = self._build_grid_actors()
+                self._grid_actor, self._axes_actor, self._axis_label_actors = self._build_grid_actors()
             self.renderer.AddActor(self._grid_actor)
             self.renderer.AddActor(self._axes_actor)
+            for actor in self._axis_label_actors:
+                self.renderer.AddActor(actor)
         else:
             if self._grid_actor:
                 self.renderer.RemoveActor(self._grid_actor)
                 self.renderer.RemoveActor(self._axes_actor)
+                for actor in self._axis_label_actors:
+                    self.renderer.RemoveActor(actor)
         self.vtkWidget.GetRenderWindow().Render()
 
     def _build_grid_actors(self):
@@ -1153,7 +1167,30 @@ class CQ3DViewer(QtWidgets.QWidget):
         axes_actor.SetPickable(0)
         axes_actor.UseBoundsOff()   # exclude from ResetCamera bounds
 
-        return grid_actor, axes_actor
+        axis_label_actors = [
+            self._build_axis_label_actor("X", (size * 1.04, 0, 0), (1.0, 0.24, 0.20)),
+            self._build_axis_label_actor("Y", (0, size * 1.04, 0), (0.24, 0.95, 0.35)),
+            self._build_axis_label_actor("Z", (0, 0, size * 1.04), (0.35, 0.55, 1.0)),
+        ]
+
+        return grid_actor, axes_actor, axis_label_actors
+
+    def _build_axis_label_actor(self, label, position, color):
+        actor = vtk.vtkBillboardTextActor3D()
+        actor.SetInput(label)
+        actor.SetPosition(*position)
+        actor.SetPickable(0)
+        prop = actor.GetTextProperty()
+        prop.SetColor(*color)
+        prop.SetFontSize(24)
+        prop.BoldOn()
+        prop.SetJustificationToCentered()
+        prop.SetVerticalJustificationToCentered()
+        try:
+            actor.UseBoundsOff()
+        except AttributeError:
+            pass
+        return actor
 
     def _set_camera_view(self, position, view_up):
         """Sets the camera to look at the focal point from the given relative direction."""

@@ -236,8 +236,8 @@ class AssistantManager(QObject):
                 if not self._voice_controller.is_model_available():
                     info = self._voice_controller.get_model_download_info()
                     self.error_occurred.emit(
-                        f"Vosk model not found. Please download from:\n{info['url']}\n"
-                        f"and extract to:\n{info['path']}"
+                        f"Speech model not available. Faster-Whisper source:\n{info['url']}\n"
+                        f"Cache path:\n{info['path']}"
                     )
                 else:
                     self.error_occurred.emit("Failed to start voice control")
@@ -498,6 +498,9 @@ class AssistantManager(QObject):
     
     def _get_or_create_llm_overlay(self):
         """Get the LLM overlay - use main window's overlay widget for corner display."""
+        if self.main_window and getattr(self.main_window, '_assistant_use_side_panel', False):
+            return None
+
         # Use the main window's hands_free_overlay which is in the top-right corner
         if self.main_window and hasattr(self.main_window, 'hands_free_overlay'):
             overlay = self.main_window.hands_free_overlay
