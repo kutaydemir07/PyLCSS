@@ -558,6 +558,7 @@ class GraphBuilder:
         code_lines.append("import numpy as np")
         code_lines.append("import joblib")
         code_lines.append("from sklearn.preprocessing import StandardScaler")
+        code_lines.append("from pylcss.cad import runtime as cad")
         code_lines.append("")
         
         # 3. Generate individual functions for each block

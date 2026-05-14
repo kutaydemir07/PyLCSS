@@ -1431,34 +1431,76 @@ class PropertiesPanel(QtWidgets.QWidget):
         fields at once which is overwhelming.  Here we render only the
         fields relevant to the currently chosen ``selector_type``.
         """
-        # The selector type drives which field group is shown.
-        sel_type = node.get_property('selector_type') or 'Bounding Box'
+        def _canonical_selector(value):
+            aliases = {
+                'direction': 'Direction',
+                'nearesttopoint': 'NearestToPoint',
+                'nearest point': 'NearestToPoint',
+                'nearest_point': 'NearestToPoint',
+                'index': 'Index',
+                'face index': 'Index',
+                'face_index': 'Index',
+                'largest area': 'Largest Area',
+                'largest_area': 'Largest Area',
+                'tag': 'Tag',
+                'box': 'Box',
+                'bounding box': 'Box',
+                'bounding_box': 'Box',
+                'coordinate range': 'Coordinate Range',
+                'range expression': 'Coordinate Range',
+                'range_expression': 'Coordinate Range',
+            }
+            text = str(value or 'Direction').strip()
+            return aliases.get(text.lower(), text)
+
+        def _canonical_direction(value):
+            aliases = {
+                '+X': '>X', '-X': '<X',
+                '+Y': '>Y', '-Y': '<Y',
+                '+Z': '>Z', '-Z': '<Z',
+                'X+': '>X', 'X-': '<X',
+                'Y+': '>Y', 'Y-': '<Y',
+                'Z+': '>Z', 'Z-': '<Z',
+            }
+            text = str(value or '>Z').strip().upper()
+            return aliases.get(text, text)
+
+        # The selector type drives which field group is shown. The combo shows
+        # friendly labels but stores the exact values SelectFaceNode executes.
+        sel_type = _canonical_selector(node.get_property('selector_type'))
         type_options = [
-            'Bounding Box', 'Nearest Point', 'Direction', 'Face Index',
-            'Range Expression', 'Tag',
+            ('Direction', 'Direction'),
+            ('Nearest Point', 'NearestToPoint'),
+            ('Face Index', 'Index'),
+            ('Largest Area', 'Largest Area'),
+            ('Bounding Box', 'Box'),
+            ('Range Expression', 'Coordinate Range'),
+            ('Tag', 'Tag'),
         ]
 
         # ── 1. Selector type combo ──────────────────────────────────────
         grp_type = QtWidgets.QGroupBox("Selector")
         lay_type = QtWidgets.QFormLayout()
         combo = QtWidgets.QComboBox()
-        combo.addItems(type_options)
-        if sel_type in type_options:
+        for label, value in type_options:
+            combo.addItem(label, value)
+        current_idx = combo.findData(sel_type)
+        if current_idx >= 0:
             combo.blockSignals(True)
-            combo.setCurrentText(sel_type)
+            combo.setCurrentIndex(current_idx)
             combo.blockSignals(False)
         combo.setToolTip(
             "How this node picks faces:\n"
             "  Bounding Box     — every face whose centroid is inside the box\n"
             "  Nearest Point    — the single face closest to (near_x, near_y, near_z)\n"
             "  Direction        — every face whose normal is +X / −Z / …\n"
-            "  Face Index       — pick by integer face id (1-based, brittle)\n"
+            "  Face Index       — pick by integer face id (zero-based, brittle)\n"
             "  Range Expression — Python boolean over x, y, z of the face centroid\n"
             "  Tag              — match a user-set tag string on the upstream node"
         )
-        combo.currentTextChanged.connect(
-            lambda v: (self.update_property('selector_type', v),
-                       self.display_node(node))  # rebuild panel for the new type
+        combo.currentIndexChanged.connect(
+            lambda _i, c=combo: (self.update_property('selector_type', c.currentData()),
+                                 self.display_node(node))  # rebuild panel for the new type
         )
         lay_type.addRow("Type:", combo)
         grp_type.setLayout(lay_type)
@@ -1490,39 +1532,49 @@ class PropertiesPanel(QtWidgets.QWidget):
             w.editingFinished.connect(lambda p=prop, ww=w: self.update_property(p, ww.text()))
             return w
 
-        if sel_type == 'Bounding Box':
+        if sel_type == 'Box':
             lay.addRow("Min X:", _spin('box_min_x'))
             lay.addRow("Min Y:", _spin('box_min_y'))
             lay.addRow("Min Z:", _spin('box_min_z'))
             lay.addRow("Max X:", _spin('box_max_x'))
             lay.addRow("Max Y:", _spin('box_max_y'))
             lay.addRow("Max Z:", _spin('box_max_z'))
-        elif sel_type == 'Nearest Point':
+        elif sel_type == 'NearestToPoint':
             lay.addRow("Near X:", _spin('near_x'))
             lay.addRow("Near Y:", _spin('near_y'))
             lay.addRow("Near Z:", _spin('near_z'))
         elif sel_type == 'Direction':
             dir_combo = QtWidgets.QComboBox()
-            dir_combo.addItems(['+X', '-X', '+Y', '-Y', '+Z', '-Z'])
+            direction_options = [
+                ('+X (X max face)', '>X'),
+                ('-X (X min face)', '<X'),
+                ('+Y (Y max face)', '>Y'),
+                ('-Y (Y min face)', '<Y'),
+                ('+Z (Z max face)', '>Z'),
+                ('-Z (Z min face)', '<Z'),
+            ]
+            for label, value in direction_options:
+                dir_combo.addItem(label, value)
             dir_combo.setToolTip(
                 "Pick every face whose outward normal points in this direction "
                 "(within ~10° tolerance)."
             )
-            cur = node.get_property('direction') or '+Z'
-            if cur in [dir_combo.itemText(i) for i in range(dir_combo.count())]:
-                dir_combo.setCurrentText(cur)
-            dir_combo.currentTextChanged.connect(
-                lambda v: self.update_property('direction', v)
+            cur = _canonical_direction(node.get_property('direction'))
+            current_idx = dir_combo.findData(cur)
+            if current_idx >= 0:
+                dir_combo.setCurrentIndex(current_idx)
+            dir_combo.currentIndexChanged.connect(
+                lambda _i, c=dir_combo: self.update_property('direction', c.currentData())
             )
             lay.addRow("Normal:", dir_combo)
-        elif sel_type == 'Face Index':
+        elif sel_type == 'Index':
             w = _intspin('face_index', 0, 100_000)
             w.setToolTip(
                 "Zero-based face index from CadQuery's `faces()` iteration order.\n"
                 "Fragile — adding a fillet or boolean upstream renumbers faces."
             )
             lay.addRow("Index:", w)
-        elif sel_type == 'Range Expression':
+        elif sel_type == 'Coordinate Range':
             w = _line('range_expr', placeholder='e.g. z > 0.99 * z_max')
             w.setToolTip(
                 "Python boolean over the face-centroid coordinates x, y, z.\n"
@@ -1538,6 +1590,49 @@ class PropertiesPanel(QtWidgets.QWidget):
 
         grp.setLayout(lay)
         self.props_layout.addWidget(grp)
+
+        summary_group = QtWidgets.QGroupBox("Resolved Selection")
+        summary_layout = QtWidgets.QVBoxLayout(summary_group)
+        result = getattr(node, '_last_result', None)
+        summaries = result.get('face_summaries') if isinstance(result, dict) else None
+        if summaries:
+            count = int(result.get('face_count') or len(summaries))
+            summary_layout.addWidget(QtWidgets.QLabel(f"{count} face(s) currently matched."))
+            for idx, info in enumerate(summaries[:6], start=1):
+                center = info.get('center') or []
+                bbox = info.get('bbox') or {}
+                area = info.get('area')
+                if len(center) != 3 or not bbox:
+                    continue
+                text = (
+                    f"Face {idx}: center=({center[0]:.3g}, {center[1]:.3g}, {center[2]:.3g}), "
+                    f"bbox X[{bbox.get('xmin', 0):.3g}, {bbox.get('xmax', 0):.3g}] "
+                    f"Y[{bbox.get('ymin', 0):.3g}, {bbox.get('ymax', 0):.3g}] "
+                    f"Z[{bbox.get('zmin', 0):.3g}, {bbox.get('zmax', 0):.3g}]"
+                )
+                if area is not None:
+                    text += f", area={area:.3g}"
+                label = QtWidgets.QLabel(text)
+                label.setWordWrap(True)
+                summary_layout.addWidget(label)
+        else:
+            label = QtWidgets.QLabel(
+                "Run or preview the graph to list the matched face centers and bounds."
+            )
+            label.setWordWrap(True)
+            label.setStyleSheet("color:#888; font-style:italic;")
+            summary_layout.addWidget(label)
+
+        btn_refresh = QtWidgets.QPushButton("Preview Selection")
+        btn_refresh.setToolTip("Execute CAD-only graph preview and redraw the selected face overlay.")
+        btn_refresh.clicked.connect(
+            lambda _checked=False: (
+                self._get_main_app()._execute_graph(skip_simulation=True)
+                if self._get_main_app() is not None else None
+            )
+        )
+        summary_layout.addWidget(btn_refresh)
+        self.props_layout.addWidget(summary_group)
 
     def _build_interactive_select_ui(self, node):
         """Dedicated Properties Panel UI for InteractiveSelectFaceNode."""

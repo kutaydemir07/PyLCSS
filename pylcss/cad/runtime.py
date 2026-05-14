@@ -21,7 +21,8 @@ function          terminal node identifier       backend
 ================  =============================  =======================
 
 Inputs are matched against ``NumberNode`` / ``VariableNode`` instances in the
-``.cad`` graph whose ``exposed_name`` property equals the kwarg name.  Results
+``.cad`` graph whose ``exposed_name`` property equals the kwarg name, and
+against named ``CadQueryCodeNode`` parameters.  Results
 are wrapped in :class:`CadResult`, which gives attribute *and* dict access plus
 a small fixed-name standard subset (``max_stress``, ``compliance``, ``mass``,
 ``volume``, ``peak_disp``, …) so user code is stable across graph versions.
@@ -34,9 +35,11 @@ here).
 """
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Sequence
@@ -279,7 +282,12 @@ def _load_graph(abs_path: str):
 
 
 def _apply_exposed_inputs(graph, inputs: Mapping[str, float]) -> tuple[int, set]:
-    """Push the kwargs into matching ``exposed_name`` nodes.
+    """Push kwargs into named CAD graph parameters.
+
+    Supported targets:
+    - NumberNode / VariableNode via ``exposed_name`` (or VariableNode name).
+    - CadQueryCodeNode parameter slots ``param_1_name`` ... ``param_6_name``.
+    - CadQueryCodeNode extra parameter text entries written as ``name=value``.
 
     Returns ``(applied_count, available_names_set)``.  The caller can compare
     requested vs. available to surface a clear KeyError for typos.
@@ -289,33 +297,138 @@ def _apply_exposed_inputs(graph, inputs: Mapping[str, float]) -> tuple[int, set]
     for node in graph.all_nodes():
         if not hasattr(node, "has_property"):
             continue
-        if not node.has_property("exposed_name"):
-            continue
-        ename = (node.get_property("exposed_name") or "").strip()
-        # Fall back to ``variable_name`` for VariableNode when exposed_name is blank.
-        if not ename and node.has_property("variable_name"):
-            ename = (node.get_property("variable_name") or "").strip()
-        if not ename:
-            continue
-        available.add(ename)
-        if ename not in inputs:
-            continue
-        value = float(inputs[ename])
-        try:
-            if node.has_property("value_input"):
-                node.set_property("value_input", repr(value))
-            if node.has_property("value"):
-                node.set_property("value", value)
-        except Exception as exc:
-            logger.warning("cad runtime: failed to set %s=%s: %s", ename, value, exc)
-            continue
-        # Force re-execution: bust the engine's per-node dirty-state cache.
-        setattr(node, "_last_result", None)
-        setattr(node, "_last_input_hash", None)
-        setattr(node, "_dirty", True)
-        setattr(node, "_force_execute", True)
-        applied += 1
+
+        if node.has_property("exposed_name"):
+            ename = (node.get_property("exposed_name") or "").strip()
+            # Fall back to ``variable_name`` for VariableNode when exposed_name is blank.
+            if not ename and node.has_property("variable_name"):
+                ename = (node.get_property("variable_name") or "").strip()
+            if ename:
+                available.add(ename)
+                if ename in inputs:
+                    value = float(inputs[ename])
+                    try:
+                        if node.has_property("value_input"):
+                            node.set_property("value_input", repr(value))
+                        if node.has_property("value"):
+                            node.set_property("value", value)
+                    except Exception as exc:
+                        logger.warning(
+                            "cad runtime: failed to set %s=%s: %s", ename, value, exc
+                        )
+                    else:
+                        _mark_node_dirty(node)
+                        applied += 1
+
+        if _is_code_part_node(node):
+            applied += _apply_code_part_inputs(node, inputs, available)
+
     return applied, available
+
+
+def _is_code_part_node(node) -> bool:
+    return (
+        getattr(node, "__identifier__", "") == "com.cad.code_part"
+        or node.__class__.__name__ == "CadQueryCodeNode"
+    )
+
+
+def _mark_node_dirty(node) -> None:
+    # Force re-execution: bust the engine's per-node dirty-state cache.
+    setattr(node, "_last_result", None)
+    setattr(node, "_last_input_hash", None)
+    setattr(node, "_dirty", True)
+    setattr(node, "_force_execute", True)
+
+
+_PARAM_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _parse_code_part_parameters(text: str) -> Dict[str, Any]:
+    raw = str(text or "").strip()
+    if not raw:
+        return {}
+    if raw.startswith("{"):
+        parsed = ast.literal_eval(raw)
+        if not isinstance(parsed, dict):
+            return {}
+        return {str(k): v for k, v in parsed.items()}
+
+    params: Dict[str, Any] = {}
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        name, value = stripped.split("=", 1)
+        name = name.strip()
+        if _PARAM_NAME_RE.match(name):
+            params[name] = value.strip()
+    return params
+
+
+def _format_code_part_parameters(params: Mapping[str, Any]) -> str:
+    lines = []
+    for name, value in params.items():
+        if isinstance(value, str):
+            try:
+                float(value)
+                text = value
+            except ValueError:
+                text = repr(value)
+        else:
+            text = repr(float(value))
+        lines.append(f"{name}={text}")
+    return "\n".join(lines)
+
+
+def _apply_code_part_inputs(node, inputs: Mapping[str, float], available: set) -> int:
+    applied = 0
+
+    for idx in range(1, 7):
+        name_prop = f"param_{idx}_name"
+        value_prop = f"param_{idx}_value"
+        if not node.has_property(name_prop) or not node.has_property(value_prop):
+            continue
+        pname = str(node.get_property(name_prop) or "").strip()
+        if not pname:
+            continue
+        available.add(pname)
+        if pname not in inputs:
+            continue
+        try:
+            node.set_property(value_prop, float(inputs[pname]))
+        except Exception as exc:
+            logger.warning("cad runtime: failed to set code parameter %s: %s", pname, exc)
+        else:
+            _mark_node_dirty(node)
+            applied += 1
+
+    if not node.has_property("parameters"):
+        return applied
+
+    try:
+        params = _parse_code_part_parameters(node.get_property("parameters") or "")
+    except Exception as exc:
+        logger.warning("cad runtime: failed to parse extra code parameters: %s", exc)
+        return applied
+
+    if not params:
+        return applied
+
+    available.update(params.keys())
+    changed = False
+    for name in list(params.keys()):
+        if name not in inputs:
+            continue
+        params[name] = float(inputs[name])
+        changed = True
+        applied += 1
+
+    if changed:
+        node.set_property("parameters", _format_code_part_parameters(params))
+        _mark_node_dirty(node)
+
+    return applied
 
 
 def _find_terminal_result(graph, terminal_id: str):

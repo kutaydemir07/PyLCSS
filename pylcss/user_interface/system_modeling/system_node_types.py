@@ -335,7 +335,8 @@ class CodeEditorDialog(QtWidgets.QDialog):
             'cad.fea("file.cad", param=value)',
             "Run CalculiX linear-static FEA on a .cad graph file.\n"
             "Args:  cad_path (str), then **inputs matched against\n"
-            "       'exposed_name' on Number/Variable nodes in the graph.\n"
+            "       'exposed_name' on Number/Variable nodes, or named\n"
+            "       Code Part parameters in the graph.\n"
             "Returns CadResult — see the 'FEA result' rows below.",
         ),
         (
@@ -343,7 +344,8 @@ class CodeEditorDialog(QtWidgets.QDialog):
             'cad.crash("file.cad", param=value)',
             "Run OpenRadioss explicit crash on a .cad graph file.\n"
             "Args:  cad_path (str), then **inputs matched against\n"
-            "       'exposed_name' on Number/Variable nodes in the graph.\n"
+            "       'exposed_name' on Number/Variable nodes, or named\n"
+            "       Code Part parameters in the graph.\n"
             "Returns CadResult — see the 'Crash result' rows below.",
         ),
         (
@@ -351,7 +353,8 @@ class CodeEditorDialog(QtWidgets.QDialog):
             'cad.topopt("file.cad", param=value)',
             "Run SIMP topology optimisation through a .cad graph file.\n"
             "Args:  cad_path (str), then **inputs matched against\n"
-            "       'exposed_name' on Number/Variable nodes in the graph.\n"
+            "       'exposed_name' on Number/Variable nodes, or named\n"
+            "       Code Part parameters in the graph.\n"
             "Returns CadResult — see the 'TopOpt result' rows below.",
         ),
 
@@ -540,9 +543,9 @@ class CodeEditorDialog(QtWidgets.QDialog):
             "Design Studio connection",
             "  1. Build and save a .cad graph in Design Studio.",
             "  2. Add the terminal solver node you want to call: FEA Solver, Crash Solver, or Topology Opt.",
-            "  3. On Number/Variable nodes inside that .cad graph, set exposed_name to the parameter name.",
+            "  3. Expose parameters with Number/Variable exposed_name, or use named Code Part parameters.",
             "  4. Call cad.fea(...), cad.crash(...), or cad.topopt(...) from this function block.",
-            "  5. Pass keyword args matching exposed_name values. PyLCSS pushes them into the saved .cad graph.",
+            "  5. Pass keyword args matching those names. PyLCSS pushes them into the saved .cad graph.",
             "  6. The call returns CadResult with stable scalar fields plus raw solver data through raw().",
             "",
             "Examples",

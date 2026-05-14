@@ -1,0 +1,397 @@
+{
+  "product_name": "FEA Plate Solution Space",
+  "systems": [
+    {
+      "name": "Plate FEA",
+      "graph": {
+        "graph": {
+          "layout_direction": 0,
+          "acyclic": true,
+          "pipe_collision": false,
+          "pipe_slicing": true,
+          "pipe_style": 1,
+          "accept_connection_types": "{}",
+          "reject_connection_types": "{}"
+        },
+        "nodes": {
+          "0x17c1de6e660": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "Plate Thickness",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 268.3125,
+            "height": 249.60000000000002,
+            "pos": [
+              -560.0,
+              -220.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "H",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "H",
+              "unit": "mm",
+              "min": "6.0",
+              "max": "16.0"
+            }
+          },
+          "0x17c1de66b10": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "Center Hole Radius",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 287.859375,
+            "height": 249.60000000000002,
+            "pos": [
+              -560.0,
+              40.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "big_R",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "big_R",
+              "unit": "mm",
+              "min": "12.0",
+              "max": "28.0"
+            }
+          },
+          "0x17c1de76870": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "Bolt Hole Diameter",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 287.203125,
+            "height": 249.60000000000002,
+            "pos": [
+              -560.0,
+              300.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "bolt_d",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "bolt_d",
+              "unit": "mm",
+              "min": "4.0",
+              "max": "9.0"
+            }
+          },
+          "0x17c1de7cb60": {
+            "type_": "com.pfd.custom_block.CustomBlockNode",
+            "icon": null,
+            "name": "Run FEA Plate",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 510.96875,
+            "height": 552.0,
+            "pos": [
+              80.0,
+              30.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "H",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "big_R",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "bolt_d",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [
+              {
+                "name": "max_stress",
+                "multi_connection": true,
+                "display_name": true
+              },
+              {
+                "name": "peak_deflection",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "func_name": "run_fea_plate",
+              "num_inputs": "3",
+              "num_outputs": "2",
+              "surrogate_controls": false,
+              "surrogate_model_path": "",
+              "use_surrogate": false,
+              "surrogate_status": "Not Trained",
+              "surrogate_train_trigger": 0.0,
+              "code_content": "global _fea_plate_solution_surrogate\ntry:\n    _fea_plate_solution_surrogate\nexcept NameError:\n    _fea_plate_solution_surrogate = None\n\nfea_graph = r'C:/Users/ukdlde/Documents/PyLCSS/data/fea_plate.cad'\nresult = cad.fea(\n        fea_graph,\n        H=float(H),\n        big_R=float(big_R),\n        bolt_d=float(bolt_d),\n    )\nmax_stress = float(result.max_stress)\npeak_deflection = float(result.peak_disp)\n"
+            }
+          },
+          "0x17c1de7dd90": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "Max Stress",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 246.921875,
+            "height": 331.5,
+            "pos": [
+              760.0,
+              -80.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "max_stress",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "max_stress",
+              "unit": "MPa",
+              "req_min": "0.0",
+              "req_max": "35.0",
+              "minimize": false,
+              "maximize": false
+            }
+          },
+          "0x17c1de76330": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "Peak Deflection",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 270.984375,
+            "height": 331.5,
+            "pos": [
+              760.0,
+              290.0
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "peak_deflection",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "peak_deflection",
+              "unit": "mm",
+              "req_min": "0.0",
+              "req_max": "0.006",
+              "minimize": false,
+              "maximize": false
+            }
+          }
+        },
+        "connections": [
+          {
+            "out": [
+              "0x17c1de6e660",
+              "H"
+            ],
+            "in": [
+              "0x17c1de7cb60",
+              "H"
+            ]
+          },
+          {
+            "out": [
+              "0x17c1de66b10",
+              "big_R"
+            ],
+            "in": [
+              "0x17c1de7cb60",
+              "big_R"
+            ]
+          },
+          {
+            "out": [
+              "0x17c1de76870",
+              "bolt_d"
+            ],
+            "in": [
+              "0x17c1de7cb60",
+              "bolt_d"
+            ]
+          },
+          {
+            "out": [
+              "0x17c1de7cb60",
+              "max_stress"
+            ],
+            "in": [
+              "0x17c1de7dd90",
+              "max_stress"
+            ]
+          },
+          {
+            "out": [
+              "0x17c1de7cb60",
+              "peak_deflection"
+            ],
+            "in": [
+              "0x17c1de76330",
+              "peak_deflection"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

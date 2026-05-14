@@ -12,6 +12,81 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+_SELECTOR_TYPE_ALIASES = {
+    "direction": "Direction",
+    "nearesttopoint": "NearestToPoint",
+    "nearest point": "NearestToPoint",
+    "nearest_point": "NearestToPoint",
+    "index": "Index",
+    "face index": "Index",
+    "face_index": "Index",
+    "largest area": "Largest Area",
+    "largest_area": "Largest Area",
+    "tag": "Tag",
+    "box": "Box",
+    "bounding box": "Box",
+    "bounding_box": "Box",
+    "coordinate range": "Coordinate Range",
+    "range expression": "Coordinate Range",
+    "range_expression": "Coordinate Range",
+}
+
+
+_DIRECTION_ALIASES = {
+    "+X": ">X",
+    "-X": "<X",
+    "+Y": ">Y",
+    "-Y": "<Y",
+    "+Z": ">Z",
+    "-Z": "<Z",
+    "X+": ">X",
+    "X-": "<X",
+    "Y+": ">Y",
+    "Y-": "<Y",
+    "Z+": ">Z",
+    "Z-": "<Z",
+}
+
+
+def _canonical_selector_type(value):
+    text = str(value or "Direction").strip()
+    return _SELECTOR_TYPE_ALIASES.get(text.lower(), text)
+
+
+def _canonical_face_direction(value):
+    text = str(value or ">Z").strip().upper()
+    return _DIRECTION_ALIASES.get(text, text)
+
+
+def _face_summary(face):
+    try:
+        c = face.Center()
+        bb = face.BoundingBox()
+        return {
+            "center": [float(c.x), float(c.y), float(c.z)],
+            "bbox": {
+                "xmin": float(bb.xmin), "xmax": float(bb.xmax),
+                "ymin": float(bb.ymin), "ymax": float(bb.ymax),
+                "zmin": float(bb.zmin), "zmax": float(bb.zmax),
+            },
+            "area": float(face.Area()),
+        }
+    except Exception:
+        return {}
+
+
+def _selection_payload(workplane, faces, selector_type):
+    faces = list(faces or [])
+    return {
+        "workplane": workplane,
+        "face": faces[0] if faces else None,
+        "faces": faces,
+        "selector_type": selector_type,
+        "face_count": len(faces),
+        "face_summaries": [_face_summary(face) for face in faces[:12]],
+    }
+
 # ==========================================
 # 3D CREATION & BOOLS
 # ==========================================
@@ -560,11 +635,11 @@ class SelectFaceNode(CadQueryNode):
         else:
             obj = cq.Workplane("XY").newObject([shape_val])
 
-        method = self.get_property('selector_type')
+        method = _canonical_selector_type(self.get_property('selector_type'))
 
         try:
             if method == 'Direction':
-                selector = self.get_property('direction')
+                selector = _canonical_face_direction(self.get_property('direction'))
                 face_selection = obj.faces(selector)
                 faces = face_selection.vals()
                 print(f"DEBUG SelectFaceNode ({self.NODE_NAME}): Direction {selector} found {len(faces)} faces")
@@ -576,7 +651,7 @@ class SelectFaceNode(CadQueryNode):
                     wp = face_selection.workplane()
                 except Exception:
                     wp = None
-                return {'workplane': wp, 'face': faces[0], 'faces': faces}
+                return _selection_payload(wp, faces, method)
 
             elif method == 'NearestToPoint':
                 pt = (self.get_property('near_x'), self.get_property('near_y'), self.get_property('near_z'))
@@ -592,7 +667,7 @@ class SelectFaceNode(CadQueryNode):
                     wp = face_selection.workplane()
                 except Exception:
                     wp = None
-                return {'workplane': wp, 'face': faces[0], 'faces': faces}
+                return _selection_payload(wp, faces, method)
 
             elif method == 'Index':
                 idx = int(self.get_property('face_index'))
@@ -601,7 +676,7 @@ class SelectFaceNode(CadQueryNode):
                 if 0 <= idx < len(all_faces):
                     face = all_faces[idx]
                     wp = obj.newObject([face]).workplane()
-                    return {'workplane': wp, 'face': face, 'faces': [face]}
+                    return _selection_payload(wp, [face], method)
                 else:
                     self.set_error(f"Face index {idx} out of range")
                     return None
@@ -614,7 +689,7 @@ class SelectFaceNode(CadQueryNode):
                 sorted_faces = sorted(all_faces, key=lambda f: f.Area(), reverse=True)
                 largest_face = sorted_faces[0]
                 wp = obj.newObject([largest_face]).workplane()
-                return {'workplane': wp, 'face': largest_face, 'faces': [largest_face]}
+                return _selection_payload(wp, [largest_face], method)
 
             elif method == 'Tag':
                 tag_name = self.get_property('tag')
@@ -623,7 +698,7 @@ class SelectFaceNode(CadQueryNode):
                 print(f"DEBUG SelectFaceNode ({self.NODE_NAME}): Tag {tag_name} found {len(faces)} faces")
                 if not faces:
                     return None
-                return {'workplane': face_selection.workplane(), 'face': faces[0], 'faces': faces}
+                return _selection_payload(face_selection.workplane(), faces, method)
 
             elif method == 'Box':
                 # Custom Box Selector
@@ -644,7 +719,7 @@ class SelectFaceNode(CadQueryNode):
                     return None
                 
                 new_wp = obj.newObject(faces)
-                return {'workplane': new_wp, 'face': faces[0], 'faces': faces}
+                return _selection_payload(new_wp, faces, method)
 
             elif method == 'Coordinate Range':
                 # Selector by simpleeval expression on face center
@@ -675,7 +750,7 @@ class SelectFaceNode(CadQueryNode):
                     return None
                 
                 new_wp = obj.newObject(faces)
-                return {'workplane': new_wp, 'face': faces[0], 'faces': faces}
+                return _selection_payload(new_wp, faces, method)
 
         except Exception as e:
             print(f"DEBUG SelectFaceNode ({self.NODE_NAME}): ERROR: {e}")
@@ -781,4 +856,4 @@ class InteractiveSelectFaceNode(CadQueryNode):
         except Exception:
             wp = None
 
-        return {'workplane': wp, 'face': selected[0], 'faces': selected}
+        return _selection_payload(wp, selected, "Interactive")
