@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 class NodeSpec(BaseModel):
     id: str = Field(..., description="Unique ID for the node")
-    type: str = Field(..., description="Type of the node (e.g., com.cad.box)")
+    type: str = Field(..., description="Type of the node. Use 'com.cad.code_part' for all geometry.")
     properties: Dict[str, Any] = Field(default_factory=dict, description="Properties to set on the node")
 
 class ConnectionSpec(BaseModel):

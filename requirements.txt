@@ -28,6 +28,8 @@ netgen-mesher==6.2.2506
 meshio==5.3.5
 scikit-image==0.26.0
 numpy-stl==3.2.0
+trimesh==4.5.3
+rtree==1.4.1
 
 # Optimization and sensitivity analysis
 nevergrad==1.0.4
@@ -53,6 +55,7 @@ edge-tts==7.2.7
 pyaudio==0.2.14
 pygame==2.5.2
 pydantic==2.12.5
+pydantic-ai-slim[openai,anthropic,google]==1.96.1
 
 # Utilities
 packaging==26.0

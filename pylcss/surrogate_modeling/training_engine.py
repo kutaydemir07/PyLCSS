@@ -389,6 +389,341 @@ class UncertaintyWrapper:
             return y_pred, y_std
 
 
+# ----------------------------------------------------------------------------
+# Geometry-aware surrogate strategies
+# ----------------------------------------------------------------------------
+# These need their own training loop because they:
+#   (a) ignore the tabular (X, y) and instead evaluate the CAD pipeline at
+#       parameter samples to get per-design mesh + nodal field;
+#   (b) train a neural network on (parameter_vector, geometry, field) tuples
+#       with per-node MSE loss.
+# Config keys they consume:
+#   cad_path     : str    -- CAD graph file
+#   cad_kind     : str    -- "fea" | "crash" | "topopt"
+#   field_name   : str    -- nodal field to predict (e.g. "von_mises")
+#   input_bounds : list[(lo, hi)]
+#   input_names  : list[str]
+#   n_samples    : int    -- design points to evaluate
+#   epochs, learning_rate, hidden_dim, etc. -- per-backbone hyperparameters.
+# ----------------------------------------------------------------------------
+class _GeometricBaseStrategy(SurrogateModelStrategy):
+    """Shared training-loop scaffold for Geom-DeepONet and GINO."""
+
+    backbone_name: str = "geometric"  # overridden by subclass
+
+    def _check_deps(self) -> None:
+        if not TORCH_AVAILABLE:
+            raise RuntimeError("PyTorch is required for geometric surrogates.")
+        try:
+            from pylcss.surrogate_modeling.geometry import TRIMESH_AVAILABLE
+        except ImportError:
+            TRIMESH_AVAILABLE = False
+        if not TRIMESH_AVAILABLE:
+            raise RuntimeError("trimesh is required for geometric surrogates.")
+
+    def _collect_dataset(
+        self,
+        cad_path: str, cad_kind: str, field_name: str,
+        input_names: List[str], input_bounds: List[Tuple[float, float]],
+        n_samples: int, random_state: int,
+        callback: Optional[Callable[[int, str], None]],
+        stop_flag: Optional[Callable[[], bool]],
+    ):
+        """LHS-sample the bounds, evaluate CAD per sample, return a list of
+        (param_vector, CadGeometry, field_array) tuples."""
+        from pylcss.surrogate_modeling.geometry import cad_evaluate_geometry
+
+        # LHS for good space-filling coverage.
+        if QMC_AVAILABLE:
+            sampler = qmc.LatinHypercube(d=len(input_bounds), seed=random_state)
+            u = sampler.random(n=n_samples)
+            lo = np.array([b[0] for b in input_bounds])
+            hi = np.array([b[1] for b in input_bounds])
+            samples = qmc.scale(u, lo, hi)
+        else:
+            rng = np.random.default_rng(random_state)
+            lo = np.array([b[0] for b in input_bounds])
+            hi = np.array([b[1] for b in input_bounds])
+            samples = lo + rng.random((n_samples, len(input_bounds))) * (hi - lo)
+
+        dataset = []
+        for i, row in enumerate(samples):
+            if stop_flag and stop_flag():
+                break
+            params = {name: float(val) for name, val in zip(input_names, row)}
+            try:
+                geom = cad_evaluate_geometry(cad_path, cad_kind, params, field_name=field_name)
+            except Exception as exc:
+                logger.warning("CAD evaluation failed for sample %d (%s); skipping. Reason: %s", i, params, exc)
+                continue
+            field_arr = geom.fields.get(field_name)
+            if field_arr is None:
+                logger.warning(
+                    "Sample %d: nodal field %r missing from CAD result. Available: %s",
+                    i, field_name, list(geom.fields.keys()),
+                )
+                continue
+            dataset.append((row.astype(np.float64), geom, field_arr.astype(np.float64)))
+            if callback:
+                callback(5 + int(60 * (i + 1) / n_samples), f"CAD eval {i+1}/{n_samples}")
+        if not dataset:
+            raise RuntimeError(
+                "No usable samples collected -- check the CAD graph + field name "
+                "+ parameter bounds."
+            )
+        return samples, dataset
+
+
+class GeomDeepONetStrategy(_GeometricBaseStrategy):
+    backbone_name = "geom_deeponet"
+
+    def train(self, X, y, config, X_test=None, y_test=None, callback=None, stop_flag=None, loss_callback=None):
+        self._check_deps()
+
+        from pylcss.surrogate_modeling.geometry import compute_sdf
+        from pylcss.surrogate_modeling.geometric_models import GeomDeepONet
+        from pylcss.surrogate_modeling.geometric_wrapper import GeometryAwareWrapper
+
+        cad_path = config["cad_path"]
+        cad_kind = config.get("cad_kind", "fea")
+        field_name = config["field_name"]
+        input_names = config["input_names"]
+        input_bounds = config["input_bounds"]
+        n_samples = int(config.get("n_samples", 30))
+        epochs = int(config.get("epochs", 500))
+        lr = float(config.get("learning_rate", 1e-3))
+        latent_dim = int(config.get("latent_dim", 64))
+        trunk_hidden = int(config.get("trunk_hidden", 64))
+
+        if callback:
+            callback(0, "Collecting CAD samples...")
+        samples, dataset = self._collect_dataset(
+            cad_path, cad_kind, field_name, input_names, input_bounds,
+            n_samples, config.get("random_state", 42), callback, stop_flag,
+        )
+
+        # Determine output dimension from first sample's field.
+        first_field = dataset[0][2]
+        out_dim = first_field.shape[1] if first_field.ndim > 1 else 1
+        field_widths = {field_name: out_dim}
+
+        # Parameter scaler (per-feature mean/std from the LHS samples).
+        param_mean = samples.mean(axis=0)
+        param_std = samples.std(axis=0) + 1e-9
+
+        device = _select_torch_device()
+        model = GeomDeepONet(
+            n_param=len(input_names), out_dim=out_dim,
+            latent_dim=latent_dim, trunk_hidden=trunk_hidden,
+        ).to(device)
+        opt = torch.optim.Adam(model.parameters(), lr=lr)
+        criterion = torch.nn.MSELoss()
+
+        if callback:
+            callback(70, f"Training Geom-DeepONet ({len(dataset)} samples, {epochs} epochs)...")
+
+        # Per-sample SGD: each sample is (params, mesh, field). Mesh sizes vary
+        # across samples, so we can't batch trivially; one sample at a time
+        # keeps the implementation simple.
+        loss_history = []
+        for epoch in range(epochs):
+            if stop_flag and stop_flag():
+                break
+            total = 0.0
+            for row, geom, field_arr in dataset:
+                params_norm = (row - param_mean) / param_std
+                params_t = torch.as_tensor(params_norm, dtype=torch.float32, device=device).unsqueeze(0)
+                sdf = compute_sdf(geom.points, geom.cells, geom.points)
+                query = np.column_stack([geom.points, sdf]).astype(np.float32)
+                query_t = torch.as_tensor(query, device=device)
+                target_t = torch.as_tensor(
+                    field_arr.reshape(1, -1, out_dim).astype(np.float32), device=device,
+                )
+                pred = model(params_t, query_t)
+                loss = criterion(pred, target_t)
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+                total += float(loss.item())
+            avg = total / max(1, len(dataset))
+            loss_history.append(avg)
+            if loss_callback and (epoch % 5 == 0 or epoch == epochs - 1):
+                loss_callback({"epoch": epoch, "train": avg, "val": avg})
+            if callback and epoch % 25 == 0:
+                p = 70 + int(25 * (epoch / epochs))
+                callback(p, f"Epoch {epoch}: train loss {avg:.4g}")
+
+        # Final evaluation: per-node RMSE/R2 against the same dataset
+        # (we don't hold out -- with n_samples ~30 there isn't much to spare).
+        all_true, all_pred = [], []
+        model.eval()
+        with torch.no_grad():
+            for row, geom, field_arr in dataset:
+                params_norm = (row - param_mean) / param_std
+                params_t = torch.as_tensor(params_norm, dtype=torch.float32, device=device).unsqueeze(0)
+                sdf = compute_sdf(geom.points, geom.cells, geom.points)
+                query = np.column_stack([geom.points, sdf]).astype(np.float32)
+                query_t = torch.as_tensor(query, device=device)
+                pred = model(params_t, query_t).cpu().numpy()[0]
+                all_true.append(field_arr.reshape(-1))
+                all_pred.append(pred.reshape(-1))
+        y_true = np.concatenate(all_true)
+        y_pred = np.concatenate(all_pred)
+        metrics = evaluate_model_predictions(y_true, y_pred, max_samples=100)
+        metrics["debug_mode"] = False
+        metrics["backbone"] = self.backbone_name
+        metrics["n_samples"] = len(dataset)
+        metrics["loss_history"] = loss_history
+
+        wrapper = GeometryAwareWrapper(
+            model=model,
+            backbone=self.backbone_name,
+            cad_path=cad_path,
+            cad_kind=cad_kind,
+            input_param_names=input_names,
+            output_mapping=[(field_name, "max")],
+            field_widths=field_widths,
+            field_names=[field_name],
+            param_scaler_mean=param_mean,
+            param_scaler_std=param_std,
+        )
+        return wrapper, metrics
+
+
+class GINOStrategy(_GeometricBaseStrategy):
+    backbone_name = "gino"
+
+    def train(self, X, y, config, X_test=None, y_test=None, callback=None, stop_flag=None, loss_callback=None):
+        self._check_deps()
+
+        from pylcss.surrogate_modeling.geometry import compute_sdf, make_background_grid
+        from pylcss.surrogate_modeling.geometric_models import GINONet
+        from pylcss.surrogate_modeling.geometric_wrapper import GeometryAwareWrapper
+
+        cad_path = config["cad_path"]
+        cad_kind = config.get("cad_kind", "fea")
+        field_name = config["field_name"]
+        input_names = config["input_names"]
+        input_bounds = config["input_bounds"]
+        n_samples = int(config.get("n_samples", 30))
+        epochs = int(config.get("epochs", 300))
+        lr = float(config.get("learning_rate", 1e-3))
+        grid_size = int(config.get("grid_size", 24))
+        modes = int(config.get("fno_modes", 4))
+        hidden_channels = int(config.get("hidden_channels", 16))
+
+        if callback:
+            callback(0, "Collecting CAD samples...")
+        samples, dataset = self._collect_dataset(
+            cad_path, cad_kind, field_name, input_names, input_bounds,
+            n_samples, config.get("random_state", 42), callback, stop_flag,
+        )
+
+        first_field = dataset[0][2]
+        out_dim = first_field.shape[1] if first_field.ndim > 1 else 1
+        field_widths = {field_name: out_dim}
+
+        param_mean = samples.mean(axis=0)
+        param_std = samples.std(axis=0) + 1e-9
+
+        device = _select_torch_device()
+        model = GINONet(
+            n_param=len(input_names), out_dim=out_dim,
+            grid_size=grid_size, modes=modes, hidden_channels=hidden_channels,
+        ).to(device)
+        opt = torch.optim.Adam(model.parameters(), lr=lr)
+        criterion = torch.nn.MSELoss()
+
+        if callback:
+            callback(70, f"Training GINO ({len(dataset)} samples, {epochs} epochs)...")
+
+        # Pre-compute SDF grids + normalised query coords for every sample so
+        # the inner loop only does the forward/backward pass.
+        prepped = []
+        for row, geom, field_arr in dataset:
+            bbox_min, bbox_max = geom.bbox
+            grid_pts, _ = make_background_grid(bbox_min, bbox_max, resolution=grid_size)
+            grid_sdf = compute_sdf(geom.points, geom.cells, grid_pts)
+            extent = bbox_max - bbox_min
+            pad = extent * 0.1
+            lo, hi = bbox_min - pad, bbox_max + pad
+            span = np.where((hi - lo) > 1e-12, hi - lo, 1.0)
+            pts_norm = 2.0 * (geom.points - lo) / span - 1.0
+            pts_norm = pts_norm[:, [2, 1, 0]].astype(np.float32)
+            prepped.append((row, grid_sdf.astype(np.float32), pts_norm, field_arr.astype(np.float32)))
+
+        R = grid_size
+        loss_history = []
+        for epoch in range(epochs):
+            if stop_flag and stop_flag():
+                break
+            total = 0.0
+            for row, grid_sdf, pts_norm, field_arr in prepped:
+                params_norm = (row - param_mean) / param_std
+                params_t = torch.as_tensor(params_norm, dtype=torch.float32, device=device).unsqueeze(0)
+                sdf_t = torch.as_tensor(grid_sdf.reshape(1, 1, R, R, R), device=device)
+                query_t = torch.as_tensor(pts_norm, device=device)
+                target_t = torch.as_tensor(field_arr.reshape(1, -1, out_dim), device=device)
+                pred = model(sdf_t, params_t, query_t)
+                loss = criterion(pred, target_t)
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+                total += float(loss.item())
+            avg = total / max(1, len(prepped))
+            loss_history.append(avg)
+            if loss_callback and (epoch % 5 == 0 or epoch == epochs - 1):
+                loss_callback({"epoch": epoch, "train": avg, "val": avg})
+            if callback and epoch % 20 == 0:
+                p = 70 + int(25 * (epoch / epochs))
+                callback(p, f"Epoch {epoch}: train loss {avg:.4g}")
+
+        # Eval: same dataset.
+        all_true, all_pred = [], []
+        model.eval()
+        with torch.no_grad():
+            for row, grid_sdf, pts_norm, field_arr in prepped:
+                params_norm = (row - param_mean) / param_std
+                params_t = torch.as_tensor(params_norm, dtype=torch.float32, device=device).unsqueeze(0)
+                sdf_t = torch.as_tensor(grid_sdf.reshape(1, 1, R, R, R), device=device)
+                query_t = torch.as_tensor(pts_norm, device=device)
+                pred = model(sdf_t, params_t, query_t).cpu().numpy()[0]
+                all_true.append(field_arr.reshape(-1))
+                all_pred.append(pred.reshape(-1))
+        y_true = np.concatenate(all_true)
+        y_pred = np.concatenate(all_pred)
+        metrics = evaluate_model_predictions(y_true, y_pred, max_samples=100)
+        metrics["debug_mode"] = False
+        metrics["backbone"] = self.backbone_name
+        metrics["n_samples"] = len(dataset)
+        metrics["loss_history"] = loss_history
+
+        wrapper = GeometryAwareWrapper(
+            model=model,
+            backbone=self.backbone_name,
+            cad_path=cad_path,
+            cad_kind=cad_kind,
+            input_param_names=input_names,
+            output_mapping=[(field_name, "max")],
+            field_widths=field_widths,
+            field_names=[field_name],
+            param_scaler_mean=param_mean,
+            param_scaler_std=param_std,
+            grid_size=grid_size,
+        )
+        return wrapper, metrics
+
+
+def _select_torch_device():
+    """Pick CUDA/MPS/CPU. Inlined here so the geometric strategies don't
+    depend on the PyTorch strategy file."""
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
 class SurrogateTrainer:
     """
     Manages data generation and model training for surrogate models.
@@ -405,8 +740,20 @@ class SurrogateTrainer:
             'Gaussian Process (Kriging)': GaussianProcessStrategy(), # Keep old key for compatibility
             'Random Forest': RandomForestStrategy(),
             'Gradient Boosting': GradientBoostingStrategy(),
-            'Deep Neural Network (PyTorch)': PyTorchStrategy(self)
+            'Deep Neural Network (PyTorch)': PyTorchStrategy(self),
         }
+        # Geometry-aware surrogates (GINO / Geom-DeepONet). These require torch
+        # AND trimesh AND PyLCSS's CAD runtime to evaluate per-design geometry,
+        # so we register them conditionally. They speak the same train() API
+        # but read CAD config out of ``config`` instead of using (X, y).
+        if TORCH_AVAILABLE:
+            try:
+                from pylcss.surrogate_modeling.geometry import TRIMESH_AVAILABLE
+            except ImportError:
+                TRIMESH_AVAILABLE = False
+            if TRIMESH_AVAILABLE:
+                self.strategies['Geom-DeepONet'] = GeomDeepONetStrategy()
+                self.strategies['GINO'] = GINOStrategy()
 
     def generate_data(self, spy_code: str, spy_inputs: List[str], spy_outputs: List[str], input_bounds: List[Tuple[float, float]], num_samples: int = 1000, test_samples: int = 200, random_state: int = 42, callback: Optional[Callable[[int, str], None]] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[str], List[str]]:
         """

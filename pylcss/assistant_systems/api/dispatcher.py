@@ -617,20 +617,20 @@ class CommandDispatcher:
                         if not node_class:
                             logger.warning(f"Unknown CAD node type: {spec_type}")
                             continue
-                        
+
                         node = node_class()
                         row = count // 4
                         col = count % 4
                         node.set_pos(start_x + (col * 250), start_y + (row * 150))
                         graph.add_node(node)
-                        
+
                         node.set_name(spec_id)
                         count += 1
                         id_to_node[spec_id] = node
-                        
+
                         for k, v in spec_props.items():
                             self._set_cad_property_safe(node, k, v)
-                            
+
                         created_info.append(f"Created {spec_id}")
 
                 # Process Connections

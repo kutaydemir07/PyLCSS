@@ -26,21 +26,64 @@ from pylcss.assistant_systems.services.memory import LLMMemory, get_secure_stora
 from pylcss.assistant_systems.core.interpreter import LLMInterpreter, ParsedResponse, ActionCommand
 from pylcss.assistant_systems.services.tts import get_tts, TextToSpeech
 
-# Agentic AI components
+# Agentic AI components -- PydanticAI native function-calling path replaces
+# the legacy supervisor/specialist/executor JSON-plan loop. Workflow
+# recording is paused: it relied on the legacy plan/step model and will be
+# re-implemented on top of PydanticAgentRunner traces in a follow-up.
 try:
-    from pylcss.assistant_systems.core.orchestrator import AgentOrchestrator
     from pylcss.assistant_systems.tools.registry import create_pylcss_tools, ToolRegistry
-    from pylcss.assistant_systems.core.workflows import WorkflowLibrary, WorkflowRecorder, WorkflowPlayer
+    from pylcss.assistant_systems.services.pydantic_agent import (
+        PydanticAgentRunner, PydanticAgentResult,
+    )
     AGENTIC_AVAILABLE = True
 except ImportError as e:
     AGENTIC_AVAILABLE = False
-    AgentOrchestrator = None
+    PydanticAgentRunner = None
+    PydanticAgentResult = None
     logging_msg = f"Agentic AI components not available: {e}"
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QMainWindow
 
 logger = logging.getLogger(__name__)
+
+
+# Sensible default models per provider for when the user picked a provider but
+# never selected a specific model. Updated per the model-knowledge cutoff in
+# this codebase.
+_DEFAULT_MODEL_FOR_PROVIDER = {
+    "openai":    "gpt-4o-mini",
+    "anthropic": "claude-haiku-4-5-20251001",
+    "google":    "gemini-2.5-flash",
+    "gemini":    "gemini-2.5-flash",
+    "local":     "qwen2.5-7b-instruct",
+}
+
+# Path suffixes that the OpenAI client appends automatically; if a user
+# accidentally saves the full endpoint URL we strip them here so the client
+# does not double-append them.
+_OPENAI_CLIENT_SUFFIXES = (
+    "/chat/completions",
+    "/completions",
+)
+
+
+def _normalize_base_url(url: Optional[str]) -> Optional[str]:
+    """Strip path segments the OpenAI client appends automatically.
+
+    If a user configures ``http://host:1234/v1/chat/completions`` instead of
+    ``http://host:1234/v1`` the client produces a doubled path.  This helper
+    removes the superfluous suffix and any trailing slash so the caller always
+    gets a clean base URL (or ``None`` if nothing was provided).
+    """
+    if not url:
+        return None
+    cleaned = url.rstrip("/")
+    for suffix in _OPENAI_CLIENT_SUFFIXES:
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)]
+            break
+    return cleaned or None
 
 
 class AssistantManager(QObject):
@@ -107,11 +150,12 @@ class AssistantManager(QObject):
         self._pending_actions: List[ActionCommand] = []
         self._secure_storage = get_secure_storage()
         
-        # Agentic AI components
-        self._agent_orchestrator: Optional['AgentOrchestrator'] = None
-        self._workflow_library: Optional['WorkflowLibrary'] = None
-        self._workflow_recorder: Optional['WorkflowRecorder'] = None
-        self._workflow_player: Optional['WorkflowPlayer'] = None
+        # Agentic AI components -- single PydanticAgentRunner replaces the
+        # old supervisor/specialist/executor stack and workflow library.
+        self._agent_runner: Optional['PydanticAgentRunner'] = None
+        self._workflow_library = None  # legacy attr kept None for back-compat
+        self._workflow_recorder = None
+        self._workflow_player = None
         self._use_agentic_mode: bool = self.config.llm_control.agentic_mode and AGENTIC_AVAILABLE
         
         # TTS state for unmute during speech
@@ -374,66 +418,65 @@ class AssistantManager(QObject):
             provider.set_system_prompt(self._llm_interpreter.get_system_prompt())
         logger.info(f"LLM provider set: {provider.name if provider else 'None'}")
         
-        # Initialize agentic system if not already done (lazy init on first provider)
-        if self._use_agentic_mode and provider and not self._agent_orchestrator:
+        # Lazy-init the PydanticAgentRunner on first provider set.  Subsequent
+        # provider changes rebuild the runner so the new provider's native
+        # function-calling client takes over immediately.
+        if self._use_agentic_mode and provider:
             self._initialize_agentic_system()
-        elif self._agent_orchestrator and provider:
-            self._agent_orchestrator.update_provider(provider)
     
     def _initialize_agentic_system(self) -> None:
-        """Initialize the multi-agent system for agentic AI."""
+        """Build the PydanticAgentRunner from the current LLM config + tool
+        registry.  Replaces the old supervisor/executor stack.
+        """
         if not AGENTIC_AVAILABLE:
             logger.warning("Agentic AI components not available")
             return
-            
-        if not self._llm_provider:
-            logger.warning("Cannot initialize agentic system without LLM provider")
+
+        if not self._command_dispatcher:
+            logger.warning("Cannot initialize agentic system without command dispatcher")
             return
-            
+
         try:
-            # Create tool registry with all PyLCSS tools
             tool_registry = create_pylcss_tools(self._command_dispatcher)
-            
-            # Create agent orchestrator
-            self._agent_orchestrator = AgentOrchestrator(
-                llm_provider=self._llm_provider,
-                tool_registry=tool_registry,
-                use_critic=self.config.llm_control.use_critic_agent,
-                validate_design_intent=self.config.llm_control.validate_design_intent,
-                max_retries=self.config.llm_control.max_retries,
-                on_step_complete=self._on_agent_step_complete,
+
+            # Pull provider + model + key from the same config UI everything
+            # else uses.  Local servers (LM Studio / Ollama / vLLM) all speak
+            # the OpenAI wire protocol so they share the "openai"/"local" code
+            # path.
+            cfg = self.config.llm_control
+            provider = (cfg.provider or "openai").lower()
+            model = cfg.selected_model or _DEFAULT_MODEL_FOR_PROVIDER.get(provider, "gpt-4o-mini")
+            api_key = self._resolve_api_key(provider, cfg)
+            base_url = _normalize_base_url(getattr(cfg, "local_api_url", None) or None)
+
+            self._agent_runner = PydanticAgentRunner.from_legacy_registry(
+                registry=tool_registry,
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
             )
-            
-            # Initialize workflow system
-            self._workflow_library = WorkflowLibrary()
-            self._workflow_recorder = WorkflowRecorder(
-                library=self._workflow_library,
-                auto_save=self.config.llm_control.auto_save_workflows,
+            logger.info(
+                "PydanticAgentRunner initialized (provider=%s, model=%s, %d tools)",
+                provider, model, len(self._agent_runner.tool_names),
             )
-            self._workflow_player = WorkflowPlayer(
-                executor_agent=self._agent_orchestrator.executor,
-                library=self._workflow_library,
-            )
-            
-            logger.info(f"Agentic AI system initialized with {len(tool_registry.all_tools)} tools, "
-                       f"{self._workflow_library.count} workflows")
-            
+
         except Exception as e:
-            logger.error(f"Failed to initialize agentic system: {e}")
-            self._agent_orchestrator = None
-            self._workflow_library = None
-            self._workflow_recorder = None
-            self._workflow_player = None
+            logger.error(f"Failed to initialize PydanticAgentRunner: {e}", exc_info=True)
+            self._agent_runner = None
+
+    def _resolve_api_key(self, provider: str, cfg) -> Optional[str]:
+        """Decrypt and return the API key for the active provider."""
+        try:
+            key_attr = f"{provider}_api_key"
+            encrypted = getattr(cfg, key_attr, None)
+            if not encrypted:
+                return None
+            return self._secure_storage.decrypt(encrypted) if encrypted else None
+        except Exception as exc:
+            logger.warning("Could not decrypt API key for %s: %s", provider, exc)
+            return None
     
-    def _on_agent_step_complete(self, step) -> None:
-        """Callback for agent step completion (for UI updates)."""
-        if step.result:
-            if step.result.success:
-                logger.info(f"Agent step completed: {step.action.tool_name if step.action else 'unknown'}")
-            else:
-                logger.warning(f"Agent step failed: {step.result.error}")
-        
-        
     # --- Callbacks from components ---
     def _on_voice_command(self, command_name: str, command_data: Dict[str, Any]) -> None:
         """Handle recognized voice command (called from background thread)."""
@@ -620,16 +663,12 @@ class AssistantManager(QObject):
                     self._voice_controller.stop_llm_mode()
                 return
 
-        # Check for workflow triggers first
-        if self._workflow_library:
-            workflow = self._workflow_library.find_by_phrase(text)
-            if workflow:
-                logger.info(f"Matched workflow: {workflow.name}")
-                self._play_workflow(workflow, text)
-                return
-        
+        # Workflow recording/replay is paused while we migrate to PydanticAI;
+        # see manager.py module docstring. Re-enable when reimplemented on
+        # top of pydantic-ai run traces.
+
         # Use agentic mode if enabled and available
-        if self._use_agentic_mode and self._agent_orchestrator:
+        if self._use_agentic_mode and self._agent_runner:
             self.process_agentic_request(text)
             return
 
@@ -671,53 +710,73 @@ class AssistantManager(QObject):
         )
     
     def process_agentic_request(self, text: str) -> None:
-        """Process request through the multi-agent system (in background thread)."""
+        """Process request via PydanticAgentRunner (background thread)."""
         logger.info(f"Processing agentic request: {text[:100]}...")
 
-        if not self._agent_orchestrator:
-            logger.warning("Agentic request received without initialized orchestrator; falling back to legacy LLM path")
+        if not self._agent_runner:
+            logger.warning("Agentic request received without initialized runner; falling back to legacy LLM path")
             self._process_llm_request(text)
             return
-        
+
         # Store for overlay updates
         self._current_request_text = text
-        
-        # Show thinking overlay
+
         overlay = self._get_or_create_llm_overlay()
         if overlay:
             overlay.show_thinking(user_text=text)
-            
-        # Pause voice recognition while processing
         if self._voice_controller:
             self._voice_controller.pause()
-        
-        # Get current graph context (must be done on main thread)
+
+        # Pull graph context on the main thread so we hand the runner a
+        # snapshot the LLM can reason about ("here's what already exists").
         graph_state = self._get_current_graph_context()
-        
-        # Run in background thread to avoid UI freeze
+        prompt = self._compose_agent_prompt(text, graph_state)
+
         import threading
-        
+
         def run_agentic():
             try:
-                # Emit progress for planning phase
-                self.agentic_progress.emit("Planning...")
-                
-                # Process through orchestrator
-                result = self._agent_orchestrator.process_request(
-                    user_request=text,
-                    graph_state=graph_state,
-                    get_graph_state=self._get_current_graph_context,
-                )
-                
-                # Emit result signal (works with dict and str)
-                self.agentic_result_received.emit(result, text)
-                
+                self.agentic_progress.emit("Calling tools...")
+                result = self._agent_runner.run_sync(prompt)
+
+                # Translate PydanticAgentResult -> the dict shape
+                # _handle_agentic_result already understands.  No plan/steps
+                # because pydantic-ai handles tool dispatch internally; we
+                # surface the LLM's final text + the list of tools it called.
+                ok = result.success
+                payload = {
+                    "success": ok,
+                    "message": result.output if ok else (result.error or "Failed."),
+                    "plan": None,
+                    "results": result.tool_calls,
+                    "telemetry_summary": {
+                        "tool_call_count": len(result.tool_calls),
+                    },
+                    "telemetry": None,
+                }
+                self.agentic_result_received.emit(payload, text)
+
             except Exception as e:
-                logger.error(f"Agentic processing failed: {e}")
+                logger.error(f"Agentic processing failed: {e}", exc_info=True)
                 self.agentic_error_received.emit(str(e))
-        
+
         thread = threading.Thread(target=run_agentic, daemon=True)
         thread.start()
+
+    def _compose_agent_prompt(self, user_text: str, graph_state: str) -> str:
+        """Glue user request + current graph snapshot into one prompt string.
+
+        PydanticAI's Agent.run_sync takes a single string; we let the system
+        prompt do the role/tone work and put per-turn context (graph state)
+        in the user message so it stays cache-friendly across turns of a
+        conversation.
+        """
+        if not graph_state:
+            return user_text
+        return (
+            f"Current graph context (read-only snapshot):\n{graph_state}\n\n"
+            f"User request:\n{user_text}"
+        )
     
     @Slot(object, str)
     def _handle_agentic_result(self, result: dict, original_text: str) -> None:
@@ -737,10 +796,10 @@ class AssistantManager(QObject):
         if telemetry_summary:
             logger.info(f"Agent telemetry summary: {telemetry_summary}")
         
-        # Auto-save successful workflows
-        if success and self._workflow_recorder and plan and len(plan.steps) >= 2:
-            self._workflow_recorder.auto_record_from_plan(plan, results, original_text)
-        
+        # Workflow auto-save was tied to the legacy plan/step model and is
+        # disabled during the PydanticAI migration; the runner exposes
+        # tool_calls in `results` for future re-implementation.
+
         # Add to memory
         if self._llm_memory:
             self._llm_memory.add_message(
@@ -781,67 +840,12 @@ class AssistantManager(QObject):
             user_text = getattr(self, '_current_request_text', "")
             overlay.show_thinking(user_text=user_text, detail_text=message)
 
-    def _on_agent_step_complete(self, step) -> None:
-        """Callback for agent step completion (for UI updates)."""
-        # Emit progress signal instead of just logging
-        if step.result:
-            if step.result.success:
-                msg = f"Completed: {step.action.tool_name if step.action else 'unknown'}"
-                logger.info(f"Agent step completed: {step.action.tool_name if step.action else 'unknown'}")
-            else:
-                msg = f"Failed: {step.action.tool_name if step.action else 'unknown'} (Retrying...)"
-                logger.warning(f"Agent step failed: {step.result.error}")
-            
-            # Emit safely from background thread
-            self.agentic_progress.emit(msg)
-        
-    def _on_agent_plan_created(self, plan) -> None:
-        """Callback for plan creation."""
-        msg = f"Plan created: {len(plan.steps)} steps"
-        self.agentic_progress.emit(msg)
-    
-    def _play_workflow(self, workflow, trigger_text: str) -> None:
-        """Play a saved workflow."""
-        if not self._workflow_player:
-            logger.warning("Workflow player not initialized")
-            return
-            
-        overlay = self._get_or_create_llm_overlay()
-        if overlay:
-            overlay.show_thinking(user_text=f"Running workflow: {workflow.name}")
-            
-        # Pause voice
-        if self._voice_controller:
-            self._voice_controller.pause()
-            
-        try:
-            context = {
-                "graph_state": self._get_current_graph_context(),
-                "get_graph_state": self._get_current_graph_context,
-            }
-            
-            results = self._workflow_player.play(workflow, context)
-            
-            success = all(r.success for r in results)
-            if success:
-                message = f"✅ Workflow '{workflow.name}' completed ({len(results)} steps)"
-            else:
-                failed_count = sum(1 for r in results if not r.success)
-                message = f"⚠️ Workflow '{workflow.name}' had {failed_count} failures"
-                
-            if overlay:
-                overlay.show_response(message, has_actions=False)
-                
-            self._do_speak(message, len(message.split()) * 500)
-            
-        except Exception as e:
-            logger.error(f"Workflow playback failed: {e}")
-            if overlay:
-                overlay.show_error(str(e))
-            if self._voice_controller:
-                self._voice_controller.resume()
-        
-        
+    # Legacy step-complete / plan-created / workflow playback hooks were
+    # removed with the PydanticAI migration -- pydantic_ai.Agent owns its own
+    # tool dispatch loop and reports per-tool messages via streaming/trace
+    # APIs that the manager will subscribe to in a follow-up.
+
+
     def _on_llm_response(self, completion: ChatCompletion) -> None:
         """Handle LLM response (called from background thread)."""
         logger.info(f"LLM Response: {completion.content[:100]}...")

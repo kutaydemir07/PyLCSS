@@ -26,7 +26,7 @@
 
 [![License](https://img.shields.io/badge/License-PolyForm_Shield_1.0.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-green.svg)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/Version-2.1.0-orange.svg)]()
+[![Version](https://img.shields.io/badge/Version-2.2.0-orange.svg)]()
 [![Slides](https://img.shields.io/badge/Slides-PDF-red.svg)](pylcss/user_interface/1773249914176.pdf)
 
 </div>
@@ -52,10 +52,10 @@ PyLCSS implements the **Solution Space** approach for robust design: instead of 
 ## Key Features
 
 ### Design Studio: Parametric Engineering Design
-- **70+ Node Types** — Primitives, Booleans, Fillets, Chamfers, Sweeps, Lofts, Shells, Patterns, Imports
-- **Code-Assisted Modeling Direction** — Parts and assemblies should remain reproducible through graph nodes, exposed parameters, imported STEP/STL geometry, or code-based creation blocks rather than hidden manual edits
+- **Code Part Node** — All geometry is authored in a single CadQuery code block; write boxes, cylinders, boolean ops, fillets, chamfers, sweeps, lofts, shells, patterns, and any OCC feature as plain Python code
+- **29 Real Node Types** — Code Part · Import STEP/STL · Select Face (text & interactive) · Assembly · Mass Properties · Bounding Box · Math Expression · Measure Distance · Surface Area · FEA material/mesh/constraint/load/pressure/solver/topopt/remesh/sizeopt/shapeopt · Crash material/impact/solver/Radioss deck · Number · Variable · Export STEP/STL — every type maps to a live node class
+- **AI-Assisted Geometry** — The assistant always generates nodes with auto-generated CadQuery code
 - **Topology Optimization** — SIMP with MMA/OC solvers, density/sensitivity filtering, Heaviside projection, symmetry constraints, shape recovery with marching cubes, and **direct STL/OBJ export** of optimized shapes
-- **Advanced Nodes** — Thicken, Pipe, Split, Text emboss, Math Expression evaluator, Import STEP/STL
 - **Real-Time 3D Viewer** — VTK-based with density cutoff preview during optimization, NavCube orientation, world X/Y/Z grid labels, and crash playback overlay management
 - **Measurement** — Distance, surface area, and volume nodes
 
@@ -124,9 +124,10 @@ PyLCSS implements the **Solution Space** approach for robust design: instead of 
 - **Top-Right Entry Point** — A small assistant button opens a right-side panel that pushes the workspace left instead of covering it
 - **Fixed Side Panel** — Opens at a stable width and pushes the workspace left
 - **Text + Voice Input** — Typed prompts and Faster-Whisper speech input are routed to the same natural-language assistant path
-- **No Hardcoded Voice Commands** — Speech is treated as assistant input; UI actions are resolved through the LLM/tool layer rather than a fixed phrase table
 - **Multi-Provider LLM** — OpenAI, Claude, Gemini, LM-Studio
 - **Privacy-First** — Optional local speech recognition and local model workflows
+
+
 
 ### Black-Box Integration
 - **Any Python-accessible tool** — ANSYS, MATLAB, LS-DYNA, in-house solvers, and HPC scripts can be wrapped in a simple `evaluate(x)` function

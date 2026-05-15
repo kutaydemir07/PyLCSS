@@ -143,11 +143,11 @@ class SelectFaceNode(CadQueryNode):
                 selector = _canonical_face_direction(self.get_property('direction'))
                 face_selection = obj.faces(selector)
                 faces = face_selection.vals()
-                print(f"DEBUG SelectFaceNode ({self.NODE_NAME}): Direction {selector} found {len(faces)} faces")
+                logger.debug("SelectFaceNode (%s): Direction %s found %d faces", self.NODE_NAME, selector, len(faces))
                 if not faces:
                     self.set_error("No faces found with selector")
                     return None
-                
+
                 try:
                     wp = face_selection.workplane()
                 except Exception:
@@ -156,14 +156,14 @@ class SelectFaceNode(CadQueryNode):
 
             elif method == 'NearestToPoint':
                 pt = (self.get_property('near_x'), self.get_property('near_y'), self.get_property('near_z'))
-                print(f"DEBUG SelectFaceNode ({self.NODE_NAME}): Point={pt}")
+                logger.debug("SelectFaceNode (%s): Point=%s", self.NODE_NAME, pt)
                 face_selection = obj.faces(cq.NearestToPointSelector(pt))
                 faces = face_selection.vals()
-                print(f"DEBUG SelectFaceNode ({self.NODE_NAME}): NearestToPoint found {len(faces)} faces")
+                logger.debug("SelectFaceNode (%s): NearestToPoint found %d faces", self.NODE_NAME, len(faces))
                 if not faces:
                     self.set_error("No faces found near point")
                     return None
-                
+
                 try:
                     wp = face_selection.workplane()
                 except Exception:
@@ -173,7 +173,7 @@ class SelectFaceNode(CadQueryNode):
             elif method == 'Index':
                 idx = int(self.get_property('face_index'))
                 all_faces = obj.faces().vals()
-                print(f"DEBUG SelectFaceNode ({self.NODE_NAME}): Index={idx}, Total faces={len(all_faces)}")
+                logger.debug("SelectFaceNode (%s): Index=%d, Total faces=%d", self.NODE_NAME, idx, len(all_faces))
                 if 0 <= idx < len(all_faces):
                     face = all_faces[idx]
                     wp = obj.newObject([face]).workplane()
@@ -184,8 +184,8 @@ class SelectFaceNode(CadQueryNode):
 
             elif method == 'Largest Area':
                 all_faces = obj.faces().vals()
-                if not all_faces: 
-                    print(f"DEBUG SelectFaceNode ({self.NODE_NAME}): NO FACES FOUND AT ALL")
+                if not all_faces:
+                    logger.debug("SelectFaceNode (%s): NO FACES FOUND AT ALL", self.NODE_NAME)
                     return None
                 sorted_faces = sorted(all_faces, key=lambda f: f.Area(), reverse=True)
                 largest_face = sorted_faces[0]
@@ -196,7 +196,7 @@ class SelectFaceNode(CadQueryNode):
                 tag_name = self.get_property('tag')
                 face_selection = obj.faces(tag=tag_name)
                 faces = face_selection.vals()
-                print(f"DEBUG SelectFaceNode ({self.NODE_NAME}): Tag {tag_name} found {len(faces)} faces")
+                logger.debug("SelectFaceNode (%s): Tag %s found %d faces", self.NODE_NAME, tag_name, len(faces))
                 if not faces:
                     return None
                 return _selection_payload(face_selection.workplane(), faces, method)
@@ -205,20 +205,20 @@ class SelectFaceNode(CadQueryNode):
                 # Custom Box Selector
                 min_pt = (self.get_property('box_min_x'), self.get_property('box_min_y'), self.get_property('box_min_z'))
                 max_pt = (self.get_property('box_max_x'), self.get_property('box_max_y'), self.get_property('box_max_z'))
-                
+
                 # Check center of faces against box
                 def in_box(f):
                     c = f.Center()
-                    return (min_pt[0] <= c.x <= max_pt[0] and 
-                            min_pt[1] <= c.y <= max_pt[1] and 
+                    return (min_pt[0] <= c.x <= max_pt[0] and
+                            min_pt[1] <= c.y <= max_pt[1] and
                             min_pt[2] <= c.z <= max_pt[2])
-                
+
                 all_faces = obj.faces().vals()
                 faces = [f for f in all_faces if in_box(f)]
-                print(f"DEBUG SelectFaceNode ({self.NODE_NAME}): Box found {len(faces)} faces")
+                logger.debug("SelectFaceNode (%s): Box found %d faces", self.NODE_NAME, len(faces))
                 if not faces:
                     return None
-                
+
                 new_wp = obj.newObject(faces)
                 return _selection_payload(new_wp, faces, method)
 
@@ -227,13 +227,13 @@ class SelectFaceNode(CadQueryNode):
                 expr = self.get_property('range_expr')
                 all_faces = obj.faces().vals()
                 faces = []
-                
+
                 # Try to use simpleeval if available
                 try:
                     from simpleeval import simple_eval
                 except ImportError:
                     simple_eval = None
-                
+
                 for f in all_faces:
                     c = f.Center()
                     try:
@@ -245,16 +245,16 @@ class SelectFaceNode(CadQueryNode):
                             faces.append(f)
                     except Exception:
                         continue
-                
-                print(f"DEBUG SelectFaceNode ({self.NODE_NAME}): Coordinate Range found {len(faces)} faces")
+
+                logger.debug("SelectFaceNode (%s): Coordinate Range found %d faces", self.NODE_NAME, len(faces))
                 if not faces:
                     return None
-                
+
                 new_wp = obj.newObject(faces)
                 return _selection_payload(new_wp, faces, method)
 
         except Exception as e:
-            print(f"DEBUG SelectFaceNode ({self.NODE_NAME}): ERROR: {e}")
+            logger.error("SelectFaceNode (%s): %s", self.NODE_NAME, e)
             self.set_error(f"Face selection failed: {e}")
             return None
 

@@ -211,57 +211,24 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
 
     def _collect_cad_features(data: Dict[str, Any]) -> Dict[str, bool]:
         types = set(_node_types(data))
-        primitives = {
-            "com.cad.box",
-            "com.cad.cylinder",
-            "com.cad.sphere",
-            "com.cad.cone",
-            "com.cad.torus",
-            "com.cad.wedge",
-            "com.cad.pyramid",
-        }
-        sketch_profiles = {
-            "com.cad.sketch",
-            "com.cad.sketch.line",
-            "com.cad.sketch.circle",
-            "com.cad.sketch.rectangle",
-            "com.cad.sketch.polygon",
-            "com.cad.sketch.arc",
-            "com.cad.ellipse",
-            "com.cad.spline",
-            "com.cad.polyline",
-        }
-        additive_ops = {
-            "com.cad.extrude",
-            "com.cad.revolve",
-            "com.cad.twisted_extrude",
-            "com.cad.sweep",
-            "com.cad.loft",
-            "com.cad.boolean",
-        }
-        subtractive_ops = {
-            "com.cad.cut_extrude",
-            "com.cad.hole_at_coords",
-            "com.cad.multi_hole",
-            "com.cad.pocket",
-            "com.cad.rectangular_cut",
-            "com.cad.boolean",
-        }
-
+        # A com.cad.code_part node can contain any geometry — treat its
+        # presence as satisfying all structural feature requirements so
+        # semantic rules don't false-positive on code-first graphs.
+        has_code_part = "com.cad.code_part" in types
         return {
-            "base_solid": bool(types & (primitives | {"com.cad.extrude", "com.cad.revolve", "com.cad.boolean"})),
-            "sketch_profile": bool(types & sketch_profiles),
-            "additive": bool(types & additive_ops),
-            "subtractive": bool(types & subtractive_ops),
-            "holes": bool(types & {"com.cad.hole_at_coords", "com.cad.multi_hole", "com.cad.cut_extrude", "com.cad.rectangular_cut", "com.cad.boolean"}),
-            "rounded": "com.cad.fillet" in types,
-            "beveled": "com.cad.chamfer" in types,
-            "hollow": bool(types & {"com.cad.shell", "com.cad.cut_extrude", "com.cad.boolean", "com.cad.pocket", "com.cad.rectangular_cut"}),
-            "rotational": bool(types & {"com.cad.cylinder", "com.cad.cone", "com.cad.torus", "com.cad.revolve"}),
-            "revolved": "com.cad.revolve" in types,
-            "swept": "com.cad.sweep" in types,
-            "lofted": "com.cad.loft" in types,
-            "tooth_like": bool(types & {"com.cad.sketch.polygon", "com.cad.polyline", "com.cad.sketch.line", "com.cad.sketch.rectangle", "com.cad.cut_extrude", "com.cad.boolean", "com.cad.extrude"}),
+            "base_solid":    has_code_part,
+            "sketch_profile": has_code_part,
+            "additive":      has_code_part,
+            "subtractive":   has_code_part,
+            "holes":         has_code_part,
+            "rounded":       has_code_part,
+            "beveled":       has_code_part,
+            "hollow":        has_code_part,
+            "rotational":    has_code_part,
+            "revolved":      has_code_part,
+            "swept":         has_code_part,
+            "lofted":        has_code_part,
+            "tooth_like":    has_code_part,
         }
 
     def _missing_features(features: Dict[str, bool], required_any: Optional[List[str]] = None, required_all: Optional[List[str]] = None) -> bool:
@@ -680,6 +647,41 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
             schema = CAD_NODE_TYPES.get(ntype)
             if not schema:
                 logger.warning(f"LLM used unknown CAD node type: {ntype}")
+                # Rescue: convert any unknown type to com.cad.code_part with
+                # a sensible default box so at least something appears in the GUI.
+                # The user can edit the code afterward.
+                raw_props = node.get("properties", {})
+                def _dim(keys, default):
+                    for k in keys:
+                        if k in raw_props:
+                            try: return float(raw_props[k])
+                            except (TypeError, ValueError): pass
+                    return default
+                t = ntype.lower()
+                if "cylinder" in t or "cyl" in t:
+                    R = _dim(["radius","r","R","width","w"], 5.0)
+                    H = _dim(["height","h","H","length","l","L"], 10.0)
+                    code = "result = cq.Workplane('XY').cylinder(H, R)"
+                    params = f"R={R}\nH={H}"
+                elif "sphere" in t or "ball" in t:
+                    R = _dim(["radius","r","R","size","width"], 5.0)
+                    code = "result = cq.Workplane('XY').sphere(R)"
+                    params = f"R={R}"
+                elif "cone" in t:
+                    R = _dim(["radius","r","bottom_radius","width"], 10.0)
+                    H = _dim(["height","h","H","length"], 20.0)
+                    code = "result = cq.Workplane('XY').newObject([cq.Solid.makeCone(R, 0, H)])"
+                    params = f"R={R}\nH={H}"
+                else:
+                    # Default: box (covers box, cube, rect, primitive, custom_block, etc.)
+                    L = _dim(["length","l","L","width","w","W","size","x"], 10.0)
+                    W = _dim(["width","w","W","depth","d","D","y"], 10.0)
+                    H = _dim(["height","h","H","depth","d","D","z","thickness"], 10.0)
+                    code = "result = cq.Workplane('XY').box(L, W, H)"
+                    params = f"L={L}\nW={W}\nH={H}"
+                node["type"] = "com.cad.code_part"
+                node["properties"] = {"code": code, "parameters": params}
+                logger.info(f"Normalized unknown type '{ntype}' → com.cad.code_part")
                 continue
             valid_props = set(schema.get("properties", {}).keys())
             if not valid_props:
@@ -811,26 +813,9 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
         if not nodes:
             return ["Empty node list — nothing to build"]
 
-        default_sensitive_nodes = {
-            "com.cad.box",
-            "com.cad.cylinder",
-            "com.cad.sphere",
-            "com.cad.cone",
-            "com.cad.torus",
-            "com.cad.wedge",
-            "com.cad.pyramid",
-            "com.cad.extrude",
-            "com.cad.revolve",
-            "com.cad.twisted_extrude",
-            "com.cad.cut_extrude",
-            "com.cad.fillet",
-            "com.cad.chamfer",
-            "com.cad.shell",
-            "com.cad.hole_at_coords",
-            "com.cad.multi_hole",
-            "com.cad.pocket",
-            "com.cad.rectangular_cut",
-        }
+        # No primitive nodes exist — only com.cad.code_part for geometry.
+        # Default-value checking is not applicable to code_part (free-form code).
+        default_sensitive_nodes: set = set()
 
         node_ids = set()
         node_map: Dict[str, Dict] = {}
@@ -1098,10 +1083,32 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
 
     registry.register(Tool(
         name="create_cad_geometry",
-        description="Create CAD geometry using a node graph. \n\nExamples:\n- Basic: `nodes=[{'type': 'com.cad.box', 'id':'b1'}]`\n- Connection: `connections=[{'from': 'b1.shape', 'to': 'bool1.shape_a'}]`\n- Drilling: Create Box AND Cylinder. Then use `com.cad.boolean` (operation='Cut') and connect them.",
+        description=(
+            "Create CAD geometry using a node graph.\n\n"
+            "PRIMARY NODE TYPE: `com.cad.code_part` — write any geometry as CadQuery code.\n"
+            "  - Set property 'code' to a Python snippet that assigns `result` to a cq.Workplane/Shape/Assembly.\n"
+            "  - Set property 'parameters' to `name=value` lines for parametric dimensions.\n\n"
+            "EXAMPLE — bracket with hole:\n"
+            "  nodes=[{\"id\":\"bracket\",\"type\":\"com.cad.code_part\","
+            "\"properties\":{\"code\":\"body=cq.Workplane('XY').box(L,W,H)\\n"
+            "body=body.faces('>Z').workplane().hole(hole_d)\\nresult=body\","
+            "\"parameters\":\"L=80\\nW=40\\nH=20\\nhole_d=10\"}}]\n\n"
+            "EXAMPLE — bracket with two forks (combine everything in one code node):\n"
+            "  Use a single com.cad.code_part and write CadQuery code that builds the full shape.\n\n"
+            "OTHER AVAILABLE TYPES (for FEA/IO only):\n"
+            "  com.cad.assembly, com.cad.select_face,\n"
+            "  com.cad.sim.material, com.cad.sim.mesh, com.cad.sim.constraint,\n"
+            "  com.cad.sim.load, com.cad.sim.solver, com.cad.sim.topopt,\n"
+            "  com.cad.number, com.cad.variable, com.cad.export_step, com.cad.export_stl"
+        ),
         parameters=[
-            ToolParameter("nodes", "array", "List of nodes. Each node has: id (string), type (e.g. 'com.cad.box'), properties (object)"),
-            ToolParameter("connections", "array", "Connections list. Each has: from (node_id.output_port), to (node_id.input_port)", required=False),
+            ToolParameter("nodes", "array",
+                          "List of nodes. Each node: {id, type, properties}. "
+                          "For geometry use type='com.cad.code_part' with properties "
+                          "{code: '<cq code>', parameters: 'name=value\\n...'}."),
+            ToolParameter("connections", "array",
+                          "Connections list. Each: {from: 'node_id.output_port', to: 'node_id.input_port'}",
+                          required=False),
         ],
         handler=lambda data: _run_cad_verified(data),
         category="cad",
@@ -1137,7 +1144,7 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
     
     registry.register(Tool(
         name="connect_cad_nodes",
-        description="Connect two CAD nodes together. \n\nUsage:\n- Boolean: Connect shapes to `shape_a` and `shape_b` of `com.cad.boolean`.\n- Ops: Connect shape to `shape` input of modifier (fillet, etc.).",
+        description="Connect two CAD nodes together. Use this to wire outputs to FEA node inputs (e.g. shape → sim.mesh, sim.mesh → sim.constraint, etc.).",
         parameters=[
             ToolParameter("from_node", "string", "Source node ID"),
             ToolParameter("from_port", "string", "Source port name (usually 'shape')"),
@@ -1416,262 +1423,41 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
 # === CAD Node Types Reference ===
 # For use in prompts and documentation
 # Property names MUST match the exact create_property names in the node classes.
+# This dict mirrors NODE_CLASS_MAPPING exactly — no extra types.
 
 CAD_NODE_TYPES = {
-    # --- Primitives (all output: shape) ---
-    "com.cad.box": {
-        "name": "Box",
-        "properties": {"box_length": 10.0, "box_width": 10.0, "box_depth": 10.0,
-                        "center_x": 0.0, "center_y": 0.0, "center_z": 0.0},
-        "outputs": ["shape"],
-    },
-    "com.cad.cylinder": {
-        "name": "Cylinder",
-        "properties": {"cyl_radius": 5.0, "cyl_height": 10.0,
-                        "center_x": 0.0, "center_y": 0.0, "center_z": 0.0},
-        "outputs": ["shape"],
-    },
-    "com.cad.sphere": {
-        "name": "Sphere",
-        "properties": {"sphere_radius": 5.0, "center_x": 0.0, "center_y": 0.0, "center_z": 0.0},
-        "outputs": ["shape"],
-    },
-    "com.cad.cone": {
-        "name": "Cone",
-        "properties": {"bottom_radius": 10.0, "top_radius": 5.0, "cone_height": 20.0,
-                        "center_x": 0.0, "center_y": 0.0, "center_z": 0.0},
-        "outputs": ["shape"],
-    },
-    "com.cad.torus": {
-        "name": "Torus",
-        "properties": {"major_radius": 20.0, "minor_radius": 5.0,
-                        "center_x": 0.0, "center_y": 0.0, "center_z": 0.0},
-        "outputs": ["shape"],
-    },
-    "com.cad.wedge": {
-        "name": "Wedge",
-        "properties": {"wedge_width": 10.0, "length": 10.0, "wedge_height": 5.0,
-                        "center_x": 0.0, "center_y": 0.0, "center_z": 0.0},
-        "outputs": ["shape"],
-    },
-    "com.cad.pyramid": {
-        "name": "Pyramid",
-        "properties": {"base_size": 10.0, "pyramid_height": 15.0, "sides": 4,
-                        "center_x": 0.0, "center_y": 0.0, "center_z": 0.0},
+    # --- Code-first geometry (THE only geometry authoring node) ---
+    "com.cad.code_part": {
+        "name": "Code Part / Assembly",
+        "description": (
+            "Write any geometry as CadQuery code. "
+            "Set 'code' to a Python snippet that assigns `result`. "
+            "Set 'parameters' to name=value lines (one per line) for parametric dims."
+        ),
+        "properties": {
+            "code": "result = cq.Workplane('XY').box(L, W, H)",
+            "parameters": "L=40.0\nW=20.0\nH=8.0",
+        },
+        "inputs": [],
         "outputs": ["shape"],
     },
 
-    # --- Sketching ---
-    "com.cad.sketch": {
-        "name": "Create Sketch",
-        "properties": {"sketch_name": "Sketch1", "plane": "XY"},
-        "outputs": ["sketch"],
-    },
-    "com.cad.sketch.line": {
-        "name": "Line",
-        "properties": {"x1": 0.0, "y1": 0.0, "x2": 10.0, "y2": 10.0},
-        "inputs": ["sketch"], "outputs": ["shape"],
-    },
-    "com.cad.sketch.circle": {
-        "name": "Circle",
-        "properties": {"center_x": 0.0, "center_y": 0.0, "radius": 5.0},
-        "inputs": ["sketch"], "outputs": ["shape"],
-    },
-    "com.cad.sketch.rectangle": {
-        "name": "Rectangle",
-        "properties": {"x": 0.0, "y": 0.0, "rect_width": 10.0, "rect_height": 10.0},
-        "inputs": ["sketch"], "outputs": ["shape"],
-    },
-    "com.cad.sketch.polygon": {
-        "name": "Polygon",
-        "properties": {"center_x": 0.0, "center_y": 0.0, "radius": 5.0, "sides": 6},
-        "inputs": ["sketch"], "outputs": ["shape"],
-    },
-    "com.cad.sketch.arc": {
-        "name": "Arc",
-        "properties": {"center_x": 0.0, "center_y": 0.0, "radius": 10.0,
-                        "start_angle": 0.0, "end_angle": 90.0},
-        "inputs": ["sketch"], "outputs": ["shape"],
-    },
-    "com.cad.ellipse": {
-        "name": "Ellipse",
-        "properties": {"x_radius": 10.0, "y_radius": 5.0, "center_x": 0.0, "center_y": 0.0},
-        "inputs": ["sketch"], "outputs": ["shape"],
-    },
-    "com.cad.spline": {
-        "name": "Spline",
-        "properties": {"points": "[(0,0), (5,5), (10,0), (15,5)]"},
-        "inputs": ["sketch"], "outputs": ["shape"],
-    },
-    "com.cad.polyline": {
-        "name": "Polyline",
-        "properties": {"points": "[(0,0), (5,5), (5,0)]", "closed": True},
-        "inputs": ["sketch"], "outputs": ["shape"],
-    },
-
-    # --- 3D Operations ---
-    "com.cad.extrude": {
-        "name": "Extrude",
-        "properties": {"extrude_distance": 5.0},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.revolve": {
-        "name": "Revolve",
-        "properties": {"angle": 360.0, "axis_start_x": 0.0, "axis_start_y": 0.0,
-                        "axis_start_z": 0.0, "axis_dir_x": 0.0, "axis_dir_y": 1.0, "axis_dir_z": 0.0},
-        "inputs": ["profile"], "outputs": ["shape"],
-    },
-    "com.cad.twisted_extrude": {
-        "name": "Twisted Extrude",
-        "properties": {"distance": 10.0, "angle": 45.0},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.cut_extrude": {
-        "name": "Extruded Cut",
-        "properties": {"distance": 10.0, "through_all": False},
-        "inputs": ["target", "profile"], "outputs": ["shape"],
-    },
-    "com.cad.boolean": {
-        "name": "Boolean Op",
-        "properties": {"operation": "Union"},  # Union / Cut / Intersect
-        "inputs": ["shape_a", "shape_b"], "outputs": ["shape"],
-    },
-    "com.cad.fillet": {
-        "name": "Fillet",
-        "properties": {"fillet_radius": 1.0},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.chamfer": {
-        "name": "Chamfer",
-        "properties": {"distance": 1.0},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.shell": {
-        "name": "Shell",
-        "properties": {"thickness": -2.0},
-        "inputs": ["shape", "face_to_remove"], "outputs": ["shape"],
-    },
-    "com.cad.sweep": {
-        "name": "Sweep",
-        "properties": {},
-        "inputs": ["profile", "path"], "outputs": ["shape"],
-    },
-    "com.cad.loft": {
-        "name": "Loft",
-        "properties": {"ruled": True},
-        "inputs": ["profiles"], "outputs": ["shape"],
-    },
+    # --- Selection ---
     "com.cad.select_face": {
         "name": "Select Face",
         "properties": {"selector_type": "Direction", "direction": ">Z"},
         "inputs": ["shape"], "outputs": ["workplane"],
     },
-
-    # --- Cutting / Holes ---
-    "com.cad.hole_at_coords": {
-        "name": "Hole (Point)",
-        "properties": {"x_position": 10.0, "y_position": 10.0, "diameter": 5.0,
-                        "depth": 10.0, "through_all": True, "from_face": ">Z"},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.multi_hole": {
-        "name": "Holes (Multi)",
-        "properties": {"coordinates": "[(10,10), (40,10)]", "diameter": 5.0,
-                        "depth": 10.0, "through_all": True, "from_face": ">Z"},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.pocket": {
-        "name": "Pocket",
-        "properties": {"pocket_depth": 5.0, "pocket_radius": 2.0},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.rectangular_cut": {
-        "name": "Rectangular Pocket",
-        "properties": {"x_position": 10.0, "y_position": 10.0, "cut_width": 15.0,
-                        "cut_length": 20.0, "depth": 5.0, "through_all": False, "from_face": ">Z"},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.slot_cut": {
-        "name": "Slot",
-        "properties": {"x_start": 10.0, "y_start": 10.0, "x_end": 30.0, "y_end": 10.0,
-                        "slot_width": 5.0, "depth": 5.0, "through_all": False, "from_face": ">Z"},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.array_holes": {
-        "name": "Hole Array",
-        "properties": {"x_start": 10.0, "y_start": 10.0, "x_spacing": 20.0, "y_spacing": 15.0,
-                        "x_count": 3, "y_count": 2, "diameter": 5.0, "through_all": True, "from_face": ">Z"},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.cylinder_cut": {
-        "name": "Cylinder Cut",
-        "properties": {"cyl_radius": 5.0, "cyl_height": 10.0,
-                        "center_x": 0.0, "center_y": 0.0, "center_z": 0.0},
-        "inputs": ["target"], "outputs": ["shape"],
-    },
-
-    # --- Transforms ---
-    "com.cad.translate": {
-        "name": "Translate",
-        "properties": {"x": 10.0, "y": 0.0, "z": 0.0},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.rotate": {
-        "name": "Rotate",
-        "properties": {"angle": 45.0, "axis_x": 0.0, "axis_y": 0.0, "axis_z": 1.0,
-                        "center_x": 0.0, "center_y": 0.0, "center_z": 0.0},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.scale": {
-        "name": "Scale",
-        "properties": {"factor": 2.0, "uniform": True,
-                        "x_factor": 1.0, "y_factor": 1.0, "z_factor": 1.0},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.mirror": {
-        "name": "Mirror",
-        "properties": {"plane": "XY", "union": False},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.offset": {
-        "name": "Offset 2D",
-        "properties": {"distance": 2.0},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-
-    # --- Patterns ---
-    "com.cad.linear_pattern": {
-        "name": "Linear Pattern",
-        "properties": {"count": 3, "distance": 10.0, "dx": 1.0, "dy": 0.0, "dz": 0.0},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.circular_pattern": {
-        "name": "Circular Pattern",
-        "properties": {"count": 6, "angle": 360.0, "axis_x": 0.0, "axis_y": 0.0, "axis_z": 1.0},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.pattern.radial": {
-        "name": "Radial Pattern",
-        "properties": {"count": 6, "angle": 360.0,
-                        "center_x": 0.0, "center_y": 0.0, "center_z": 0.0},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.pattern.mirror": {
-        "name": "Mirror Pattern",
-        "properties": {"plane_normal_x": 1.0, "plane_normal_y": 0.0, "plane_normal_z": 0.0,
-                        "plane_point_x": 0.0, "plane_point_y": 0.0, "plane_point_z": 0.0},
-        "inputs": ["shape"], "outputs": ["shape"],
-    },
-    "com.cad.pattern.grid": {
-        "name": "Grid Pattern",
-        "properties": {"rows": 3, "columns": 3, "row_spacing": 10.0, "col_spacing": 10.0},
-        "inputs": ["shape"], "outputs": ["shape"],
+    "com.cad.select_face_interactive": {
+        "name": "Select Face (Interactive)",
+        "properties": {"picked_face_indices": "", "selection_label": "No faces selected"},
+        "inputs": ["shape"], "outputs": ["workplane"],
     },
 
     # --- Assembly ---
     "com.cad.assembly": {
         "name": "Assembly",
-        "properties": {"assembly_name": "Assembly1"},
+        "properties": {"assembly_name": "Assembly1", "fuse_parts": False},
         "inputs": ["part_1", "part_2", "part_3", "part_4"], "outputs": ["assembly"],
     },
 
@@ -1685,6 +1471,21 @@ CAD_NODE_TYPES = {
         "name": "Bounding Box",
         "properties": {},
         "inputs": ["shape"], "outputs": ["dimensions"],
+    },
+    "com.cad.math_expression": {
+        "name": "Math Expression",
+        "properties": {"expression": "x + y"},
+        "inputs": ["x", "y", "z"], "outputs": ["result"],
+    },
+    "com.cad.measure_distance": {
+        "name": "Measure Distance",
+        "properties": {},
+        "inputs": ["shape_a", "shape_b"], "outputs": ["distance"],
+    },
+    "com.cad.surface_area": {
+        "name": "Surface Area",
+        "properties": {},
+        "inputs": ["shape_in"], "outputs": ["area_out"],
     },
 
     # --- FEA Simulation ---
@@ -1701,7 +1502,7 @@ CAD_NODE_TYPES = {
     },
     "com.cad.sim.constraint": {
         "name": "FEA Constraint",
-        "properties": {"constraint_type": "Fixed"},  # Fixed/Roller X/Y/Z/Pinned/Symmetry/Displacement
+        "properties": {"constraint_type": "Fixed"},
         "inputs": ["mesh", "target_face"], "outputs": ["constraints"],
     },
     "com.cad.sim.load": {
@@ -1711,7 +1512,7 @@ CAD_NODE_TYPES = {
     },
     "com.cad.sim.pressure_load": {
         "name": "FEA Pressure Load",
-        "properties": {"pressure": 1000000.0},
+        "properties": {"pressure": 1.0, "direction": "Inward"},
         "inputs": ["mesh", "target_face"], "outputs": ["loads"],
     },
     "com.cad.sim.solver": {
@@ -1731,6 +1532,45 @@ CAD_NODE_TYPES = {
         "properties": {"element_size": 3.0, "mesh_quality": "Medium"},
         "inputs": ["topopt_result"], "outputs": ["mesh", "shape"],
     },
+    "com.cad.sim.sizeopt": {
+        "name": "Size Optimization",
+        "properties": {"objective": "Min Weight", "max_iterations": 50},
+        "inputs": ["shape", "material", "constraints", "loads"],
+        "outputs": ["optimized_shape", "optimal_parameters", "result"],
+    },
+    "com.cad.sim.shapeopt": {
+        "name": "Shape Optimization",
+        "properties": {"objective": "Min Max Stress", "max_iterations": 20, "step_size": 0.1},
+        "inputs": ["mesh", "material", "constraints", "loads"],
+        "outputs": ["optimized_mesh", "result"],
+    },
+
+    # --- Crash Simulation ---
+    "com.cad.sim.crash_material": {
+        "name": "Crash Material",
+        "properties": {"youngs_modulus": 210000.0, "poissons_ratio": 0.3,
+                        "density": 7.85e-9, "yield_strength": 250.0,
+                        "tangent_modulus": 2000.0, "failure_strain": 0.20},
+        "outputs": ["crash_material"],
+    },
+    "com.cad.sim.impact": {
+        "name": "Impact Condition",
+        "properties": {"velocity_x": 0.0, "velocity_y": 0.0, "velocity_z": -1.0,
+                        "node_tolerance": 2.0},
+        "inputs": ["impact_face"], "outputs": ["impact"],
+    },
+    "com.cad.sim.crash_solver": {
+        "name": "Crash Solver",
+        "properties": {"end_time": 0.5, "n_frames": 30, "time_steps": 500,
+                        "deck_only": False},
+        "inputs": ["mesh", "crash_material", "constraints", "impact"],
+        "outputs": ["crash_results"],
+    },
+    "com.cad.sim.radioss_deck": {
+        "name": "Run Radioss Deck",
+        "properties": {"deck_path": "", "deck_only": False, "timeout_s": 7200.0},
+        "outputs": ["crash_results"],
+    },
 
     # --- IO / Values ---
     "com.cad.number": {
@@ -1743,16 +1583,6 @@ CAD_NODE_TYPES = {
         "properties": {"value": 0.0},
         "outputs": ["value"],
     },
-    "com.cad.export_step": {
-        "name": "Export STEP",
-        "properties": {"filename": "output.step"},
-        "inputs": ["shape"],
-    },
-    "com.cad.export_stl": {
-        "name": "Export STL",
-        "properties": {"filename": "output.stl", "smoothing": 10},
-        "inputs": ["shape"],
-    },
     "com.cad.import_step": {
         "name": "Import STEP",
         "properties": {"filepath": ""},
@@ -1763,47 +1593,15 @@ CAD_NODE_TYPES = {
         "properties": {"filepath": ""},
         "outputs": ["mesh_out"],
     },
-
-    # --- Advanced CAD ---
-    "com.cad.helix": {
-        "name": "Helix",
-        "properties": {"radius": 10.0, "pitch": 5.0, "helix_height": 50.0},
-        "outputs": ["shape"],
+    "com.cad.export_step": {
+        "name": "Export STEP",
+        "properties": {"filename": "output.step"},
+        "inputs": ["shape"],
     },
-    "com.cad.thicken": {
-        "name": "Thicken",
-        "properties": {"thickness": 2.0},
-        "inputs": ["shape_in"], "outputs": ["shape_out"],
-    },
-    "com.cad.split": {
-        "name": "Split Body",
-        "properties": {"plane": "XY", "offset": 0.0, "keep": "Both"},
-        "inputs": ["shape_in"], "outputs": ["shape_out"],
-    },
-    "com.cad.pipe": {
-        "name": "Pipe",
-        "properties": {"outer_radius": 5.0, "inner_radius": 3.0},
-        "inputs": ["path_in"], "outputs": ["shape_out"],
-    },
-    "com.cad.text": {
-        "name": "3D Text",
-        "properties": {"text_content": "pylcss", "font_size": 10.0, "depth": 2.0},
-        "outputs": ["shape_out"],
-    },
-    "com.cad.math_expression": {
-        "name": "Math Expression",
-        "properties": {"expression": "x + y"},
-        "inputs": ["x", "y", "z"], "outputs": ["result"],
-    },
-    "com.cad.measure_distance": {
-        "name": "Measure Distance",
-        "properties": {},
-        "inputs": ["shape_a", "shape_b"], "outputs": ["distance"],
-    },
-    "com.cad.surface_area": {
-        "name": "Surface Area",
-        "properties": {},
-        "inputs": ["shape_in"], "outputs": ["area_out"],
+    "com.cad.export_stl": {
+        "name": "Export STL",
+        "properties": {"filename": "output.stl", "smoothing": 10},
+        "inputs": ["shape"],
     },
 }
 
@@ -1874,29 +1672,21 @@ def get_cad_schema_for_prompt() -> str:
     The `com.cad.` prefix is stripped; it will be auto-added back on input.
     """
     lines = ["## CAD Nodes  (type | props | ports)"]
-    lines.append("Note: all types are prefixed `com.cad.` internally — you write them WITHOUT the prefix.")
+    lines.append("PRIMARY RULE: Use `com.cad.code_part` for ALL geometry. Write CadQuery code in the 'code' property.")
     lines.append("")
 
-    # Core nodes that the LLM should know in detail
+    # Core nodes the LLM should know — only types that exist in NODE_CLASS_MAPPING
     CORE_NODES = [
-        # Primitives
-        "com.cad.box", "com.cad.cylinder", "com.cad.sphere", "com.cad.cone",
-        "com.cad.torus", "com.cad.wedge", "com.cad.pyramid",
-        # Sketch
-        "com.cad.sketch", "com.cad.sketch.circle", "com.cad.sketch.rectangle",
-        "com.cad.sketch.polygon", "com.cad.polyline",
-        # 3D ops
-        "com.cad.extrude", "com.cad.revolve", "com.cad.boolean",
-        "com.cad.fillet", "com.cad.chamfer", "com.cad.shell",
-        "com.cad.sweep", "com.cad.loft", "com.cad.select_face",
-        # Cutting
-        "com.cad.hole_at_coords", "com.cad.multi_hole", "com.cad.array_holes",
-        "com.cad.cylinder_cut",
-        # Transforms
-        "com.cad.translate", "com.cad.rotate", "com.cad.scale", "com.cad.mirror",
-        # Patterns
-        "com.cad.linear_pattern", "com.cad.circular_pattern",
-        # Values
+        # Geometry — code-first (ONLY geometry node)
+        "com.cad.code_part",
+        # Assembly
+        "com.cad.assembly",
+        # Face selection (for FEA BC wiring)
+        "com.cad.select_face",
+        # Analysis utilities
+        "com.cad.mass_properties", "com.cad.bounding_box",
+        "com.cad.math_expression", "com.cad.measure_distance", "com.cad.surface_area",
+        # Values / parameters
         "com.cad.number", "com.cad.variable",
         # IO
         "com.cad.export_step", "com.cad.export_stl",

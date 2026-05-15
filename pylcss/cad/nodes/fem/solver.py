@@ -52,7 +52,7 @@ class SolverNode(CadQueryNode):
         self.create_property('run_external_solver', True, widget_type='checkbox')
 
     def run(self):
-        print("FEA Solver: routing to CalculiX backend.")
+        logger.debug("FEA Solver: routing to CalculiX backend.")
         from pylcss.solver_backends import (
             ExternalRunConfig,
             SolverBackendError,
@@ -64,9 +64,10 @@ class SolverNode(CadQueryNode):
         material = self.get_input_value('material', None)
         constraint_list = flatten_inputs(self.get_input_list('constraints'))
         load_list = flatten_inputs(self.get_input_list('loads'))
-        print(
-            f"FEA Solver: mesh={mesh is not None}, material={material is not None}, "
-            f"constraints={len(constraint_list)}, loads={len(load_list)}"
+        logger.debug(
+            "FEA Solver: mesh=%s, material=%s, constraints=%d, loads=%d",
+            mesh is not None, material is not None,
+            len(constraint_list), len(load_list),
         )
 
         missing = []
@@ -80,7 +81,7 @@ class SolverNode(CadQueryNode):
             missing.append('at least one load')
         if missing:
             msg = "CalculiX backend requires " + ", ".join(missing) + "."
-            print(f"FEA Solver: {msg}")
+            logger.warning("FEA Solver: %s", msg)
             self.set_error(msg)
             return None
 
@@ -93,7 +94,7 @@ class SolverNode(CadQueryNode):
         if legacy_run is not None and not as_bool(legacy_run):
             deck_only = True
         run_flag = not deck_only
-        print(f"FEA Solver: deck_only={deck_only}, run_solver={run_flag}")
+        logger.debug("FEA Solver: deck_only=%s, run_solver=%s", deck_only, run_flag)
 
         try:
             config = ExternalRunConfig(
@@ -115,21 +116,18 @@ class SolverNode(CadQueryNode):
             )
             warnings = result.get('warnings') or []
             if warnings:
-                print("CalculiX backend warnings:\n  " + "\n  ".join(warnings))
-            print(
-                f"FEA Solver: status={result.get('external_status')}, "
-                f"type={result.get('type')}, "
-                f"work_dir={result.get('work_dir')}, "
-                f"solver_exe={result.get('solver_executable')}"
+                logger.debug("CalculiX backend warnings:\n  %s", "\n  ".join(warnings))
+            logger.debug(
+                "FEA Solver: status=%s, type=%s, work_dir=%s, solver_exe=%s",
+                result.get('external_status'), result.get('type'),
+                result.get('work_dir'), result.get('solver_executable'),
             )
             return result
         except SolverBackendError as exc:
-            print(f"FEA Solver: CalculiX backend error: {exc}")
+            logger.error("FEA Solver: CalculiX backend error: %s", exc)
             self.set_error(str(exc))
             return None
         except Exception as exc:
-            import traceback
-            print(f"FEA Solver: External backend raised {type(exc).__name__}: {exc}")
-            traceback.print_exc()
+            logger.exception("FEA Solver: External backend raised %s", type(exc).__name__)
             self.set_error(f"CalculiX backend crashed: {exc}")
             return None

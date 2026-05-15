@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pylcss"
-version = "2.1.0"
-description = "Professional Engineering Design Optimization Platform - Design Studio, Parametric CAD, CalculiX FEA, OpenRadioss Crash, Topology Optimisation, Sensitivity Analysis, Solution Spaces, Surrogate AI"
+version = "2.2.0"
+description = "Professional Engineering Design Optimization Platform - Design Studio, Parametric CAD (CadQuery Code Parts), CalculiX FEA, OpenRadioss Crash, Topology Optimisation, Sensitivity Analysis, Solution Spaces, Surrogate AI, Integrated Help"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "PolyForm Shield License 1.0.0"}
@@ -60,6 +60,8 @@ dependencies = [
     "meshio==5.3.5",
     "scikit-image==0.26.0",
     "numpy-stl==3.2.0",
+    "trimesh==4.5.3",
+    "rtree==1.4.1",
 
     # Optimization and sensitivity analysis
     "nevergrad==1.0.4",
@@ -85,6 +87,7 @@ dependencies = [
     "pyaudio==0.2.14",
     "pygame==2.5.2",
     "pydantic==2.12.5",
+    "pydantic-ai-slim[openai,anthropic,google]==1.96.1",
 
     # Utilities
     "packaging==26.0",

@@ -121,12 +121,15 @@ class MeshNode(CadQueryNode):
                     ng_mesh.Export(msh_path, "Gmsh2 Format")
                 
                 # 5. Load into skfem
-                print("FEA Mesh: Loading into skfem...")
+                logger.debug("FEA Mesh: Loading into skfem...")
                 mesh = Mesh.load(msh_path)
-                print(f"FEA Mesh: Load complete. Nodes: {mesh.p.shape[1]}, Tets: {mesh.t.shape[1]}")
-                
+                logger.debug(
+                    "FEA Mesh: Load complete. Nodes: %d, Tets: %d",
+                    mesh.p.shape[1], mesh.t.shape[1],
+                )
+
             except Exception as e:
-                print(f"FEA Mesh: ERROR loading mesh: {e}")
+                logger.error("FEA Mesh: ERROR loading mesh: %s", e)
                 return None
                 
             finally:

@@ -1,5 +1,5 @@
 # PyLCSS Third-Party Notices
-Document Version: 1.4 Last Updated: May 14, 2026
+Document Version: 1.5 Last Updated: May 16, 2026
 
 This document outlines the third-party libraries and components used in PyLCSS, along with their respective licenses. PyLCSS is committed to respecting the intellectual property of all contributors and provides this information in accordance with open-source licensing requirements.
 
@@ -115,6 +115,24 @@ QtAwesome bundles several third-party icon fonts. These assets are governed by t
 - **Copyright**: © 2010 Eric Gazoni, Charlie Clark
 - **License**: MIT
 - **Source**: [https://gitlab.com/openpyxl/openpyxl](https://gitlab.com/openpyxl/openpyxl)
+
+### trimesh
+- **Copyright**: © 2012-present, Michael Dawson-Haggerty and contributors
+- **License**: MIT
+- **Source**: [https://github.com/mikedh/trimesh](https://github.com/mikedh/trimesh)
+- **Note**: Used for mesh loading, SDF computation, and geometry preprocessing in geometric surrogate models.
+
+### rtree
+- **Copyright**: © 2008-2026, Sean Gillies and contributors
+- **License**: MIT
+- **Source**: [https://github.com/Toblerity/rtree](https://github.com/Toblerity/rtree)
+- **Note**: Python bindings for libspatialindex; libspatialindex is also MIT licensed.
+
+### pydantic-ai-slim
+- **Copyright**: © 2024-2026, Pydantic Services Inc. and contributors
+- **License**: MIT
+- **Source**: [https://github.com/pydantic/pydantic-ai](https://github.com/pydantic/pydantic-ai)
+- **Note**: Minimal distribution of Pydantic AI used with OpenAI, Anthropic, and Google provider extras for the PyLCSS assistant system.
 
 ### MIT License Text
 ```text

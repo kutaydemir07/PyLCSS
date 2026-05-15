@@ -13,6 +13,8 @@ import json
 import logging
 from typing import Dict, List, Any
 
+logger = logging.getLogger(__name__)
+
 # Import the centralized CAD node registry
 from pylcss.cad.node_library import NODE_CLASS_MAPPING
 
@@ -213,20 +215,20 @@ def get_simplified_schema_string() -> str:
         
         # Map to readable category
         cat_map = {
-            'box': 'Primitives', 'cylinder': 'Primitives', 'sphere': 'Primitives',
-            'cone': 'Primitives', 'torus': 'Primitives', 'wedge': 'Primitives', 'pyramid': 'Primitives',
-            'sketch': 'Sketching', 'spline': 'Sketching', 'polyline': 'Sketching', 'ellipse': 'Sketching',
-            'extrude': 'Operations', 'revolve': 'Operations', 'sweep': 'Operations', 'loft': 'Operations',
-            'helix': 'Operations', 'pocket': 'Operations', 'cut_extrude': 'Operations', 'cylinder_cut': 'Operations',
-            'fillet': 'Operations', 'chamfer': 'Operations', 'shell': 'Operations', 'boolean': 'Operations',
-            'twisted_extrude': 'Operations', 'select_face': 'Operations', 'offset': 'Operations',
-            'hole_at_coords': 'Cutting', 'multi_hole': 'Cutting', 'rectangular_cut': 'Cutting',
-            'slot_cut': 'Cutting', 'array_holes': 'Cutting',
-            'translate': 'Transforms', 'rotate': 'Transforms', 'scale': 'Transforms', 'mirror': 'Transforms',
-            'linear_pattern': 'Patterns', 'circular_pattern': 'Patterns', 'pattern': 'Patterns',
+            # Geometry — code-first (only geometry node)
+            'code_part': 'Geometry',
+            # Import
+            'import_step': 'IO', 'import_stl': 'IO',
+            # Selection
+            'select_face': 'Selection', 'select_face_interactive': 'Selection',
+            # Assembly
             'assembly': 'Assembly',
+            # Analysis
             'mass_properties': 'Analysis', 'bounding_box': 'Analysis',
+            'math_expression': 'Analysis', 'measure_distance': 'Analysis', 'surface_area': 'Analysis',
+            # Simulation (sim.* nodes — matched by the 'sim' prefix below)
             'sim': 'Simulation',
+            # IO / parameters
             'number': 'IO', 'variable': 'IO', 'export_step': 'IO', 'export_stl': 'IO',
         }
         category = cat_map.get(cat, 'Other')
@@ -236,7 +238,7 @@ def get_simplified_schema_string() -> str:
         categories[category].append(node)
     
     # Output by category
-    for cat_name in ['Primitives', 'Sketching', 'Operations', 'Cutting', 'Transforms', 'Patterns', 'Assembly', 'Analysis', 'Simulation', 'IO', 'Other']:
+    for cat_name in ['Geometry', 'Selection', 'Assembly', 'Analysis', 'Simulation', 'IO', 'Other']:
         if cat_name in categories:
             lines.append(f"\n**{cat_name}:**")
             for node in categories[cat_name]:

@@ -4,10 +4,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, List, Tuple
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 from pylcss.solver_backends.common import (
     ExternalRunConfig,
@@ -380,11 +383,10 @@ def _ingest_frd_into_result(
     total_strain_energy = float(np.sum(elem_ener * elem_vol))
     compliance = 2.0 * total_strain_energy
 
-    print(
-        f"FEA Solver (external): FRD ingest "
-        f"frd_nodes={n_frd}, mesh_nodes={n_points}, "
-        f"max|u|={max_disp:.4e}, peak VM={peak_vm:.4e}, "
-        f"compliance={compliance:.4e}"
+    logger.debug(
+        "FEA Solver (external): FRD ingest frd_nodes=%d, mesh_nodes=%d, "
+        "max|u|=%.4e, peak VM=%.4e, compliance=%.4e",
+        n_frd, n_points, max_disp, peak_vm, compliance,
     )
 
     # Auto deformation scale so deformed shape is visible without misleading.

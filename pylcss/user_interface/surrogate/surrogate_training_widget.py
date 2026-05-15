@@ -151,8 +151,25 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         model_options = ["MLP Regressor", "Random Forest", "Gradient Boosting", "Gaussian Process"]
         if TORCH_AVAILABLE:
             model_options.append("Deep Neural Network (PyTorch)")
+        # Geometric backbones require torch + trimesh; check at construction time.
+        try:
+            from pylcss.surrogate_modeling.geometry import TRIMESH_AVAILABLE as _TRIMESH_OK
+        except ImportError:
+            _TRIMESH_OK = False
+        if TORCH_AVAILABLE and _TRIMESH_OK:
+            model_options.append("Geom-DeepONet")
+            model_options.append("GINO")
         self.combo_algo.addItems(model_options)
-        self.combo_algo.setToolTip("Choose the machine learning algorithm for the surrogate model:\n• MLP Regressor: Neural network with configurable layers\n• Random Forest: Ensemble of decision trees\n• Gradient Boosting: Sequential tree boosting\n• Gaussian Process: Probabilistic kernel-based model" + ("\n• Deep Neural Network: Advanced PyTorch-based neural network" if TORCH_AVAILABLE else "\n• Deep Neural Network: Requires PyTorch (not available)"))
+        self.combo_algo.setToolTip(
+            "Choose the machine learning algorithm for the surrogate model:\n"
+            "• MLP Regressor: Neural network with configurable layers\n"
+            "• Random Forest: Ensemble of decision trees\n"
+            "• Gradient Boosting: Sequential tree boosting\n"
+            "• Gaussian Process: Probabilistic kernel-based model"
+            + ("\n• Deep Neural Network: PyTorch MLP" if TORCH_AVAILABLE else "")
+            + ("\n• Geom-DeepONet: Geometry-aware operator (CAD per query)" if (TORCH_AVAILABLE and _TRIMESH_OK) else "")
+            + ("\n• GINO: FNO on SDF background grid" if (TORCH_AVAILABLE and _TRIMESH_OK) else "")
+        )
         self.combo_algo.currentIndexChanged.connect(self.update_hyperparams)
         l_arch.addRow("Algorithm:", self.combo_algo)
         
@@ -322,7 +339,124 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         f_pytorch.addRow("MC Samples:", self.spin_mc_samples)
         
         self.stack_params.addWidget(p_pytorch)
-        
+
+        # --- Geom-DeepONet / GINO shared params (geometric backbones) ---
+        # Both backbones need: CAD graph path + solver kind + nodal field name +
+        # sample count + epochs + a small set of architecture knobs.
+        p_geom = QtWidgets.QWidget()
+        f_geom = QtWidgets.QFormLayout(p_geom)
+
+        cad_row = QtWidgets.QHBoxLayout()
+        self.txt_cad_path = QtWidgets.QLineEdit()
+        self.txt_cad_path.setPlaceholderText("Path to .cad / .json CAD graph...")
+        self.txt_cad_path.setToolTip(
+            "PyLCSS CAD graph file. The wrapper will call pylcss.cad.runtime "
+            "with each design's parameters to materialise its mesh."
+        )
+        self.btn_browse_cad = QtWidgets.QPushButton("Browse...")
+        self.btn_browse_cad.clicked.connect(self._browse_cad_path)
+        cad_row.addWidget(self.txt_cad_path, 1)
+        cad_row.addWidget(self.btn_browse_cad)
+        cad_holder = QtWidgets.QWidget(); cad_holder.setLayout(cad_row)
+        f_geom.addRow("CAD Graph:", cad_holder)
+
+        self.combo_cad_kind = QtWidgets.QComboBox()
+        self.combo_cad_kind.addItems(["fea", "crash", "topopt"])
+        self.combo_cad_kind.setToolTip("Which CAD terminal solver to call (fea/crash/topopt).")
+        self.combo_cad_kind.currentTextChanged.connect(self._refresh_field_choices)
+        f_geom.addRow("Solver:", self.combo_cad_kind)
+
+        # Field is editable in case the user has a custom raw key, but the
+        # dropdown is pre-populated with the names PyLCSS's known backends
+        # actually emit -- so the common case is a single click.
+        self.combo_field = QtWidgets.QComboBox()
+        self.combo_field.setEditable(True)
+        self.combo_field.setToolTip(
+            "Which nodal field the surrogate will predict.\n"
+            "Choices are filtered by the selected solver."
+        )
+        f_geom.addRow("Field:", self.combo_field)
+        self._refresh_field_choices(self.combo_cad_kind.currentText())
+
+        self.spin_geom_samples = QtWidgets.QSpinBox()
+        self.spin_geom_samples.setRange(4, 1000)
+        self.spin_geom_samples.setValue(30)
+        self.spin_geom_samples.setToolTip("Number of LHS-sampled design points used to train (one CAD eval each).")
+        f_geom.addRow("CAD Samples:", self.spin_geom_samples)
+
+        self.spin_geom_epochs = QtWidgets.QSpinBox()
+        self.spin_geom_epochs.setRange(10, 5000)
+        self.spin_geom_epochs.setValue(300)
+        f_geom.addRow("Epochs:", self.spin_geom_epochs)
+
+        self.spin_geom_lr = QtWidgets.QDoubleSpinBox()
+        self.spin_geom_lr.setRange(1e-5, 1.0); self.spin_geom_lr.setDecimals(5)
+        self.spin_geom_lr.setValue(1e-3); self.spin_geom_lr.setSingleStep(1e-4)
+        f_geom.addRow("Learning rate:", self.spin_geom_lr)
+
+        # ---- Geom-DeepONet-specific knobs (branch/trunk MLP). ----
+        self.spin_donet_latent = QtWidgets.QSpinBox()
+        self.spin_donet_latent.setRange(8, 512); self.spin_donet_latent.setValue(64)
+        self.spin_donet_latent.setToolTip(
+            "Inner-product dimension between branch (params) and trunk (geometry) outputs."
+        )
+        self._lbl_donet_latent = QtWidgets.QLabel("Latent dim:")
+        f_geom.addRow(self._lbl_donet_latent, self.spin_donet_latent)
+
+        self.spin_donet_trunk = QtWidgets.QSpinBox()
+        self.spin_donet_trunk.setRange(16, 512); self.spin_donet_trunk.setValue(64)
+        self.spin_donet_trunk.setToolTip("Hidden width of the SIREN trunk network.")
+        self._lbl_donet_trunk = QtWidgets.QLabel("Trunk hidden:")
+        f_geom.addRow(self._lbl_donet_trunk, self.spin_donet_trunk)
+
+        # ---- GINO-specific knobs (3-D FNO on background SDF grid). ----
+        self.spin_gino_channels = QtWidgets.QSpinBox()
+        self.spin_gino_channels.setRange(4, 256); self.spin_gino_channels.setValue(16)
+        self.spin_gino_channels.setToolTip("Width of the FNO hidden channels.")
+        self._lbl_gino_channels = QtWidgets.QLabel("Hidden channels:")
+        f_geom.addRow(self._lbl_gino_channels, self.spin_gino_channels)
+
+        self.spin_gino_grid = QtWidgets.QSpinBox()
+        self.spin_gino_grid.setRange(8, 64); self.spin_gino_grid.setValue(24)
+        self.spin_gino_grid.setToolTip("Background-grid resolution per axis (R x R x R SDF volume).")
+        self._lbl_gino_grid = QtWidgets.QLabel("Grid resolution:")
+        f_geom.addRow(self._lbl_gino_grid, self.spin_gino_grid)
+
+        self.spin_gino_modes = QtWidgets.QSpinBox()
+        self.spin_gino_modes.setRange(2, 16); self.spin_gino_modes.setValue(4)
+        self.spin_gino_modes.setToolTip(
+            "Number of low-frequency Fourier modes mixed by each FNO layer (per axis)."
+        )
+        self._lbl_gino_modes = QtWidgets.QLabel("FNO modes:")
+        f_geom.addRow(self._lbl_gino_modes, self.spin_gino_modes)
+
+        # Single page (geometric backbones share CAD/training config); the
+        # backbone-specific arch rows above get hidden/shown by
+        # _set_geom_visibility() when the user picks Geom-DeepONet vs GINO.
+        # Default-hide both groups so only the active backbone's knobs show
+        # the moment the user lands on the page.
+        for _lbl, _w in [
+            (self._lbl_donet_latent, self.spin_donet_latent),
+            (self._lbl_donet_trunk, self.spin_donet_trunk),
+            (self._lbl_gino_channels, self.spin_gino_channels),
+            (self._lbl_gino_grid, self.spin_gino_grid),
+            (self._lbl_gino_modes, self.spin_gino_modes),
+        ]:
+            _lbl.setVisible(False)
+            _w.setVisible(False)
+        self._geom_page_index = self.stack_params.addWidget(p_geom)
+        # Map algorithm display name -> stack page index. Used by
+        # update_hyperparams to switch the hyperparam panel.
+        self._algo_to_page = {
+            "MLP Regressor": 0,
+            "Random Forest": 1,
+            "Gradient Boosting": 2,
+            "Gaussian Process": 3,
+            "Deep Neural Network (PyTorch)": 4,
+            "Geom-DeepONet": self._geom_page_index,
+            "GINO": self._geom_page_index,
+        }
+
         l_arch.addRow(self.stack_params)
         
         # Make the architecture section scrollable
@@ -697,7 +831,127 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
                 self.combo_nodes.addItem(f"{node.name()} ({node.id})", node)
 
     def update_hyperparams(self, index: int) -> None:
-        self.stack_params.setCurrentIndex(index)
+        # Map algorithm display name -> hyperparam stack page index.
+        # Falls back to the combo index for legacy ordering.
+        algo = self.combo_algo.currentText()
+        page = self._algo_to_page.get(algo, index)
+        self.stack_params.setCurrentIndex(page)
+
+        # Geometric backbones drive the CAD pipeline themselves; they don't
+        # need pre-generated tabular data, so the Train button can be enabled
+        # immediately once a CAD file + target node are configured.
+        if algo in ("Geom-DeepONet", "GINO"):
+            self.btn_train.setEnabled(True)
+            self.btn_adaptive.setEnabled(False)  # adaptive uses tabular spy data only
+            self._set_geom_visibility(algo)
+        else:
+            # Restore standard rule: enabled only if data is ready.
+            ready = hasattr(self, 'X_train') and self.X_train is not None
+            self.btn_train.setEnabled(ready)
+            self.btn_adaptive.setEnabled(ready)
+
+    def _set_geom_visibility(self, algo: str) -> None:
+        """Show only the architecture rows that apply to the selected
+        geometric backbone, so the user doesn't see knobs that get ignored."""
+        is_donet = (algo == "Geom-DeepONet")
+        is_gino = (algo == "GINO")
+
+        # QFormLayout.setRowVisible requires Qt 6.4+; PySide6 6.10 has it.
+        # Fall back to per-widget setVisible() if the form-layout API isn't
+        # available (older Qt) so this stays robust.
+        donet_widgets = [
+            (self._lbl_donet_latent, self.spin_donet_latent),
+            (self._lbl_donet_trunk, self.spin_donet_trunk),
+        ]
+        gino_widgets = [
+            (self._lbl_gino_channels, self.spin_gino_channels),
+            (self._lbl_gino_grid, self.spin_gino_grid),
+            (self._lbl_gino_modes, self.spin_gino_modes),
+        ]
+        for lbl, w in donet_widgets:
+            lbl.setVisible(is_donet)
+            w.setVisible(is_donet)
+        for lbl, w in gino_widgets:
+            lbl.setVisible(is_gino)
+            w.setVisible(is_gino)
+
+    def _browse_cad_path(self) -> None:
+        fname, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select CAD Graph File", "",
+            "CAD Graph (*.cad *.json);;All Files (*)",
+        )
+        if fname:
+            self.txt_cad_path.setText(fname)
+
+    # Per-solver field dropdown choices.  Keys are the user-facing names; the
+    # geometry layer's _FIELD_ALIASES maps each one to whatever the solver
+    # backend actually puts in raw[...].  Editable combo means a power user
+    # can still type a custom key.
+    _FIELD_CHOICES_BY_SOLVER = {
+        "fea":    ["von_mises", "displacement", "stress_tensor", "ener_nodal"],
+        "crash":  ["stress_vm", "displacement", "von_mises"],
+        "topopt": ["density"],
+    }
+
+    def _refresh_field_choices(self, solver_kind: str) -> None:
+        if not hasattr(self, "combo_field"):
+            return
+        prev = self.combo_field.currentText().strip()
+        choices = self._FIELD_CHOICES_BY_SOLVER.get(
+            solver_kind, ["von_mises", "displacement"],
+        )
+        self.combo_field.blockSignals(True)
+        self.combo_field.clear()
+        self.combo_field.addItems(choices)
+        # Preserve the user's previous choice if it still makes sense, else
+        # default to the first option for the new solver.
+        if prev in choices:
+            self.combo_field.setCurrentText(prev)
+        else:
+            self.combo_field.setCurrentIndex(0)
+        self.combo_field.blockSignals(False)
+
+    def _collect_input_bounds_for_target(self) -> Tuple[List[Tuple[float, float]], List[str]]:
+        """Return (bounds, names) from the currently selected target node's
+        spy-model context. Mirrors what start_generation extracts so geometric
+        backbones share the same parameter setup with tabular ones."""
+        idx = self.combo_nodes.currentIndex()
+        if idx < 0:
+            raise RuntimeError("No target node selected.")
+        target_node = self.combo_nodes.itemData(idx)
+        graph = self.modeling_widget.current_graph
+        nodes = graph.all_nodes()
+        input_nodes = [n for n in nodes if n.type_.startswith('com.pfd.input')]
+        output_nodes = [n for n in nodes if n.type_.startswith('com.pfd.output')]
+
+        # For geometric surrogates we need (parameter_name -> bounds) pairs
+        # that match the CAD graph's exposed inputs -- these are the global
+        # input nodes, NOT the target node's input ports (which can be
+        # intermediates).  Pull both name + range straight from input_nodes
+        # so the dict keys we pass to cad.runtime.fea(**params) line up with
+        # the CAD graph's exposed input parameters.
+        bounds: List[Tuple[float, float]] = []
+        names: List[str] = []
+        for inp_node in input_nodes:
+            if inp_node.has_property('input_props'):
+                props = inp_node.get_property('input_props')
+                lo = float(props.get('min', '0.0'))
+                hi = float(props.get('max', '10.0'))
+            else:
+                lo = float(inp_node.get_property('min'))
+                hi = float(inp_node.get_property('max'))
+            bounds.append((lo, hi))
+            # Prefer the variable name property (what the CAD graph keys off)
+            # then fall back to the node's display name.
+            var_name = inp_node.get_property('var_name') if inp_node.has_property('var_name') else None
+            names.append(str(var_name or inp_node.name()))
+
+        if not names:
+            raise RuntimeError(
+                "No global input nodes found in the system graph; "
+                "geometric surrogates need at least one parametric input."
+            )
+        return bounds, names
 
     def toggle_debug_mode(self) -> None:
         is_debug = self.radio_debug.isChecked()
@@ -866,19 +1120,72 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
             config['activation'] = self.combo_pt_activation.currentText()
             config['dropout'] = self.spin_pt_dropout.value()
             config['n_mc_samples'] = self.spin_mc_samples.value()
-        
+
+        elif algo in ("Geom-DeepONet", "GINO"):
+            # Geometric backbones drive the CAD pipeline directly; they need
+            # the CAD path, solver kind, target nodal field, parameter bounds,
+            # and sample count. Bounds + names come from the system graph via
+            # the existing target-node mechanism.
+            config['cad_path'] = self.txt_cad_path.text().strip()
+            config['cad_kind'] = self.combo_cad_kind.currentText()
+            config['field_name'] = self.combo_field.currentText().strip() or "von_mises"
+            config['n_samples'] = self.spin_geom_samples.value()
+            config['epochs'] = self.spin_geom_epochs.value()
+            config['learning_rate'] = self.spin_geom_lr.value()
+            if algo == "Geom-DeepONet":
+                config['latent_dim'] = self.spin_donet_latent.value()
+                config['trunk_hidden'] = self.spin_donet_trunk.value()
+            else:  # GINO
+                config['hidden_channels'] = self.spin_gino_channels.value()
+                config['grid_size'] = self.spin_gino_grid.value()
+                config['fno_modes'] = self.spin_gino_modes.value()
+            # input_names / input_bounds are populated by start_training from
+            # the current spy-model context (same source the LHS data-gen uses).
+
         # Add debug mode setting
         config['debug_mode'] = self.radio_debug.isChecked()
             
         return config
 
     def start_training(self) -> None:
-        if not hasattr(self, 'X_train') or self.X_train is None:
-            QtWidgets.QMessageBox.warning(self, "Error", "No training data available. Please generate or upload data first.")
-            return
-
         config = self.get_config()
-        
+        algo = config.get('model_type', '')
+        is_geometric = algo in ("Geom-DeepONet", "GINO")
+
+        if is_geometric:
+            # Geometric backbones drive the CAD pipeline themselves; they
+            # don't use (X, y) generated from a spy model. Validate config
+            # instead.
+            if not config.get('cad_path'):
+                QtWidgets.QMessageBox.warning(
+                    self, "Error",
+                    "Geometric surrogates need a CAD graph file.\n"
+                    "Pick one via 'Browse...' in the Model tab."
+                )
+                return
+            if not config.get('field_name'):
+                QtWidgets.QMessageBox.warning(
+                    self, "Error",
+                    "Geometric surrogates need a nodal field name (e.g. 'von_mises')."
+                )
+                return
+            # Pull input bounds + names from the same source the LHS data-gen
+            # uses: the currently selected target node's spy-model context.
+            try:
+                bounds, names = self._collect_input_bounds_for_target()
+            except Exception as exc:
+                QtWidgets.QMessageBox.critical(self, "Error",
+                    f"Couldn't determine input bounds from the system graph: {exc}\n"
+                    "Make sure a target node is selected and its inputs have ranges set."
+                )
+                return
+            config['input_bounds'] = bounds
+            config['input_names'] = names
+        else:
+            if not hasattr(self, 'X_train') or self.X_train is None:
+                QtWidgets.QMessageBox.warning(self, "Error", "No training data available. Please generate or upload data first.")
+                return
+
         self.btn_train.setEnabled(False)
         self.btn_save.setEnabled(False)
         self.plot_widget.clear()
@@ -904,9 +1211,16 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
             self.progress_text.hide()
         
         # --- START WORKER (BACKGROUND THREAD) ---
-        self.worker = ModelTrainingWorker(
-            self.X_train, self.y_train, self.X_test, self.y_test, config
-        )
+        # For geometric backbones we pass placeholder (X, y) -- the strategy
+        # ignores them and uses cad_path / input_bounds from config instead.
+        if is_geometric:
+            X_tr = np.zeros((1, len(config['input_names'])))
+            y_tr = np.zeros((1, 1))
+            X_te = np.zeros((0, len(config['input_names'])))
+            y_te = np.zeros((0, 1))
+        else:
+            X_tr, y_tr, X_te, y_te = self.X_train, self.y_train, self.X_test, self.y_test
+        self.worker = ModelTrainingWorker(X_tr, y_tr, X_te, y_te, config)
         self.worker.progress_sig.connect(self.update_progress)
         self.worker.loss_sig.connect(self.update_loss_plot)
         self.worker.done_sig.connect(self.training_finished)
