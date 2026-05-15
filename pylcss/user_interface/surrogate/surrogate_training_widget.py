@@ -53,15 +53,33 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
 
     def setup_ui(self) -> None:
         layout = QtWidgets.QHBoxLayout(self)
-        
+
         # --- LEFT PANEL: Configuration ---
         config_panel = QtWidgets.QWidget()
         config_panel.setFixedWidth(380)
         config_layout = QtWidgets.QVBoxLayout(config_panel)
         config_layout.setContentsMargins(0, 0, 0, 0)
-        
+
         layout.addWidget(config_panel)
-        
+
+        # Sub-tabs: Data / Model / Training -- mirrors the solution-space
+        # left-panel pattern so the workflow reads top-to-bottom: pick data,
+        # pick model, train.
+        self.left_tabs = QtWidgets.QTabWidget()
+        config_layout.addWidget(self.left_tabs)
+
+        tab_data = QtWidgets.QWidget()
+        data_layout = QtWidgets.QVBoxLayout(tab_data)
+        self.left_tabs.addTab(tab_data, "Data")
+
+        tab_model = QtWidgets.QWidget()
+        model_layout = QtWidgets.QVBoxLayout(tab_model)
+        self.left_tabs.addTab(tab_model, "Model")
+
+        tab_training = QtWidgets.QWidget()
+        training_layout = QtWidgets.QVBoxLayout(tab_training)
+        self.left_tabs.addTab(tab_training, "Training")
+
         # 1. Node Selection
         grp_node = QtWidgets.QGroupBox("Target Node")
         l_node = QtWidgets.QVBoxLayout(grp_node)
@@ -72,7 +90,7 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         self.btn_refresh.clicked.connect(self.refresh_nodes)
         l_node.addWidget(self.combo_nodes)
         l_node.addWidget(self.btn_refresh)
-        config_layout.addWidget(grp_node)
+        data_layout.addWidget(grp_node)
         
         # 2. Data Source
         grp_data = QtWidgets.QGroupBox("Data Source")
@@ -122,7 +140,8 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         self.stack_data.addWidget(p_upload)
         
         l_data.addWidget(self.stack_data)
-        config_layout.addWidget(grp_data)
+        data_layout.addWidget(grp_data)
+        data_layout.addStretch()
         
         # 3. Model Architecture
         grp_arch = QtWidgets.QGroupBox("Model Architecture")
@@ -316,9 +335,10 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         # Make background transparent to match theme
         scroll_arch.setStyleSheet("QScrollArea { background: transparent; border: none; }")
         scroll_arch.setAutoFillBackground(False)
-        
-        config_layout.addWidget(scroll_arch)
-        
+
+        model_layout.addWidget(scroll_arch)
+        model_layout.addStretch()
+
         # 3.5. Training Mode
         grp_mode = QtWidgets.QGroupBox("Training Mode")
         l_mode = QtWidgets.QVBoxLayout(grp_mode)
@@ -330,8 +350,8 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         self.radio_debug.toggled.connect(self.toggle_debug_mode)
         l_mode.addWidget(self.radio_standard)
         l_mode.addWidget(self.radio_debug)
-        config_layout.addWidget(grp_mode)
-        
+        training_layout.addWidget(grp_mode)
+
         # Debug Mode Warning Label
         self.lbl_debug_warning = QtWidgets.QLabel("⚠️ VALIDATION DISABLED - DO NOT USE FOR DESIGN ⚠️")
         self.lbl_debug_warning.setStyleSheet("""
@@ -347,39 +367,39 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         """)
         self.lbl_debug_warning.setVisible(False)
         self.lbl_debug_warning.setWordWrap(True)
-        config_layout.addWidget(self.lbl_debug_warning)
-        
+        training_layout.addWidget(self.lbl_debug_warning)
+
         # Debug Buttons (initially hidden)
         self.btn_overfit1 = QtWidgets.QPushButton("Overfit 1 Sample")
         self.btn_overfit1.clicked.connect(lambda: self.start_debug_training(1))
         self.btn_overfit1.setVisible(False)
-        config_layout.addWidget(self.btn_overfit1)
-        
+        training_layout.addWidget(self.btn_overfit1)
+
         self.btn_overfit10 = QtWidgets.QPushButton("Overfit 10 Samples")
         self.btn_overfit10.clicked.connect(lambda: self.start_debug_training(10))
         self.btn_overfit10.setVisible(False)
-        config_layout.addWidget(self.btn_overfit10)
-        
+        training_layout.addWidget(self.btn_overfit10)
+
         # 4. Action Buttons
         self.btn_train = QtWidgets.QPushButton(qta.icon('fa5s.cogs'), " Train Model")
         self.btn_train.setStyleSheet("font-weight: bold; padding: 8px;")
         self.btn_train.setToolTip("Train the chosen machine learning algorithm using the available data.")
         self.btn_train.clicked.connect(self.start_training)
         self.btn_train.setEnabled(False) # Disabled until data is ready
-        config_layout.addWidget(self.btn_train)
-        
+        training_layout.addWidget(self.btn_train)
+
         self.btn_save = QtWidgets.QPushButton(qta.icon('fa5s.save'), " Save and Attach to Node")
         self.btn_save.setEnabled(False)
         self.btn_save.clicked.connect(self.save_model)
-        config_layout.addWidget(self.btn_save)
-        
+        training_layout.addWidget(self.btn_save)
+
         self.btn_adaptive = QtWidgets.QPushButton(" Adaptive Training (Active Learning)")
         self.btn_adaptive.setToolTip("Train surrogate model using adaptive sampling to focus on high-uncertainty regions")
         self.btn_adaptive.clicked.connect(self.start_adaptive_training)
         self.btn_adaptive.setEnabled(False)  # Disabled until data is ready
-        config_layout.addWidget(self.btn_adaptive)
-        
-        config_layout.addStretch()
+        training_layout.addWidget(self.btn_adaptive)
+
+        training_layout.addStretch()
         
         # --- RIGHT PANEL: Visualization ---
         viz_panel = QtWidgets.QWidget()
