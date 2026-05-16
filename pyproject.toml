@@ -43,7 +43,7 @@ classifiers = [
 dependencies = [
     # Core scientific stack
     "numpy==2.2.6",
-    "scipy==1.13.1",
+    "scipy==1.15.2",
     "pandas==2.2.2",
 
     # Desktop UI
@@ -74,7 +74,7 @@ dependencies = [
 
     # Units, graph utilities, and serialization
     "pint==0.25.2",
-    "h5py==3.11.0",
+    "h5py>=3.11.0",
     "dill==0.4.0",
     "networkx==3.3",
 
@@ -82,14 +82,21 @@ dependencies = [
     "openpyxl==3.1.5",
 
     # Optional AI assistant speech/TTS services
-    "faster-whisper==1.2.1",
+    "faster-whisper==1.1.1",
     "edge-tts==7.2.7",
     "pyaudio==0.2.14",
     "pygame==2.5.2",
     "pydantic==2.12.5",
     "pydantic-ai-slim[openai,anthropic,google]==1.96.1",
 
+    # Modern voice stack: streaming STT/TTS + Silero VAD + Kokoro local TTS
+    "RealtimeSTT==0.3.104",
+    "RealtimeTTS==0.7.1",
+    "sounddevice==0.5.5",
+    "kokoro-onnx==0.5.0",
+
     # Utilities
+    "py7zr==0.20.8",  # used by scripts/install_solvers.py to unpack FreeCAD 7z release
     "packaging==26.0",
     "pyautogui==0.9.54",
     "simpleeval==1.0.3",

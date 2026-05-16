@@ -110,24 +110,53 @@ class HelpWidget(QtWidgets.QWidget):
         <h2>Design Studio: CAD Modeling and FEM Simulation</h2>
 
         <h3>Overview</h3>
-        <p>PyLCSS includes a powerful parametric CAD module built on CadQuery, enabling you to create 3D models using a node-based interface. Combined with finite element analysis (FEA) capabilities, you can design and validate mechanical components entirely within the platform.</p>
+        <p>PyLCSS has two complementary parametric CAD authoring paths, both feeding the same node graph and downstream FEA / crash / topology optimisation:</p>
+        <ul>
+        <li><b>Code Part Node (CadQuery)</b> — write one short Python snippet that builds your geometry; named parameters (L, W, H, hole_d, …) are exposed as live optimisable inputs.</li>
+        <li><b>FreeCAD Part Node (interactive)</b> — double-click to launch the real FreeCAD GUI as a subprocess; sketch in PartDesign, define Spreadsheet aliases, save. PyLCSS auto-imports the geometry via BREP + sidecar JSON and exposes your aliases as live parametric properties. The optimiser drives them back into FreeCAD headlessly between iterations.</li>
+        </ul>
 
         <h3>Key Capabilities</h3>
         <ul>
-        <li><b>Parametric Design:</b> Create 3D models using nodes for primitives, operations, and transformations.</li>
-        <li><b>Node-Based Workflow:</b> Connect nodes to build complex geometries visually.</li>
-        <li><b>FEM Simulation:</b> Perform structural analysis using scikit-fem with Netgen meshing.</li>
-        <li><b>Topology Optimization:</b> Optimize material distribution for minimum compliance.</li>
-        <li><b>Export Options:</b> Export to STEP, STL, and other CAD formats.</li>
+        <li><b>Two authoring modes:</b> Pick CadQuery (code-first, scriptable) or FreeCAD (interactive, GUI-driven). Both produce the same downstream <code>shape</code> output.</li>
+        <li><b>Node-Based Workflow:</b> Connect parts into assemblies, mesh, define materials, constraints, loads, and solve — all in one graph.</li>
+        <li><b>FEM Simulation:</b> Netgen meshing + CalculiX static solver.</li>
+        <li><b>Crash Simulation:</b> OpenRadioss explicit dynamics with animation playback.</li>
+        <li><b>Topology Optimization:</b> SIMP with MMA solver, shape recovery, STL export.</li>
+        <li><b>Export Options:</b> STEP, STL, OBJ.</li>
         </ul>
 
-        <h3>CAD Node Types</h3>
+        <h3>FreeCAD Part Node Workflow</h3>
+        <ol>
+        <li><b>Drag in:</b> From the library panel, Geometry → "FreeCAD Part (interactive)".</li>
+        <li><b>Double-click the node</b> → FreeCAD launches in a separate window on a node-owned <code>.FCStd</code> file (auto-created on first open).</li>
+        <li><b>(Optional) Add Spreadsheet:</b> Spreadsheet workbench → new Spreadsheet → fill cells like <code>A1=Length, B1=50</code>, right-click the value cell → Properties → Alias = <code>L</code>. Repeat for every parameter you want PyLCSS to drive (W, hole_d, …).</li>
+        <li><b>Author your part:</b> PartDesign workbench → Body → Sketch → Pad. In each value field, right-click → Expression editor → <code>Spreadsheet.L</code> (or whichever alias). A small <i>fx</i> icon confirms the binding.</li>
+        <li><b>Ctrl+S</b> inside FreeCAD. The PyLCSS Mod observer (installed under <code>%APPDATA%/FreeCAD/v1-1/Mod/PyLCSS/</code>) writes a sibling <code>.brep</code> + <code>.fcmeta.json</code> the moment you save.</li>
+        <li><b>PyLCSS reacts automatically:</b> a file-system watcher fires, the graph re-executes, the 3D viewer refreshes, and the spreadsheet aliases populate the node's <code>param_&lt;i&gt;_name</code> / <code>param_&lt;i&gt;_value</code> properties.</li>
+        <li><b>Optimisation / sensitivity</b> can now mutate those parameters; the next graph execute headlessly pushes the new values back into FreeCAD, recomputes, saves, and re-reads the BREP. No GUI clicks in the loop.</li>
+        </ol>
+
+        <h3>FreeCAD Requirements</h3>
+        <p>The FreeCAD Part node needs FreeCAD 1.x installed. From a terminal:</p>
+        <pre>python scripts/install_solvers.py --only freecad</pre>
+        <p>The script downloads the official Windows installer wizard from the FreeCAD GitHub release and auto-detects the install path. If you already have FreeCAD installed, the script skips the wizard and just registers the path. PyLCSS opens cleanly without FreeCAD installed — only the FreeCAD Part node is disabled.</p>
+
+        <h3>CadQuery Code Part Node</h3>
         <ul>
-        <li><b>Primitives:</b> Box, Sphere, Cylinder, Cone - basic 3D shapes.</li>
-        <li><b>Sketch Operations:</b> Rectangle, Circle, Polygon - 2D profiles for extrusion.</li>
-        <li><b>Operations:</b> Extrude, Revolve, Fillet, Chamfer - modify and combine shapes.</li>
-        <li><b>Boolean Operations:</b> Union, Subtract, Intersect - combine multiple parts.</li>
-        <li><b>Transformations:</b> Translate, Rotate, Mirror, Pattern - position and replicate.</li>
+        <li><b>Code:</b> any CadQuery expression assigned to <code>result</code>. Example:
+            <code>result = cq.Workplane('XY').box(L, W, H).faces('&gt;Z').workplane().hole(d)</code></li>
+        <li><b>Parameters:</b> <code>name=value</code> lines (one per line) become identifiers usable in the code AND live properties on the node.</li>
+        <li><b>Best for:</b> reproducible scripted geometry, sharing parametric models as plain text.</li>
+        </ul>
+
+        <h3>Other Node Types</h3>
+        <ul>
+        <li><b>Import:</b> STEP, STL — bring in external CAD.</li>
+        <li><b>Select Face:</b> text selectors (Direction, Index, Box, NearestToPoint) OR interactive click-to-pick in the viewer.</li>
+        <li><b>Assembly:</b> combine multiple shape outputs into one assembly.</li>
+        <li><b>Analysis:</b> Mass Properties, Bounding Box, Surface Area, Measure Distance.</li>
+        <li><b>Booleans:</b> handled inside the Code Part node (cq.cut / .union / .intersect) or via Assembly + FreeCAD multi-body.</li>
         </ul>
 
         <h3>FEM Simulation Workflow</h3>
@@ -313,46 +342,50 @@ class HelpWidget(QtWidgets.QWidget):
         <h2>AI Assistant</h2>
 
         <h3>Overview</h3>
-        <p>PyLCSS includes a compact AI assistant for engineering questions, graph construction,
-        and UI actions. The assistant opens from the small robot button in the top-right corner
-        of the main window.</p>
+        <p>PyLCSS ships a PydanticAI-based agent that uses <b>native LLM function-calling</b> to
+        drive 25 in-app tools — CAD authoring, system-graph building, simulations,
+        optimisation, sensitivity, surrogate training, and UI navigation. Strict JSON-schema
+        validation on every tool call (with auto-retry on validation errors) makes even small
+        local models reliable for production use.</p>
 
-        <h3>Setup Requirements</h3>
+        <h3>Setup</h3>
         <ol>
         <li><b>Open Assistant:</b> Click the robot button in the top-right corner.</li>
         <li><b>Text Input:</b> Type a request and press Enter or Send.</li>
-        <li><b>Voice Input:</b> Press Voice to route Faster-Whisper speech recognition into the same natural-language assistant flow.</li>
-        <li><b>First Voice Run:</b> The speech model may be downloaded automatically by Faster-Whisper.</li>
+        <li><b>Voice Input:</b> Toggle Voice to stream microphone audio through the new RealtimeSTT pipeline (Silero VAD + Faster-Whisper). Partial transcripts appear live; the full utterance is dispatched as a natural-language request when you finish speaking.</li>
+        <li><b>First Voice Run:</b> Whisper weights (~500 MB) download once into the user cache.</li>
         </ol>
 
-        <h3>LLM Intelligence</h3>
-        <p>PyLCSS features a powerful LLM execution engine that can build systems for you.</p>
-        <ol>
-        <li><b>Activation:</b> Type or say a natural-language request, such as <i>"Create a red box"</i> or <i>"Run topology optimization on this bracket"</i>.</li>
-        <li><b>Providers:</b> Configure your preferred AI provider from the assistant panel settings button.</li>
-        <li><b>Capabilities:</b> The AI understands the full PyLCSS node library and can construct complex graphs, answer engineering questions, and control the UI.</li>
-        <li><b>Privacy:</b> Securely encrypts your API keys locally.</li>
-        </ol>
-
-        <h3>How Voice Works</h3>
-        <p>Voice input no longer uses a hardcoded phrase table. Recognized speech is sent to
-        the assistant as natural language, just like typed text. The LLM/tool layer decides
-        whether the request is a question, a graph-building task, or a UI action.</p>
-
-        <h3>Example Requests</h3>
+        <h3>LLM Providers</h3>
+        <p>Configure from the assistant panel's settings (gear icon). Every provider uses native function-calling — no JSON-plan parsing fallback.</p>
         <ul>
-        <li>Create a helical gear in Design Studio.</li>
-        <li>Explain why this topology optimization result has disconnected material.</li>
-        <li>Build a system model with inputs for thickness and velocity.</li>
-        <li>Run sensitivity analysis and summarize the most influential variables.</li>
-        <li>Open the Optimization tab and prepare an NSGA-II run.</li>
+        <li><b>OpenAI:</b> GPT-4.x / GPT-5 family.</li>
+        <li><b>Anthropic:</b> Claude Haiku, Sonnet, Opus 4.x.</li>
+        <li><b>Google:</b> Gemini 2.5 Pro / Flash.</li>
+        <li><b>Local (recommended for privacy):</b> Any OpenAI-compatible server — <b>LM Studio</b>, <b>Ollama</b>, <b>vLLM</b>. Set the base URL to e.g. <code>http://localhost:1234/v1</code> and pick a model that supports tool calling (Qwen 2.5 7B+, Llama 3.1 8B+, Mistral Nemo, GPT-OSS 20B). All voice + LLM work runs offline.</li>
         </ul>
 
-        <h3>Tips for Best Recognition</h3>
+        <h3>Voice Stack</h3>
         <ul>
-        <li><b>Speak Clearly:</b> Use natural, complete requests.</li>
-        <li><b>Use Context:</b> Mention the current tab or object when the request could be ambiguous.</li>
-        <li><b>Quiet Environment:</b> Minimize background noise</li>
+        <li><b>STT:</b> RealtimeSTT wrapping Silero VAD (production-grade ONNX, ~1 ms/chunk) + Faster-Whisper. Auto-detects CUDA / MPS / CPU and picks the right compute_type (float16 / int8). Streaming partial transcripts; engineering jargon (von Mises, CalculiX, CadQuery, …) is pre-seeded into Whisper's <code>initial_prompt</code> so domain terms transcribe correctly.</li>
+        <li><b>TTS:</b> RealtimeTTS with the local Kokoro-82M engine (~550× realtime on CPU, fully offline). Barge-in supported — start speaking and the assistant stops mid-sentence.</li>
+        </ul>
+
+        <h3>What the assistant can do</h3>
+        <ul>
+        <li>Create CadQuery code-part geometry: <i>"Make a 100x50x10 bracket with a 10 mm hole on the top face."</i></li>
+        <li>Insert a FreeCAD Part node for interactive sketching: <i>"Open a new FreeCAD part for a fork bracket."</i></li>
+        <li>Build a system model with inputs / outputs / custom Python blocks.</li>
+        <li>Run sensitivity analysis and summarise the most influential variables.</li>
+        <li>Train a surrogate (MLP / GP / Random Forest / PyTorch DNN) on the active design.</li>
+        <li>Switch tabs, save the project, kick off an NSGA-II optimisation.</li>
+        </ul>
+
+        <h3>Tips</h3>
+        <ul>
+        <li><b>Decompose:</b> The assistant is instructed to issue parallel tool calls when steps are independent (e.g. "create geometry AND switch to FEA tab AND save"). Phrasing your request as one sentence still works.</li>
+        <li><b>Local models:</b> The strict-schema retry loop means an 8B model can handle multi-step requests that used to require GPT-4. Try Qwen 2.5 7B first.</li>
+        <li><b>Privacy:</b> API keys are encrypted with a machine-specific cipher in <code>llm_memory.json</code>. Pick the Local provider to keep every byte on your machine.</li>
         </ul>
 
         <h3>Current Limitations</h3>

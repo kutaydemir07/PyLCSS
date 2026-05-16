@@ -73,12 +73,13 @@ if errorlevel 1 (
     echo.
 )
 
-REM Optional external solver setup for CalculiX, OpenRadioss
+REM Optional external solver setup for CalculiX, OpenRadioss, FreeCAD
 set "SOLVER_CONFIG=%PYLCSS_DIR%\external_solvers\solver_paths.json"
 if not exist "%SOLVER_CONFIG%" (
     echo External solver paths are not configured.
-    echo PyLCSS can still start, but FEA/crash/topology solver nodes need CalculiX, OpenRadioss.
-    choice /C YN /N /M "Install CalculiX, OpenRadioss now? [Y/N] "
+    echo PyLCSS can still start, but FEA/crash/topology solver nodes need CalculiX, OpenRadioss,
+    echo and CAD geometry nodes need FreeCAD.
+    choice /C YN /N /M "Install CalculiX, OpenRadioss, FreeCAD now? [Y/N] "
     if errorlevel 2 goto SKIP_SOLVER_INSTALL
 
     echo.

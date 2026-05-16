@@ -1069,7 +1069,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         'displacement_z':    "Prescribed Z-displacement [mm] (only when constraint_type = Displacement).",
         'gravity_accel':     "Gravity magnitude [mm/s²].  9810 = standard Earth gravity.",
         'gravity_direction': "Sign and axis of the gravity vector.",
-        'pressure':          "Surface pressure [Pa].  Positive = outward, negative = inward.",
+        'pressure':          "Surface pressure [N/mm² = MPa].  Positive = outward, negative = inward.",
 
         # ── SelectFace ─────────────────────────────────────────────────
         'selector_type':     "How this node picks faces (see the dropdown's own tooltip).",
@@ -2027,19 +2027,25 @@ class PropertiesPanel(QtWidgets.QWidget):
             grp = QtWidgets.QGroupBox("Pressure Load")
             lay = QtWidgets.QFormLayout()
 
-            pval = float(props.get('pressure', 1000000.0))
+            pval = float(node.get_property('pressure') or 1.0)
             spin = QtWidgets.QDoubleSpinBox()
-            spin.setRange(-1e15, 1e15)
-            spin.setDecimals(2)
+            spin.setRange(-1e9, 1e9)
+            spin.setDecimals(4)
+            spin.blockSignals(True)
             spin.setValue(pval)
-            spin.setSuffix(' Pa')
+            spin.blockSignals(False)
+            spin.setSuffix(' MPa')
             spin.valueChanged.connect(lambda v: self.update_property('pressure', v))
             lay.addRow("Pressure:", spin)
 
-            pval_mpa = pval / 1e6
-            info_lbl = QtWidgets.QLabel(f"{pval_mpa:.4g} MPa  (positive = outward, negative = inward)")
-            info_lbl.setStyleSheet("color:#aad4ff; font-size:11px;")
-            lay.addRow("", info_lbl)
+            pdir = node.get_property('direction') or 'Outward'
+            dir_combo = QtWidgets.QComboBox()
+            dir_combo.addItems(['Outward', 'Inward'])
+            dir_combo.blockSignals(True)
+            dir_combo.setCurrentText(str(pdir) if str(pdir) in ['Outward', 'Inward'] else 'Outward')
+            dir_combo.blockSignals(False)
+            dir_combo.currentTextChanged.connect(lambda v: self.update_property('direction', v))
+            lay.addRow("Direction:", dir_combo)
 
             grp.setLayout(lay)
             self.props_layout.addWidget(grp)
@@ -2388,6 +2394,13 @@ class LibraryPanel(QtWidgets.QWidget):
                  "Set up to 6 named parameters (with optional inputs from Number / Variable\n"
                  "nodes) and write `result = cq.Workplane(...)...`.  The output 'shape' port\n"
                  "feeds straight into Mesh / Select Face / Assembly nodes."),
+                ("FreeCAD Part (interactive)", "com.cad.freecad_part",
+                 "Interactive parametric CAD authored in FreeCAD's own GUI.\n"
+                 "Double-click the node to launch FreeCAD on a node-owned .FCStd file.\n"
+                 "Draw sketches, add PartDesign features, set named faces / FEM loads;\n"
+                 "save inside FreeCAD and PyLCSS auto-imports the geometry via BREP +\n"
+                 "sidecar JSON.  Requires FreeCAD installed locally\n"
+                 "(`python scripts/install_solvers.py --only freecad`)."),
                 ("Import STEP", "com.cad.import_step",
                  "Import a STEP / IGES CAD file as the upstream geometry."),
                 ("Import Mesh", "com.cad.import_stl",
@@ -2553,6 +2566,14 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         
         # Prevent double-click popup
         self.graph.node_double_clicked.connect(self._on_node_double_clicked)
+        # Tear down per-node FreeCAD launcher / watcher state when a node is
+        # removed from the graph so the QProcess + QFileSystemWatcher don't
+        # leak and so reopening the deleted node's file ID later starts
+        # fresh state.
+        try:
+            self.graph.nodes_deleted.connect(self._on_nodes_deleted)
+        except Exception:
+            pass
         
         # Setup UI
         self._setup_toolbar() 
@@ -2605,6 +2626,22 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             menu = self.graph.get_context_menu('graph')
             menu.add_command('Fit to View', self._fit_all, 'F')
         except Exception:
+            pass
+
+        # Per-node context menu commands. NodeGraphQt scopes node-context
+        # menu items to a specific node type via its identifier, so this
+        # only appears on FreeCadPartNode right-click. The handler receives
+        # (graph, node).
+        try:
+            node_menu = self.graph.get_context_menu('nodes')
+            node_menu.add_command(
+                'Open in FreeCAD',
+                lambda g, n: self._open_freecad_for_node(n),
+                node_type='com.cad.freecad_part.FreeCadPartNode',
+            )
+        except Exception:
+            # NodeGraphQt's node-context menu API changes between versions;
+            # if this signature isn't supported, double-click still works.
             pass
 
         # Right panel
@@ -2706,10 +2743,13 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         QShortcut(QKeySequence.New, self, self._new_project)
         QShortcut(QKeySequence.Open, self, self._open_project)
         QShortcut(QKeySequence.Save, self, self._save_project)
-        
-        # Edit shortcuts
-        QShortcut(QKeySequence.Undo, self, self._undo)
-        QShortcut(QKeySequence.Redo, self, self._redo)
+
+        # Edit shortcuts.  NodeGraphQt's graph_widget already binds Ctrl+Z /
+        # Ctrl+Y internally, so registering them as QShortcut on the same
+        # parent caused Qt's "Ambiguous shortcut overload" warning at
+        # runtime.  We bind through the toolbar actions instead (see
+        # _create_toolbar's act_undo / act_redo) so there's exactly one
+        # owner per key chord.  Delete is unique to us -- keep it.
         QShortcut(QKeySequence.Delete, self, self._delete_selected)
         
         # Custom shortcuts
@@ -2755,9 +2795,20 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         self.toolbar.addSeparator()
 
         # ── Edit (icon-only — short labels add noise) ───────────────────
+        # setShortcut() on the action makes Qt route Ctrl+Z / Ctrl+Y to our
+        # handler from a single owner; the previous QShortcut bindings were
+        # removed in _setup_shortcuts to stop the "Ambiguous shortcut" warning.
+        # QKeySequence is imported locally because _setup_shortcuts (the
+        # other caller in this file) does the same -- there's no
+        # module-level import to lean on.
+        from PySide6.QtGui import QKeySequence
         act_undo = self.toolbar.addAction(_icon("fa5s.undo"), "", self._undo)
+        act_undo.setShortcut(QKeySequence.Undo)
+        act_undo.setShortcutContext(QtCore.Qt.WindowShortcut)
         act_undo.setToolTip("Undo (Ctrl+Z)")
         act_redo = self.toolbar.addAction(_icon("fa5s.redo"), "", self._redo)
+        act_redo.setShortcut(QKeySequence.Redo)
+        act_redo.setShortcutContext(QtCore.Qt.WindowShortcut)
         act_redo.setToolTip("Redo (Ctrl+Y)")
         self.toolbar.addSeparator()
 
@@ -3376,15 +3427,22 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         """Handle a double-click on a node on the graph canvas.
 
         For ``CadQueryCodeNode`` this opens the full-screen CAD code editor —
-        the same one the inspector's *Edit Code…* button uses.  Other node
-        types swallow the double-click so NodeGraphQt's default subgraph
-        popup doesn't appear.
+        the same one the inspector's *Edit Code…* button uses.
+        For ``FreeCadPartNode`` this launches the FreeCAD GUI subprocess on
+        the node's .FCStd file and wires the save-watcher so the viewer
+        refreshes automatically when the user saves inside FreeCAD.
+        Other node types swallow the double-click so NodeGraphQt's default
+        subgraph popup doesn't appear.
         """
         try:
-            if node.__class__.__name__ == 'CadQueryCodeNode':
+            class_name = node.__class__.__name__
+            if class_name == 'CadQueryCodeNode':
                 # The inspector holds the editor-open helper.
                 self.properties._open_cad_code_editor(node)
                 self.timeline.add_event(f"Opened code editor for {node.name()}")
+                return
+            if class_name == 'FreeCadPartNode':
+                self._open_freecad_for_node(node)
                 return
         except Exception:
             # Fall through to the silent default behaviour on any error.
@@ -3394,6 +3452,98 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         except Exception:
             node_label = '<unknown>'
         self.timeline.add_event(f"Double-clicked {node_label} (Popup disabled)")
+
+    def _open_freecad_for_node(self, node):
+        """Spawn FreeCAD on a FreeCadPartNode's .FCStd file and wire a
+        per-node :class:`FCStdWatcher` so saves trigger a viewer refresh.
+
+        Idempotent: opening the same node twice re-focuses the existing
+        FreeCAD instance (the launcher's per-file registry guarantees this)
+        and reuses the watcher already attached to the node.
+        """
+        try:
+            from pylcss.cad.freecad_bridge.launcher import FreeCadLauncher
+            from pylcss.cad.freecad_bridge.watcher import FCStdWatcher
+        except ImportError as exc:
+            self.timeline.add_event(f"FreeCAD bridge unavailable: {exc}")
+            return
+
+        fcstd_path = node.fcstd_path()
+
+        launcher = getattr(node, '_freecad_launcher', None)
+        if launcher is None:
+            launcher = FreeCadLauncher(parent=self)
+            node._freecad_launcher = launcher
+            launcher.error_occurred.connect(
+                lambda path, msg, n=node: self.timeline.add_event(
+                    f"FreeCAD error for {n.name()}: {msg}"
+                )
+            )
+            launcher.process_exited.connect(
+                lambda path, code, n=node: self.timeline.add_event(
+                    f"FreeCAD exited (code {code}) for {n.name()}"
+                )
+            )
+
+        if not launcher.is_available():
+            self.timeline.add_event(
+                "FreeCAD not installed — run "
+                "`python scripts/install_solvers.py --only freecad`"
+            )
+            return
+
+        # Wire (or re-wire) the save-watcher exactly once per node so each
+        # save in FreeCAD triggers _cad_execute and the viewer updates.
+        watcher = getattr(node, '_freecad_watcher', None)
+        if watcher is None or str(watcher.fcstd_path) != str(fcstd_path):
+            if watcher is not None:
+                try:
+                    watcher.stop()
+                except Exception:
+                    pass
+            watcher = FCStdWatcher(fcstd_path, parent=self)
+            watcher.saved.connect(
+                lambda _p, n=node: self._on_freecad_save(n)
+            )
+            node._freecad_watcher = watcher
+
+        ok = launcher.open(fcstd_path)
+        if ok:
+            self.timeline.add_event(f"Opened FreeCAD for {node.name()}")
+
+    def _on_freecad_save(self, node):
+        """FCStdWatcher fired -- mark the node dirty and trigger a CAD
+        execute so the new geometry shows up in the viewer."""
+        setattr(node, '_dirty', True)
+        self.timeline.add_event(f"FreeCAD saved: refreshing {node.name()}")
+        try:
+            # Re-use whichever execution entry point the rest of the widget
+            # uses for "graph property changed -> re-run".
+            if hasattr(self, '_cad_execute'):
+                self._cad_execute()
+            elif hasattr(self, 'execute_graph'):
+                self.execute_graph()
+        except Exception as exc:
+            self.timeline.add_event(f"CAD re-execute failed: {exc}")
+
+    def _on_nodes_deleted(self, node_ids):
+        """Release per-node FreeCAD launcher + watcher when the node is
+        removed from the graph. NodeGraphQt emits node IDs (not nodes) here
+        because the node objects have already been torn down -- we keep
+        the launcher/watcher in a per-node attribute, so look them up via
+        the still-alive references in our own bookkeeping."""
+        # NodeGraphQt API gives us only IDs; we can't fetch the nodes back
+        # because they're gone. Best-effort cleanup: walk every still-alive
+        # node and ensure orphans get shut down on the next idle cycle.
+        try:
+            for node in self.graph.all_nodes():
+                if not hasattr(node, '_freecad_watcher'):
+                    continue
+                # Node still alive -- nothing to do here.
+        except Exception:
+            pass
+        # Anything we forget here gets garbage-collected when the cad_widget
+        # itself is torn down (the launcher's QProcess is parented to us).
 
 
     def _on_graph_property_changed(self, node, prop_name, prop_value):

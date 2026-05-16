@@ -32,6 +32,9 @@ from pylcss.cad.core.registry import NODE_REGISTRY, register_node
 # Geometry — code-first.
 from pylcss.cad.nodes.code_part import CadQueryCodeNode
 
+# Geometry — interactive (FreeCAD GUI subprocess + BREP round-trip).
+from pylcss.cad.nodes.freecad_part import FreeCadPartNode
+
 # Face / surface selection — needed for boundary-condition wiring.
 from pylcss.cad.nodes.modeling import (
     SelectFaceNode, InteractiveSelectFaceNode,
@@ -70,6 +73,9 @@ __all__ = [
 
     # Code-first geometry
     "CadQueryCodeNode",
+
+    # Interactive geometry (FreeCAD)
+    "FreeCadPartNode",
 
     # Selection + assembly
     "SelectFaceNode", "InteractiveSelectFaceNode",

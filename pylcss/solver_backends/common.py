@@ -609,9 +609,15 @@ def tet_face_sets_for_geometries(
         t = np.asarray(mesh.t[:4, :], dtype=int)
     n_elem = t.shape[1]
 
-    # Local face nodes — CalculiX face f uses the three corners excluding f-1.
+    # Local face nodes — CCX C3D4 face numbering (from the *SURFACE / *DLOAD docs):
+    #   Face 1: nodes 1-2-3  → 0-indexed positions {0, 1, 2}
+    #   Face 2: nodes 1-4-2  → 0-indexed positions {0, 1, 3}
+    #   Face 3: nodes 2-4-3  → 0-indexed positions {1, 2, 3}
+    #   Face 4: nodes 3-4-1  → 0-indexed positions {0, 2, 3}
+    # Row i of face_local gives the three 0-indexed positions for CCX face i+1,
+    # so f_local+1 is already the correct CCX Sx face label to write in *SURFACE.
     face_local = np.array(
-        [[1, 2, 3], [0, 2, 3], [0, 1, 3], [0, 1, 2]], dtype=int
+        [[0, 1, 2], [0, 1, 3], [1, 2, 3], [0, 2, 3]], dtype=int
     )
 
     # Build a map: sorted 3-node tuple → list of (elem, face_local_1based).

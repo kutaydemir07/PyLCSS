@@ -1084,17 +1084,29 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
     registry.register(Tool(
         name="create_cad_geometry",
         description=(
-            "Create CAD geometry using a node graph.\n\n"
-            "PRIMARY NODE TYPE: `com.cad.code_part` — write any geometry as CadQuery code.\n"
-            "  - Set property 'code' to a Python snippet that assigns `result` to a cq.Workplane/Shape/Assembly.\n"
-            "  - Set property 'parameters' to `name=value` lines for parametric dimensions.\n\n"
-            "EXAMPLE — bracket with hole:\n"
+            "Create CAD geometry by writing CadQuery code in `com.cad.code_part` nodes.\n\n"
+            "CORE IDEA: PyLCSS does NOT have primitive box/cylinder/fillet nodes. "
+            "Geometry is *always* CadQuery Python code inside one or more "
+            "`com.cad.code_part` nodes. Use the full expressive power of CadQuery — "
+            "Workplane().box(), .hole(), .fillet(), .chamfer(), .extrude(), .revolve(), "
+            ".cut(), .union(), .intersect(), faces() selectors, etc.\n\n"
+            "PARAMETRIC RULE: Every numeric dimension that the user might want to "
+            "optimize later MUST come from the `parameters` field, NOT be hard-coded "
+            "inside the `code`. The `parameters` string is `name=value\\n...` lines; "
+            "those names are then available as bare identifiers inside the code.\n\n"
+            "EXAMPLE — bracket with a hole, one code_part:\n"
             "  nodes=[{\"id\":\"bracket\",\"type\":\"com.cad.code_part\","
             "\"properties\":{\"code\":\"body=cq.Workplane('XY').box(L,W,H)\\n"
             "body=body.faces('>Z').workplane().hole(hole_d)\\nresult=body\","
             "\"parameters\":\"L=80\\nW=40\\nH=20\\nhole_d=10\"}}]\n\n"
-            "EXAMPLE — bracket with two forks (combine everything in one code node):\n"
-            "  Use a single com.cad.code_part and write CadQuery code that builds the full shape.\n\n"
+            "EXAMPLE — assembly of several parts, MULTIPLE code_part nodes "
+            "(preferred when parts have independent parameters or get reused):\n"
+            "  Create one `com.cad.code_part` per part. Connect their `shape` "
+            "output ports into `com.cad.assembly` input ports. Each part stays "
+            "independently parametric and the LLM can edit one part at a time.\n\n"
+            "EXAMPLE — adding a hole to an existing geometry: emit a new code_part "
+            "that calls `.cut()` on a cylinder, and connect the existing shape into "
+            "it. Don't rewrite the whole part from scratch.\n\n"
             "OTHER AVAILABLE TYPES (for FEA/IO only):\n"
             "  com.cad.assembly, com.cad.select_face,\n"
             "  com.cad.sim.material, com.cad.sim.mesh, com.cad.sim.constraint,\n"
@@ -1105,9 +1117,13 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
             ToolParameter("nodes", "array",
                           "List of nodes. Each node: {id, type, properties}. "
                           "For geometry use type='com.cad.code_part' with properties "
-                          "{code: '<cq code>', parameters: 'name=value\\n...'}."),
+                          "{code: '<cq code>', parameters: 'name=value\\n...'}. "
+                          "Prefer multiple code_part nodes over one giant one when "
+                          "parts are reused, have independent parameters, or the user "
+                          "is iterating on a specific part."),
             ToolParameter("connections", "array",
-                          "Connections list. Each: {from: 'node_id.output_port', to: 'node_id.input_port'}",
+                          "Connections list. Each: {from: 'node_id.output_port', to: 'node_id.input_port'}. "
+                          "Wire shape outputs into assembly inputs, or into FEA mesh/constraint/load nodes.",
                           required=False),
         ],
         handler=lambda data: _run_cad_verified(data),
@@ -1167,6 +1183,45 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
         description="Execute the CAD graph to generate 3D geometry. Call this after creating or modifying nodes.",
         parameters=[],
         handler=lambda data: command_dispatcher._cad_execute(sync=True),
+        category="cad",
+    ))
+
+    registry.register(Tool(
+        name="create_freecad_part",
+        description=(
+            "Insert a `com.cad.freecad_part` node into the CAD graph for "
+            "interactive (mouse-driven) authoring in FreeCAD.\n\n"
+            "When to use this instead of `create_cad_geometry`:\n"
+            "- The user explicitly asks to 'open in FreeCAD', 'sketch by hand', "
+            "'draw it interactively', or wants to define loads / boundary "
+            "conditions through FreeCAD's FEM workbench UI.\n"
+            "- The geometry has a complex sketch (compound profile, splines, "
+            "fillets following an irregular path) that's faster to draw than "
+            "to write as CadQuery code.\n\n"
+            "After insertion, tell the user to **double-click the node** to "
+            "open the FreeCAD GUI. When they save inside FreeCAD, PyLCSS "
+            "auto-imports the geometry + named selections + FEM definitions "
+            "via the BREP + sidecar JSON the startup macro writes.\n\n"
+            "Requires FreeCAD to be installed locally: "
+            "`python scripts/install_solvers.py --only freecad`."
+        ),
+        parameters=[
+            ToolParameter("name", "string",
+                          "Node display name shown in the graph (e.g. 'bracket', 'fork'). "
+                          "Also seeds the .FCStd filename under data_freecad/."),
+            ToolParameter("description", "string",
+                          "One-line note about what the user will draw in this part "
+                          "(stored on the node for traceability).", required=False),
+        ],
+        handler=lambda data: command_dispatcher._build_node_graph({
+            "params": {
+                "nodes": [{
+                    "id": data.get("name") or "freecad_part",
+                    "type": "com.cad.freecad_part",
+                    "properties": {"description": data.get("description", "")},
+                }],
+            }
+        }, sync=True),
         category="cad",
     ))
 

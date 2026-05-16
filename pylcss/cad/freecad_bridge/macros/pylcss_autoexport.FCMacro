@@ -1,0 +1,262 @@
+# Copyright (c) 2026 Kutay Demir.
+# Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
+#
+# PyLCSS auto-export macro for FreeCAD 1.x.
+#
+# How FreeCAD picks this up
+# -------------------------
+# When PyLCSS launches FreeCAD via QProcess (see launcher.py) it passes the
+# absolute path to this file as the second argument.  FreeCAD treats a .py /
+# .FCMacro argument as a startup macro and executes it once the main window
+# is ready.
+#
+# What the macro does
+# -------------------
+# Registers a Gui::Application observer that fires on document-save events.
+# After each save we walk every visible Part / PartDesign body in the document
+# and:
+#   1. Export the consolidated shape to ``<doc>.brep`` via OCCT.
+#   2. Write ``<doc>.fcmeta.json`` describing
+#       - the doc's parameter set (Spreadsheet cells, if any)
+#       - per-shape face / edge counts so the PyLCSS BREP reader can index
+#         consistently
+#       - any FEM Analysis container's constraints / loads (writer port for
+#         a follow-up commit; the JSON has empty slots for now).
+#
+# PyLCSS's :class:`FCStdWatcher` picks both sidecar files up and refreshes
+# the in-app viewer + the surrogate / FEM graph.
+
+import json
+import os
+import traceback
+from typing import Any, Dict, List
+
+import FreeCAD
+import Part
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _candidate_shapes(doc) -> List[Any]:
+    """Return a sensible set of objects whose Shape we should export.
+
+    We prefer the document's Tip (the PartDesign body root that the user
+    iterated on) over arbitrary intermediate features. If no body exists
+    we fall back to every top-level object that has a Shape property
+    (Part primitives, fused booleans, imported STEP, ...).
+    """
+    shapes = []
+
+    # PartDesign body Tip lookup -- the user's "final" feature in the body.
+    bodies = [obj for obj in doc.Objects if obj.TypeId == "PartDesign::Body"]
+    if bodies:
+        for body in bodies:
+            tip = getattr(body, "Tip", None)
+            if tip is not None and getattr(tip, "Shape", None) is not None:
+                shapes.append(tip)
+            elif getattr(body, "Shape", None) is not None:
+                shapes.append(body)
+        if shapes:
+            return shapes
+
+    # Otherwise pick up any top-level object with a Shape (skip those that
+    # are merely inputs to another feature).
+    consumed = set()
+    for obj in doc.Objects:
+        for prop_name in obj.PropertiesList:
+            try:
+                prop = getattr(obj, prop_name)
+            except Exception:
+                continue
+            if isinstance(prop, FreeCAD.DocumentObject):
+                consumed.add(prop.Name)
+            elif isinstance(prop, (list, tuple)):
+                for v in prop:
+                    if isinstance(v, FreeCAD.DocumentObject):
+                        consumed.add(v.Name)
+    for obj in doc.Objects:
+        if obj.Name in consumed:
+            continue
+        if getattr(obj, "Shape", None) is not None and not obj.Shape.isNull():
+            shapes.append(obj)
+    return shapes
+
+
+def _spreadsheet_parameters(doc) -> Dict[str, float]:
+    """Pull every named cell out of every Spreadsheet in the doc.
+
+    PyLCSS treats spreadsheet cells as the canonical parameter surface for
+    a FreeCAD-driven node -- the LLM/AI tools edit those, not the geometry
+    directly.
+    """
+    params: Dict[str, float] = {}
+    for obj in doc.Objects:
+        if obj.TypeId != "Spreadsheet::Sheet":
+            continue
+        try:
+            for alias, value in obj.PropertiesList:
+                pass  # placeholder; real per-cell alias walking is below
+        except Exception:
+            pass
+        # Walk visible aliases (cells with a name assigned via 'Alias' field).
+        try:
+            for prop_name in obj.PropertiesList:
+                if prop_name.startswith("set_") or prop_name in ("Label", "Name"):
+                    continue
+                try:
+                    value = getattr(obj, prop_name)
+                except Exception:
+                    continue
+                if isinstance(value, (int, float)):
+                    params[prop_name] = float(value)
+                elif hasattr(value, "Value"):
+                    try:
+                        params[prop_name] = float(value.Value)
+                    except Exception:
+                        pass
+        except Exception:
+            traceback.print_exc()
+    return params
+
+
+def _fem_analysis_summary(doc) -> List[Dict[str, Any]]:
+    """Collect FEM constraint/load definitions if a Fem::FemAnalysis container
+    exists. Returns an empty list otherwise so PyLCSS can ignore the section.
+    """
+    out: List[Dict[str, Any]] = []
+    for obj in doc.Objects:
+        if not obj.TypeId.startswith("Fem::"):
+            continue
+        if not obj.TypeId.startswith("Fem::Constraint") and not obj.TypeId.endswith("Analysis"):
+            continue
+        entry: Dict[str, Any] = {
+            "name": obj.Name,
+            "label": obj.Label,
+            "type_id": obj.TypeId,
+        }
+        # Best-effort introspection: surface scalar properties + references.
+        for prop_name in obj.PropertiesList:
+            try:
+                val = getattr(obj, prop_name)
+            except Exception:
+                continue
+            if isinstance(val, (int, float, bool, str)):
+                entry[prop_name] = val
+            elif hasattr(val, "Value"):
+                try:
+                    entry[prop_name] = float(val.Value)
+                except Exception:
+                    pass
+        out.append(entry)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Save observer
+# ---------------------------------------------------------------------------
+class _PyLcssExportObserver:
+    """FreeCAD app-level observer that exports a BREP + JSON sidecar on save.
+
+    FreeCAD's document-observer slot name for "save finished" changed across
+    versions:
+      - 0.18 / 0.19:  ``slotSavedDocument(doc)``
+      - 0.20+ / 1.x: ``slotFinishSaveDocument(doc, file)``
+    We implement BOTH so this macro works on the LTS users still run AND on
+    FreeCAD 1.x.  FreeCAD only calls whichever signature it advertises in
+    your release; the unused slot is dead code.
+    """
+
+    def slotFinishSaveDocument(self, doc, file):  # noqa: N802 -- FreeCAD API name (1.x).
+        try:
+            self._export(doc)
+        except Exception:
+            FreeCAD.Console.PrintError(
+                "[PyLCSS auto-export] failed:\n" + traceback.format_exc() + "\n"
+            )
+
+    def slotSavedDocument(self, doc):  # noqa: N802 -- FreeCAD API name (0.x legacy).
+        try:
+            self._export(doc)
+        except Exception:
+            FreeCAD.Console.PrintError(
+                "[PyLCSS auto-export] failed:\n" + traceback.format_exc() + "\n"
+            )
+
+    def _export(self, doc) -> None:
+        if not doc.FileName:
+            return
+        base, _ = os.path.splitext(doc.FileName)
+        brep_path = base + ".brep"
+        json_path = base + ".fcmeta.json"
+
+        shapes = _candidate_shapes(doc)
+        if not shapes:
+            FreeCAD.Console.PrintMessage(
+                "[PyLCSS auto-export] no exportable shapes; skipping BREP.\n"
+            )
+            sidecar = {
+                "version": 1,
+                "fcstd": doc.FileName,
+                "shapes": [],
+                "parameters": _spreadsheet_parameters(doc),
+                "fem": _fem_analysis_summary(doc),
+                "note": "no shapes detected",
+            }
+            with open(json_path, "w", encoding="utf-8") as fh:
+                json.dump(sidecar, fh, indent=2)
+            return
+
+        # Compound the shapes so a single .brep round-trips the whole assembly.
+        compound_shapes = [s.Shape for s in shapes if getattr(s, "Shape", None) is not None]
+        compound = Part.Compound(compound_shapes)
+        compound.exportBrep(brep_path)
+
+        sidecar = {
+            "version": 1,
+            "fcstd": doc.FileName,
+            "brep": brep_path,
+            "shapes": [
+                {
+                    "name": s.Name,
+                    "label": s.Label,
+                    "n_faces": len(s.Shape.Faces) if hasattr(s.Shape, "Faces") else 0,
+                    "n_edges": len(s.Shape.Edges) if hasattr(s.Shape, "Edges") else 0,
+                    "n_vertexes": len(s.Shape.Vertexes) if hasattr(s.Shape, "Vertexes") else 0,
+                    "volume": float(s.Shape.Volume) if hasattr(s.Shape, "Volume") else 0.0,
+                    "bbox": [
+                        float(s.Shape.BoundBox.XMin), float(s.Shape.BoundBox.YMin),
+                        float(s.Shape.BoundBox.ZMin), float(s.Shape.BoundBox.XMax),
+                        float(s.Shape.BoundBox.YMax), float(s.Shape.BoundBox.ZMax),
+                    ] if hasattr(s.Shape, "BoundBox") else None,
+                }
+                for s in shapes
+            ],
+            "parameters": _spreadsheet_parameters(doc),
+            "fem": _fem_analysis_summary(doc),
+        }
+        with open(json_path, "w", encoding="utf-8") as fh:
+            json.dump(sidecar, fh, indent=2)
+
+        FreeCAD.Console.PrintMessage(
+            "[PyLCSS auto-export] wrote {0} + {1}\n".format(brep_path, json_path)
+        )
+
+
+# ---------------------------------------------------------------------------
+# Registration -- run once at FreeCAD startup
+# ---------------------------------------------------------------------------
+def _install():
+    obs = _PyLcssExportObserver()
+    FreeCAD.addDocumentObserver(obs)
+    # Keep a strong reference so GC doesn't deregister us.
+    FreeCAD._pylcss_observer = obs
+    FreeCAD.Console.PrintMessage("[PyLCSS] auto-export observer installed\n")
+
+
+try:
+    _install()
+except Exception:
+    FreeCAD.Console.PrintError(
+        "[PyLCSS] failed to install auto-export observer:\n" + traceback.format_exc() + "\n"
+    )

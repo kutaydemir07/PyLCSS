@@ -23,7 +23,6 @@ from pylcss.assistant_systems.services.llm import (
     LLMProvider, get_provider, ChatCompletion, LLMProviderError
 )
 from pylcss.assistant_systems.services.memory import LLMMemory, get_secure_storage
-from pylcss.assistant_systems.core.interpreter import LLMInterpreter, ParsedResponse, ActionCommand
 from pylcss.assistant_systems.services.tts import get_tts, TextToSpeech
 
 # Agentic AI components -- PydanticAI native function-calling path replaces
@@ -127,7 +126,10 @@ class AssistantManager(QObject):
         self.config = AssistantConfig.load()
         
         # Connect signals
-        self.llm_response_received.connect(self._process_llm_response)
+        # llm_response_received used to drive the legacy interpreter; the
+        # PydanticAI path emits agentic_result_received / agentic_error_received
+        # instead. The signal object is kept so any external listener still
+        # connected to it doesn't crash on disconnect.
         self.llm_error_occurred.connect(self._handle_llm_error)
         self.llm_request_received.connect(self._process_llm_request, Qt.QueuedConnection)
         self.voice_command_received.connect(self._process_voice_command, Qt.QueuedConnection)
@@ -142,12 +144,13 @@ class AssistantManager(QObject):
         self._mouse_controller: Optional[MouseController] = None
         self._command_dispatcher: Optional[CommandDispatcher] = None
         
-        # LLM components (multi-provider)
+        # LLM components (multi-provider) -- LLMProvider is the legacy
+        # text-only client kept for backwards compat with anything that still
+        # asks for ``manager.llm_provider``; PydanticAgentRunner now owns the
+        # real conversation loop.
         self._llm_provider: Optional[LLMProvider] = None
-        self._llm_interpreter: Optional[LLMInterpreter] = None
         self._llm_memory: Optional[LLMMemory] = None
         self._llm_overlay = None  # Created lazily to avoid import issues
-        self._pending_actions: List[ActionCommand] = []
         self._secure_storage = get_secure_storage()
         
         # Agentic AI components -- single PydanticAgentRunner replaces the
@@ -210,20 +213,18 @@ class AssistantManager(QObject):
             on_stop_dictation=self._stop_dictation,
         )
         
-        # Initialize LLM components (multi-provider)
+        # Initialize LLM components -- legacy LLMInterpreter is gone;
+        # PydanticAgentRunner (built below) owns tool dispatch.
         try:
-            self._llm_interpreter = LLMInterpreter()
-            
-            # Initialize memory system
             if self.config.llm_control.memory_enabled:
-                self._llm_memory = LLMMemory(
-                    max_conversations=100
-                )
+                self._llm_memory = LLMMemory(max_conversations=100)
                 logger.info(f"LLM memory initialized with {self._llm_memory.get_conversation_count()} conversations")
-            
-            # Initialize provider based on config
+
+            # Provider object is kept around for any UI code still asking for
+            # ``manager.llm_provider`` (config dialog model lists, etc.),
+            # but it is not consulted for chat any more.
             self._initialize_llm_provider()
-            
+
             logger.info("LLM components initialized")
         except Exception as e:
             logger.error(f"Failed to initialize LLM components: {e}")
@@ -276,15 +277,19 @@ class AssistantManager(QObject):
                 started = True
                 self.status_changed.emit("Voice control active")
             else:
-                # Check if model is missing
+                # Surface the actual reason from voice.py instead of the
+                # generic "Failed to start" string that used to send users
+                # straight to "revert the whole stack".
+                detail = (
+                    getattr(self._voice_controller, "get_last_error", lambda: None)()
+                    or "Unknown error -- check the terminal log."
+                )
                 if not self._voice_controller.is_model_available():
-                    info = self._voice_controller.get_model_download_info()
                     self.error_occurred.emit(
-                        f"Speech model not available. Faster-Whisper source:\n{info['url']}\n"
-                        f"Cache path:\n{info['path']}"
+                        f"Voice control unavailable: speech model missing.\n{detail}"
                     )
                 else:
-                    self.error_occurred.emit("Failed to start voice control")
+                    self.error_occurred.emit(f"Failed to start voice control.\n{detail}")
                     
         self._running = started
         
@@ -391,20 +396,11 @@ class AssistantManager(QObject):
             self._llm_provider = get_provider(provider_name, api_key, **kwargs)
             self._llm_provider.temperature = llm_config.temperature
             self._llm_provider.max_tokens = llm_config.max_tokens
-            
-            # Set system prompt
-            if self._llm_interpreter:
-                self._llm_provider.set_system_prompt(self._llm_interpreter.get_system_prompt())
-            
-            # Restore memory context if available
-            if self._llm_memory:
-                context = self._llm_memory.get_context_messages(llm_config.max_memory_messages)
-                for msg in context:
-                    if msg["role"] != "system":
-                        self._llm_provider._messages.append(
-                            type('Message', (), {'role': msg["role"], 'content': msg["content"]})()
-                        )
-            
+
+            # System prompt + memory restore moved into PydanticAgentRunner;
+            # the legacy provider object below is only kept for the LLM
+            # Settings dialog (which still uses provider.list_models()).
+
             logger.info(f"LLM provider initialized: {provider_name}")
             
         except Exception as e:
@@ -414,8 +410,6 @@ class AssistantManager(QObject):
     def set_llm_provider(self, provider: Optional[LLMProvider]) -> None:
         """Set the LLM provider directly (from UI)."""
         self._llm_provider = provider
-        if provider and self._llm_interpreter:
-            provider.set_system_prompt(self._llm_interpreter.get_system_prompt())
         logger.info(f"LLM provider set: {provider.name if provider else 'None'}")
         
         # Lazy-init the PydanticAgentRunner on first provider set.  Subsequent
@@ -495,11 +489,9 @@ class AssistantManager(QObject):
             if command == "llm_mode":
                 self.start_llm_mode()
                 return
-            elif command == "llm_confirm":
-                self.confirm_llm_actions()
-                return
-            elif command == "llm_cancel":
-                self.cancel_llm_actions()
+            elif command in ("llm_confirm", "llm_cancel"):
+                # Legacy "preview-then-confirm" flow is gone; PydanticAgentRunner
+                # invokes tools directly. Voice "confirm"/"cancel" become no-ops.
                 return
             elif command == "llm_exit":
                 self.exit_llm_mode()
@@ -651,63 +643,24 @@ class AssistantManager(QObject):
             return ""
 
     def _process_llm_request(self, text: str) -> None:
-        """Process LLM request in main thread."""
+        """All LLM requests now go through PydanticAgentRunner -- the legacy
+        chat_async / JSON-action / preview-and-confirm path was deleted with
+        the orchestrator. If the runner isn't initialised we surface a clear
+        error instead of silently doing nothing."""
         logger.info(f"LLM Request received: {text}")
-        
-        if not self._llm_provider:
-            logger.error("LLM provider not initialized")
-            self._initialize_llm_provider()
-            if not self._llm_provider:
-                self.error_occurred.emit("LLM not configured.")
-                if self._voice_controller:
-                    self._voice_controller.stop_llm_mode()
-                return
 
-        # Workflow recording/replay is paused while we migrate to PydanticAI;
-        # see manager.py module docstring. Re-enable when reimplemented on
-        # top of pydantic-ai run traces.
+        if not self._agent_runner:
+            # Lazy retry: maybe the provider just changed and the runner
+            # hasn't been built yet.
+            self._initialize_agentic_system()
 
-        # Use agentic mode if enabled and available
-        if self._use_agentic_mode and self._agent_runner:
-            self.process_agentic_request(text)
+        if not self._agent_runner:
+            self.error_occurred.emit("LLM not configured. Open LLM Settings.")
+            if self._voice_controller:
+                self._voice_controller.stop_llm_mode()
             return
 
-        # === Legacy single-shot processing ===
-        # 1. Get Graph Context
-        context = self._get_current_graph_context()
-        full_message = text
-        if context:
-            full_message += f"\n\n[Current Graph State]:\n{context}"
-            
-        # 2. Add to Memory (System sees full context, User sees clean text in history?)
-        # Actually better to store what we send so LLM has history of state.
-        if self._llm_memory:
-            self._llm_memory.add_message(
-                role="user",
-                content=full_message,
-                provider=self.config.llm_control.provider,
-                model=self.config.llm_control.selected_model or self.config.llm_control.model
-            )
-            
-
-            
-        # Show thinking overlay with user's text
-        overlay = self._get_or_create_llm_overlay()
-        if overlay:
-            overlay.show_thinking(user_text=text)
-        
-        # Pause voice recognition while processing
-        if self._voice_controller:
-            self._voice_controller.pause()
-            
-        # Send to LLM asynchronously using multi-provider
-        model = self.config.llm_control.selected_model or self.config.llm_control.model
-        self._llm_provider.chat_async(
-            user_message=full_message,
-            on_complete=self._on_llm_response,
-            on_error=self._on_llm_error,
-            model=model,
-        )
+        self.process_agentic_request(text)
     
     def process_agentic_request(self, text: str) -> None:
         """Process request via PydanticAgentRunner (background thread)."""
@@ -846,78 +799,12 @@ class AssistantManager(QObject):
     # APIs that the manager will subscribe to in a follow-up.
 
 
-    def _on_llm_response(self, completion: ChatCompletion) -> None:
-        """Handle LLM response (called from background thread)."""
-        logger.info(f"LLM Response: {completion.content[:100]}...")
-        # Emit signal to process in main thread
-        self.llm_response_received.emit(completion)
-        
-    def _on_llm_error(self, error: Exception) -> None:
-        """Handle LLM error (called from background thread)."""
-        logger.error(f"LLM Error: {error}")
-        # Emit signal to handle in main thread
-        self.llm_error_occurred.emit(error)
-    
-    def _process_llm_response(self, completion: ChatCompletion) -> None:
-        """Process LLM response in main thread."""
-        overlay = self._get_or_create_llm_overlay()
-        
-        # Parse response for actions
-        parsed = self._llm_interpreter.parse_response(completion.content)
-        logger.info(f"Parsed {len(parsed.actions)} actions from LLM response")
-        
-        # Save assistant response to memory
-        if self._llm_memory:
-            self._llm_memory.add_message(
-                role="assistant",
-                content=completion.content,
-                provider=completion.provider,
-                model=completion.model
-            )
-        
-        # Store pending actions
-        self._pending_actions = parsed.actions
-        
-        # Get the message to display/speak
-        message = parsed.message or completion.content
-        
-        # Calculate speech duration for timeout
-        speak_text = message[:500] if len(message) > 500 else message
-        if parsed.actions:
-            speak_text += f". Executing {len(parsed.actions)} actions."
-        
-        
-        word_count = len(speak_text.split())
-        # Assume slower speech (120 WPM) and add larger buffer (5s) to ensure text stays visible
-        estimated_duration_ms = int((word_count / 120) * 60 * 1000) + 5000
-        
-        # Update overlay - text stays visible until speech ends
-        if overlay:
-            has_actions = len(parsed.actions) > 0
-            # Pass calculated timeout to keep overlay visible during speech
-            if hasattr(overlay, 'show_llm_response'):
-                 # Check if show_llm_response accepts timeout_ms (it might not if not updated)
-                 # We assume it is updated.
-                 try:
-                     overlay.show_response(message, has_actions=has_actions, timeout_ms=estimated_duration_ms + 2000)
-                 except TypeError:
-                     # Fallback for old signature
-                     overlay.show_response(message, has_actions=has_actions)
-        
-        # Store speech text for display
-        self._speech_text = message
-        self._is_speaking = True
-            
-            
-        # Execute actions immediately but DO NOT resume mic, speak, or show overlay (handled by LLM response flow)
-        if parsed.actions:
-            logger.info(f"Auto-executing {len(parsed.actions)} actions")
-            # Call renamed method
-            self.execute_actions_safe(resume_listening=False, speak_confirmation=False, show_overlay=False)
-        
-        # Speak the response using TTS with unmute
-        # Delay speech slightly to allow UI (overlay) to update first
-        QTimer.singleShot(50, lambda: self._do_speak(speak_text, estimated_duration_ms))
+    # Legacy LLM chat_async / JSON-action / preview-and-confirm path is
+    # gone. The remaining signal handlers (_on_llm_response,
+    # _on_llm_error, _process_llm_response) were the bridge between the
+    # legacy provider client and the interpreter; with PydanticAgentRunner
+    # owning the loop they had nothing to do, so they were deleted along
+    # with execute_actions_safe / confirm_llm_actions / cancel_llm_actions.
 
     @staticmethod
     def _sanitize_tts_text(text: str) -> str:
@@ -982,54 +869,10 @@ class AssistantManager(QObject):
             # Resume immediately on error
             self._on_speech_finished()
 
-    # Old method removed/replaced by _do_speak logic inside _process_llm_response
-    def _speak_with_unmute(self, message: str, actions: List[ActionCommand]) -> None:
-         # Backward compatibility stub if needed, but we replaced the call site
-         pass
-    
-    # ... (other methods)
-    
-    def execute_actions_safe(self, resume_listening: bool = True, speak_confirmation: bool = True, show_overlay: bool = True) -> None:
-        """Execute pending LLM actions (Renamed to bypass cache)."""
-        logger.info(f"SAFE EXEC: Executing {len(self._pending_actions)} actions")
-        
-        if self._pending_actions and self._command_dispatcher:
-            for action in self._pending_actions:
-                result = self._llm_interpreter.action_to_dispatcher_format(action)
-                if result:
-                    command_name, command_data = result
-                    try:
-                        self._command_dispatcher.dispatch(command_name, command_data)
-                        logger.info(f"Executed action: {action.command}")
-                    except Exception as e:
-                        logger.error(f"Failed to execute action {action.command}: {e}")
-                        
-        count = len(self._pending_actions)
-        self._pending_actions = []
-        
-        if show_overlay:
-            overlay = self._get_or_create_llm_overlay()
-            if overlay:
-                overlay.show_confirmed()
-            
-        # Speak confirmation
-        if speak_confirmation:
-            try:
-                tts = get_tts()
-                if tts.is_available():
-                    tts.speak(f"Executed {count} actions.")
-            except:
-                pass
-            
-        # Do not exit LLM mode automatically, keep conversation open
-        
-        # Resume listening ONLY if requested (don't if about to speak long text)
-        if resume_listening and self._voice_controller:
-            self._voice_controller.resume()
-            
     # Force recompile check
     _force_recompile = True
-    
+
+
     def _on_speech_finished(self) -> None:
         """Called when TTS speech is estimated to have finished."""
         self._is_speaking = False
@@ -1048,27 +891,17 @@ class AssistantManager(QObject):
             logger.info("Speech finished, resuming listening in LLM mode")
             
     def _handle_llm_error(self, error: Exception) -> None:
-        """Handle LLM error in main thread."""
+        """Handle LLM error in main thread (now produced by PydanticAgentRunner
+        via agentic_error_received). Kept for back-compat with anything still
+        connected to llm_error_occurred."""
         overlay = self._get_or_create_llm_overlay()
         if overlay:
             overlay.show_error(str(error))
-        
-        # Resume voice recognition
         if self._voice_controller:
             self._voice_controller.resume()
-            
-        # Speak error
-        try:
-            tts = get_tts()
-            if tts.is_available():
-                tts.speak("Sorry, I encountered an error.")
-        except:
-            pass
-            
-        # Exit LLM mode on error
-        if self._voice_controller:
             self._voice_controller.stop_llm_mode()
-            
+
+
     def start_llm_mode(self) -> None:
         """Start LLM voice-first mode."""
         # Reload config to pick up any changes (e.g. new API key)
@@ -1115,76 +948,16 @@ class AssistantManager(QObject):
         # except:
         #     pass
             
-    def confirm_llm_actions(self) -> None:
-        """Execute pending LLM actions."""
-        logger.info(f"Confirming {len(self._pending_actions)} LLM actions")
-        
-        if self._pending_actions and self._command_dispatcher:
-            for action in self._pending_actions:
-                result = self._llm_interpreter.action_to_dispatcher_format(action)
-                if result:
-                    command_name, command_data = result
-                    try:
-                        self._command_dispatcher.dispatch(command_name, command_data)
-                        logger.info(f"Executed action: {action.command}")
-                    except Exception as e:
-                        logger.error(f"Failed to execute action {action.command}: {e}")
-                        
-        count = len(self._pending_actions)
-        self._pending_actions = []
-        
-        overlay = self._get_or_create_llm_overlay()
-        if overlay:
-            overlay.show_confirmed()
-            
-        # Speak confirmation
-        try:
-            tts = get_tts()
-            if tts.is_available():
-                tts.speak(f"Executed {count} actions.")
-        except:
-            pass
-            
-        # Do not exit LLM mode automatically, keep conversation open
-        # if self._voice_controller:
-        #     self._voice_controller.stop_llm_mode()
-        
-        # Resume listening
-        if self._voice_controller:
-            self._voice_controller.resume()
-            
-    def cancel_llm_actions(self) -> None:
-        """Cancel pending LLM actions."""
-        logger.info("Cancelling LLM actions")
-        self._pending_actions = []
-        
-        overlay = self._get_or_create_llm_overlay()
-        if overlay:
-            overlay.show_cancelled()
-            
-        # Speak cancellation
-        try:
-            tts = get_tts()
-            if tts.is_available():
-                tts.speak("Cancelled.")
-        except:
-            pass
-            
-        # Exit LLM mode
-        if self._voice_controller:
-            self._voice_controller.stop_llm_mode()
-            
+    # confirm_llm_actions / cancel_llm_actions were tied to the legacy
+    # preview-and-confirm flow.  PydanticAgentRunner runs tools as the LLM
+    # decides, so there is nothing to confirm or cancel between turns --
+    # individual destructive tools should do their own confirmation gate.
+
     def exit_llm_mode(self) -> None:
-        """Exit LLM mode without executing."""
+        """Exit LLM voice-first mode."""
         logger.info("Exiting LLM mode")
-        self._pending_actions = []
-        
         overlay = self._get_or_create_llm_overlay()
         if overlay:
             overlay.hide_overlay()
-        
-        if self._voice_controller:
-            self._voice_controller.stop_llm_mode()
-            
         if self._voice_controller:
             self._voice_controller.stop_llm_mode()

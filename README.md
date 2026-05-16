@@ -52,9 +52,10 @@ PyLCSS implements the **Solution Space** approach for robust design: instead of 
 ## Key Features
 
 ### Design Studio: Parametric Engineering Design
-- **Code Part Node** — All geometry is authored in a single CadQuery code block; write boxes, cylinders, boolean ops, fillets, chamfers, sweeps, lofts, shells, patterns, and any OCC feature as plain Python code
-- **29 Real Node Types** — Code Part · Import STEP/STL · Select Face (text & interactive) · Assembly · Mass Properties · Bounding Box · Math Expression · Measure Distance · Surface Area · FEA material/mesh/constraint/load/pressure/solver/topopt/remesh/sizeopt/shapeopt · Crash material/impact/solver/Radioss deck · Number · Variable · Export STEP/STL — every type maps to a live node class
-- **AI-Assisted Geometry** — The assistant always generates nodes with auto-generated CadQuery code
+- **Code Part Node** — Author geometry in a CadQuery snippet (boxes, fillets, sweeps, lofts, booleans, any OCC feature) with explicit named parameters that flow into optimisation / sensitivity automatically
+- **FreeCAD Part Node** — Interactive parametric authoring via the real FreeCAD GUI: double-click the node, draw in PartDesign, define a Spreadsheet with aliases, save. PyLCSS auto-imports the BREP via a sidecar JSON and exposes the spreadsheet aliases as live parametric properties — the optimiser drives them back into FreeCAD headlessly between iterations
+- **30 Live Node Types** — Code Part · FreeCAD Part · Import STEP/STL · Select Face (text & interactive) · Assembly · Mass Properties · Bounding Box · Math Expression · Measure Distance · Surface Area · FEA material/mesh/constraint/load/pressure/solver/topopt/remesh/sizeopt/shapeopt · Crash material/impact/solver/Radioss deck · Number · Variable · Export STEP/STL — every type maps to a live node class
+- **AI-Assisted Geometry** — The assistant generates CadQuery code nodes OR inserts a FreeCAD-backed node when the user asks for hand-sketched / FEM-load-authored parts
 - **Topology Optimization** — SIMP with MMA/OC solvers, density/sensitivity filtering, Heaviside projection, symmetry constraints, shape recovery with marching cubes, and **direct STL/OBJ export** of optimized shapes
 - **Real-Time 3D Viewer** — VTK-based with density cutoff preview during optimization, NavCube orientation, world X/Y/Z grid labels, and crash playback overlay management
 - **Measurement** — Distance, surface area, and volume nodes
@@ -120,12 +121,14 @@ PyLCSS implements the **Solution Space** approach for robust design: instead of 
 - **Expression-Aware Inputs** — Safe AST-based evaluation (sin, cos, sqrt, log, variables) in input fields
 - **Unit-Aware Inputs** — Physical unit support via pint (SI, Imperial, CGS) in simulation nodes
 
-### Compact AI Assistant
-- **Top-Right Entry Point** — A small assistant button opens a right-side panel that pushes the workspace left instead of covering it
-- **Fixed Side Panel** — Opens at a stable width and pushes the workspace left
-- **Text + Voice Input** — Typed prompts and Faster-Whisper speech input are routed to the same natural-language assistant path
-- **Multi-Provider LLM** — OpenAI, Claude, Gemini, LM-Studio
-- **Privacy-First** — Optional local speech recognition and local model workflows
+### AI Assistant
+- **PydanticAI agent loop** — Native function-calling via every supported provider, with strict JSON-schema validation on tool args; auto-retries the LLM with the diagnostic when arguments fail validation, so small local models stay reliable
+- **25 wired tools** — CAD (create geometry, FreeCAD part, modify node, connect, execute, export), system modelling (inputs, outputs, custom blocks, validate, build), analyses (sensitivity, optimisation, surrogate training, sampling), and navigation (tab switch, save, new project)
+- **Multi-Provider LLM** — OpenAI (GPT-4.x / 5), Anthropic (Claude Haiku/Sonnet/Opus 4.x), Google (Gemini 2.5), and any OpenAI-compatible local server (LM Studio, Ollama, vLLM) — same code path, same tool calls, switchable from the LLM Settings dialog
+- **Streaming STT** — RealtimeSTT pipeline: Silero VAD (production-grade, ONNX) + Faster-Whisper with auto-detected CUDA/MPS/CPU, partial transcripts surfaced live so the user sees what's being heard
+- **Local TTS** — Kokoro-82M via RealtimeTTS, fully offline, ~550× realtime on CPU; barge-in support so the user can interrupt mid-sentence
+- **Engineering jargon seed** — Whisper's `initial_prompt` is pre-seeded with PyLCSS vocabulary (von Mises, CalculiX, OpenRadioss, CadQuery, fillet, …) so domain terms transcribe correctly without retraining
+- **Privacy-First** — All voice + local-LLM paths run offline; cloud providers are opt-in via API key
 
 
 
@@ -158,9 +161,16 @@ source .venv/bin/activate
 # Dependencies
 pip install -r requirements.txt
 
-# (Optional) Download CalculiX + OpenRadioss native binaries.
-# These are NOT pip-installable; the script fetches the upstream releases
-# into <repo>/external_solvers/ and writes solver_paths.json.
+# (Optional) Download external native components.
+# Each is INDEPENDENT -- the script asks Y/N per item so you can take
+# just FreeCAD, just CalculiX, or any combination. PyLCSS opens cleanly
+# without any of them; only the corresponding node types are disabled.
+#
+#   python scripts/install_solvers.py            # interactive Y/N per component
+#   python scripts/install_solvers.py --all      # install everything non-interactively
+#   python scripts/install_solvers.py --only ccx --only freecad
+#
+# Resolved paths are written to external_solvers/solver_paths.json.
 python scripts/install_solvers.py
 
 # Launch
@@ -169,15 +179,19 @@ python scripts/main.py
 
 Or on Windows: double-click `run_gui.bat`.
 
-### External solver binaries
+### External native tools
 
-| Backend | Provided by | How PyLCSS finds it |
+| Tool | Provided by | How PyLCSS finds it |
 |---------|-------------|----------------------|
 | CalculiX (`ccx`) | `python scripts/install_solvers.py --only ccx` | `PYLCSS_CALCULIX_CCX`, `CALCULIX_CCX`, `ccx_static`, `ccx`, or `ccx.exe` on `PATH` |
 | OpenRadioss Starter/Engine | `python scripts/install_solvers.py --only radioss` | `PYLCSS_OPENRADIOSS_STARTER`, `PYLCSS_OPENRADIOSS_ENGINE`, or `starter_*`/`engine_*` on `PATH` |
 | OpenRadioss `anim_to_vtk` | Bundled with the Radioss install above | `PYLCSS_OPENRADIOSS_ANIM2VTK` or `anim_to_vtk*` on `PATH` |
+| FreeCAD 1.x (for the FreeCAD Part node) | `python scripts/install_solvers.py --only freecad` | `PYLCSS_FREECAD_EXE` env var, `external_solvers/solver_paths.json`, Windows registry, Program Files, AppData, or PATH (deep scan fallback) |
 
-CalculiX and OpenRadioss are launched as external native processes. They are not pip dependencies and remain governed by their own upstream licenses.
+All four are launched as external native processes. **They are not pip dependencies and PyLCSS opens cleanly without them** — only the features that need them (e.g. the FreeCAD Part node, the Crash Solver node) are disabled with a clear message in the UI. They remain governed by their own upstream licenses (CalculiX: GPL, OpenRadioss: AGPL-3.0, FreeCAD: LGPL-2.1+).
+
+#### FreeCAD installer notes
+The FreeCAD installer is the official Windows wizard from the GitHub release. The PyLCSS script downloads it, launches it elevated, and after install auto-detects the path. The same script also drops a one-line Mod hook (`%APPDATA%\FreeCAD\v1-1\Mod\PyLCSS\Init.py`) so every FreeCAD save automatically emits a sibling `.brep` + `.fcmeta.json` PyLCSS picks up via a Qt file-system watcher.
 
 ---
 
@@ -231,15 +245,16 @@ pylcss/
 | Layer | Technologies |
 |-------|-------------|
 | **UI** | PySide6, NodeGraphQt, QtAwesome |
-| **Parametric Design** | CadQuery, OpenCASCADE (OCP), VTK |
+| **Parametric Design** | CadQuery (code-first), **FreeCAD 1.x bridge** (interactive — Spreadsheet aliases round-tripped through `Mod/PyLCSS/Init.py` + `.brep` + `.fcmeta.json` sidecars), OpenCASCADE (OCP), VTK, trimesh |
 | **FEA / Crash** | Netgen, scikit-fem mesh containers, meshio, CalculiX (`ccx` + `.frd` round-trip), OpenRadioss (`starter`/`engine` + `anim_to_vtk` round-trip) |
 | **Computation** | NumPy, SciPy, Pandas |
 | **Visualisation** | VTK (3D), pyqtgraph (2D) |
 | **ML** | PyTorch, scikit-learn |
 | **Optimization** | SciPy, Nevergrad, SALib |
 | **Units** | pint |
-| **Serialisation** | h5py, dill, joblib |
-| **AI Assistant** | Faster-Whisper, OpenAI, Edge-TTS |
+| **Serialisation** | h5py, dill, joblib, py7zr |
+| **AI Assistant** | **PydanticAI** (native function-calling, multi-provider) + Anthropic / OpenAI / Google SDKs + OpenAI-compatible local servers (LM Studio, Ollama, vLLM) |
+| **Voice** | **RealtimeSTT** (Silero VAD + Faster-Whisper streaming with auto GPU detection), **RealtimeTTS** with **Kokoro-82M** local engine + sounddevice playback |
 
 ---
 

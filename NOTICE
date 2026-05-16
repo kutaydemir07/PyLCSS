@@ -1,5 +1,5 @@
 # PyLCSS Third-Party Notices
-Document Version: 1.5 Last Updated: May 16, 2026
+Document Version: 1.6 Last Updated: May 16, 2026
 
 This document outlines the third-party libraries and components used in PyLCSS, along with their respective licenses. PyLCSS is committed to respecting the intellectual property of all contributors and provides this information in accordance with open-source licensing requirements.
 
@@ -18,6 +18,12 @@ PyLCSS can launch native solver executables as separate external processes. Thes
 - **License**: GNU Affero General Public License v3 or later, per the OpenRadioss `COPYRIGHT.md` distributed with the upstream binaries.
 - **Source**: [https://github.com/OpenRadioss/OpenRadioss](https://github.com/OpenRadioss/OpenRadioss)
 - **Packaging Note**: PyLCSS writes or stages solver decks, launches OpenRadioss as an external process, and imports converted animation frames. OpenRadioss may include additional third-party runtime components in its `extlib/` directory.
+
+### FreeCAD
+- **Purpose**: Interactive parametric CAD authoring driven by the `com.cad.freecad_part` node. PyLCSS launches `FreeCAD.exe` as a subprocess (NOT in-process embedded), and uses `FreeCADCmd.exe` headless for parameter round-trips between optimisation iterations.
+- **License**: GNU Lesser General Public License v2.1 or later (LGPL-2.1+).
+- **Source**: [https://github.com/FreeCAD/FreeCAD](https://github.com/FreeCAD/FreeCAD)
+- **Packaging Note**: PyLCSS does NOT bundle the FreeCAD binaries. The helper script `scripts/install_solvers.py --only freecad` downloads the official Windows installer wizard from the GitHub release and runs it with admin elevation; users may also point `PYLCSS_FREECAD_EXE` at an existing install. PyLCSS additionally drops a one-line hook (`Mod/PyLCSS/Init.py`) into FreeCAD's per-version user config so every save inside FreeCAD writes a sibling `.brep` + `.fcmeta.json` PyLCSS auto-imports. The hook executes a small bundled macro (`pylcss/cad/freecad_bridge/macros/pylcss_autoexport.FCMacro`) which registers a `DocumentObserver` — the macro itself is PyLCSS-authored code under the PolyForm Shield license, but it runs inside FreeCAD's LGPL process. PyLCSS opens cleanly without FreeCAD installed; only the FreeCAD Part node feature is disabled.
 
 ## 1. LGPL Licensed Software
 
@@ -133,6 +139,36 @@ QtAwesome bundles several third-party icon fonts. These assets are governed by t
 - **License**: MIT
 - **Source**: [https://github.com/pydantic/pydantic-ai](https://github.com/pydantic/pydantic-ai)
 - **Note**: Minimal distribution of Pydantic AI used with OpenAI, Anthropic, and Google provider extras for the PyLCSS assistant system.
+
+### RealtimeSTT
+- **Copyright**: © 2023-2026, Kolja Beigel
+- **License**: MIT
+- **Source**: [https://github.com/KoljaB/RealtimeSTT](https://github.com/KoljaB/RealtimeSTT)
+- **Note**: Streaming speech-to-text pipeline bundling Silero VAD + Faster-Whisper used by the PyLCSS voice controller. Silero VAD is itself MIT-licensed (snakers4/silero-vad).
+
+### RealtimeTTS
+- **Copyright**: © 2023-2026, Kolja Beigel
+- **License**: MIT
+- **Source**: [https://github.com/KoljaB/RealtimeTTS](https://github.com/KoljaB/RealtimeTTS)
+- **Note**: Streaming text-to-speech wrapper used with the Kokoro local TTS engine for the PyLCSS assistant; supports barge-in.
+
+### kokoro-onnx
+- **Copyright**: © 2024-2026, Roi Bechor (thewh1teagle) and Kokoro contributors
+- **License**: MIT
+- **Source**: [https://github.com/thewh1teagle/kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx)
+- **Note**: ONNX runtime for the Kokoro-82M text-to-speech model. The underlying Kokoro-82M model weights are licensed under Apache 2.0 (hexgrad/Kokoro-82M).
+
+### sounddevice
+- **Copyright**: © 2015-2026, Matthias Geier
+- **License**: MIT
+- **Source**: [https://github.com/spatialaudio/python-sounddevice](https://github.com/spatialaudio/python-sounddevice)
+- **Note**: PortAudio-based audio I/O used by the PyLCSS TTS playback stack.
+
+### py7zr
+- **Copyright**: © 2019-2026, Hiroshi Miura
+- **License**: LGPL-2.1-or-later, used as the Python interface only.
+- **Source**: [https://github.com/miurahr/py7zr](https://github.com/miurahr/py7zr)
+- **Note**: Pure-Python 7z reader used as a fallback by `scripts/install_solvers.py` when extracting third-party archives. PyLCSS imports it from the venv; users may replace the wheel freely.
 
 ### MIT License Text
 ```text

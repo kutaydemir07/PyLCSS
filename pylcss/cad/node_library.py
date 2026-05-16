@@ -16,6 +16,9 @@ from pylcss.cad.nodes import (
     # Code-based geometry — the primary authoring path.
     CadQueryCodeNode,
 
+    # Interactive geometry (FreeCAD GUI subprocess + BREP round-trip).
+    FreeCadPartNode,
+
     # Face / surface selection (still needed for boundary-condition wiring).
     SelectFaceNode, InteractiveSelectFaceNode,
 
@@ -45,6 +48,8 @@ from pylcss.cad.nodes import (
 NODE_CLASS_MAPPING = {
     # Geometry — code-first.
     'com.cad.code_part': CadQueryCodeNode,
+    # Geometry — interactive (opens FreeCAD GUI on double-click, BREP round-trip).
+    'com.cad.freecad_part': FreeCadPartNode,
     'com.cad.import_step': ImportStepNode,
     'com.cad.import_stl':  ImportStlNode,
 

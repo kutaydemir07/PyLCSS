@@ -251,7 +251,21 @@ def setup_logging(level: int = DEFAULT_LOG_LEVEL,
     logging.getLogger('skfem.utils').setLevel(logging.WARNING)
     logging.getLogger('netgen').setLevel(logging.WARNING)
     logging.getLogger('ngsolve').setLevel(logging.WARNING)
-    
+
+    # Silence pydub's ffmpeg-not-found startup warning.  pydub is a
+    # transitive dep of RealtimeTTS, only used internally for MP3 format
+    # conversion which Kokoro (our default TTS engine) doesn't need --
+    # it emits PCM/WAV directly.  The warning fires at import time
+    # regardless, and shows up before our normal logging setup, so we
+    # suppress it preemptively here.
+    import warnings
+    warnings.filterwarnings(
+        "ignore",
+        message=r"Couldn't find ffmpeg or avconv.*",
+        category=RuntimeWarning,
+        module=r"pydub\.utils",
+    )
+
     logger = logging.getLogger(__name__)
     logger.info(f"PyLCSS logging initialized at level: {logging.getLevelName(level)}")
 

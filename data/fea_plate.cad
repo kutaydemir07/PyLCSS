@@ -556,24 +556,16 @@
       "layout_direction": 0,
       "port_deletion_allowed": false,
       "subgraph_session": {},
-      "type_": "com.cad.sim.load.LoadNode",
-      "name": "Force (Y)",
+      "type_": "com.cad.sim.pressure_load.PressureLoadNode",
+      "name": "Pressure (Hole)",
       "pos": [
         100.0,
         240.0
       ],
-      "height": 142.5,
+      "height": 97.0,
       "custom": {
-        "load_type": "Force",
-        "condition": "",
-        "force_x": 0.0,
-        "force_y": -10000.0,
-        "force_z": 0.0,
-        "moment_x": 0.0,
-        "moment_y": 0.0,
-        "moment_z": 0.0,
-        "gravity_accel": 9810.0,
-        "gravity_direction": "-Y"
+        "pressure": 1.0,
+        "direction": "Outward"
       }
     },
     "0x00e": {

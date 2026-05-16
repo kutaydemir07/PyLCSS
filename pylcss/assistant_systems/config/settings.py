@@ -78,12 +78,16 @@ class LLMControlConfig:
     memory_enabled: bool = True
     max_memory_messages: int = 20  # Context window for LLM
     
-    # Agentic AI settings
-    agentic_mode: bool = True  # Use multi-agent system (Planner → Executor → Critic)
-    use_critic_agent: bool = True  # Enable critic for validation
-    validate_design_intent: bool = True  # Critic validates design intent, not just geometry
-    max_retries: int = 3  # Max retry attempts for self-correction
-    auto_save_workflows: bool = True  # Auto-save successful multi-step operations
+    # Agentic AI: route requests through PydanticAgentRunner (native
+    # function-calling).  Turned on by default; turning it off falls back to
+    # the legacy single-shot path used only by the chat dialog.
+    agentic_mode: bool = True
+    # NOTE: the legacy flags `use_critic_agent`, `validate_design_intent`,
+    # `max_retries`, and `auto_save_workflows` were tied to the deleted
+    # orchestrator/workflow stack and had no effect at runtime; they were
+    # removed in the PydanticAI migration.  Old settings.json files that
+    # still contain them load fine -- dataclass ignores unknown keys via
+    # AssistantConfig.load's filtering.
     
     def get_api_key_for_provider(self, provider: str = "") -> str:
         """Get the API key for a specific provider."""
