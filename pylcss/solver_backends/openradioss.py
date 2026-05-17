@@ -149,8 +149,15 @@ def _build_keyword_deck(
     gravity: dict | None,
     warnings: List[str],
     impactor_mass: float = 0.0,
+    out_meta: dict | None = None,
 ) -> str:
-    """Create a minimal LS-DYNA keyword deck for OpenRadioss Starter."""
+    """Create a minimal LS-DYNA keyword deck for OpenRadioss Starter.
+
+    If ``out_meta`` is provided, it is populated with wall geometry data
+    (``wall``: dict or None) so the viewer can render the wall.  The keyword
+    deck only contains the wall coordinates as text; without this side channel
+    the viewer has no way to know where the wall was placed.
+    """
     points, tets = mesh_to_tet4(mesh, warnings)
 
     e_mpa = float(material.get("E", 210000.0))
@@ -161,7 +168,20 @@ def _build_keyword_deck(
     failure_strain = float(material.get("failure_strain", 0.0))
     if not material.get("enable_fracture", True):
         failure_strain = 0.0
-    
+
+    # Cowper-Symonds strain-rate parameters.  Per the Altair *MAT_003 /
+    # *MAT_PLASTIC_KINEMATIC reference, SRC is documented with the unit
+    # annotation [1/s] — the LS-DYNA reader does NOT auto-scale this
+    # field to the deck's consistent time unit.  So the value is written
+    # to the deck as-is; supply C in 1/s regardless of whether the rest
+    # of the deck is in mm-ms-tonne.  Default 0/0 disables rate hardening.
+    # Mild steel: strain_rate_c ≈ 40 s⁻¹, strain_rate_p ≈ 5.
+    # Aluminum 6061: strain_rate_c ≈ 6500, strain_rate_p ≈ 4.
+    # Rate-hardened yield is σ_y(ε̇) = σ_y0 · (1 + (ε̇/C)^(1/p)); at
+    # crash rates (100–1000 s⁻¹) this raises flow stress ~30–80 %.
+    src = float(material.get("strain_rate_c", 0.0) or 0.0)
+    srp = float(material.get("strain_rate_p", 0.0) or 0.0)
+
     e = e_mpa * _MPA_TO_TONNE_MM_MS2
     yield_strength = yield_strength_mpa * _MPA_TO_TONNE_MM_MS2
     tangent_modulus = tangent_modulus_mpa * _MPA_TO_TONNE_MM_MS2
@@ -205,7 +225,7 @@ def _build_keyword_deck(
             # MANDATORY in LS-DYNA / OpenRadioss; omitting it makes the parser
             # eat the next keyword as the missing data line.
             "$#     src       srp        fs        vp",
-            f"0.0, 0.0, {failure_strain:.6g}, 0.0",
+            f"{src:.6g}, {srp:.6g}, {failure_strain:.6g}, 0.0",
         ]
     )
 
@@ -356,13 +376,18 @@ def _build_keyword_deck(
 
     # Standard tube-crush decks use automatic single-surface contact so folds
     # do not pass through each other as the structure collapses.  Keep it on
-    # for all crash decks; SSID=0 means "all external segments".
+    # for all crash decks; SSID=0 means "all external segments".  Card 3
+    # (penalty scale factors) is emitted with defaults so the deck is
+    # portable to native LS-DYNA preprocessors which require it to be
+    # physically present, even if blank.
     lines.extend([
         "*CONTACT_AUTOMATIC_SINGLE_SURFACE",
         "$#    ssid      msid     sstyp     mstyp    sboxid    mboxid       spr       mpr",
         "0",
         "$#      fs        fd        dc        vc       vdc    penchk        bt        dt",
         "0.08, 0.08",
+        "$#     sfs       sfm       sst       mst      sfst      sfmt       fsf       vsf",
+        "1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0",
     ])
 
     # ── Rigid wall (Moving Body scope only) ──────────────────────────────────
@@ -388,9 +413,9 @@ def _build_keyword_deck(
         wall_head = wall_pt + wall_normal
         lines.extend([
             "*RIGIDWALL_PLANAR",
-            "$# nsid    nsidex  boxid   fric    wvel",
+            "$#    nsid    nsidex     boxid    offset     birth     death     rwksf",
             "0, 0, 0, 0.0, 0.0",
-            "$# xt            yt            zt            xh            yh            zh            foffset",
+            "$#      xt        yt        zt        xh        yh        zh      fric",
             (f"{wall_pt[0]:.12g}, {wall_pt[1]:.12g}, {wall_pt[2]:.12g}, "
              f"{wall_head[0]:.12g}, {wall_head[1]:.12g}, {wall_head[2]:.12g}, 0.0"),
         ])
@@ -400,6 +425,15 @@ def _build_keyword_deck(
             f"normal=[{wall_normal[0]:.3g}, {wall_normal[1]:.3g}, {wall_normal[2]:.3g}] "
             f"(Moving Body barrier, gap={gap:.3f} mm)"
         )
+        if out_meta is not None:
+            out_meta["wall"] = {
+                "type": "stationary",
+                "pt": [float(wall_pt[0]), float(wall_pt[1]), float(wall_pt[2])],
+                "normal": [float(wall_normal[0]), float(wall_normal[1]), float(wall_normal[2])],
+                "half_extent": float(0.6 * bbox_diag),
+                "v0_mm_per_ms": 0.0,
+                "velocity_dir": [0.0, 0.0, 0.0],
+            }
         # Warn if the named impact face is at the trailing edge — common sign
         # that the velocity direction is wrong (e.g. -20 instead of +20 mm/ms
         # for a frontal-crash geometry where +X is the impact face).
@@ -441,12 +475,12 @@ def _build_keyword_deck(
         wall_mass = max(float(impactor_mass), 0.0) * 1e-3  # kg -> tonne
         lines.extend([
             "*RIGIDWALL_PLANAR_MOVING",
-            "$#    nsid    nsidex   dsearch",
+            "$#    nsid    nsidex     boxid",
             "0, 0, 0",
-            "$#     xt            yt            zt            xh            yh            zh          fric",
+            "$#      xt        yt        zt        xh        yh        zh      fric",
             (f"{wall_pt[0]:.12g}, {wall_pt[1]:.12g}, {wall_pt[2]:.12g}, "
              f"{wall_head[0]:.12g}, {wall_head[1]:.12g}, {wall_head[2]:.12g}, 0.08"),
-            "$#   mass          v0",
+            "$#    mass        v0",
             f"{wall_mass:.12g}, {v_mag:.12g}",
         ])
         if wall_mass <= 0.0:
@@ -461,20 +495,34 @@ def _build_keyword_deck(
             f"normal=[{wall_normal[0]:.3g}, {wall_normal[1]:.3g}, {wall_normal[2]:.3g}], "
             f"v0={v_mag:.3g} mm/ms, mass={wall_mass:.3g} tonne"
         )
+        if out_meta is not None:
+            out_meta["wall"] = {
+                "type": "moving",
+                "pt": [float(wall_pt[0]), float(wall_pt[1]), float(wall_pt[2])],
+                "normal": [float(wall_normal[0]), float(wall_normal[1]), float(wall_normal[2])],
+                "half_extent": float(0.6 * bbox_diag),
+                "v0_mm_per_ms": float(v_mag),
+                "velocity_dir": [float(v_hat[0]), float(v_hat[1]), float(v_hat[2])],
+            }
 
     # Gravity body force via *LOAD_BODY_X/Y/Z (LS-DYNA syntax accepted by Radioss).
+    # *LOAD_BODY_* is a BASE ACCELERATION of the reference frame — a body in that
+    # frame experiences a fictitious inertial force in the OPPOSITE direction
+    # (D'Alembert).  So to make objects fall in -Y, the supplied SF must be +9810,
+    # not -9810.  (See dynasupport.com/howtos/general/gravity-load: "A positive
+    # gravity constant is used to make objects drop in the negative direction.")
     if gravity and float(gravity.get("accel", 0.0)) != 0.0:
         direction = gravity.get("direction", "-Y")
         accel = float(gravity.get("accel", 9810.0))
         dir_map = {
-            "-X": ("X", -accel),
-            "+X": ("X", +accel),
-            "-Y": ("Y", -accel),
-            "+Y": ("Y", +accel),
-            "-Z": ("Z", -accel),
-            "+Z": ("Z", +accel),
+            "-X": ("X", +accel),
+            "+X": ("X", -accel),
+            "-Y": ("Y", +accel),
+            "+Y": ("Y", -accel),
+            "-Z": ("Z", +accel),
+            "+Z": ("Z", -accel),
         }
-        axis, signed = dir_map.get(direction, ("Y", -accel))
+        axis, signed = dir_map.get(direction, ("Y", +accel))
         # *DEFINE_CURVE: a unit constant curve so LOAD_BODY can scale by it.
         curve_id = next_set_id
         next_set_id += 1
@@ -520,6 +568,16 @@ def _build_keyword_deck(
                 f"distributed over {len(mass_nodes)} {mass_label}."
             )
 
+    # Time-history outputs (*DATABASE_GLSTAT / _MATSUM / _RWFORC) are NOT
+    # emitted here.  OpenRadioss's LS-DYNA reader does not implement those
+    # keywords — they are silently dropped during translation to native
+    # Radioss, and the engine produces no glstat/matsum/rwforc files.
+    # Energy-balance and rigid-wall force histories therefore have to come
+    # from the T01 file produced via the engine /TFILE cadence card (see
+    # _build_engine_deck) plus the auto-included rigid-wall TH group that
+    # *RIGIDWALL_PLANAR creates internally.  Native LS-DYNA users running
+    # this deck through LS-PrePost will get full *DATABASE_* support, but
+    # for OpenRadioss the T01 file is the only TH output available.
     lines.append("*END")
     return "\n".join(lines) + "\n"
 
@@ -586,6 +644,18 @@ def _build_engine_deck(
             "/ANIM/ELEM/EPSP",   # equivalent plastic strain
             "/ANIM/ELEM/ENER",
             "/ANIM/BRICK/TENS/STRESS",
+        ]
+    )
+
+    # Time-history file cadence.  The correct OpenRadioss engine keyword
+    # for T01 sampling rate is /TFILE — *not* /TH/DT (which is a Starter
+    # keyword for TH-group definitions, not an engine cadence card).
+    # Sampling at output_dt matches the animation cadence so any TH
+    # curves line up with the visualization timeline.
+    lines.extend(
+        [
+            "/TFILE",
+            f"{out_dt:.6g}",
             "",
         ]
     )
@@ -836,6 +906,12 @@ def run_openradioss_existing_deck(
         "frames": raw_frames,
         "peak_displacement": peak_disp,
         "peak_stress": peak_vm,
+        # User-supplied decks: we don't know the wall geometry (it lives
+        # inside their deck text) and we don't have a mesh/density to compute
+        # KE/IE from, so both are left out.  end_time defaults to 1.0 so the
+        # viewer's time label still produces useful normalized values.
+        "wall": None,
+        "end_time": float(end_time) if end_time is not None else 1.0,
         "input_file": str(staged_deck),
         "engine_file": str(staged_engine),
         "work_dir": str(work_dir),
@@ -875,7 +951,12 @@ def _wrap_deck_result(
 
 
 def _build_animation_frames_with_mesh(mesh: Any, frames: list) -> list:
-    """Pad / truncate animation frame arrays to match the source mesh point count."""
+    """Pad / truncate animation frame arrays to match the source mesh point count.
+
+    Preserves the per-node velocity field and per-element internal-energy
+    density when available, so the time-history builder downstream can
+    compute KE(t) and IE(t).
+    """
     n_points = int(np.asarray(mesh.p).shape[1])
     fixed: list = []
     for frame in frames:
@@ -885,6 +966,9 @@ def _build_animation_frames_with_mesh(mesh: Any, frames: list) -> list:
             * _TONNE_MM_MS2_TO_MPA
         )
         node_ids = np.asarray(frame.get("node_ids", []), dtype=int).reshape(-1)
+        vel_raw = np.asarray(frame.get("velocity", []), dtype=float)
+        if vel_raw.ndim != 2 or vel_raw.shape[1] != 3:
+            vel_raw = np.zeros((0, 3), dtype=float)
 
         # Ensure length 3*N and N respectively. anim_to_vtk may reorder points,
         # but it emits NODE_ID, so scatter back to the source mesh ids first.
@@ -907,16 +991,96 @@ def _build_animation_frames_with_mesh(mesh: Any, frames: list) -> list:
             target_vm[node_ids[valid] - 1] = vm[valid]
         else:
             target_vm[: min(vm.size, target_vm.size)] = vm[: target_vm.size]
+
+        target_vel = np.zeros((n_points, 3), dtype=float)
+        if node_ids.size == vel_raw.shape[0] and vel_raw.shape[0] > 0:
+            valid = (node_ids >= 1) & (node_ids <= n_points)
+            target_vel[node_ids[valid] - 1] = vel_raw[valid]
+        elif vel_raw.shape[0] > 0:
+            n_copy = min(vel_raw.shape[0], n_points)
+            target_vel[:n_copy] = vel_raw[:n_copy]
+
+        ener_cell = frame.get("ener_cell")
+        if ener_cell is not None:
+            ener_cell = np.asarray(ener_cell, dtype=float).reshape(-1)
+
         fixed.append(
             {
                 "displacement": target_disp,
                 "stress_vm": target_vm,
+                "velocity": target_vel,
+                "ener_cell": ener_cell,
                 "eps_p": np.zeros(n_points, dtype=float),
                 "failed": np.zeros(n_points, dtype=float),
                 "time": float(frame.get("time", 0.0)),
             }
         )
     return fixed
+
+
+def _compute_time_history(
+    mesh: Any,
+    material: dict,
+    frames: list,
+    end_time: float,
+) -> dict:
+    """KE(t) [kJ] and IE(t) [kJ] from per-frame velocity + cell ENER fields.
+
+    Lumped node masses are derived from the tet mesh: each node receives
+    1/4 of every adjacent element's mass (ρ_material × element_volume).
+    """
+    if not frames:
+        return {"t_ms": [], "ke_kj": [], "ie_kj": []}
+
+    try:
+        points, tets = mesh_to_tet4(mesh, [])
+    except Exception:
+        return {"t_ms": [float(f.get("time", 0.0)) * float(end_time) for f in frames],
+                "ke_kj": [0.0] * len(frames),
+                "ie_kj": [0.0] * len(frames)}
+
+    rho_consistent = float(material.get("rho", material.get("density", 7.85e-9)))
+    n_points = points.shape[0]
+    n_elem = tets.shape[0]
+
+    # Element volumes (always positive thanks to mesh_to_tet4's orientation flip).
+    v0 = points[tets[:, 0]]
+    e1 = points[tets[:, 1]] - v0
+    e2 = points[tets[:, 2]] - v0
+    e3 = points[tets[:, 3]] - v0
+    elem_vol = np.abs(np.einsum("ij,ij->i", np.cross(e1, e2), e3)) / 6.0
+    total_vol = float(np.sum(elem_vol))
+
+    # Lumped node mass: 1/4 of each adjacent element's mass.
+    node_mass = np.zeros(n_points, dtype=float)
+    for k in range(4):
+        np.add.at(node_mass, tets[:, k], 0.25 * rho_consistent * elem_vol)
+
+    t_ms: list = []
+    ke_kj: list = []
+    ie_kj: list = []
+    for frame in frames:
+        t_ms.append(float(frame.get("time", 0.0)) * float(end_time))
+
+        vel = frame.get("velocity")
+        if vel is None or not isinstance(vel, np.ndarray) or vel.shape != (n_points, 3):
+            ke_kj.append(0.0)
+        else:
+            speed_sq = np.einsum("ij,ij->i", vel, vel)
+            # 0.5 · m · v² → in tonne-mm-ms units this evaluates directly in kJ.
+            ke_kj.append(float(0.5 * np.sum(node_mass * speed_sq)))
+
+        ener = frame.get("ener_cell")
+        if ener is None or ener.size == 0:
+            ie_kj.append(0.0)
+        else:
+            arr = np.asarray(ener, dtype=float).reshape(-1)
+            n = min(arr.size, n_elem)
+            ie_kj.append(float(np.sum(arr[:n] * elem_vol[:n])))
+
+    return {"t_ms": t_ms, "ke_kj": ke_kj, "ie_kj": ie_kj,
+            "total_volume_mm3": total_vol,
+            "total_mass_kg": float(rho_consistent * total_vol * 1e3)}
 
 
 def run_openradioss_crash(
@@ -942,6 +1106,7 @@ def run_openradioss_crash(
     work_dir = make_work_dir("pylcss_openradioss_", config.work_dir)
     job_name = config.job_name or "pylcss_openradioss"
     deck_path = work_dir / f"{job_name}.k"
+    deck_meta: dict = {}
     deck_path.write_text(
         _build_keyword_deck(
             mesh=mesh,
@@ -953,9 +1118,11 @@ def run_openradioss_crash(
             gravity=gravity,
             warnings=warnings,
             impactor_mass=impactor_mass,
+            out_meta=deck_meta,
         ),
         encoding="utf-8",
     )
+    wall_info = deck_meta.get("wall")
 
     engine_deck_path = work_dir / f"{job_name}_0001.rad"
 
@@ -1111,6 +1278,7 @@ def run_openradioss_crash(
         stress_field = last["stress_vm"]
         peak_disp = float(np.max(np.linalg.norm(displacement_flat.reshape(n_points, 3), axis=1)))
         peak_vm = float(np.max(stress_field)) if stress_field.size else 0.0
+        time_history = _compute_time_history(mesh, material, frames, end_time)
         return {
             "type": "crash",
             "backend": "OpenRadioss",
@@ -1123,6 +1291,9 @@ def run_openradioss_crash(
             "frames": frames,
             "peak_displacement": peak_disp,
             "peak_stress": peak_vm,
+            "wall": wall_info,
+            "end_time": float(end_time),
+            "time_history": time_history,
             "input_file": str(deck_path),
             "engine_file": str(engine_deck_path),
             "work_dir": str(work_dir),
@@ -1140,6 +1311,8 @@ def run_openradioss_crash(
         "mesh": mesh,
         "visualization_mode": visualization_mode,
         "disp_scale": disp_scale,
+        "wall": wall_info,
+        "end_time": float(end_time),
         "input_file": str(deck_path),
         "engine_file": str(engine_deck_path),
         "work_dir": str(work_dir),

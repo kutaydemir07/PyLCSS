@@ -227,16 +227,26 @@ def _cell_vm_to_point_vm(mesh) -> Optional[np.ndarray]:
     return vm_points
 
 
-def _vtk_point_data(mesh) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
-    """Extract displacement (N,3) and Von Mises (N,) from a meshio object.
+def _vtk_point_data(mesh) -> Tuple[
+    Optional[np.ndarray],     # disp (N, 3)
+    Optional[np.ndarray],     # vm   (N,)
+    Optional[np.ndarray],     # node_ids (N,) 1-based
+    Optional[np.ndarray],     # velocity (N, 3)
+    Optional[np.ndarray],     # cell internal energy density per element (N_elem,)
+]:
+    """Extract displacement (N,3), Von Mises (N,), velocity (N,3), and cell
+    internal energy density (N_elem,) from a meshio object.
 
     OpenRadioss's ``anim_to_vtk`` writes displacement under names that vary by
-    release ("Displacement", "DISP", "DEPLACEMENT"); stress is most commonly
-    "Stress" or "VonMises".  We probe the common spellings.
+    release ("Displacement", "DISP", "DEPLACEMENT"); velocity is "VEL" /
+    "Velocity" / "VITESSE"; stress is "Stress" or "VonMises"; internal-energy
+    density is in cell_data under "Energy", "ENER", or "Internal_Energy".
+    We probe the common spellings.
     """
     disp: Optional[np.ndarray] = None
     vm: Optional[np.ndarray] = None
     node_ids: Optional[np.ndarray] = None
+    vel: Optional[np.ndarray] = None
 
     point_data = getattr(mesh, "point_data", {}) or {}
     for key in point_data:
@@ -249,6 +259,12 @@ def _vtk_point_data(mesh) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], O
                 disp = arr[:, :3]
             elif arr.ndim == 1 and arr.size % 3 == 0:
                 disp = arr.reshape((-1, 3))
+        if vel is None and (kl == "vel" or "veloc" in kl or "vitesse" in kl):
+            arr = np.asarray(point_data[key], dtype=float)
+            if arr.ndim == 2 and arr.shape[1] >= 3:
+                vel = arr[:, :3]
+            elif arr.ndim == 1 and arr.size % 3 == 0:
+                vel = arr.reshape((-1, 3))
         if vm is None and ("von" in kl or "vonmis" in kl or kl == "vm"):
             arr = np.asarray(point_data[key], dtype=float)
             if arr.ndim == 1:
@@ -271,7 +287,48 @@ def _vtk_point_data(mesh) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], O
                 )
     if vm is None:
         vm = _cell_vm_to_point_vm(mesh)
-    return disp, vm, node_ids
+    ener_cell = _extract_cell_ener(mesh)
+    return disp, vm, node_ids, vel, ener_cell
+
+
+def _extract_cell_ener(mesh) -> Optional[np.ndarray]:
+    """Return per-element internal-energy density (one scalar per solid cell).
+
+    OpenRadioss tags 2D vs 3D fields in cell_data — for tet meshes the 3D
+    block is what we want.  Falls back to the first matching field if no
+    explicit 3D tag is present.
+    """
+    cell_data = getattr(mesh, "cell_data_dict", {}) or {}
+    if not cell_data:
+        return None
+
+    def _sort_key(n: str) -> int:
+        nl = n.lower()
+        if "3delem" in nl and "ener" in nl:
+            return 0
+        if "ener" in nl or "internal" in nl:
+            return 1
+        return 2
+
+    for name, by_type in sorted(cell_data.items(), key=lambda kv: _sort_key(kv[0])):
+        nl = name.lower()
+        if "ener" not in nl and "internal" not in nl:
+            continue
+        # Concatenate all cell types preserving the meshio cell-block order
+        # so indices line up with mesh.cells.
+        out_blocks: List[np.ndarray] = []
+        for block in mesh.cells:
+            vals = by_type.get(block.type)
+            if vals is None:
+                out_blocks.append(np.zeros(block.data.shape[0], dtype=float))
+                continue
+            arr = np.asarray(vals, dtype=float)
+            if arr.ndim > 1:
+                arr = arr.reshape(arr.shape[0], -1)[:, 0]
+            out_blocks.append(arr)
+        if out_blocks:
+            return np.concatenate(out_blocks)
+    return None
 
 
 def read_animation_frames(
@@ -334,7 +391,7 @@ def read_animation_frames(
         except Exception as exc:
             warnings.append(f"Failed to read {vtk_path.name}: {exc}")
             continue
-        disp, vm, node_ids = _vtk_point_data(mesh)
+        disp, vm, node_ids, vel, ener_cell = _vtk_point_data(mesh)
         n_points = int(mesh.points.shape[0]) if mesh.points is not None else 0
         if disp is None:
             disp = np.zeros((n_points, 3), dtype=float)
@@ -349,6 +406,10 @@ def read_animation_frames(
             {
                 "displacement": flat_disp,
                 "stress_vm": np.asarray(vm, dtype=float),
+                "velocity": (np.asarray(vel, dtype=float) if vel is not None
+                             else np.zeros((n_points, 3), dtype=float)),
+                "ener_cell": (np.asarray(ener_cell, dtype=float) if ener_cell is not None
+                              else None),
                 "node_ids": node_ids,
                 "time": float(vtk_idx + 1) / float(n_anim),
             }
