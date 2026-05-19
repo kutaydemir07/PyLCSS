@@ -89,7 +89,7 @@ def make_work_dir(prefix: str, requested_dir: Optional[str]) -> Path:
     if requested_dir:
         path = Path(os.path.expandvars(os.path.expanduser(str(requested_dir))))
         path.mkdir(parents=True, exist_ok=True)
-        return path
+        return path.resolve()
     return Path(tempfile.mkdtemp(prefix=prefix))
 
 
@@ -317,6 +317,56 @@ def mesh_to_tet4(mesh: Any, warnings: List[str]) -> Tuple[np.ndarray, np.ndarray
         )
 
     return points, cells
+
+
+def is_shell_mesh(mesh: Any) -> bool:
+    """True if ``mesh`` is a triangle surface mesh (shell element source)."""
+    if mesh is None or not hasattr(mesh, "t"):
+        return False
+    t = np.asarray(mesh.t)
+    return t.ndim == 2 and t.shape[0] == 3
+
+
+def mesh_to_shell(mesh: Any, warnings: List[str]) -> Tuple[np.ndarray, np.ndarray]:
+    """Return points and 3-node triangles for an OpenRadioss shell deck.
+
+    The mesh is expected to have ``mesh.p`` of shape ``(3, N_nodes)`` and
+    ``mesh.t`` of shape ``(3, N_elem)`` (triangle vertex indices, 0-based).
+    Degenerate triangles (zero area) are dropped with a warning since
+    OpenRadioss /SHELL elements reject them.
+    """
+    if mesh is None or not hasattr(mesh, "p") or not hasattr(mesh, "t"):
+        raise SolverBackendError("Shell deck writer expected a mesh with .p and .t.")
+
+    p = np.asarray(mesh.p, dtype=float)
+    if p.ndim != 2 or p.shape[0] != 3:
+        raise SolverBackendError(
+            f"Shell mesh.p must be (3, N_nodes), got {p.shape!r}."
+        )
+    t = np.asarray(mesh.t, dtype=int)
+    if t.ndim != 2 or t.shape[0] != 3:
+        raise SolverBackendError(
+            f"Shell mesh.t must be (3, N_elem), got {t.shape!r}."
+        )
+
+    points = p.T                       # (N_nodes, 3)
+    tris = t.T.copy()                  # (N_elem, 3)
+
+    # Drop zero-area triangles — OpenRadioss rejects them with -ve Jacobian.
+    v0 = points[tris[:, 0]]
+    v1 = points[tris[:, 1]]
+    v2 = points[tris[:, 2]]
+    twice_area = np.linalg.norm(np.cross(v1 - v0, v2 - v0), axis=1)
+    keep = twice_area > 1.0e-12
+    n_drop = int(np.count_nonzero(~keep))
+    if n_drop:
+        warnings.append(
+            f"Dropped {n_drop}/{tris.shape[0]} degenerate shell triangles "
+            "with zero area before writing the OpenRadioss deck."
+        )
+        tris = tris[keep]
+
+    return points, tris
 
 
 def id_lines(ids: Sequence[int], per_line: int = 12) -> List[str]:

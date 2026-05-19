@@ -1,0 +1,627 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "0x17cd8a4f9e0": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "MBB Domain With Pads",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 165.6,
+      "pos": [
+        -840.0,
+        -160.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "code": "# MBB beam design domain: main span plus connected support/load pads.\n# The pads give the Select Face nodes real local faces instead of string-only BCs.\nbeam = cq.Workplane('XY').box(span, height, thickness)\nleft_pad = (\n    cq.Workplane('XY')\n    .box(pad_width, pad_height, thickness)\n    .translate((-0.5 * span + 0.5 * pad_width, -0.5 * height - 0.5 * pad_height, 0.0))\n)\nright_pad = (\n    cq.Workplane('XY')\n    .box(pad_width, pad_height, thickness)\n    .translate((0.5 * span - 0.5 * pad_width, -0.5 * height - 0.5 * pad_height, 0.0))\n)\nload_pad = (\n    cq.Workplane('XY')\n    .box(pad_width, pad_height, thickness)\n    .translate((0.0, 0.5 * height + 0.5 * pad_height, 0.0))\n)\nresult = beam.union(left_pad).union(right_pad).union(load_pad)\n",
+        "parameters": "",
+        "param_1_name": "span",
+        "param_1_value": 150.0,
+        "param_2_name": "height",
+        "param_2_value": 20.0,
+        "param_3_name": "thickness",
+        "param_3_value": 6.0,
+        "param_4_name": "pad_width",
+        "param_4_value": 1.0,
+        "param_5_name": "pad_height",
+        "param_5_value": 1.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
+      }
+    },
+    "0x17cd8a4fd10": {
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "icon": null,
+      "name": "Mesh",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160.953125,
+      "height": 119.4,
+      "pos": [
+        -550.0,
+        -160.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "mesh_type": "Tet",
+        "element_size": 4.0,
+        "refinement_size": 1.5
+      }
+    },
+    "0x17cd8a54620": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "Material",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 174.25,
+      "height": 96.3,
+      "pos": [
+        -550.0,
+        140.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "preset": "Steel (Structural)",
+        "youngs_modulus": 210000.0,
+        "poissons_ratio": 0.3,
+        "density": 7.85e-09,
+        "yield_strength": 0.0,
+        "tangent_modulus": 0.0
+      }
+    },
+    "0x17cd8a55eb0": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "icon": null,
+      "name": "Left Support",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 73.2,
+      "pos": [
+        20.0,
+        -430.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "constraint_type": "Fixed",
+        "displacement_x": 0.0,
+        "displacement_y": 0.0,
+        "displacement_z": 0.0,
+        "condition": ""
+      }
+    },
+    "0x17cd8a56300": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "icon": null,
+      "name": "Right Roller",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 73.2,
+      "pos": [
+        20.0,
+        -250.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "constraint_type": "Roller Y",
+        "displacement_x": 0.0,
+        "displacement_y": 0.0,
+        "displacement_z": 0.0,
+        "condition": ""
+      }
+    },
+    "0x17cd8a57440": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Select Load Pad",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 60,
+      "pos": [
+        -260.0,
+        -70.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "selector_type": "Box",
+        "direction": ">Z",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -4.5,
+        "box_max_x": 4.5,
+        "box_min_y": 14.8,
+        "box_max_y": 15.2,
+        "box_min_z": -3.5,
+        "box_max_z": 3.5,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "top"
+      }
+    },
+    "0x17cd8a56540": {
+      "type_": "com.cad.sim.load.LoadNode",
+      "icon": null,
+      "name": "Mid-span Load",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 142.5,
+      "pos": [
+        20.0,
+        -70.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "load_type": "Force",
+        "condition": "",
+        "force_x": 0.0,
+        "force_y": -1000.0,
+        "force_z": 0.0,
+        "moment_x": 0.0,
+        "moment_y": 0.0,
+        "moment_z": 0.0,
+        "gravity_accel": 9810.0,
+        "gravity_direction": "-Y"
+      }
+    },
+    "0x17cd8a54770": {
+      "type_": "com.cad.sim.topopt_voxel.TopologyOptVoxelNode",
+      "icon": null,
+      "name": "Voxel Topology Opt",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 187.125,
+      "height": 119.4,
+      "pos": [
+        330.0,
+        -210.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "nelx": 80,
+        "nely": 18,
+        "nelz": 2,
+        "volfrac": 0.35,
+        "rmin": 1.8,
+        "penal": 3.0,
+        "density_cutoff": 0.35,
+        "visualization": "Recovered Shape",
+        "E0": 1.0,
+        "Emin": 1e-09,
+        "nu": 0.3,
+        "optimizer": "MMA",
+        "max_iter": 80,
+        "tol": 0.01,
+        "bc_preset": "Custom",
+        "left_support": "None",
+        "right_support": "None",
+        "top_support": "None",
+        "bottom_support": "None",
+        "front_support": "None",
+        "back_support": "None",
+        "support_regions": "[]",
+        "force_type": "Point",
+        "force_face": "Top",
+        "force_ix_frac": 0.5,
+        "force_iy_frac": 1.0,
+        "force_iz_frac": 0.5,
+        "force_dir_x": 0.0,
+        "force_dir_y": -1.0,
+        "force_dir_z": 0.0,
+        "force_magnitude": 1.0
+      }
+    },
+    "0x17cc807b230": {
+      "type_": "com.cad.select_face_interactive.InteractiveSelectFaceNode",
+      "icon": null,
+      "name": "Select Face (Interactive)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 60,
+      "pos": [
+        -308.9628761789184,
+        -300.84510724938065
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "picked_face_indices": "2",
+        "selection_label": "1 face selected  (idx: 2)"
+      }
+    },
+    "0x17cd8a56840": {
+      "type_": "com.cad.select_face_interactive.InteractiveSelectFaceNode",
+      "icon": null,
+      "name": "Select Face (Interactive) 1",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 167.234375,
+      "height": 60,
+      "pos": [
+        -421.3645454545451,
+        -412.5799999999998
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "picked_face_indices": "8",
+        "selection_label": "1 face selected  (idx: 8)"
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "0x17cd8a4f9e0",
+        "shape"
+      ],
+      "in": [
+        "0x17cd8a4fd10",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x17cd8a4f9e0",
+        "shape"
+      ],
+      "in": [
+        "0x17cd8a57440",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x17cd8a4f9e0",
+        "shape"
+      ],
+      "in": [
+        "0x17cc807b230",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x17cd8a4f9e0",
+        "shape"
+      ],
+      "in": [
+        "0x17cd8a56840",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x17cd8a4fd10",
+        "mesh"
+      ],
+      "in": [
+        "0x17cd8a55eb0",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x17cd8a4fd10",
+        "mesh"
+      ],
+      "in": [
+        "0x17cd8a56300",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x17cd8a4fd10",
+        "mesh"
+      ],
+      "in": [
+        "0x17cd8a56540",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x17cd8a4fd10",
+        "mesh"
+      ],
+      "in": [
+        "0x17cd8a54770",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x17cd8a54620",
+        "material"
+      ],
+      "in": [
+        "0x17cd8a54770",
+        "material"
+      ]
+    },
+    {
+      "in": [
+        "0x17cd8a55eb0",
+        "target_face"
+      ],
+      "out": [
+        "0x17cd8a56840",
+        "workplane"
+      ]
+    },
+    {
+      "out": [
+        "0x17cd8a55eb0",
+        "constraints"
+      ],
+      "in": [
+        "0x17cd8a54770",
+        "constraints"
+      ]
+    },
+    {
+      "in": [
+        "0x17cd8a56300",
+        "target_face"
+      ],
+      "out": [
+        "0x17cc807b230",
+        "workplane"
+      ]
+    },
+    {
+      "out": [
+        "0x17cd8a56300",
+        "constraints"
+      ],
+      "in": [
+        "0x17cd8a54770",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "0x17cd8a57440",
+        "workplane"
+      ],
+      "in": [
+        "0x17cd8a56540",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x17cd8a56540",
+        "loads"
+      ],
+      "in": [
+        "0x17cd8a54770",
+        "loads"
+      ]
+    }
+  ]
+}

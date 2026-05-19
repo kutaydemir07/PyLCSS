@@ -1,0 +1,520 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "0x267b49ee480": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Cantilever Domain",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 165.6,
+      "pos": [
+        -780.0,
+        -120.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "code": "# Cantilever design domain: span along X, height along Y, thickness along Z.\n# The left face is clamped; the right face receives the downward load.\nresult = cq.Workplane('XY').box(length, height, thickness)\n",
+        "parameters": "",
+        "param_1_name": "length",
+        "param_1_value": 90.0,
+        "param_2_name": "height",
+        "param_2_value": 30.0,
+        "param_3_name": "thickness",
+        "param_3_value": 12.0,
+        "param_4_name": "",
+        "param_4_value": 0.0,
+        "param_5_name": "",
+        "param_5_value": 0.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
+      }
+    },
+    "0x267b4d3a9c0": {
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "icon": null,
+      "name": "Mesh",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160.953125,
+      "height": 119.4,
+      "pos": [
+        -500.0,
+        -130.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "mesh_type": "Tet",
+        "element_size": 4.0,
+        "refinement_size": 1.5,
+        "shell_thickness": 1.5,
+        "shell_nip": 5
+      }
+    },
+    "0x267b4d3b620": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "Material",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 174.25,
+      "height": 96.3,
+      "pos": [
+        -500.0,
+        110.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "preset": "Steel (Structural)",
+        "youngs_modulus": 210000.0,
+        "poissons_ratio": 0.3,
+        "density": 7.85e-09,
+        "yield_strength": 0.0,
+        "tangent_modulus": 0.0
+      }
+    },
+    "0x267b4d3a0f0": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Select Fixed Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 60,
+      "pos": [
+        -230.0,
+        -330.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "selector_type": "Direction",
+        "direction": "<X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "top"
+      }
+    },
+    "0x267b4d3bdd0": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "icon": null,
+      "name": "Fixed Support",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 73.2,
+      "pos": [
+        40.0,
+        -330.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "constraint_type": "Fixed",
+        "displacement_x": 0.0,
+        "displacement_y": 0.0,
+        "displacement_z": 0.0,
+        "condition": ""
+      }
+    },
+    "0x267b4d50290": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Select Load Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 60,
+      "pos": [
+        -230.0,
+        -120.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "selector_type": "Direction",
+        "direction": ">X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "top"
+      }
+    },
+    "0x267b4d50680": {
+      "type_": "com.cad.sim.load.LoadNode",
+      "icon": null,
+      "name": "Tip Load",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 142.5,
+      "pos": [
+        40.0,
+        -120.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "load_type": "Force",
+        "condition": "",
+        "force_x": 0.0,
+        "force_y": -1000.0,
+        "force_z": 0.0,
+        "moment_x": 0.0,
+        "moment_y": 0.0,
+        "moment_z": 0.0,
+        "gravity_accel": 9810.0,
+        "gravity_direction": "-Y"
+      }
+    },
+    "0x267b4c23b00": {
+      "type_": "com.cad.sim.topopt_voxel.TopologyOptVoxelNode",
+      "icon": null,
+      "name": "Voxel Topology Opt",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 187.125,
+      "height": 119.4,
+      "pos": [
+        340.0,
+        -160.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "nelx": 40,
+        "nely": 14,
+        "nelz": 2,
+        "volfrac": 0.4,
+        "rmin": 1.6,
+        "penal": 3.0,
+        "density_cutoff": 0.35,
+        "visualization": "Density",
+        "E0": 1.0,
+        "Emin": 1e-09,
+        "nu": 0.3,
+        "optimizer": "OC",
+        "max_iter": 60,
+        "tol": 0.01,
+        "bc_preset": "Custom",
+        "left_support": "None",
+        "right_support": "None",
+        "top_support": "None",
+        "bottom_support": "None",
+        "front_support": "None",
+        "back_support": "None",
+        "support_regions": "[]",
+        "force_type": "Point",
+        "force_face": "Right",
+        "force_ix_frac": 1.0,
+        "force_iy_frac": 0.5,
+        "force_iz_frac": 0.5,
+        "force_dir_x": 0.0,
+        "force_dir_y": -1.0,
+        "force_dir_z": 0.0,
+        "force_magnitude": 1.0
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "0x267b49ee480",
+        "shape"
+      ],
+      "in": [
+        "0x267b4d3a9c0",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x267b49ee480",
+        "shape"
+      ],
+      "in": [
+        "0x267b4d3a0f0",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x267b49ee480",
+        "shape"
+      ],
+      "in": [
+        "0x267b4d50290",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x267b4d3a9c0",
+        "mesh"
+      ],
+      "in": [
+        "0x267b4d3bdd0",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x267b4d3a9c0",
+        "mesh"
+      ],
+      "in": [
+        "0x267b4d50680",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x267b4d3a9c0",
+        "mesh"
+      ],
+      "in": [
+        "0x267b4c23b00",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x267b4d3b620",
+        "material"
+      ],
+      "in": [
+        "0x267b4c23b00",
+        "material"
+      ]
+    },
+    {
+      "out": [
+        "0x267b4d3a0f0",
+        "workplane"
+      ],
+      "in": [
+        "0x267b4d3bdd0",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x267b4d3bdd0",
+        "constraints"
+      ],
+      "in": [
+        "0x267b4c23b00",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "0x267b4d50290",
+        "workplane"
+      ],
+      "in": [
+        "0x267b4d50680",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x267b4d50680",
+        "loads"
+      ],
+      "in": [
+        "0x267b4c23b00",
+        "loads"
+      ]
+    }
+  ]
+}

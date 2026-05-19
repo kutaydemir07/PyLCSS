@@ -35,6 +35,12 @@ from pylcss.cad.nodes.fem.boundary_conditions import (
 )
 from pylcss.cad.nodes.fem.solver              import SolverNode
 from pylcss.cad.nodes.fem.topology_optimization import TopologyOptimizationNode
+from pylcss.cad.nodes.fem.topology_opt_voxel    import (
+    TopologyOptVoxelNode,
+    TopologyOptVoxelSolver,
+    TopologyOptVoxelProblem,
+    VoxelBC,
+)
 from pylcss.cad.nodes.fem.remesh              import RemeshNode
 from pylcss.cad.nodes.fem.size_optimization   import SizeOptimizationNode
 from pylcss.cad.nodes.fem.shape_optimization  import ShapeOptimizationNode
@@ -49,6 +55,6 @@ __all__ = [
     # nodes
     'MaterialNode', 'MeshNode',
     'ConstraintNode', 'LoadNode', 'PressureLoadNode',
-    'SolverNode', 'TopologyOptimizationNode',
+    'SolverNode', 'TopologyOptimizationNode', 'TopologyOptVoxelNode',
     'RemeshNode', 'SizeOptimizationNode', 'ShapeOptimizationNode',
 ]

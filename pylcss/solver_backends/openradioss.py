@@ -20,7 +20,9 @@ from pylcss.solver_backends.common import (
     SolverBackendError,
     dict_geometries,
     id_lines,
+    is_shell_mesh,
     make_work_dir,
+    mesh_to_shell,
     mesh_to_tet4,
     nodes_matching_condition,
     nodes_matching_geometries,
@@ -139,6 +141,35 @@ def _node_set(lines: List[str], set_id: int, nodes_1based: np.ndarray) -> None:
     lines.extend(id_lines(nodes_1based, per_line=8))
 
 
+def _normalise_crash_scenario(value: Any) -> str:
+    """Map new GUI labels and legacy saved values to backend scenario IDs."""
+    text = str(value or "").strip().lower().replace("_", " ")
+    if text.startswith("moving body") or text == "moving":
+        return "moving_body_fixed_wall"
+    if text.startswith("prescribed"):
+        return "prescribed_moving_wall"
+    return "fixed_specimen_moving_impactor"
+
+
+def _crash_scenario_label(scenario: str) -> str:
+    if scenario == "moving_body_fixed_wall":
+        return "Moving body + fixed wall"
+    if scenario == "prescribed_moving_wall":
+        return "Prescribed moving wall"
+    return "Fixed specimen + moving impactor"
+
+
+def _wall_friction_for_scenario(raw_value: Any, moving_body: bool) -> float:
+    """Return rigid-wall Coulomb friction, preserving legacy defaults."""
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = -1.0
+    if value >= 0.0:
+        return value
+    return 0.0 if moving_body else 0.08
+
+
 def _build_keyword_deck(
     mesh: Any,
     material: dict,
@@ -158,7 +189,19 @@ def _build_keyword_deck(
     deck only contains the wall coordinates as text; without this side channel
     the viewer has no way to know where the wall was placed.
     """
-    points, tets = mesh_to_tet4(mesh, warnings)
+    # Detect shell vs. tet input.  Shell decks emit *ELEMENT_SHELL +
+    # *SECTION_SHELL with a user-set thickness — the realistic crash model
+    # for thin-walled crashboxes and tubes.  Tet input keeps the existing
+    # *ELEMENT_SOLID / *SECTION_SOLID path.
+    shell_mode = is_shell_mesh(mesh)
+    shell_thickness = float(getattr(mesh, "shell_thickness", 1.5)) if shell_mode else 0.0
+    shell_nip = max(1, int(getattr(mesh, "shell_nip", 5))) if shell_mode else 0
+    tets = np.empty((0, 4), dtype=int)
+    tris = np.empty((0, 3), dtype=int)
+    if shell_mode:
+        points, tris = mesh_to_shell(mesh, warnings)
+    else:
+        points, tets = mesh_to_tet4(mesh, warnings)
 
     e_mpa = float(material.get("E", 210000.0))
     nu = float(material.get("nu", material.get("poissons_ratio", 0.3)))
@@ -188,6 +231,9 @@ def _build_keyword_deck(
 
     lines: List[str] = [
         "*KEYWORD",
+        "*CONTROL_UNITS",
+        "$#  length      time      mass",
+        "mm ms mtrc_ton",
         "*TITLE",
         "PyLCSS OpenRadioss crash deck",
         "*CONTROL_TERMINATION",
@@ -200,15 +246,42 @@ def _build_keyword_deck(
     for idx, xyz in enumerate(points, start=1):
         lines.append(f"{idx}, {xyz[0]:.12g}, {xyz[1]:.12g}, {xyz[2]:.12g}")
 
-    lines.extend(["*ELEMENT_SOLID", "$#   eid     pid      n1      n2      n3      n4"])
-    for idx, conn in enumerate(tets, start=1):
-        node_ids = [int(v) + 1 for v in conn]
-        lines.append(
-            f"{idx}, 1, {node_ids[0]}, {node_ids[1]}, {node_ids[2]}, {node_ids[3]}"
-        )
+    if shell_mode:
+        # *ELEMENT_SHELL needs four node columns; for a 3-node triangle the
+        # convention (LS-DYNA Keyword User's Manual, *ELEMENT_SHELL) is to
+        # repeat n3 in the n4 slot so the reader treats it as a degenerate
+        # quad / true triangle.
+        lines.extend(["*ELEMENT_SHELL", "$#   eid     pid      n1      n2      n3      n4"])
+        for idx, conn in enumerate(tris, start=1):
+            n1, n2, n3 = (int(v) + 1 for v in conn)
+            lines.append(f"{idx}, 1, {n1}, {n2}, {n3}, {n3}")
 
-    lines.extend(
-        [
+        # ELFORM=2 = Belytschko-Tsay shell, the LS-DYNA / OpenRadioss default
+        # for crash thin-shell metal; under-integrated but cheap and well
+        # validated for sheet metal crush.  SHRF=5/6 (Mindlin shear factor),
+        # NIP integration points through thickness (plastic stress recovered
+        # each cycle), QR/IRID=1.0 (one in-plane Gauss point).
+        lines.extend([
+            "*PART",
+            "PyLCSS shell part",
+            "$#     pid     secid       mid",
+            "1, 1, 1",
+            "*SECTION_SHELL",
+            "$#   secid    elform      shrf       nip     propt   qr/irid     icomp     setyp",
+            f"1, 2, 0.833333, {shell_nip}, 1.0, 0, 0, 1",
+            "$#      t1        t2        t3        t4",
+            (f"{shell_thickness:.12g}, {shell_thickness:.12g}, "
+             f"{shell_thickness:.12g}, {shell_thickness:.12g}"),
+        ])
+    else:
+        lines.extend(["*ELEMENT_SOLID", "$#   eid     pid      n1      n2      n3      n4"])
+        for idx, conn in enumerate(tets, start=1):
+            node_ids = [int(v) + 1 for v in conn]
+            lines.append(
+                f"{idx}, 1, {node_ids[0]}, {node_ids[1]}, {node_ids[2]}, {node_ids[3]}"
+            )
+
+        lines.extend([
             "*PART",
             "PyLCSS solid part",
             "$#     pid     secid       mid",
@@ -216,29 +289,38 @@ def _build_keyword_deck(
             "*SECTION_SOLID",
             "$#   secid    elform",
             "1, 10",
-            "*MAT_PLASTIC_KINEMATIC",
-            # Card 1: MID, RO, E, PR, SIGY, ETAN, BETA
-            "$#     mid        ro         e        pr      sigy      etan      beta",
-            f"1, {rho:.12g}, {e:.12g}, {nu:.12g}, {yield_strength:.12g}, {tangent_modulus:.12g}, 0.0",
-            # Card 2: SRC, SRP, FS, VP  (Cowper-Symonds strain-rate params,
-            # failure strain, viscoplastic flag).  This second card is
-            # MANDATORY in LS-DYNA / OpenRadioss; omitting it makes the parser
-            # eat the next keyword as the missing data line.
-            "$#     src       srp        fs        vp",
-            f"{src:.6g}, {srp:.6g}, {failure_strain:.6g}, 0.0",
-        ]
-    )
+        ])
+
+    # *MAT_PLASTIC_KINEMATIC (MID=1) — used by both shell and solid sections.
+    # Card 2 (SRC/SRP/FS/VP) is MANDATORY in LS-DYNA / OpenRadioss; omitting it
+    # makes the parser eat the next keyword as the missing data line.
+    lines.extend([
+        "*MAT_PLASTIC_KINEMATIC",
+        # Card 1: MID, RO, E, PR, SIGY, ETAN, BETA
+        "$#     mid        ro         e        pr      sigy      etan      beta",
+        f"1, {rho:.12g}, {e:.12g}, {nu:.12g}, {yield_strength:.12g}, {tangent_modulus:.12g}, 0.0",
+        # Card 2: SRC, SRP (Cowper-Symonds strain-rate), FS (failure strain), VP.
+        "$#     src       srp        fs        vp",
+        f"{src:.6g}, {srp:.6g}, {failure_strain:.6g}, 0.0",
+    ])
 
     next_set_id = 100
 
     velocity = np.asarray(impact.get("velocity", [0.0, 0.0, 0.0]), dtype=float)
     v_mag = float(np.linalg.norm(velocity))
     v_hat = velocity / v_mag if v_mag > 0.0 else np.array([1.0, 0.0, 0.0])
-    scope = str(impact.get("application_scope") or "Impact Face").strip().lower()
-    moving_body = scope.replace("_", " ").startswith("moving")
+    scenario = _normalise_crash_scenario(impact.get("application_scope"))
+    scenario_label = _crash_scenario_label(scenario)
+    moving_body = scenario == "moving_body_fixed_wall"
+    prescribed_wall = scenario == "prescribed_moving_wall"
+    wall_friction = _wall_friction_for_scenario(impact.get("wall_friction"), moving_body)
+    try:
+        wall_gap_override = max(float(impact.get("wall_gap_mm", 0.0) or 0.0), 0.0)
+    except (TypeError, ValueError):
+        wall_gap_override = 0.0
 
-    # ── SPC constraints (Impact Face scope only) ────────────────────────────
-    # For the Moving Body scope the entire structure is a free-flying projectile:
+    # ── SPC constraints (fixed-specimen scenarios only) ─────────────────────
+    # For the moving-body scenario the entire structure is a free-flying projectile:
     # there must be NO kinematic constraints — the rigid wall provides the only
     # reaction force.  Adding SPCs here would turn the free-flight crash into a
     # "hammer blow on a fixed-end bar", which gives elastic oscillations at
@@ -281,17 +363,17 @@ def _build_keyword_deck(
             )
     elif constraints:
         warnings.append(
-            "Moving Body crash: SPC constraints are ignored in this scope — the "
-            "entire body is a free-flying projectile and the rigid wall provides "
-            "the only reaction.  To model a fixed-rear laboratory test, switch "
-            "the ImpactCondition to 'Impact Face' scope and apply the velocity "
-            "only to the front face nodes."
+            "Moving body + fixed wall crash: SPC constraints are ignored in this "
+            "scope because the whole structure is a free-flying projectile and "
+            "the rigid wall provides the reaction. To model a fixed-rear "
+            "laboratory test, switch the ImpactCondition to "
+            "'Fixed specimen + moving impactor'."
         )
 
     # ── Impact node set / moving-wall contact ────────────────────────────────
     print(f"OpenRadioss deck: impact velocity (mm/ms) = {velocity.tolist()!r}, "
           f"|v|={v_mag:.3f} mm/ms "
-          f"(= {v_mag:.1f} m/s)")
+          f"(= {v_mag:.1f} m/s), scenario={scenario_label}")
     impact_faces = impact.get("face_list", [])
     if moving_body:
         # ALL nodes get the initial velocity — the body is a free-flying mass.
@@ -334,33 +416,32 @@ def _build_keyword_deck(
                             available = float(np.min(downstream))
                             if travel > 0.85 * available:
                                 warnings.append(
-                                    "Impact Face crash: |velocity| * end_time is "
+                                    "Fixed specimen + moving impactor: |velocity| * end_time is "
                                     f"{travel:.1f} mm, but the nearest constrained "
                                     f"support is only {available:.1f} mm along the "
                                     "impact direction.  The moving wall can overrun "
                                     "the supported end in the animation.  "
                                     "Reduce end_time, velocity, or sled mass, or use "
-                                    "Moving Body scope for a free-body wall impact."
+                                    "Moving body + fixed wall for a free-body barrier impact."
                                 )
                 else:
                     bbox_span = float(np.ptp(points @ v_hat))
                     if bbox_span > 0.0 and travel > 0.85 * bbox_span:
                         warnings.append(
-                            "Impact Face crash has no active constraints and the "
+                            "Fixed specimen + moving impactor has no active constraints and the "
                             f"requested stroke ({travel:.1f} mm) is close to or "
                             "larger than the part length in the impact direction.  "
-                            "For a wall/barrier event, use Moving Body scope."
+                            "For a wall/barrier event, use Moving body + fixed wall."
                         )
         if moving_rigid_wall:
             print(
-                "OpenRadioss deck: Impact Face scope uses a moving rigid wall; "
+                f"OpenRadioss deck: {scenario_label} uses a moving rigid wall; "
                 "the deformable mesh starts at rest."
             )
         else:
             print(
                 "OpenRadioss deck: applying initial velocity to "
-                f"{len(impact_nodes)} node(s) with scope="
-                f"{'Moving Body' if moving_body else 'Impact Face'}"
+                f"{len(impact_nodes)} node(s) with scenario={scenario_label}"
             )
             # OpenRadioss's LS-DYNA reader does not implement
             # ``*INITIAL_VELOCITY_NODE_SET`` — only the per-node
@@ -390,7 +471,7 @@ def _build_keyword_deck(
         "1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0",
     ])
 
-    # ── Rigid wall (Moving Body scope only) ──────────────────────────────────
+    # ── Stationary rigid wall (moving-body scenario only) ────────────────────
     # The wall is placed just in front of the leading face of the body in the
     # velocity direction.  The wall normal points back toward the body so that
     # nodes moving in the impact direction are pushed back when they make contact.
@@ -401,29 +482,35 @@ def _build_keyword_deck(
         bbox_diag = float(np.linalg.norm(
             np.max(all_pos, axis=0) - np.min(all_pos, axis=0)
         ))
-        gap = max(bbox_diag * 0.005, 0.1)                 # 0.5 % of extent, min 0.1 mm
+        auto_gap = max(bbox_diag * 0.005, 0.1)            # 0.5 % of extent, min 0.1 mm
+        gap = wall_gap_override if wall_gap_override > 0.0 else auto_gap
         # Wall anchor point: on the plane perpendicular to v_hat passing through
         # the leading edge + gap.  Centroid keeps it in the middle of the body.
         centroid = np.mean(all_pos, axis=0)
         wall_pt = centroid + v_hat * (max_proj + gap - float(centroid @ v_hat))
         # Wall normal opposes the impact direction so the body bounces off.
         wall_normal = -v_hat
-        # LS-DYNA *RIGIDWALL_PLANAR: Card 2 is XT,YT,ZT (tail = point on wall)
-        # followed by XH,YH,ZH (head = second point; tail→head = outward normal).
+        wall_slave_set_id = next_set_id
+        next_set_id += 1
+        _node_set(lines, wall_slave_set_id, np.arange(1, points.shape[0] + 1, dtype=int))
+        # OpenRadioss *RIGIDWALL_PLANAR: first card selects secondary nodes,
+        # second card is XT,YT,ZT (point on wall) followed by XH,YH,ZH
+        # (second point; tail-to-head = outward normal) and FRIC.
         wall_head = wall_pt + wall_normal
         lines.extend([
             "*RIGIDWALL_PLANAR",
-            "$#    nsid    nsidex     boxid    offset     birth     death     rwksf",
-            "0, 0, 0, 0.0, 0.0",
+            "$#    nsid     nsedx   dsearch",
+            f"{wall_slave_set_id}, 0, 0.0",
             "$#      xt        yt        zt        xh        yh        zh      fric",
             (f"{wall_pt[0]:.12g}, {wall_pt[1]:.12g}, {wall_pt[2]:.12g}, "
-             f"{wall_head[0]:.12g}, {wall_head[1]:.12g}, {wall_head[2]:.12g}, 0.0"),
+             f"{wall_head[0]:.12g}, {wall_head[1]:.12g}, {wall_head[2]:.12g}, "
+             f"{wall_friction:.12g}"),
         ])
         print(
             f"OpenRadioss deck: added RIGIDWALL_PLANAR at "
             f"[{wall_pt[0]:.3g}, {wall_pt[1]:.3g}, {wall_pt[2]:.3g}] "
             f"normal=[{wall_normal[0]:.3g}, {wall_normal[1]:.3g}, {wall_normal[2]:.3g}] "
-            f"(Moving Body barrier, gap={gap:.3f} mm)"
+            f"(Moving body + fixed wall, gap={gap:.3f} mm, fric={wall_friction:.3g})"
         )
         if out_meta is not None:
             out_meta["wall"] = {
@@ -443,14 +530,14 @@ def _build_keyword_deck(
                 face_max_proj = float(np.max(points[face_nodes_idx] @ v_hat))
                 if max_proj - face_max_proj > bbox_diag * 0.2:
                     warnings.append(
-                        "Moving Body crash: the named impact face is at the TRAILING "
+                        "Moving body + fixed wall: the named impact face is at the TRAILING "
                         "edge in the velocity direction — the rear of the body will hit "
                         "the wall first, not the intended impact face.  For a frontal "
                         "crash where the +X face hits the barrier first, set "
                         "velocity_x to a POSITIVE value (e.g. +20 mm/ms)."
                     )
 
-    # ── Moving rigid wall (fixed-rear Impact Face scope) ─────────────────────
+    # ── Moving rigid wall (fixed-specimen / prescribed-wall scenarios) ───────
     # This is the industry-standard tube/crashbox crush setup: fixed support via
     # SPCs, structure initially at rest, and a massive rigid wall moving into
     # the selected impact face.
@@ -463,7 +550,8 @@ def _build_keyword_deck(
         bbox_diag = float(np.linalg.norm(
             np.max(points, axis=0) - np.min(points, axis=0)
         ))
-        gap = max(bbox_diag * 0.003, 0.05)
+        auto_gap = max(bbox_diag * 0.003, 0.05)
+        gap = wall_gap_override if wall_gap_override > 0.0 else auto_gap
         face_centroid = np.mean(face_pos, axis=0)
         face_proj = face_pos @ v_hat
         # Put the wall just outside the selected face on the side opposite the
@@ -472,32 +560,49 @@ def _build_keyword_deck(
         wall_pt = face_centroid + v_hat * (wall_proj - float(face_centroid @ v_hat))
         wall_normal = v_hat
         wall_head = wall_pt + wall_normal
-        wall_mass = max(float(impactor_mass), 0.0) * 1e-3  # kg -> tonne
+        wall_mass = 0.0 if prescribed_wall else max(float(impactor_mass), 0.0) * 1e-3
+        wall_slave_set_id = next_set_id
+        next_set_id += 1
+        _node_set(lines, wall_slave_set_id, np.arange(1, points.shape[0] + 1, dtype=int))
         lines.extend([
             "*RIGIDWALL_PLANAR_MOVING",
-            "$#    nsid    nsidex     boxid",
-            "0, 0, 0",
+            "$#    nsid     nsedx   dsearch",
+            f"{wall_slave_set_id}, 0, 0.0",
             "$#      xt        yt        zt        xh        yh        zh      fric",
             (f"{wall_pt[0]:.12g}, {wall_pt[1]:.12g}, {wall_pt[2]:.12g}, "
-             f"{wall_head[0]:.12g}, {wall_head[1]:.12g}, {wall_head[2]:.12g}, 0.08"),
+             f"{wall_head[0]:.12g}, {wall_head[1]:.12g}, {wall_head[2]:.12g}, "
+             f"{wall_friction:.12g}"),
             "$#    mass        v0",
             f"{wall_mass:.12g}, {v_mag:.12g}",
         ])
-        if wall_mass <= 0.0:
+        if prescribed_wall and float(impactor_mass) > 0.0:
             warnings.append(
-                "Impact Face crash uses a moving rigid wall with Mass=0, so "
-                "V0 is an imposed velocity.  Set impactor_mass_kg on the Crash "
-                "Solver for an inertial sled impact."
+                "Prescribed moving wall scenario ignores impactor_mass_kg. "
+                "OpenRadioss uses Mass=0 so V0 is an imposed velocity."
+            )
+        if not constrained_node_ids and not prescribed_wall:
+            warnings.append(
+                "Fixed specimen + moving impactor has no active constraints. "
+                "The specimen can translate after contact; add a Constraint node "
+                "for a fixed-rear crush test or use Moving body + fixed wall."
+            )
+        if wall_mass <= 0.0 and not prescribed_wall:
+            warnings.append(
+                "Fixed specimen + moving impactor uses a moving rigid wall with "
+                "Mass=0. OpenRadioss treats V0 as imposed velocity, not an "
+                "initial velocity of a finite-mass impactor. Set "
+                "impactor_mass_kg on the Crash Solver for an inertial sled impact."
             )
         print(
             f"OpenRadioss deck: added moving RIGIDWALL_PLANAR at "
             f"[{wall_pt[0]:.3g}, {wall_pt[1]:.3g}, {wall_pt[2]:.3g}] "
             f"normal=[{wall_normal[0]:.3g}, {wall_normal[1]:.3g}, {wall_normal[2]:.3g}], "
-            f"v0={v_mag:.3g} mm/ms, mass={wall_mass:.3g} tonne"
+            f"v0={v_mag:.3g} mm/ms, mass={wall_mass:.3g} tonne, "
+            f"gap={gap:.3f} mm, fric={wall_friction:.3g}, scenario={scenario_label}"
         )
         if out_meta is not None:
             out_meta["wall"] = {
-                "type": "moving",
+                "type": "prescribed" if prescribed_wall else "moving",
                 "pt": [float(wall_pt[0]), float(wall_pt[1]), float(wall_pt[2])],
                 "normal": [float(wall_normal[0]), float(wall_normal[1]), float(wall_normal[2])],
                 "half_extent": float(0.6 * bbox_diag),
@@ -537,7 +642,7 @@ def _build_keyword_deck(
             ]
         )
 
-    # ── Impactor Mass (Sled, Moving Body scope only) ─────────────────────────
+    # ── Impactor Mass (sled, moving-body scenario only) ──────────────────────
     if moving_body and float(impactor_mass) > 0.0:
         added_mass_tonnes = float(impactor_mass) * 1e-3
         mass_nodes = np.array([], dtype=int)
@@ -633,6 +738,11 @@ def _build_engine_deck(
         )
 
     # Animation output: explicit frequency + the fields the viewer renders.
+    # /ANIM/ELEM/* covers both BRICK and SHELL element families for the
+    # scalar fields (Von Mises, plastic strain, energy).  The full stress
+    # tensor is requested only for BRICKs — the matching SHELL card requires
+    # a layer index (/ANIM/SHELL/TENS/STRESS/N), which we don't emit by
+    # default because callers haven't asked for through-thickness output.
     lines.extend(
         [
             "/ANIM/DT",
@@ -640,8 +750,8 @@ def _build_engine_deck(
             "/ANIM/VECT/DISP",
             "/ANIM/VECT/VEL",
             "/ANIM/VECT/ACC",
-            "/ANIM/ELEM/VONM",   # Von Mises stress field
-            "/ANIM/ELEM/EPSP",   # equivalent plastic strain
+            "/ANIM/ELEM/VONM",   # Von Mises stress field (BRICK + SHELL)
+            "/ANIM/ELEM/EPSP",   # equivalent plastic strain (BRICK + SHELL)
             "/ANIM/ELEM/ENER",
             "/ANIM/BRICK/TENS/STRESS",
         ]
@@ -1004,14 +1114,30 @@ def _build_animation_frames_with_mesh(mesh: Any, frames: list) -> list:
         if ener_cell is not None:
             ener_cell = np.asarray(ener_cell, dtype=float).reshape(-1)
 
+        eps_raw = np.asarray(frame.get("eps_p", []), dtype=float).reshape(-1)
+        target_eps = np.zeros(n_points, dtype=float)
+        if node_ids.size == eps_raw.size:
+            valid = (node_ids >= 1) & (node_ids <= n_points)
+            target_eps[node_ids[valid] - 1] = eps_raw[valid]
+        elif eps_raw.size:
+            target_eps[: min(eps_raw.size, n_points)] = eps_raw[:n_points]
+
+        failed_raw = np.asarray(frame.get("failed", []), dtype=float).reshape(-1)
+        target_failed = np.zeros(n_points, dtype=float)
+        if node_ids.size == failed_raw.size:
+            valid = (node_ids >= 1) & (node_ids <= n_points)
+            target_failed[node_ids[valid] - 1] = failed_raw[valid]
+        elif failed_raw.size:
+            target_failed[: min(failed_raw.size, n_points)] = failed_raw[:n_points]
+
         fixed.append(
             {
                 "displacement": target_disp,
                 "stress_vm": target_vm,
                 "velocity": target_vel,
                 "ener_cell": ener_cell,
-                "eps_p": np.zeros(n_points, dtype=float),
-                "failed": np.zeros(n_points, dtype=float),
+                "eps_p": target_eps,
+                "failed": target_failed,
                 "time": float(frame.get("time", 0.0)),
             }
         )
@@ -1032,8 +1158,14 @@ def _compute_time_history(
     if not frames:
         return {"t_ms": [], "ke_kj": [], "ie_kj": []}
 
+    shell_mode = is_shell_mesh(mesh)
     try:
-        points, tets = mesh_to_tet4(mesh, [])
+        if shell_mode:
+            points, conn = mesh_to_shell(mesh, [])
+            nodes_per_elem = 3
+        else:
+            points, conn = mesh_to_tet4(mesh, [])
+            nodes_per_elem = 4
     except Exception:
         return {"t_ms": [float(f.get("time", 0.0)) * float(end_time) for f in frames],
                 "ke_kj": [0.0] * len(frames),
@@ -1041,20 +1173,30 @@ def _compute_time_history(
 
     rho_consistent = float(material.get("rho", material.get("density", 7.85e-9)))
     n_points = points.shape[0]
-    n_elem = tets.shape[0]
+    n_elem = conn.shape[0]
 
-    # Element volumes (always positive thanks to mesh_to_tet4's orientation flip).
-    v0 = points[tets[:, 0]]
-    e1 = points[tets[:, 1]] - v0
-    e2 = points[tets[:, 2]] - v0
-    e3 = points[tets[:, 3]] - v0
-    elem_vol = np.abs(np.einsum("ij,ij->i", np.cross(e1, e2), e3)) / 6.0
+    # Element volumes — tet: (1/6)|det|; shell: area * thickness.  Both are
+    # strictly positive (orientation handled upstream for tets, area uses |cross|).
+    if shell_mode:
+        thickness = float(getattr(mesh, "shell_thickness", 1.5))
+        v0 = points[conn[:, 0]]
+        e1 = points[conn[:, 1]] - v0
+        e2 = points[conn[:, 2]] - v0
+        elem_area = 0.5 * np.linalg.norm(np.cross(e1, e2), axis=1)
+        elem_vol = elem_area * thickness
+    else:
+        v0 = points[conn[:, 0]]
+        e1 = points[conn[:, 1]] - v0
+        e2 = points[conn[:, 2]] - v0
+        e3 = points[conn[:, 3]] - v0
+        elem_vol = np.abs(np.einsum("ij,ij->i", np.cross(e1, e2), e3)) / 6.0
     total_vol = float(np.sum(elem_vol))
 
-    # Lumped node mass: 1/4 of each adjacent element's mass.
+    # Lumped node mass: 1/N of each adjacent element's mass (N = nodes per elem).
     node_mass = np.zeros(n_points, dtype=float)
-    for k in range(4):
-        np.add.at(node_mass, tets[:, k], 0.25 * rho_consistent * elem_vol)
+    share = rho_consistent * elem_vol / nodes_per_elem
+    for k in range(nodes_per_elem):
+        np.add.at(node_mass, conn[:, k], share)
 
     t_ms: list = []
     ke_kj: list = []

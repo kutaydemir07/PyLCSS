@@ -447,6 +447,8 @@ class PropertiesPanel(QtWidgets.QWidget):
         node_class = node.__class__.__name__
         if node_class == 'TopologyOptimizationNode':
             self._build_topopt_ui(node)
+        elif node_class == 'TopologyOptVoxelNode':
+            self._build_topopt_voxel_ui(node)
         elif node_class == 'CadQueryCodeNode':
             self._build_code_part_ui(node)
         elif node_class == 'InteractiveSelectFaceNode':
@@ -785,8 +787,149 @@ class PropertiesPanel(QtWidgets.QWidget):
         self.props_layout.addWidget(group_exp)
 
     # ──────────────────────────────────────────────────
-    # TopOpt direct mesh export (vertices / faces)
+    # TopOpt voxel inspector and direct mesh export (vertices / faces)
     # ──────────────────────────────────────────────────
+    def _build_topopt_voxel_ui(self, node):
+        """Compact inspector for the structured voxel topology optimizer."""
+
+        def _get_int(prop, default):
+            try:
+                return int(node.get_property(prop))
+            except Exception:
+                return default
+
+        def _get_float(prop, default):
+            try:
+                return float(node.get_property(prop))
+            except Exception:
+                return default
+
+        domain_group = QtWidgets.QGroupBox("Voxel Grid")
+        domain_layout = QtWidgets.QFormLayout()
+        for label, prop, default in (
+            ("X Cells:", "nelx", 30),
+            ("Y Cells:", "nely", 20),
+            ("Z Cells:", "nelz", 10),
+        ):
+            spin = QtWidgets.QSpinBox()
+            spin.setRange(1, 500)
+            spin.setValue(_get_int(prop, default))
+            spin.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
+            domain_layout.addRow(label, spin)
+        domain_group.setLayout(domain_layout)
+        self.props_layout.addWidget(domain_group)
+
+        opt_group = QtWidgets.QGroupBox("Optimization")
+        opt_layout = QtWidgets.QFormLayout()
+
+        volfrac = max(0.01, min(0.99, _get_float("volfrac", 0.5)))
+        vol_container = QtWidgets.QWidget()
+        vol_layout = QtWidgets.QHBoxLayout(vol_container)
+        vol_layout.setContentsMargins(0, 0, 0, 0)
+        vol_layout.setSpacing(6)
+        vol_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        vol_slider.setRange(1, 99)
+        vol_slider.setValue(int(round(volfrac * 100)))
+        vol_spin = QtWidgets.QSpinBox()
+        vol_spin.setRange(1, 99)
+        vol_spin.setSuffix("%")
+        vol_spin.setValue(int(round(volfrac * 100)))
+
+        def update_volfrac(percent):
+            vol_slider.blockSignals(True)
+            vol_spin.blockSignals(True)
+            vol_slider.setValue(percent)
+            vol_spin.setValue(percent)
+            vol_slider.blockSignals(False)
+            vol_spin.blockSignals(False)
+            self.update_property("volfrac", percent / 100.0)
+
+        vol_slider.valueChanged.connect(update_volfrac)
+        vol_spin.valueChanged.connect(update_volfrac)
+        vol_layout.addWidget(vol_slider, 1)
+        vol_layout.addWidget(vol_spin)
+        opt_layout.addRow("Keep Volume:", vol_container)
+
+        rmin = QtWidgets.QDoubleSpinBox()
+        rmin.setRange(0.0, 100.0)
+        rmin.setDecimals(2)
+        rmin.setSingleStep(0.1)
+        rmin.setValue(_get_float("rmin", 1.5))
+        rmin.valueChanged.connect(lambda v: self.update_property("rmin", v))
+        opt_layout.addRow("Filter Radius:", rmin)
+
+        penal = QtWidgets.QDoubleSpinBox()
+        penal.setRange(1.0, 10.0)
+        penal.setDecimals(2)
+        penal.setSingleStep(0.1)
+        penal.setValue(_get_float("penal", 3.0))
+        penal.valueChanged.connect(lambda v: self.update_property("penal", v))
+        opt_layout.addRow("Penalization:", penal)
+
+        cutoff = QtWidgets.QDoubleSpinBox()
+        cutoff.setRange(0.0, 1.0)
+        cutoff.setDecimals(2)
+        cutoff.setSingleStep(0.05)
+        cutoff.setValue(_get_float("density_cutoff", 0.35))
+        cutoff.valueChanged.connect(lambda v: self.update_property("density_cutoff", v))
+        opt_layout.addRow("Density Cutoff:", cutoff)
+
+        opt_group.setLayout(opt_layout)
+        self.props_layout.addWidget(opt_group)
+
+        solver_group = QtWidgets.QGroupBox("Solver")
+        solver_layout = QtWidgets.QFormLayout()
+
+        optimizer = QtWidgets.QComboBox()
+        optimizer.addItems(["OC", "MMA"])
+        current_optimizer = str(node.get_property("optimizer") or "OC")
+        index = optimizer.findText(current_optimizer)
+        optimizer.setCurrentIndex(index if index >= 0 else 0)
+        optimizer.currentTextChanged.connect(
+            lambda v: self.update_property("optimizer", v)
+        )
+        solver_layout.addRow("Optimizer:", optimizer)
+
+        max_iter = QtWidgets.QSpinBox()
+        max_iter.setRange(1, 1000)
+        max_iter.setValue(_get_int("max_iter", 80))
+        max_iter.valueChanged.connect(lambda v: self.update_property("max_iter", v))
+        solver_layout.addRow("Iterations:", max_iter)
+
+        tol = QtWidgets.QDoubleSpinBox()
+        tol.setRange(0.00001, 1.0)
+        tol.setDecimals(5)
+        tol.setSingleStep(0.001)
+        tol.setValue(_get_float("tol", 0.01))
+        tol.valueChanged.connect(lambda v: self.update_property("tol", v))
+        solver_layout.addRow("Tolerance:", tol)
+
+        solver_group.setLayout(solver_layout)
+        self.props_layout.addWidget(solver_group)
+
+        view_group = QtWidgets.QGroupBox("Visualization")
+        view_layout = QtWidgets.QFormLayout()
+
+        visualization = QtWidgets.QComboBox()
+        visualization.addItems(["Density", "Recovered Shape"])
+        current_view = str(node.get_property("visualization") or "Density")
+        view_index = visualization.findText(current_view)
+        visualization.setCurrentIndex(view_index if view_index >= 0 else 0)
+        visualization.currentTextChanged.connect(
+            lambda v: self.update_property("visualization", v)
+        )
+        view_layout.addRow("Mode:", visualization)
+
+        btn_export_stl = QtWidgets.QPushButton("Export to STL")
+        btn_export_stl.setToolTip(
+            "Export the recovered voxel topology surface as an STL file"
+        )
+        btn_export_stl.clicked.connect(lambda: self._export_topopt_stl(node))
+        view_layout.addRow("Recovered Shape:", btn_export_stl)
+
+        view_group.setLayout(view_layout)
+        self.props_layout.addWidget(view_group)
+
     def _export_topopt_stl(self, node):
         """Export recovered shape from topology optimisation as binary STL."""
         result = getattr(node, '_last_result', None)
@@ -891,7 +1034,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         ("Material",        ("preset", "E", "nu", "rho", "density", "poissons_ratio", "yield_strength",
                              "tangent_modulus", "failure_strain", "enable_fracture")),
         ("Mesh",            ("mesh_type", "element_size", "max_size", "min_size", "order")),
-        ("Impact",          ("velocity_", "application_scope", "node_tolerance", "impactor_mass_kg")),
+        ("Impact",          ("velocity_", "application_scope", "node_tolerance", "wall_", "impactor_mass_kg")),
         ("Geometry",        ("box_", "length", "width", "depth", "height", "radius", "thickness",
                              "near_", "selector_type", "tag", "range_expr", "direction")),
         ("Load",            ("load_type", "force_", "vector", "magnitude", "pressure", "gravity_",
@@ -1048,15 +1191,24 @@ class PropertiesPanel(QtWidgets.QWidget):
         'velocity_y':        "Initial impactor velocity along Y [mm/ms = m/s].",
         'velocity_z':        "Initial impactor velocity along Z [mm/ms = m/s].",
         'application_scope':
-            "Impact Face: a moving rigid wall/impactor drives the selected\n"
-            "face; connected constraints stay active (fixed-rear crush tests).\n"
-            "Moving Body: the whole mesh receives velocity and hits a generated\n"
-            "rigid wall; connected constraints are intentionally ignored.",
+            "Fixed specimen + moving impactor: selected face is hit by a moving\n"
+            "finite-mass impactor/wall; connected constraints stay active.\n"
+            "Moving body + fixed wall: the mesh receives initial velocity and\n"
+            "hits a generated fixed wall; connected constraints are ignored.\n"
+            "Prescribed moving wall: selected face is driven by a massless platen\n"
+            "with imposed velocity, useful for controlled crush.",
         'node_tolerance':    "Distance [mm] within which a mesh node is treated as belonging to the impact face.",
+        'wall_friction':
+            "Rigid-wall Coulomb friction.  Use -1 for the scenario default\n"
+            "(0.0 for fixed barrier, 0.08 for moving platen/impactor).",
+        'wall_gap_mm':
+            "Initial clearance from wall to selected/leading face [mm].\n"
+            "Use 0 for automatic clearance based on model size.",
         'impactor_mass_kg':
-            "Optional sled/impactor mass [kg].  In Impact Face scope this is\n"
-            "the moving rigid wall mass.  In Moving Body scope it is lumped on\n"
-            "the trailing edge of the projectile.",
+            "Optional sled/impactor mass [kg].  In Fixed specimen + moving\n"
+            "impactor this is the moving rigid wall mass.  In Moving body +\n"
+            "fixed wall it is lumped onto the projectile trailing edge.\n"
+            "A zero mass moving wall is prescribed velocity, not inertial impact.",
         'enable_fracture':   "Delete elements whose plastic strain exceeds failure_strain.",
 
         # ── Constraint / Load extras ───────────────────────────────────
@@ -1077,12 +1229,14 @@ class PropertiesPanel(QtWidgets.QWidget):
     }
 
     _PROPERTY_LABELS = {
-        'application_scope': 'Impact Setup',
+        'application_scope': 'Crash Scenario',
         'velocity_x': 'Velocity X (mm/ms)',
         'velocity_y': 'Velocity Y (mm/ms)',
         'velocity_z': 'Velocity Z (mm/ms)',
         'node_tolerance': 'Node Tolerance (mm)',
-        'impactor_mass_kg': 'Sled Mass (kg)',
+        'wall_friction': 'Wall Friction',
+        'wall_gap_mm': 'Wall Gap (mm)',
+        'impactor_mass_kg': 'Impactor / Sled Mass (kg)',
         'end_time': 'End Time (ms)',
         'time_steps': 'Mass-Scaling Steps',
         'n_frames': 'Animation Frames',
@@ -1289,7 +1443,11 @@ class PropertiesPanel(QtWidgets.QWidget):
             # New combos introduced by the CalculiX / OpenRadioss rewrites.
             'analysis_type': ['Linear', 'Nonlinear (Geometric)', 'Nonlinear (Plastic)'],
             'deformation_scale': ['Auto', '1x', '5x', '10x', '50x', '100x', '200x'],
-            'application_scope': ['Impact Face', 'Moving Body'],
+            'application_scope': [
+                'Fixed specimen + moving impactor',
+                'Moving body + fixed wall',
+                'Prescribed moving wall',
+            ],
             # Optimisation-node combos that were always there but worth pinning.
             'objective': ['Min Weight', 'Min Compliance', 'Min Max Stress',
                           'Uniform Stress'],
@@ -1329,7 +1487,9 @@ class PropertiesPanel(QtWidgets.QWidget):
                 label_text = self._PROPERTY_LABELS.get(name, name.replace('_', ' ').title())
                 attrs = prop_attrs.get(name, {})
                 combo_items = attrs.get('items') if isinstance(attrs, dict) else None
-                if not combo_items and name in known_combos:
+                if name == 'application_scope':
+                    combo_items = known_combos[name]
+                elif not combo_items and name in known_combos:
                     combo_items = known_combos[name]
                 value_range = attrs.get('range') if isinstance(attrs, dict) else None
                 tooltip = attrs.get('tooltip') if isinstance(attrs, dict) else None
@@ -2425,6 +2585,7 @@ class LibraryPanel(QtWidgets.QWidget):
             "Simulation - Solve & Optimize": [
                 ("Solver", "com.cad.sim.solver", "Run FEA solver"),
                 ("Topology Opt", "com.cad.sim.topopt", "Optimize topology (SIMP)"),
+                ("Topology Opt (Voxel)", "com.cad.sim.topopt_voxel", "Run structured 3D voxel topology optimization with pyMOTO"),
                 ("Size Opt", "com.cad.sim.sizeopt", "Optimize parametric dimensions"),
                 ("Shape Opt", "com.cad.sim.shapeopt", "Optimize boundary shape"),
                 ("Remesh Surface", "com.cad.sim.remesh", "Convert TopOpt surface to volume mesh"),
@@ -2908,7 +3069,11 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         if hasattr(obj, 'p') and hasattr(obj, 't'):
             return True
         if isinstance(obj, dict):
-            return 'mesh' in obj or (obj.get('type') == 'crash' and bool(obj.get('frames')))
+            return (
+                'mesh' in obj
+                or obj.get('type') == 'topopt_voxel'
+                or (obj.get('type') == 'crash' and bool(obj.get('frames')))
+            )
         return False
 
     def _is_renderable_result(self, obj):
@@ -4621,6 +4786,12 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             self._last_preview_update_time = now
             self.statusBar().showMessage(f"⏳ TopOpt: Iteration {step+1}/{total} (Vol: {np.mean(densities):.1%})")
             
+            if isinstance(mesh, dict) and mesh.get('type') == 'topopt_voxel':
+                result = dict(mesh)
+                result['_preview'] = True
+                self.viewer.render_simulation(result)
+                return
+
             # Update viewer with current density field
             result = {
                 'mesh': mesh,

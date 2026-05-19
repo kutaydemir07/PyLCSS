@@ -65,6 +65,70 @@ def resolve_anim_to_vtk(explicit: Optional[str] = None) -> Optional[str]:
     )
 
 
+def _normalise_anim_vtk(text: str) -> str:
+    """Fix anim_to_vtk's shell-element output so meshio's VTK reader accepts it.
+
+    For *ELEMENT_SHELL triangles the OpenRadioss converter emits the LS-DYNA
+    degenerate-quad convention in the ``CELLS`` block — four node indices with
+    the fourth equal to the third — but tags the cell as ``VTK_TRIANGLE`` (5)
+    in ``CELL_TYPES``.  meshio rejects this with "Couldn't read file ... as
+    vtk" because a VTK triangle must list exactly three vertices.  We rewrite
+    the CELLS block so every triangle row uses ``3 n1 n2 n3`` and adjust the
+    cell-block size accordingly; non-triangle cells are left untouched.
+    """
+    lines = text.splitlines()
+    try:
+        i_cells = next(
+            i for i, ln in enumerate(lines) if ln.startswith("CELLS ")
+        )
+    except StopIteration:
+        return text
+    try:
+        n_cells_s, _ = lines[i_cells].split()[1:3]
+        n_cells = int(n_cells_s)
+    except (ValueError, IndexError):
+        return text
+    try:
+        i_types = next(
+            i for i, ln in enumerate(lines)
+            if ln.startswith("CELL_TYPES ")
+        )
+    except StopIteration:
+        return text
+
+    cell_rows = lines[i_cells + 1 : i_cells + 1 + n_cells]
+    type_rows = lines[i_types + 1 : i_types + 1 + n_cells]
+    if len(cell_rows) != n_cells or len(type_rows) != n_cells:
+        return text
+
+    new_rows: list[str] = []
+    total = 0
+    rewritten = 0
+    for row, type_row in zip(cell_rows, type_rows):
+        try:
+            cell_type = int(type_row.strip())
+        except ValueError:
+            new_rows.append(row)
+            total += len(row.split())
+            continue
+        parts = row.split()
+        if cell_type == 5 and len(parts) >= 4 and int(parts[0]) > 3:
+            # Drop the trailing duplicated node and reset the leading count.
+            keep = parts[1:4]
+            row = "3 " + " ".join(keep)
+            rewritten += 1
+            total += 4
+        else:
+            total += len(parts)
+        new_rows.append(row)
+
+    if rewritten == 0:
+        return text
+    lines[i_cells] = f"CELLS {n_cells} {total}"
+    lines[i_cells + 1 : i_cells + 1 + n_cells] = new_rows
+    return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+
+
 def convert_anim_files(
     anim_files: List[Path],
     converter: str,
@@ -113,7 +177,8 @@ def convert_anim_files(
         if proc.returncode == 0 and proc.stdout:
             out_path = anim.with_name(anim.name + ".vtk")
             try:
-                out_path.write_text(proc.stdout, encoding="utf-8")
+                out_path.write_text(_normalise_anim_vtk(proc.stdout),
+                                    encoding="utf-8")
             except OSError:
                 pass
         return anim
@@ -331,6 +396,8 @@ def _extract_cell_ener(mesh) -> Optional[np.ndarray]:
     return None
 
 
+
+
 def read_animation_frames(
     work_dir: str | Path,
     job_name: str,
@@ -361,9 +428,8 @@ def read_animation_frames(
     if not converter_path:
         warnings.append(
             "OpenRadioss animation files were generated but no anim_to_vtk "
-            "converter was found.  Set PYLCSS_OPENRADIOSS_ANIM2VTK, drop the "
-            "anim_to_vtk binary on PATH, or open the .A### files in HyperView / "
-            "ParaView for visualization."
+            "converter was found. Set PYLCSS_OPENRADIOSS_ANIM2VTK or open the "
+            ".A### files in HyperView / ParaView for visualization."
         )
         return [], warnings
 

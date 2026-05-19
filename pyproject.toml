@@ -66,6 +66,7 @@ dependencies = [
     # Optimization and sensitivity analysis
     "nevergrad==1.0.4",
     "SALib==1.5.2",
+    "pymoto==2.0.1",
 
     # Machine learning and surrogate models
     "torch==2.9.1",

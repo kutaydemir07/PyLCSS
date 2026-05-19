@@ -31,7 +31,7 @@ from pylcss.cad.nodes import (
 
     # FEA / Simulation.
     MaterialNode, MeshNode, ConstraintNode, LoadNode, PressureLoadNode,
-    SolverNode, TopologyOptimizationNode,
+    SolverNode, TopologyOptimizationNode, TopologyOptVoxelNode,
     RemeshNode, SizeOptimizationNode, ShapeOptimizationNode,
 
     # Crash / Impact.
@@ -75,6 +75,7 @@ NODE_CLASS_MAPPING = {
     'com.cad.sim.pressure_load':  PressureLoadNode,
     'com.cad.sim.solver':         SolverNode,
     'com.cad.sim.topopt':         TopologyOptimizationNode,
+    'com.cad.sim.topopt_voxel':    TopologyOptVoxelNode,
     'com.cad.sim.remesh':         RemeshNode,
     'com.cad.sim.sizeopt':        SizeOptimizationNode,
     'com.cad.sim.shapeopt':       ShapeOptimizationNode,

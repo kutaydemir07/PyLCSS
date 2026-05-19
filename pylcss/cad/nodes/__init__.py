@@ -49,7 +49,7 @@ from pylcss.cad.nodes.analysis import MassPropertiesNode, BoundingBoxNode
 # FEM / simulation.
 from pylcss.cad.nodes.fem import (
     MaterialNode, MeshNode, ConstraintNode, LoadNode, PressureLoadNode,
-    SolverNode, TopologyOptimizationNode,
+    SolverNode, TopologyOptimizationNode, TopologyOptVoxelNode,
     RemeshNode, SizeOptimizationNode, ShapeOptimizationNode,
 )
 
@@ -88,7 +88,7 @@ __all__ = [
     # FEM
     "MaterialNode", "MeshNode",
     "ConstraintNode", "LoadNode", "PressureLoadNode",
-    "SolverNode", "TopologyOptimizationNode",
+    "SolverNode", "TopologyOptimizationNode", "TopologyOptVoxelNode",
     "RemeshNode", "SizeOptimizationNode", "ShapeOptimizationNode",
 
     # Crash / impact

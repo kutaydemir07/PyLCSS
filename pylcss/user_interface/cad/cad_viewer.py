@@ -32,12 +32,12 @@ class NavCubeWidget(QtWidgets.QWidget):
 
     # faces  (vertex_indices, label, cam_pos_norm, cam_up)
     _FACES = [
-        ((4, 5, 6, 7), "TOP",   ( 0,  0,  1), (0,  1,  0)),
-        ((3, 2, 1, 0), "BOT",   ( 0,  0, -1), (0,  1,  0)),
-        ((0, 1, 5, 4), "FRONT", ( 0, -1,  0), (0,  0,  1)),
-        ((2, 3, 7, 6), "BACK",  ( 0,  1,  0), (0,  0,  1)),
-        ((1, 2, 6, 5), "RIGHT", ( 1,  0,  0), (0,  0,  1)),
-        ((3, 0, 4, 7), "LEFT",  (-1,  0,  0), (0,  0,  1)),
+        ((4, 5, 6, 7), "+Z",   ( 0,  0,  1), (0,  1,  0)),
+        ((3, 2, 1, 0), "-Z",   ( 0,  0, -1), (0,  1,  0)),
+        ((0, 1, 5, 4), "-Y",   ( 0, -1,  0), (0,  0,  1)),
+        ((2, 3, 7, 6), "+Y",   ( 0,  1,  0), (0,  0,  1)),
+        ((1, 2, 6, 5), "+X",   ( 1,  0,  0), (0,  0,  1)),
+        ((3, 0, 4, 7), "-X",   (-1,  0,  0), (0,  0,  1)),
     ]
     _FACE_N = np.array([
         ( 0,  0,  1), ( 0,  0, -1), ( 0, -1,  0),
@@ -50,10 +50,10 @@ class NavCubeWidget(QtWidgets.QWidget):
         (5, 6, ( 1,  0,  1), (0,  0,  1)),   # RT
         (6, 7, ( 0,  1,  1), (0,  0,  1)),   # BT
         (7, 4, (-1,  0,  1), (0,  0,  1)),   # LT
-        (0, 1, ( 0, -1, -1), (0,  0, -1)),   # FB
-        (1, 2, ( 1,  0, -1), (0,  0, -1)),   # RB
-        (2, 3, ( 0,  1, -1), (0,  0, -1)),   # BB
-        (3, 0, (-1,  0, -1), (0,  0, -1)),   # LB
+        (0, 1, ( 0, -1, -1), (0,  0,  1)),   # FB
+        (1, 2, ( 1,  0, -1), (0,  0,  1)),   # RB
+        (2, 3, ( 0,  1, -1), (0,  0,  1)),   # BB
+        (3, 0, (-1,  0, -1), (0,  0,  1)),   # LB
         (4, 0, (-1, -1,  0), (0,  0,  1)),   # FL
         (5, 1, ( 1, -1,  0), (0,  0,  1)),   # FR
         (6, 2, ( 1,  1,  0), (0,  0,  1)),   # BR
@@ -62,10 +62,10 @@ class NavCubeWidget(QtWidgets.QWidget):
 
     # corners  (vertex_idx, cam_pos_norm, cam_up)
     _CORNERS = [
-        (0, (-1, -1, -1), (0,  0, -1)),  # FLB
-        (1, ( 1, -1, -1), (0,  0, -1)),  # FRB
-        (2, ( 1,  1, -1), (0,  0, -1)),  # BRB
-        (3, (-1,  1, -1), (0,  0, -1)),  # BLB
+        (0, (-1, -1, -1), (0,  0,  1)),  # FLB
+        (1, ( 1, -1, -1), (0,  0,  1)),  # FRB
+        (2, ( 1,  1, -1), (0,  0,  1)),  # BRB
+        (3, (-1,  1, -1), (0,  0,  1)),  # BLB
         (4, (-1, -1,  1), (0,  0,  1)),  # FLT
         (5, ( 1, -1,  1), (0,  0,  1)),  # FRT
         (6, ( 1,  1,  1), (0,  0,  1)),  # BRT
@@ -154,15 +154,34 @@ class NavCubeWidget(QtWidgets.QWidget):
             if mx > self.SIZE - 35: return ('roll', 90.0)
 
         p  = self._project()
-        vd = self._rot[2]  # camera Z = direction we're looking along
-        # corners (highest priority)
+        vd = self._rot[2]  # camera Z = direction from focal point toward camera
+        # corners (highest priority) — skip back-facing so the click hits the
+        # corner the user actually sees, not an occluded one with a lower index.
+        # A corner at unit-cube vertex V[vi] is visible iff V[vi] · vd > 0.
+        best_corner = None
+        best_corner_d2 = 64.0  # 8-px hit radius squared
         for i, (vi, _, _) in enumerate(self._CORNERS):
-            if (mx - p[vi, 0]) ** 2 + (my - p[vi, 1]) ** 2 < 64:
-                return ('corner', i)
-        # edges
+            if float(np.dot(self._V[vi], vd)) <= 0:
+                continue
+            d2 = (mx - p[vi, 0]) ** 2 + (my - p[vi, 1]) ** 2
+            if d2 < best_corner_d2:
+                best_corner_d2 = d2
+                best_corner = i
+        if best_corner is not None:
+            return ('corner', best_corner)
+        # edges — skip those whose both endpoints are on the far side
+        best_edge = None
+        best_edge_d2 = 36.0
         for i, (v0, v1, _, _) in enumerate(self._EDGES):
-            if self._seg_dist2(p[v0,0], p[v0,1], p[v1,0], p[v1,1], mx, my) < 36:
-                return ('edge', i)
+            if (float(np.dot(self._V[v0], vd)) <= 0
+                    and float(np.dot(self._V[v1], vd)) <= 0):
+                continue
+            d2 = self._seg_dist2(p[v0, 0], p[v0, 1], p[v1, 0], p[v1, 1], mx, my)
+            if d2 < best_edge_d2:
+                best_edge_d2 = d2
+                best_edge = i
+        if best_edge is not None:
+            return ('edge', best_edge)
         # faces (front-facing first)
         order = sorted(range(6), key=lambda fi: -float(np.dot(self._FACE_N[fi], vd)))
         for fi in order:
@@ -312,6 +331,7 @@ class CQ3DViewer(QtWidgets.QWidget):
 
     # Signals emitted during interactive picking
     face_picked = QtCore.Signal(list)      # list of OCC face objects
+    edge_picked = QtCore.Signal(list)      # list of OCC edge objects
     picking_cancelled = QtCore.Signal()
     face_picking_requested = QtCore.Signal()
 
@@ -346,6 +366,18 @@ class CQ3DViewer(QtWidgets.QWidget):
         btn_grid.clicked.connect(self._toggle_grid)
         vtb_layout.addWidget(btn_grid)
 
+        btn_edges = QtWidgets.QPushButton("Edges")
+        btn_edges.setCheckable(True)
+        btn_edges.setChecked(False)
+        btn_edges.setStyleSheet(
+            "QPushButton { background: transparent; color: #ccc; font-weight: bold; border-radius: 3px; padding: 4px 10px; }"
+            "QPushButton:hover { background: rgba(80, 80, 80, 200); color: white; }"
+            "QPushButton:checked { background: rgba(74, 158, 255, 100); color: #4a9eff; border: 1px solid #4a9eff; }"
+        )
+        btn_edges.clicked.connect(self._toggle_edges)
+        vtb_layout.addWidget(btn_edges)
+        self._btn_edges = btn_edges
+
         self.main_layout.addWidget(self._view_toolbar)
 
         # --- Picking toolbar (hidden by default) ---
@@ -373,6 +405,21 @@ class CQ3DViewer(QtWidgets.QWidget):
         self._pick_hint_lbl = QtWidgets.QLabel("Ctrl+Click = multi-select")
         self._pick_hint_lbl.setStyleSheet("color: #aad4ff; font-size: 11px; margin-right: 16px;")
         tb_layout.addWidget(self._pick_hint_lbl)
+
+        self._btn_lock = QtWidgets.QPushButton("🔒 Lock")
+        self._btn_lock.setCheckable(True)
+        self._btn_lock.setChecked(True)
+        self._btn_lock.setToolTip(
+            "Locked: left-click picks geometry.\nRotate: left-drag orbits freely."
+        )
+        self._btn_lock.setStyleSheet(
+            "QPushButton { background:#555; color:white; border-radius:4px;"
+            "  padding:4px 12px; font-size:12px; }"
+            "QPushButton:checked { background:#b8860b; color:#ffe; }"
+            "QPushButton:hover { background:#777; }"
+        )
+        self._btn_lock.toggled.connect(self._on_lock_toggled)
+        tb_layout.addWidget(self._btn_lock)
 
         btn_done = QtWidgets.QPushButton("Done")
         btn_done.setStyleSheet(
@@ -458,6 +505,21 @@ class CQ3DViewer(QtWidgets.QWidget):
         self._all_occ_faces = []             # list of OCC face objects (from last render_shape)
         self._face_polydata_list = []        # per-face vtkPolyData for highlighting
         self._pick_callback_id = None
+        self._rotation_locked = False        # True → no-op interactor style installed; left-click picks
+
+        # --- Edge Display State ---
+        self._show_edges = False
+        self._edge_actor = None          # wireframe line actor (OCC edges)
+
+        # --- Edge Picking State ---
+        self._edge_picking_mode = False
+        self._picked_edge_indices = []   # list of int (OCC edge indices)
+        self._picked_occ_edges = []      # list of OCC edge objects
+        self._edge_highlight_actors = [] # VTK actors for selected edge highlights
+        self._all_occ_edges = []         # list of OCC edge objects (from last render_shape)
+        self._edge_pd_list = []          # per-edge vtkPolyData for highlighting
+        self._edge_cell_map = {}         # vtk_cell_id -> occ_edge_index (picking actor)
+        self._edge_pick_callback_id = None
 
         # --- BC Overlay State ---
         self._bc_overlay_actors = []     # dedicated list for load/support overlay actors
@@ -479,6 +541,12 @@ class CQ3DViewer(QtWidgets.QWidget):
 
         self.interactor.Initialize()
         self.interactor.Start()
+
+        # Cache the default trackball interactor style so we can restore it
+        # after picking. A no-op style is installed during locked picking to
+        # prevent the camera from rotating while the user clicks faces/edges.
+        self._default_interactor_style = self.interactor.GetInteractorStyle()
+        self._noop_interactor_style = vtk.vtkInteractorStyleUser()
 
         # NavCube overlay – replaces the VTK axes orientation marker widget
         self.marker_widget.SetEnabled(0)
@@ -814,6 +882,42 @@ class CQ3DViewer(QtWidgets.QWidget):
         self._crash_timer.setInterval(interval_ms)
 
     # ──────────────────────────────────────────────────────────────────────────
+    # VTK INTERACTOR STYLE SWAP — blocks camera rotation during locked picking
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _apply_rotation_lock(self, locked):
+        """Swap the VTK interactor style so the camera can't rotate when locked.
+
+        Qt event filters on QVTKRenderWindowInteractor aren't reliable on Windows
+        (events reach VTK through native paths that bypass the filter), so we
+        disable rotation at the VTK level instead by replacing the trackball
+        style with a no-op style.
+        """
+        if locked:
+            self.interactor.SetInteractorStyle(self._noop_interactor_style)
+        else:
+            self.interactor.SetInteractorStyle(self._default_interactor_style)
+
+    def _on_vtk_pick(self, obj, event):
+        """VTK LeftButtonPressEvent observer — dispatches to face/edge picker."""
+        if not self._rotation_locked:
+            return  # in Rotate mode, clicks orbit the camera instead of picking
+        x, y = self.interactor.GetEventPosition()
+        mods = QtWidgets.QApplication.keyboardModifiers()
+        ctrl = bool(mods & QtCore.Qt.ControlModifier)
+        if self._edge_picking_mode:
+            self._do_edge_pick(x, y, ctrl)
+        elif self._picking_mode:
+            self._do_face_pick(x, y, ctrl)
+
+    def _on_lock_toggled(self, locked):
+        """Toggle between locked-pick and free-rotate modes."""
+        self._rotation_locked = locked
+        self._apply_rotation_lock(locked)
+        if self._btn_lock is not None:
+            self._btn_lock.setText("🔒 Lock" if locked else "🔓 Rotate")
+
+    # ──────────────────────────────────────────────────────────────────────────
     # PICKING MODE
     # ──────────────────────────────────────────────────────────────────────────
 
@@ -825,26 +929,33 @@ class CQ3DViewer(QtWidgets.QWidget):
         self._picked_occ_faces = []
         self._clear_highlight_actors()
 
-        # Show toolbar
+        # Show toolbar, reset lock to locked state
         self._picking_toolbar.show()
         self._pick_count_lbl.setText("0 selected")
         if self._btn_pick_faces is not None:
             self._btn_pick_faces.setEnabled(False)
+        if self._btn_lock is not None:
+            self._btn_lock.setChecked(True)
 
-        # Install VTK left-button press callback
-        self._pick_callback_id = self.interactor.AddObserver(
-            "LeftButtonPressEvent", self._on_vtk_pick
-        )
+        # Lock rotation at the VTK level (swap to no-op interactor style) and
+        # listen for left-button presses to drive the picker.
+        self._rotation_locked = True
+        self._apply_rotation_lock(True)
+        if self._pick_callback_id is None:
+            self._pick_callback_id = self.interactor.AddObserver(
+                "LeftButtonPressEvent", self._on_vtk_pick
+            )
 
-        # Change cursor
         self.vtkWidget.setCursor(QtGui.QCursor(QtCore.Qt.CrossCursor))
 
     def disable_picking_mode(self):
-        """Exit picking mode, restore normal orbit interaction."""
+        """Exit picking mode, restore free orbit."""
         self._picking_mode = False
         self._picking_toolbar.hide()
         self._clear_highlight_actors()
 
+        self._rotation_locked = False
+        self._apply_rotation_lock(False)
         if self._pick_callback_id is not None:
             try:
                 self.interactor.RemoveObserver(self._pick_callback_id)
@@ -856,14 +967,12 @@ class CQ3DViewer(QtWidgets.QWidget):
         if self._btn_pick_faces is not None:
             self._btn_pick_faces.setEnabled(True)
 
-    def _on_vtk_pick(self, obj, event):
-        """VTK callback: called on left-button press in picking mode."""
+    def _do_face_pick(self, vtk_x, vtk_y, ctrl_held):
+        """Run the face cell-picker at the given VTK viewport coordinates."""
         if not self._picking_mode:
             return
 
-        x, y = self.interactor.GetEventPosition()
-        modifiers = QtWidgets.QApplication.keyboardModifiers()
-        ctrl_held = bool(modifiers & QtCore.Qt.ControlModifier)
+        x, y = vtk_x, vtk_y
 
         # Use cell picker for face selection
         picker = vtk.vtkCellPicker()
@@ -914,14 +1023,19 @@ class CQ3DViewer(QtWidgets.QWidget):
             mapper = vtk.vtkPolyDataMapper()
             mapper.SetInputData(face_pd)
             mapper.ScalarVisibilityOff()
+            # Pull the highlight slightly toward the camera so it always wins
+            # the depth test against the coincident base-face triangles — without
+            # this, the overlay flickers / vanishes during camera rotation.
+            mapper.SetResolveCoincidentTopologyToPolygonOffset()
+            mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2.0, -2.0)
 
             actor = vtk.vtkActor()
             actor.SetMapper(mapper)
             actor.GetProperty().SetColor(1.0, 0.55, 0.0)   # Orange highlight
-            actor.GetProperty().SetOpacity(0.8)
+            actor.GetProperty().SetOpacity(1.0)
             actor.GetProperty().SetLineWidth(2.0)
             actor.GetProperty().EdgeVisibilityOn()
-            actor.GetProperty().SetEdgeColor(1.0, 0.8, 0.0)
+            actor.GetProperty().SetEdgeColor(1.0, 0.85, 0.2)
 
             self.renderer.AddActor(actor)
             self._highlight_actors.append(actor)
@@ -934,8 +1048,141 @@ class CQ3DViewer(QtWidgets.QWidget):
             self.renderer.RemoveActor(actor)
         self._highlight_actors = []
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # EDGE PICKING MODE
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def enable_edge_picking_mode(self, multi_select=True):
+        """Switch the viewer into edge-selection picking mode."""
+        self._edge_picking_mode = True
+        self._multi_select = multi_select
+        self._picked_edge_indices = []
+        self._picked_occ_edges = []
+        self._clear_edge_highlight_actors()
+
+        # Show picking toolbar with edge label
+        self._pick_icon_lbl.setText("Edge Picking Mode  --  Click edges to select")
+        self._picking_toolbar.show()
+        self._pick_count_lbl.setText("0 selected")
+
+        # Make edge actor pickable and visible so the picker can hit it
+        if self._edge_actor is not None:
+            self._edge_actor.SetPickable(1)
+            self._edge_actor.SetVisibility(1)
+
+        # Lock rotation via interactor-style swap; same observer used for faces
+        # dispatches edge picks because _edge_picking_mode is True.
+        if self._btn_lock is not None:
+            self._btn_lock.setChecked(True)
+        self._rotation_locked = True
+        self._apply_rotation_lock(True)
+        if self._edge_pick_callback_id is None:
+            self._edge_pick_callback_id = self.interactor.AddObserver(
+                "LeftButtonPressEvent", self._on_vtk_pick
+            )
+        self.vtkWidget.setCursor(QtGui.QCursor(QtCore.Qt.CrossCursor))
+
+    def disable_edge_picking_mode(self):
+        """Exit edge picking mode and restore free orbit."""
+        self._edge_picking_mode = False
+        self._picking_toolbar.hide()
+        self._clear_edge_highlight_actors()
+        self._pick_icon_lbl.setText("Face Picking Mode  --  Click faces to select")
+
+        self._rotation_locked = False
+        self._apply_rotation_lock(False)
+        if self._edge_pick_callback_id is not None:
+            try:
+                self.interactor.RemoveObserver(self._edge_pick_callback_id)
+            except Exception:
+                pass
+            self._edge_pick_callback_id = None
+
+        if self._edge_actor is not None:
+            self._edge_actor.SetPickable(0)
+            self._edge_actor.SetVisibility(1 if self._show_edges else 0)
+
+        self.vtkWidget.setCursor(QtGui.QCursor(QtCore.Qt.ArrowCursor))
+
+    def _do_edge_pick(self, vtk_x, vtk_y, ctrl_held):
+        """Run the edge cell-picker at the given VTK viewport coordinates."""
+        if not self._edge_picking_mode:
+            return
+
+        if self._edge_actor is None:
+            return
+
+        x, y = vtk_x, vtk_y
+
+        picker = vtk.vtkCellPicker()
+        picker.SetTolerance(0.02)   # wider tolerance helps hit thin lines
+        picker.AddPickList(self._edge_actor)
+        picker.PickFromListOn()
+        picker.Pick(x, y, 0, self.renderer)
+
+        cell_id = picker.GetCellId()
+        if cell_id < 0:
+            return
+
+        edge_idx = self._edge_cell_map.get(cell_id, None)
+        if edge_idx is None:
+            return
+
+        if not ctrl_held:
+            self._picked_edge_indices = [edge_idx]
+            self._picked_occ_edges = (
+                [self._all_occ_edges[edge_idx]] if edge_idx < len(self._all_occ_edges) else []
+            )
+        else:
+            if edge_idx in self._picked_edge_indices:
+                self._picked_edge_indices.remove(edge_idx)
+                if edge_idx < len(self._all_occ_edges):
+                    e = self._all_occ_edges[edge_idx]
+                    if e in self._picked_occ_edges:
+                        self._picked_occ_edges.remove(e)
+            else:
+                self._picked_edge_indices.append(edge_idx)
+                if edge_idx < len(self._all_occ_edges):
+                    self._picked_occ_edges.append(self._all_occ_edges[edge_idx])
+
+        self._update_edge_highlight_actors()
+        n = len(self._picked_edge_indices)
+        self._pick_count_lbl.setText(f"{n} edge{'s' if n != 1 else ''} selected")
+
+    def _update_edge_highlight_actors(self):
+        """Re-render edge highlights for currently selected edges."""
+        self._clear_edge_highlight_actors()
+        for edge_idx in self._picked_edge_indices:
+            if edge_idx >= len(self._edge_pd_list):
+                continue
+            edge_pd = self._edge_pd_list[edge_idx]
+            if edge_pd is None:
+                continue
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputData(edge_pd)
+            mapper.ScalarVisibilityOff()
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            actor.GetProperty().SetColor(0.0, 0.9, 1.0)   # cyan
+            actor.GetProperty().SetLineWidth(4.0)
+            actor.GetProperty().LightingOff()
+            self.renderer.AddActor(actor)
+            self._edge_highlight_actors.append(actor)
+        self.vtkWidget.GetRenderWindow().Render()
+
+    def _clear_edge_highlight_actors(self):
+        """Remove all edge highlight actors from the scene."""
+        for actor in self._edge_highlight_actors:
+            self.renderer.RemoveActor(actor)
+        self._edge_highlight_actors = []
+
     def _on_pick_done(self):
         """User confirmed picking — emit signal and exit picking mode."""
+        if self._edge_picking_mode:
+            picked = list(self._picked_occ_edges)
+            self.disable_edge_picking_mode()
+            self.edge_picked.emit(picked)
+            return
         picked = list(self._picked_occ_faces)
         picked_indices = list(self._picked_face_indices)
         self.disable_picking_mode()
@@ -945,10 +1192,15 @@ class CQ3DViewer(QtWidgets.QWidget):
                 mapper = vtk.vtkPolyDataMapper()
                 mapper.SetInputData(self._face_polydata_list[idx])
                 mapper.ScalarVisibilityOff()
+                mapper.SetResolveCoincidentTopologyToPolygonOffset()
+                mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2.0, -2.0)
                 actor = vtk.vtkActor()
                 actor.SetMapper(mapper)
                 actor.GetProperty().SetColor(1.0, 0.6, 0.1)
-                actor.GetProperty().SetOpacity(0.5)
+                actor.GetProperty().SetOpacity(1.0)
+                actor.GetProperty().EdgeVisibilityOn()
+                actor.GetProperty().SetEdgeColor(1.0, 0.85, 0.2)
+                actor.GetProperty().SetLineWidth(1.5)
                 self.renderer.AddActor(actor)
                 self.actors.append(actor)
         self.vtkWidget.GetRenderWindow().Render()
@@ -956,7 +1208,10 @@ class CQ3DViewer(QtWidgets.QWidget):
 
     def _on_pick_cancel(self):
         """User cancelled picking."""
-        self.disable_picking_mode()
+        if self._edge_picking_mode:
+            self.disable_edge_picking_mode()
+        else:
+            self.disable_picking_mode()
         self.picking_cancelled.emit()
 
     def highlight_faces(self, face_indices):
@@ -967,10 +1222,15 @@ class CQ3DViewer(QtWidgets.QWidget):
                 mapper = vtk.vtkPolyDataMapper()
                 mapper.SetInputData(self._face_polydata_list[idx])
                 mapper.ScalarVisibilityOff()
+                mapper.SetResolveCoincidentTopologyToPolygonOffset()
+                mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2.0, -2.0)
                 actor = vtk.vtkActor()
                 actor.SetMapper(mapper)
                 actor.GetProperty().SetColor(1.0, 0.6, 0.1)  # Dim orange
-                actor.GetProperty().SetOpacity(0.5)
+                actor.GetProperty().SetOpacity(1.0)
+                actor.GetProperty().EdgeVisibilityOn()
+                actor.GetProperty().SetEdgeColor(1.0, 0.85, 0.2)
+                actor.GetProperty().SetLineWidth(1.5)
                 self.renderer.AddActor(actor)
                 self.actors.append(actor)
         self.vtkWidget.GetRenderWindow().Render()
@@ -992,6 +1252,15 @@ class CQ3DViewer(QtWidgets.QWidget):
     def clear(self):
         """Clear the viewer and release memory."""
         self._clear_highlight_actors()
+        self._clear_edge_highlight_actors()
+
+        # Remove wireframe edge actor
+        if self._edge_actor is not None:
+            self.renderer.RemoveActor(self._edge_actor)
+            self._edge_actor = None
+        self._all_occ_edges = []
+        self._edge_pd_list = []
+        self._edge_cell_map = {}
 
         # Clear BC overlay actors
         for actor in list(self._bc_overlay_actors):
@@ -1072,6 +1341,113 @@ class CQ3DViewer(QtWidgets.QWidget):
                 for actor in self._axis_label_actors:
                     self.renderer.RemoveActor(actor)
         self.vtkWidget.GetRenderWindow().Render()
+
+    def _toggle_edges(self, state):
+        """Toggle wireframe edge visibility on the current shape."""
+        self._show_edges = bool(state)
+        if self._edge_actor is not None:
+            self._edge_actor.SetVisibility(1 if self._show_edges else 0)
+            self.vtkWidget.GetRenderWindow().Render()
+
+    def _build_edge_actor(self, topo_shape):
+        """
+        Tessellate every OCC edge of *topo_shape* into a combined line actor.
+
+        The actor is added to the renderer immediately:
+         - invisible by default (shown only when _show_edges or edge picking is active)
+         - not pickable by default (edge picking turns it on temporarily)
+        Per-edge vtkPolyData objects are cached in self._edge_pd_list for
+        highlight rendering; self._edge_cell_map maps VTK cell ids to edge indices.
+        """
+        occ_edges = []
+        try:
+            if hasattr(topo_shape, 'Edges'):
+                occ_edges = topo_shape.Edges()
+        except Exception:
+            pass
+
+        self._all_occ_edges = occ_edges
+        self._edge_pd_list = []
+        self._edge_cell_map = {}
+
+        if not occ_edges:
+            return
+
+        combined_pts = vtk.vtkPoints()
+        combined_lines = vtk.vtkCellArray()
+        cell_idx = 0
+
+        for edge_idx, occ_edge in enumerate(occ_edges):
+            pts_list = []
+            try:
+                if hasattr(occ_edge, 'wrapped'):
+                    from OCP.BRepAdaptor import BRepAdaptor_Curve
+                    from OCP.GCPnts import GCPnts_UniformAbscissa
+                    curve = BRepAdaptor_Curve(occ_edge.wrapped)
+                    sampler = GCPnts_UniformAbscissa(curve, 24)
+                    if sampler.NbPoints() > 0:
+                        for i in range(1, sampler.NbPoints() + 1):
+                            p = curve.Value(sampler.Parameter(i))
+                            pts_list.append((p.X(), p.Y(), p.Z()))
+            except Exception:
+                pass
+
+            if not pts_list:
+                try:
+                    sp = occ_edge.startPoint()
+                    ep = occ_edge.endPoint()
+                    pts_list = [(sp.x, sp.y, sp.z), (ep.x, ep.y, ep.z)]
+                except Exception:
+                    pass
+
+            if len(pts_list) < 2:
+                self._edge_pd_list.append(None)
+                continue
+
+            # Per-edge polydata (for highlight rendering)
+            edge_pts = vtk.vtkPoints()
+            edge_lines = vtk.vtkCellArray()
+            local_base = combined_pts.GetNumberOfPoints()
+            for pt in pts_list:
+                combined_pts.InsertNextPoint(pt[0], pt[1], pt[2])
+                edge_pts.InsertNextPoint(pt[0], pt[1], pt[2])
+            for i in range(len(pts_list) - 1):
+                combined_lines.InsertNextCell(2)
+                combined_lines.InsertCellPoint(local_base + i)
+                combined_lines.InsertCellPoint(local_base + i + 1)
+                self._edge_cell_map[cell_idx] = edge_idx
+                cell_idx += 1
+
+                edge_lines.InsertNextCell(2)
+                edge_lines.InsertCellPoint(i)
+                edge_lines.InsertCellPoint(i + 1)
+
+            edge_pd = vtk.vtkPolyData()
+            edge_pd.SetPoints(edge_pts)
+            edge_pd.SetLines(edge_lines)
+            self._edge_pd_list.append(edge_pd)
+
+        if combined_pts.GetNumberOfPoints() == 0:
+            return
+
+        pd = vtk.vtkPolyData()
+        pd.SetPoints(combined_pts)
+        pd.SetLines(combined_lines)
+
+        mapper = vtk.vtkPolyDataMapper()
+        mapper.SetInputData(pd)
+        mapper.ScalarVisibilityOff()
+
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
+        actor.GetProperty().SetColor(0.12, 0.12, 0.12)
+        actor.GetProperty().SetLineWidth(1.5)
+        actor.GetProperty().LightingOff()
+        actor.SetPickable(0)
+        actor.SetVisibility(1 if self._show_edges else 0)
+
+        self.renderer.AddActor(actor)
+        self._edge_actor = actor
 
     def _build_grid_actors(self):
         """Creates a 3-plane (XY/XZ/YZ) reference grid and thick main axes for spatial reference."""
@@ -1623,6 +1999,9 @@ class CQ3DViewer(QtWidgets.QWidget):
 
         self.renderer.AddActor(actor)
         self.current_actor = actor
+
+        # Build wireframe edge actor from OCC edges (used by Edges toggle + edge picking)
+        self._build_edge_actor(topo_shape)
 
         self.renderer.ResetCamera()
         self.vtkWidget.GetRenderWindow().Render()
@@ -2187,6 +2566,91 @@ class CQ3DViewer(QtWidgets.QWidget):
     # SIMULATION RENDER
     # ──────────────────────────────────────────────────────────────────────────
 
+    def _render_voxel_topopt(self, data):
+        """Render pyMOTO structured-density results as actual voxel cubes."""
+        density = np.asarray(data.get('density'), dtype=float)
+        grid_shape = data.get('grid_shape')
+        if density.ndim == 1 and grid_shape:
+            density = density.reshape(tuple(int(v) for v in grid_shape))
+        if density.ndim != 3:
+            return
+
+        nelx, nely, nelz = density.shape
+        bounds = data.get('bounds') if isinstance(data.get('bounds'), dict) else None
+        if bounds and 'min' in bounds and 'max' in bounds:
+            mins = np.asarray(bounds['min'], dtype=float)
+            maxs = np.asarray(bounds['max'], dtype=float)
+            if mins.size >= 3 and maxs.size >= 3 and np.all(maxs[:3] > mins[:3]):
+                cell = (maxs[:3] - mins[:3]) / np.array([nelx, nely, nelz], dtype=float)
+                origin = mins[:3]
+            else:
+                cell = np.ones(3, dtype=float)
+                origin = np.array([-0.5 * nelx, -0.5 * nely, -0.5 * nelz], dtype=float)
+        else:
+            cell = np.ones(3, dtype=float)
+            origin = np.array([-0.5 * nelx, -0.5 * nely, -0.5 * nelz], dtype=float)
+
+        cutoff = float(np.clip(data.get('density_cutoff', 0.35), 0.01, 0.95))
+        mask = density >= cutoff
+        if not np.any(mask) and density.size:
+            mask = density >= float(np.percentile(density, 90))
+
+        points = vtk.vtkPoints()
+        scalars = vtk.vtkFloatArray()
+        scalars.SetName("Density")
+
+        for ix, iy, iz in np.argwhere(mask):
+            points.InsertNextPoint(
+                origin[0] + (ix + 0.5) * cell[0],
+                origin[1] + (iy + 0.5) * cell[1],
+                origin[2] + (iz + 0.5) * cell[2],
+            )
+            scalars.InsertNextValue(float(density[ix, iy, iz]))
+
+        poly_data = vtk.vtkPolyData()
+        poly_data.SetPoints(points)
+        poly_data.GetPointData().SetScalars(scalars)
+
+        cube = vtk.vtkCubeSource()
+        cube.SetXLength(float(cell[0] * 0.92))
+        cube.SetYLength(float(cell[1] * 0.92))
+        cube.SetZLength(float(cell[2] * 0.92))
+
+        glyph = vtk.vtkGlyph3D()
+        glyph.SetInputData(poly_data)
+        glyph.SetSourceConnection(cube.GetOutputPort())
+        glyph.SetScaleFactor(1.0)
+        glyph.SetColorModeToColorByScalar()
+        try:
+            glyph.ScalingOff()
+        except AttributeError:
+            pass
+
+        lut = vtk.vtkLookupTable()
+        lut.SetHueRange(0.67, 0.16)
+        lut.SetSaturationRange(0.75, 0.95)
+        lut.SetValueRange(0.65, 1.0)
+        lut.Build()
+
+        mapper = vtk.vtkPolyDataMapper()
+        mapper.SetInputConnection(glyph.GetOutputPort())
+        mapper.SetScalarModeToUsePointData()
+        mapper.SetScalarRange(0.0, 1.0)
+        mapper.SetLookupTable(lut)
+
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
+        actor.GetProperty().SetRepresentationToSurface()
+        actor.GetProperty().EdgeVisibilityOn()
+        actor.GetProperty().SetEdgeColor(0.08, 0.09, 0.10)
+
+        self.renderer.AddActor(actor)
+        self.current_actor = actor
+        self.actors.append(actor)
+        self._update_scalar_bar("Density", 0.0, 1.0, lut)
+        self.renderer.ResetCamera()
+        self.vtkWidget.GetRenderWindow().Render()
+
     def render_simulation(self, data):
         """
         Render simulation results (Mesh or FEA Result).
@@ -2227,9 +2691,16 @@ class CQ3DViewer(QtWidgets.QWidget):
                     triangle.GetPointIds().SetId(2, f[2])
                     cells.InsertNextCell(triangle)
                 poly_data.SetPolys(cells)
+
+                normals = vtk.vtkPolyDataNormals()
+                normals.SetInputData(poly_data)
+                normals.ConsistencyOn()
+                normals.AutoOrientNormalsOn()
+                normals.SplittingOff()
+                normals.SetFeatureAngle(80.0)
                 
                 mapper = vtk.vtkPolyDataMapper()
-                mapper.SetInputData(poly_data)
+                mapper.SetInputConnection(normals.GetOutputPort())
                 
                 actor = vtk.vtkActor()
                 actor.SetMapper(mapper)
@@ -2243,8 +2714,13 @@ class CQ3DViewer(QtWidgets.QWidget):
                 # Update scalar bar to be empty for geometry view
                 self._update_scalar_bar("", 0, 1, None)
                 
+                self.renderer.ResetCamera()
                 self.vtkWidget.GetRenderWindow().Render()
                 return
+
+        if isinstance(data, dict) and data.get('type') == 'topopt_voxel':
+            self._render_voxel_topopt(data)
+            return
 
 
         # Check if it's a Mesh object or Result dict
@@ -2304,6 +2780,10 @@ class CQ3DViewer(QtWidgets.QWidget):
 
         tets = mesh.t
         n_tets = tets.shape[1]
+        # Detect shell (triangle) meshes — first dimension is 3 instead of 4/10.
+        # The viewer otherwise emits vtkTetra cells, which would silently render
+        # nothing for a surface mesh.
+        is_shell_mesh = tets.shape[0] == 3
 
         # Add Density Data if available
         if density is not None:
@@ -2334,11 +2814,18 @@ class CQ3DViewer(QtWidgets.QWidget):
                 if visualization_mode == 'Displacement':
                     grid.GetPointData().SetActiveScalars("Displacement")
 
-        for i in range(n_tets):
-            tet = vtk.vtkTetra()
-            for j in range(4):
-                tet.GetPointIds().SetId(j, tets[j, i])
-            grid.InsertNextCell(tet.GetCellType(), tet.GetPointIds())
+        if is_shell_mesh:
+            for i in range(n_tets):
+                tri = vtk.vtkTriangle()
+                for j in range(3):
+                    tri.GetPointIds().SetId(j, int(tets[j, i]))
+                grid.InsertNextCell(tri.GetCellType(), tri.GetPointIds())
+        else:
+            for i in range(n_tets):
+                tet = vtk.vtkTetra()
+                for j in range(4):
+                    tet.GetPointIds().SetId(j, int(tets[j, i]))
+                grid.InsertNextCell(tet.GetCellType(), tet.GetPointIds())
 
         # 3. Mapper and Actor
         mapper = vtk.vtkDataSetMapper()

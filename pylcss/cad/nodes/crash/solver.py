@@ -72,9 +72,9 @@ class CrashSolverNode(CadQueryNode):
         # OpenRadioss /DT/NODA/CST toggle.  Uses time_steps above to derive
         # the target timestep.
         self.create_property('enable_mass_scaling', False, widget_type='checkbox')
-        # Impactor (sled) mass in kg.  In Impact Face scope this becomes the
-        # moving rigid wall mass; in Moving Body scope it is lumped onto the
-        # projectile's trailing edge.
+        # Impactor (sled) mass in kg.  In "Fixed specimen + moving impactor"
+        # this becomes the moving rigid wall mass; in "Moving body + fixed wall"
+        # it is lumped onto the projectile's trailing edge.
         # Without a sled mass the crashbox (~250 g) has too little KE to crush
         # plastically at realistic velocities — it bounces elastically.
         # Set to 0 to disable; typical component test values: 25–200 kg.
