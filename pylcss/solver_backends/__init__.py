@@ -10,7 +10,6 @@ input artifacts and, where practical, launch the external executable.
 from pylcss.solver_backends.common import ExternalRunConfig, SolverBackendError
 from pylcss.solver_backends.calculix import (
     run_calculix_static,
-    run_calculix_topopt_iteration,
 )
 from pylcss.solver_backends.openradioss import (
     run_openradioss_crash,
@@ -21,7 +20,6 @@ __all__ = [
     "ExternalRunConfig",
     "SolverBackendError",
     "run_calculix_static",
-    "run_calculix_topopt_iteration",
     "run_openradioss_crash",
     "run_openradioss_existing_deck",
 ]

@@ -1,0 +1,937 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "0x1cca60241d0": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Base Plate (with holes)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 165.6,
+      "pos": [
+        -720.0,
+        -150.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "code": "# 100\u00d7100\u00d710 mm plate with a big centre hole and four bolt holes.\n# The plate sits in the XY plane (z=\u00b15).  All holes are through-all along Z.\n# Bolt holes drilled at the four corners (\u00b1bolt_x, \u00b1bolt_y).\nplate = cq.Workplane('XY').box(L, W, H)\n# Big centre hole (diameter = 2 * big_R)\nplate = plate.faces('>Z').workplane().hole(2.0 * big_R)\n# Four bolt holes\nplate = (\n    plate.faces('>Z').workplane()\n    .pushPoints([\n        ( bolt_x,  bolt_y),\n        ( bolt_x, -bolt_y),\n        (-bolt_x,  bolt_y),\n        (-bolt_x, -bolt_y),\n    ])\n    .hole(bolt_d)\n)\nresult = plate\n",
+        "parameters": "bolt_d=6.0\n",
+        "param_1_name": "L",
+        "param_1_value": 100.0,
+        "param_2_name": "W",
+        "param_2_value": 100.0,
+        "param_3_name": "H",
+        "param_3_value": 10.0,
+        "param_4_name": "big_R",
+        "param_4_value": 20.0,
+        "param_5_name": "bolt_x",
+        "param_5_value": 35.0,
+        "param_6_name": "bolt_y",
+        "param_6_value": 35.0
+      }
+    },
+    "0x1cca6026060": {
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "icon": null,
+      "name": "Mesh Gen",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160.953125,
+      "height": 119.4,
+      "pos": [
+        -440.0,
+        -150.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "mesh_type": "Tet",
+        "element_size": 4.0,
+        "refinement_size": 0.5,
+        "shell_thickness": 1.5,
+        "shell_nip": 5
+      }
+    },
+    "0x1cca6024fb0": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "Steel",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 174.25,
+      "height": 96.3,
+      "pos": [
+        -440.0,
+        80.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "preset": "Steel (Structural)",
+        "youngs_modulus": 210000.0,
+        "poissons_ratio": 0.3,
+        "density": 7.85e-09,
+        "yield_strength": 0.0,
+        "tangent_modulus": 0.0
+      }
+    },
+    "0x1cca6026d20": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Select Fix 1",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 60,
+      "pos": [
+        -180.0,
+        -340.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "selector_type": "NearestToPoint",
+        "direction": ">Z",
+        "near_x": 35.0,
+        "near_y": 35.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "top"
+      }
+    },
+    "0x1cca5f8e2a0": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "icon": null,
+      "name": "Fix Support 1",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 73.2,
+      "pos": [
+        100.0,
+        -340.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "constraint_type": "Fixed",
+        "displacement_x": 0.0,
+        "displacement_y": 0.0,
+        "displacement_z": 0.0,
+        "condition": ""
+      }
+    },
+    "0x1cca60279b0": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Select Fix 2",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 60,
+      "pos": [
+        -180.0,
+        -200.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "selector_type": "NearestToPoint",
+        "direction": ">Z",
+        "near_x": 35.0,
+        "near_y": -35.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "top"
+      }
+    },
+    "0x1cca6038620": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "icon": null,
+      "name": "Fix Support 2",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 73.2,
+      "pos": [
+        100.0,
+        -200.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "constraint_type": "Fixed",
+        "displacement_x": 0.0,
+        "displacement_y": 0.0,
+        "displacement_z": 0.0,
+        "condition": ""
+      }
+    },
+    "0x1cca6039100": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Select Fix 3",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 60,
+      "pos": [
+        -180.0,
+        -60.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "selector_type": "NearestToPoint",
+        "direction": ">Z",
+        "near_x": -35.0,
+        "near_y": 35.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "top"
+      }
+    },
+    "0x1cca6039f70": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "icon": null,
+      "name": "Fix Support 3",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 73.2,
+      "pos": [
+        100.0,
+        -60.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "constraint_type": "Fixed",
+        "displacement_x": 0.0,
+        "displacement_y": 0.0,
+        "displacement_z": 0.0,
+        "condition": ""
+      }
+    },
+    "0x1cca603a9c0": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Select Fix 4",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 60,
+      "pos": [
+        -180.0,
+        80.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "selector_type": "NearestToPoint",
+        "direction": ">Z",
+        "near_x": -35.0,
+        "near_y": -35.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "top"
+      }
+    },
+    "0x1cca6039df0": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "icon": null,
+      "name": "Fix Support 4",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 73.2,
+      "pos": [
+        100.0,
+        80.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "constraint_type": "Fixed",
+        "displacement_x": 0.0,
+        "displacement_y": 0.0,
+        "displacement_z": 0.0,
+        "condition": ""
+      }
+    },
+    "0x1cca603be30": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Select Load Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 60,
+      "pos": [
+        -180.0,
+        240.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "selector_type": "NearestToPoint",
+        "direction": ">Z",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "top"
+      }
+    },
+    "0x1cca603ade0": {
+      "type_": "com.cad.sim.pressure_load.PressureLoadNode",
+      "icon": null,
+      "name": "Pressure (Hole)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 96.3,
+      "pos": [
+        100.0,
+        240.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "pressure": 1.0,
+        "direction": "Outward"
+      }
+    },
+    "0x1ccb2e8a750": {
+      "type_": "com.cad.sim.topopt_voxel.TopologyOptVoxelNode",
+      "icon": null,
+      "name": "Topology Opt (3D Voxel)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": true,
+      "visible": true,
+      "width": 187.125,
+      "height": 119.4,
+      "pos": [
+        426.7893585524721,
+        -52.3201308819066
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "workflow_mode": "Guided",
+        "design_goal": "Lightweight Stiffness",
+        "quality_preset": "Balanced",
+        "manufacturing_process": "None",
+        "advanced_settings_visible": false,
+        "validate_after_optimize": false,
+        "validation_quality": "Standard",
+        "generate_cad_after_optimize": false,
+        "cad_reconstruction_method": "Automatic",
+        "cad_export_filename": "topology_optimized.step",
+        "nelx": 60,
+        "nely": 60,
+        "nelz": 6,
+        "volfrac": 0.4,
+        "rmin": 3.0,
+        "penal": 3.0,
+        "density_cutoff": 0.45,
+        "visualization": "Recovered Shape",
+        "print_ready_mesh": true,
+        "mesh_decimate_ratio": 1.0,
+        "E0": 1.0,
+        "Emin": 1e-09,
+        "nu": 0.3,
+        "optimizer": "OC",
+        "max_iter": 120,
+        "tol": 0.005,
+        "convergence_patience": 8,
+        "stress_constraint": false,
+        "yield_stress": 1.0,
+        "stress_penalty": 1.0,
+        "stress_pnorm_p": 8.0,
+        "bc_preset": "Custom",
+        "symmetry": "XY",
+        "extrusion": "Z",
+        "overhang_build_axis": "None",
+        "max_member_size_voxels": 0.0,
+        "pattern_repeat": 1,
+        "pattern_axis": "Y",
+        "left_support": "None",
+        "right_support": "None",
+        "top_support": "None",
+        "bottom_support": "None",
+        "front_support": "None",
+        "back_support": "None",
+        "support_regions": "[]",
+        "solid_regions": "[{\"type\":\"cylinder\",\"axis\":\"z\",\"center\":[0.5,0.5],\"radius\":0.24,\"z\":[0.0,1.0]},{\"type\":\"cylinder\",\"axis\":\"z\",\"center\":[0.85,0.85],\"radius\":0.09,\"z\":[0.0,1.0]},{\"type\":\"cylinder\",\"axis\":\"z\",\"center\":[0.85,0.15],\"radius\":0.09,\"z\":[0.0,1.0]},{\"type\":\"cylinder\",\"axis\":\"z\",\"center\":[0.15,0.85],\"radius\":0.09,\"z\":[0.0,1.0]},{\"type\":\"cylinder\",\"axis\":\"z\",\"center\":[0.15,0.15],\"radius\":0.09,\"z\":[0.0,1.0]}]",
+        "void_regions": "[{\"type\":\"cylinder\",\"axis\":\"z\",\"center\":[0.5,0.5],\"radius\":0.205,\"z\":[0.0,1.0]},{\"type\":\"cylinder\",\"axis\":\"z\",\"center\":[0.85,0.85],\"radius\":0.032,\"z\":[0.0,1.0]},{\"type\":\"cylinder\",\"axis\":\"z\",\"center\":[0.85,0.15],\"radius\":0.032,\"z\":[0.0,1.0]},{\"type\":\"cylinder\",\"axis\":\"z\",\"center\":[0.15,0.85],\"radius\":0.032,\"z\":[0.0,1.0]},{\"type\":\"cylinder\",\"axis\":\"z\",\"center\":[0.15,0.15],\"radius\":0.032,\"z\":[0.0,1.0]}]",
+        "load_cases": "[]",
+        "force_type": "Point",
+        "force_face": "Right",
+        "force_ix_frac": 1.0,
+        "force_iy_frac": 0.5,
+        "force_iz_frac": 0.5,
+        "force_dir_x": 0.0,
+        "force_dir_y": -1.0,
+        "force_dir_z": 0.0,
+        "force_magnitude": 1.0
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "0x1cca60241d0",
+        "shape"
+      ],
+      "in": [
+        "0x1cca6026060",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca60241d0",
+        "shape"
+      ],
+      "in": [
+        "0x1cca6026d20",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca60241d0",
+        "shape"
+      ],
+      "in": [
+        "0x1cca60279b0",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca60241d0",
+        "shape"
+      ],
+      "in": [
+        "0x1cca6039100",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca60241d0",
+        "shape"
+      ],
+      "in": [
+        "0x1cca603a9c0",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca60241d0",
+        "shape"
+      ],
+      "in": [
+        "0x1cca603be30",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca6026060",
+        "mesh"
+      ],
+      "in": [
+        "0x1cca5f8e2a0",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca6026060",
+        "mesh"
+      ],
+      "in": [
+        "0x1cca6038620",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca6026060",
+        "mesh"
+      ],
+      "in": [
+        "0x1cca6039f70",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca6026060",
+        "mesh"
+      ],
+      "in": [
+        "0x1cca6039df0",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca6026060",
+        "mesh"
+      ],
+      "in": [
+        "0x1cca603ade0",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca6026060",
+        "mesh"
+      ],
+      "in": [
+        "0x1ccb2e8a750",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca6024fb0",
+        "material"
+      ],
+      "in": [
+        "0x1ccb2e8a750",
+        "material"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca6026d20",
+        "workplane"
+      ],
+      "in": [
+        "0x1cca5f8e2a0",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca5f8e2a0",
+        "constraints"
+      ],
+      "in": [
+        "0x1ccb2e8a750",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca60279b0",
+        "workplane"
+      ],
+      "in": [
+        "0x1cca6038620",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca6038620",
+        "constraints"
+      ],
+      "in": [
+        "0x1ccb2e8a750",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca6039100",
+        "workplane"
+      ],
+      "in": [
+        "0x1cca6039f70",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca6039f70",
+        "constraints"
+      ],
+      "in": [
+        "0x1ccb2e8a750",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca603a9c0",
+        "workplane"
+      ],
+      "in": [
+        "0x1cca6039df0",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca6039df0",
+        "constraints"
+      ],
+      "in": [
+        "0x1ccb2e8a750",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca603be30",
+        "workplane"
+      ],
+      "in": [
+        "0x1cca603ade0",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x1cca603ade0",
+        "loads"
+      ],
+      "in": [
+        "0x1ccb2e8a750",
+        "loads"
+      ]
+    }
+  ]
+}

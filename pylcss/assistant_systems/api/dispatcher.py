@@ -11,7 +11,7 @@ import logging
 from typing import Dict, Any, Optional, Callable, TYPE_CHECKING, List
 
 from pylcss.assistant_systems.services.input import MouseController
-from pylcss.cad.node_library import NODE_CLASS_MAPPING
+from pylcss.design_studio.node_library import NODE_CLASS_MAPPING
 from pylcss.system_modeling.node_registry import SYSTEM_NODE_CLASS_MAPPING
 
 from PySide6.QtCore import QObject, Signal, Slot, Qt, QMetaObject
@@ -1086,7 +1086,7 @@ class CommandDispatcher:
                     from PySide6.QtWidgets import QApplication
                     QApplication.processEvents()
 
-                from pylcss.cad.engine import execute_graph
+                from pylcss.design_studio.engine import execute_graph
                 nodes = list(widget.graph.all_nodes())
                 results = execute_graph(nodes)
 

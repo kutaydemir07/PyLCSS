@@ -9,7 +9,7 @@
     "reject_connection_types": "{}"
   },
   "nodes": {
-    "0x267b49ee480": {
+    "0x2de21d65d30": {
       "type_": "com.cad.code_part.CadQueryCodeNode",
       "icon": null,
       "name": "Cantilever Domain",
@@ -60,7 +60,7 @@
         "param_6_value": 0.0
       }
     },
-    "0x267b4d3a9c0": {
+    "0x2de21d66f00": {
       "type_": "com.cad.sim.mesh.MeshNode",
       "icon": null,
       "name": "Mesh",
@@ -102,7 +102,7 @@
         "shell_nip": 5
       }
     },
-    "0x267b4d3b620": {
+    "0x2de21d67350": {
       "type_": "com.cad.sim.material.MaterialNode",
       "icon": null,
       "name": "Material",
@@ -145,7 +145,7 @@
         "tangent_modulus": 0.0
       }
     },
-    "0x267b4d3a0f0": {
+    "0x2de21a94b00": {
       "type_": "com.cad.select_face.SelectFaceNode",
       "icon": null,
       "name": "Select Fixed Face",
@@ -196,7 +196,7 @@
         "tag": "top"
       }
     },
-    "0x267b4d3bdd0": {
+    "0x2de21d67b00": {
       "type_": "com.cad.sim.constraint.ConstraintNode",
       "icon": null,
       "name": "Fixed Support",
@@ -238,7 +238,7 @@
         "condition": ""
       }
     },
-    "0x267b4d50290": {
+    "0x2de21d67e90": {
       "type_": "com.cad.select_face.SelectFaceNode",
       "icon": null,
       "name": "Select Load Face",
@@ -289,7 +289,7 @@
         "tag": "top"
       }
     },
-    "0x267b4d50680": {
+    "0x2de21d64c50": {
       "type_": "com.cad.sim.load.LoadNode",
       "icon": null,
       "name": "Tip Load",
@@ -336,7 +336,7 @@
         "gravity_direction": "-Y"
       }
     },
-    "0x267b4c23b00": {
+    "0x2de21a5ca70": {
       "type_": "com.cad.sim.topopt_voxel.TopologyOptVoxelNode",
       "icon": null,
       "name": "Voxel Topology Opt",
@@ -371,21 +371,44 @@
       "port_deletion_allowed": false,
       "subgraph_session": {},
       "custom": {
-        "nelx": 40,
-        "nely": 14,
-        "nelz": 2,
-        "volfrac": 0.4,
-        "rmin": 1.6,
+        "workflow_mode": "Guided",
+        "design_goal": "Lightweight Stiffness",
+        "quality_preset": "Balanced",
+        "manufacturing_process": "Symmetric",
+        "advanced_settings_visible": false,
+        "validate_after_optimize": false,
+        "validation_quality": "Standard",
+        "generate_cad_after_optimize": false,
+        "cad_reconstruction_method": "Automatic",
+        "cad_export_filename": "cantilever_optimized.step",
+        "nelx": 80,
+        "nely": 28,
+        "nelz": 6,
+        "volfrac": 0.3,
+        "rmin": 2.4,
         "penal": 3.0,
-        "density_cutoff": 0.35,
+        "density_cutoff": 0.45,
         "visualization": "Density",
+        "print_ready_mesh": true,
+        "mesh_decimate_ratio": 0.65,
         "E0": 1.0,
         "Emin": 1e-09,
         "nu": 0.3,
         "optimizer": "OC",
-        "max_iter": 60,
-        "tol": 0.01,
+        "max_iter": 100,
+        "tol": 0.005,
+        "convergence_patience": 5,
+        "stress_constraint": false,
+        "yield_stress": 1.0,
+        "stress_penalty": 1.0,
+        "stress_pnorm_p": 8.0,
         "bc_preset": "Custom",
+        "symmetry": "Z",
+        "extrusion": "None",
+        "overhang_build_axis": "None",
+        "max_member_size_voxels": 0.0,
+        "pattern_repeat": 1,
+        "pattern_axis": "Y",
         "left_support": "None",
         "right_support": "None",
         "top_support": "None",
@@ -393,6 +416,9 @@
         "front_support": "None",
         "back_support": "None",
         "support_regions": "[]",
+        "solid_regions": "[]",
+        "void_regions": "[]",
+        "load_cases": "[]",
         "force_type": "Point",
         "force_face": "Right",
         "force_ix_frac": 1.0,
@@ -408,111 +434,111 @@
   "connections": [
     {
       "out": [
-        "0x267b49ee480",
+        "0x2de21d65d30",
         "shape"
       ],
       "in": [
-        "0x267b4d3a9c0",
-        "shape"
-      ]
-    },
-    {
-      "out": [
-        "0x267b49ee480",
-        "shape"
-      ],
-      "in": [
-        "0x267b4d3a0f0",
+        "0x2de21d66f00",
         "shape"
       ]
     },
     {
       "out": [
-        "0x267b49ee480",
+        "0x2de21d65d30",
         "shape"
       ],
       "in": [
-        "0x267b4d50290",
+        "0x2de21a94b00",
         "shape"
       ]
     },
     {
       "out": [
-        "0x267b4d3a9c0",
+        "0x2de21d65d30",
+        "shape"
+      ],
+      "in": [
+        "0x2de21d67e90",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x2de21d66f00",
         "mesh"
       ],
       "in": [
-        "0x267b4d3bdd0",
+        "0x2de21d67b00",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x267b4d3a9c0",
+        "0x2de21d66f00",
         "mesh"
       ],
       "in": [
-        "0x267b4d50680",
+        "0x2de21d64c50",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x267b4d3a9c0",
+        "0x2de21d66f00",
         "mesh"
       ],
       "in": [
-        "0x267b4c23b00",
+        "0x2de21a5ca70",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x267b4d3b620",
+        "0x2de21d67350",
         "material"
       ],
       "in": [
-        "0x267b4c23b00",
+        "0x2de21a5ca70",
         "material"
       ]
     },
     {
       "out": [
-        "0x267b4d3a0f0",
+        "0x2de21a94b00",
         "workplane"
       ],
       "in": [
-        "0x267b4d3bdd0",
+        "0x2de21d67b00",
         "target_face"
       ]
     },
     {
       "out": [
-        "0x267b4d3bdd0",
+        "0x2de21d67b00",
         "constraints"
       ],
       "in": [
-        "0x267b4c23b00",
+        "0x2de21a5ca70",
         "constraints"
       ]
     },
     {
       "out": [
-        "0x267b4d50290",
+        "0x2de21d67e90",
         "workplane"
       ],
       "in": [
-        "0x267b4d50680",
+        "0x2de21d64c50",
         "target_face"
       ]
     },
     {
       "out": [
-        "0x267b4d50680",
+        "0x2de21d64c50",
         "loads"
       ],
       "in": [
-        "0x267b4c23b00",
+        "0x2de21a5ca70",
         "loads"
       ]
     }

@@ -185,8 +185,8 @@ class GraphBuilder:
         # cad.fea(path, **inputs) / cad.crash(...) / cad.topopt(...) to evaluate
         # an external .cad file as part of the system model. Each call returns a
         # CadResult exposing standardised scalars (max_stress, compliance,
-        # mass, ...). See pylcss/cad/runtime.py for the full contract.
-        code_lines.append("from pylcss.cad import runtime as cad")
+        # mass, ...). See pylcss/design_studio/runtime.py for the full contract.
+        code_lines.append("from pylcss.design_studio import runtime as cad")
         code_lines.append("# Auto-generated model code")
         code_lines.append("")
         code_lines.append("# Base directory for relative paths")
@@ -558,7 +558,7 @@ class GraphBuilder:
         code_lines.append("import numpy as np")
         code_lines.append("import joblib")
         code_lines.append("from sklearn.preprocessing import StandardScaler")
-        code_lines.append("from pylcss.cad import runtime as cad")
+        code_lines.append("from pylcss.design_studio import runtime as cad")
         code_lines.append("")
         
         # 3. Generate individual functions for each block

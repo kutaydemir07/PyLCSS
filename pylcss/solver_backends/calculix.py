@@ -20,6 +20,7 @@ from pylcss.solver_backends.common import (
     load_vector,
     make_work_dir,
     mesh_to_tet4,
+    mesh_to_tet10,
     nodes_matching_condition,
     nodes_matching_geometries,
     resolve_executable,
@@ -272,7 +273,16 @@ def _build_input_deck(
     ``analysis_type`` selects linear vs nonlinear (NLGEOM) static.  Plasticity
     is auto-enabled whenever ``material['yield_strength'] > 0``.
     """
-    points, tets = mesh_to_tet4(mesh, warnings)
+    # A 10-row connectivity is a quadratic (C3D10) mesh — emit it verbatim;
+    # anything else is treated as linear C3D4 (mesh_to_tet4 downgrades higher
+    # orders to their corner nodes, preserving the prior behaviour).
+    quadratic = bool(np.asarray(mesh.t).shape[0] == 10) if hasattr(mesh, "t") else False
+    if quadratic:
+        points, tets = mesh_to_tet10(mesh, warnings)
+        elem_type = "C3D10"
+    else:
+        points, tets = mesh_to_tet4(mesh, warnings)
+        elem_type = "C3D4"
     step_header = _step_header(analysis_type)
     # Note: _build_sets_and_step prepends a hard-coded ``*STEP``/``*STATIC``;
     # we override it below by replacing the leading two entries with the
@@ -289,10 +299,10 @@ def _build_input_deck(
     for idx, xyz in enumerate(points, start=1):
         lines.append(f"{idx}, {xyz[0]:.12g}, {xyz[1]:.12g}, {xyz[2]:.12g}")
 
-    lines.append("*ELEMENT, TYPE=C3D4, ELSET=EALL")
+    lines.append(f"*ELEMENT, TYPE={elem_type}, ELSET=EALL")
     for idx, conn in enumerate(tets, start=1):
-        node_ids = [int(v) + 1 for v in conn]
-        lines.append(f"{idx}, {node_ids[0]}, {node_ids[1]}, {node_ids[2]}, {node_ids[3]}")
+        node_ids = ", ".join(str(int(v) + 1) for v in conn)
+        lines.append(f"{idx}, {node_ids}")
 
     lines.extend(_material_block(material))
     lines.extend(model_lines)
@@ -417,191 +427,6 @@ def _ingest_frd_into_result(
         "frd_file": str(frd_path),
         "frd_steps": parsed.get("steps", []),
     }
-
-
-def _build_topopt_input_deck(
-    mesh: Any,
-    material: dict,
-    constraints: List[dict],
-    loads: List[dict],
-    densities: np.ndarray,
-    p_penal: float,
-    rho_min: float,
-    n_bins: int,
-    warnings: List[str],
-) -> str:
-    """Build a CalculiX deck where elements are grouped by SIMP-binned modulus.
-
-    Element modulus follows the modified-SIMP interpolation
-        E_e = (rho_min + (1 - rho_min) * rho_e**p) * E_0
-    and is quantised into ``n_bins`` discrete materials so the deck stays
-    tractable on meshes with > 10⁵ elements.
-    """
-    points, tets = mesh_to_tet4(mesh, warnings)
-    model_lines, step_lines = _build_sets_and_step(mesh, constraints, loads, warnings)
-
-    n_elem = tets.shape[0]
-    if densities.shape[0] != n_elem:
-        raise SolverBackendError(
-            f"densities has {densities.shape[0]} entries but mesh has {n_elem} tets."
-        )
-
-    rho_clipped = np.clip(densities.astype(float), float(rho_min), 1.0)
-    e_factor = float(rho_min) + (1.0 - float(rho_min)) * (rho_clipped ** float(p_penal))
-
-    # Logarithmic binning over the modulus *factor* so the dense-end resolution
-    # (where sensitivities matter most for compliance) is preserved.
-    e_lo = float(np.min(e_factor))
-    e_hi = float(np.max(e_factor))
-    if e_hi - e_lo < 1e-9:
-        bin_ids = np.zeros(n_elem, dtype=int)
-        bin_values = np.array([e_hi])
-    else:
-        edges = np.linspace(np.log(max(e_lo, 1e-12)), np.log(e_hi), int(n_bins) + 1)
-        bin_ids = np.clip(
-            np.searchsorted(edges[1:-1], np.log(e_factor)),
-            0,
-            int(n_bins) - 1,
-        )
-        bin_centers_log = 0.5 * (edges[:-1] + edges[1:])
-        bin_values = np.exp(bin_centers_log)
-
-    e_base = float(material.get("E", 210000.0))
-    nu = float(material.get("nu", material.get("poissons_ratio", 0.3)))
-    rho_dens = float(material.get("rho", material.get("density", 7.85e-9)))
-
-    lines: List[str] = [
-        "*HEADING",
-        "PyLCSS CalculiX SIMP topology-optimisation iteration",
-        "*NODE",
-    ]
-    for idx, xyz in enumerate(points, start=1):
-        lines.append(f"{idx}, {xyz[0]:.12g}, {xyz[1]:.12g}, {xyz[2]:.12g}")
-
-    lines.append("*ELEMENT, TYPE=C3D4, ELSET=EALL")
-    for idx, conn in enumerate(tets, start=1):
-        node_ids = [int(v) + 1 for v in conn]
-        lines.append(f"{idx}, {node_ids[0]}, {node_ids[1]}, {node_ids[2]}, {node_ids[3]}")
-
-    # Per-bin element sets (1-based CCX element ids).
-    used_bins = np.unique(bin_ids)
-    for b in used_bins:
-        elset = f"E_BIN_{b}"
-        elem_ids = np.where(bin_ids == b)[0] + 1
-        lines.append(f"*ELSET, ELSET={elset}")
-        lines.extend(id_lines(elem_ids))
-
-    # Per-bin material + solid section.
-    for b in used_bins:
-        e_b = float(bin_values[b]) * e_base
-        mat_name = f"MAT_{b}"
-        lines.extend(
-            [
-                f"*MATERIAL, NAME={mat_name}",
-                "*ELASTIC",
-                f"{e_b:.12g}, {nu:.12g}",
-                "*DENSITY",
-                f"{rho_dens:.12g}",
-                f"*SOLID SECTION, ELSET=E_BIN_{b}, MATERIAL={mat_name}",
-                "",
-            ]
-        )
-    lines.extend(model_lines)
-    lines.extend(step_lines)
-    return "\n".join(lines) + "\n"
-
-
-def run_calculix_topopt_iteration(
-    mesh: Any,
-    material: dict,
-    constraints: List[dict],
-    loads: List[dict],
-    densities: np.ndarray,
-    p_penal: float,
-    rho_min: float,
-    config: ExternalRunConfig,
-    n_bins: int = 32,
-) -> dict:
-    """Run one SIMP topology-optimisation iteration through CalculiX.
-
-    Returns the standard FEA result dict plus ``element_ener`` and
-    ``element_volumes`` for SIMP sensitivity computation.
-    """
-    warnings: List[str] = []
-    work_dir = make_work_dir("pylcss_calculix_topopt_", config.work_dir)
-    job_name = config.job_name or "pylcss_calculix_topopt"
-    inp_path = work_dir / f"{job_name}.inp"
-    inp_path.write_text(
-        _build_topopt_input_deck(
-            mesh, material, constraints, loads,
-            np.asarray(densities, dtype=float),
-            p_penal, rho_min, n_bins, warnings,
-        ),
-        encoding="utf-8",
-    )
-
-    executable = resolve_executable(
-        config.executable,
-        env_vars=("PYLCSS_CALCULIX_CCX", "CALCULIX_CCX"),
-        candidates=(
-            "ccx_static", "ccx_static.exe",
-            "ccx", "ccx.exe",
-            "ccx_dynamic", "ccx_dynamic.exe",
-        ),
-    )
-
-    status = "deck_written"
-    solver_log = ""
-    result_payload: dict = {}
-    if config.run_solver:
-        if executable is None:
-            raise SolverBackendError(
-                "CalculiX executable not found. Set the node path, add ccx to PATH, "
-                "define PYLCSS_CALCULIX_CCX, or run scripts/install_solvers.py."
-            )
-        exe_dir = str(Path(executable).resolve().parent)
-        proc = run_process(
-            [executable, job_name],
-            cwd=work_dir,
-            timeout_s=config.timeout_s,
-            extra_path_dirs=(exe_dir,),
-        )
-        solver_log = tail(proc.stdout or "")
-        if proc.returncode != 0:
-            aux = _collect_calculix_failure_context(work_dir, job_name, proc.returncode, executable)
-            raise SolverBackendError(
-                "CalculiX (topopt iteration) failed. Last solver output:\n"
-                + (solver_log or "(stdout was empty)\n")
-                + "\n"
-                + aux
-            )
-        status = "completed"
-        frd_path = work_dir / f"{job_name}.frd"
-        if not frd_path.is_file():
-            raise SolverBackendError(
-                f"CalculiX (topopt iteration) produced no {frd_path.name}; "
-                "check the .dat / .sta logs in the work directory."
-            )
-        result_payload = _ingest_frd_into_result(mesh, frd_path, "Density", warnings)
-        rho_mat = float(material.get("rho", material.get("density", 0.0)))
-        if rho_mat > 0.0 and "element_volumes" in result_payload:
-            phys = np.asarray(densities, dtype=float)
-            elem_vol_arr = np.asarray(result_payload["element_volumes"], dtype=float)
-            result_payload["mass"] = float(np.sum(phys * elem_vol_arr) * rho_mat)
-
-    output = {
-        "type": result_payload.get("type", "external_solver"),
-        "backend": "CalculiX (SIMP)",
-        "external_status": status,
-        "mesh": mesh,
-        "input_file": str(inp_path),
-        "work_dir": str(work_dir),
-        "solver_executable": executable,
-        "solver_log": solver_log,
-        "warnings": warnings,
-    }
-    output.update(result_payload)
-    return output
 
 
 def run_calculix_static(

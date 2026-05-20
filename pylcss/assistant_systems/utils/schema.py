@@ -16,7 +16,7 @@ from typing import Dict, List, Any
 logger = logging.getLogger(__name__)
 
 # Import the centralized CAD node registry
-from pylcss.cad.node_library import NODE_CLASS_MAPPING
+from pylcss.design_studio.node_library import NODE_CLASS_MAPPING
 
 # Import Modeling environment node registry
 from pylcss.system_modeling.node_registry import SYSTEM_NODE_CLASS_MAPPING as MODELING_NODE_MAPPING

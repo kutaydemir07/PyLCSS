@@ -350,7 +350,7 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         self.txt_cad_path = QtWidgets.QLineEdit()
         self.txt_cad_path.setPlaceholderText("Path to .cad / .json CAD graph...")
         self.txt_cad_path.setToolTip(
-            "PyLCSS CAD graph file. The wrapper will call pylcss.cad.runtime "
+            "PyLCSS CAD graph file. The wrapper will call pylcss.design_studio.runtime "
             "with each design's parameters to materialise its mesh."
         )
         self.btn_browse_cad = QtWidgets.QPushButton("Browse...")
@@ -1393,7 +1393,7 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
             target_node.set_property('surrogate_model_path', fname)
             target_node.set_property('use_surrogate', True)
             target_node.set_property('surrogate_status', 
-                f"Trained ({self.combo_algo.currentText()}, RÂ²={self.current_metrics['R2']:.2f})")
+                f"Trained ({self.combo_algo.currentText()}, R\u00B2={self.current_metrics['R2']:.2f})")
             
             QtWidgets.QMessageBox.information(self, "Success", 
                 f"Model saved to '{fname}' and attached to node.\n"

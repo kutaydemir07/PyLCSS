@@ -2707,6 +2707,11 @@ class CQ3DViewer(QtWidgets.QWidget):
                 # Soft premium gray
                 actor.GetProperty().SetColor(0.8, 0.8, 0.8)
                 actor.GetProperty().SetOpacity(1.0)
+                try:
+                    actor.GetProperty().SetInterpolationToPhong()
+                except AttributeError:
+                    pass
+                actor.GetProperty().EdgeVisibilityOff()
                 
                 self.renderer.AddActor(actor)
                 self.current_actor = actor
@@ -2755,7 +2760,15 @@ class CQ3DViewer(QtWidgets.QWidget):
             if 'max_stress_gauss' in data:
                 max_stress_gauss = float(data['max_stress_gauss'])
             if 'deformation_scale' in data:
-                _def_scale = float(data['deformation_scale'])
+                raw_scale = data['deformation_scale']
+                try:
+                    if isinstance(raw_scale, str):
+                        text_scale = raw_scale.strip().lower()
+                        _def_scale = 1.0 if text_scale == 'auto' else float(text_scale.rstrip('x'))
+                    else:
+                        _def_scale = float(raw_scale)
+                except Exception:
+                    _def_scale = 1.0
 
         if mesh is None:
             return
@@ -3036,13 +3049,7 @@ class CQ3DViewer(QtWidgets.QWidget):
 
         # 5. Re-apply cached BC face overlays on top of the simulation result
         #    so they remain visible after FEA/TopOpt solve.
-        #    Skip only for TopOpt iteration previews (keep frame rate high).
-        #    Crash frames DO replay overlays so supports/impact face stay visible.
-        skip_bc_replay = (
-            isinstance(data, dict)
-            and data.get('type') == 'topopt'
-            and bool(data.get('_preview', False))
-        )
+        skip_bc_replay = False
         if not skip_bc_replay and self._cached_bc_data is not None:
             c_faces, l_faces, l_vecs = self._cached_bc_data
             self.render_bc_overlays(

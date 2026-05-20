@@ -1110,7 +1110,7 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
             "OTHER AVAILABLE TYPES (for FEA/IO only):\n"
             "  com.cad.assembly, com.cad.select_face,\n"
             "  com.cad.sim.material, com.cad.sim.mesh, com.cad.sim.constraint,\n"
-            "  com.cad.sim.load, com.cad.sim.solver, com.cad.sim.topopt,\n"
+            "  com.cad.sim.load, com.cad.sim.solver, com.cad.sim.topopt_voxel,\n"
             "  com.cad.number, com.cad.variable, com.cad.export_step, com.cad.export_stl"
         ),
         parameters=[
@@ -1575,29 +1575,25 @@ CAD_NODE_TYPES = {
         "properties": {"visualization": "Von Mises Stress"},
         "inputs": ["mesh", "material", "constraints", "loads"], "outputs": ["results"],
     },
-    "com.cad.sim.topopt": {
+    "com.cad.sim.topopt_voxel": {
         "name": "Topology Optimization",
-        "properties": {"vol_frac": 0.4, "iterations": 50, "filter_radius": 3.0,
-                        "density_cutoff": 0.3, "shape_recovery": True},
+        "properties": {
+            "workflow_mode": "Guided",
+            "design_goal": "Lightweight Stiffness",
+            "quality_preset": "Balanced",
+            "manufacturing_process": "None",
+            "volfrac": 0.4,
+            "validate_after_optimize": False,
+            "generate_cad_after_optimize": False,
+            "cad_reconstruction_method": "Recovered Shape",
+        },
         "inputs": ["mesh", "material", "constraints", "loads"],
-        "outputs": ["optimized_mesh", "recovered_shape"],
+        "outputs": ["result", "recovered_shape"],
     },
     "com.cad.sim.remesh": {
         "name": "Remesh Surface",
         "properties": {"element_size": 3.0, "mesh_quality": "Medium"},
         "inputs": ["topopt_result"], "outputs": ["mesh", "shape"],
-    },
-    "com.cad.sim.sizeopt": {
-        "name": "Size Optimization",
-        "properties": {"objective": "Min Weight", "max_iterations": 50},
-        "inputs": ["shape", "material", "constraints", "loads"],
-        "outputs": ["optimized_shape", "optimal_parameters", "result"],
-    },
-    "com.cad.sim.shapeopt": {
-        "name": "Shape Optimization",
-        "properties": {"objective": "Min Max Stress", "max_iterations": 20, "step_size": 0.1},
-        "inputs": ["mesh", "material", "constraints", "loads"],
-        "outputs": ["optimized_mesh", "result"],
     },
 
     # --- Crash Simulation ---
@@ -1747,7 +1743,7 @@ def get_cad_schema_for_prompt() -> str:
         "com.cad.export_step", "com.cad.export_stl",
         # FEA
         "com.cad.sim.material", "com.cad.sim.mesh", "com.cad.sim.constraint",
-        "com.cad.sim.load", "com.cad.sim.solver", "com.cad.sim.topopt",
+        "com.cad.sim.load", "com.cad.sim.solver", "com.cad.sim.topopt_voxel",
     ]
 
     for ntype in CORE_NODES:

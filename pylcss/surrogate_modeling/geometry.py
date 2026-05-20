@@ -13,7 +13,7 @@ that each parameter vector produces, because their input is the design space's
 This module bridges the two:
 
 1. ``cad_evaluate_geometry(cad_path, kind, params)`` runs PyLCSS's existing
-   CAD graph (via :mod:`pylcss.cad.runtime`) at the given parameters and
+   CAD graph (via :mod:`pylcss.design_studio.runtime`) at the given parameters and
    returns the resulting mesh + nodal fields.
 2. ``compute_sdf(points, cells, query_points)`` evaluates the signed distance
    from ``query_points`` to the surface defined by ``(points, cells)``.
@@ -102,7 +102,7 @@ def cad_evaluate_geometry(
         fields are populated best-effort from common key names ("stress",
         "displacement", "von_mises", "node_stress", ...).
     """
-    from pylcss.cad import runtime as cad_runtime
+    from pylcss.design_studio import runtime as cad_runtime
 
     if kind == "fea":
         result = cad_runtime.fea(cad_path, **params)

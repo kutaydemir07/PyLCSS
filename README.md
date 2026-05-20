@@ -45,7 +45,7 @@ The core concept is the **Solution Space** approach for robust design: instead o
 
 - **Parametric CAD** — Define geometry in Python (CadQuery) or draw it interactively in FreeCAD via a live bridge
 - **FEA** — Static structural analysis via CalculiX with displacement and von Mises stress results visualised in the built-in VTK viewer
-- **Topology Optimization** — SIMP-based topology, shape, and size optimization; voxel-based via pyMOTO; direct STL/OBJ export of optimized geometry
+- **Topology Optimization** — SIMP-based voxel topology optimization via pyMOTO; direct STL/OBJ export of optimized geometry
 - **Crash / Impact Simulation** — OpenRadioss explicit solver integration with animated VTK result playback
 - **Solution Space Exploration** — Find all designs that satisfy your requirements, not just a single optimum; includes product family analysis to identify a common platform across variants
 - **Multi-Objective Optimization** — 7 solvers: SLSQP, COBYLA, trust-constr, Differential Evolution, Nevergrad, NSGA-II, and Multi-Start

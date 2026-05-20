@@ -63,7 +63,7 @@ if TORCH_AVAILABLE:
         backbone : {"geom_deeponet", "gino"}
             Tells the wrapper which forward-pass adapter to use.
         cad_path : str
-            CAD graph file driven by :mod:`pylcss.cad.runtime` to materialise
+            CAD graph file driven by :mod:`pylcss.design_studio.runtime` to materialise
             geometry per design.
         cad_kind : {"fea", "crash", "topopt"}
             Which terminal solver to call.  Geometry only is used at predict

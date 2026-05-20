@@ -61,8 +61,8 @@ dependencies = [
     "scikit-image==0.26.0",
     "numpy-stl==3.2.0",
     "trimesh==4.5.3",
+    "fast-simplification==0.1.13",
     "rtree==1.4.1",
-
     # Optimization and sensitivity analysis
     "nevergrad==1.0.4",
     "SALib==1.5.2",
@@ -108,6 +108,11 @@ dependencies = [
 [project.scripts]
 pylcss = "pylcss.main:main"
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["pylcss*"]
@@ -122,4 +127,8 @@ minversion = "6.0"
 addopts = "-ra -q"
 testpaths = [
     "tests",
+]
+filterwarnings = [
+    # pyMOTO's sparse LU converts CSR→CSC internally; benign and noisy.
+    "ignore::scipy.sparse.SparseEfficiencyWarning",
 ]

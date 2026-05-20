@@ -60,7 +60,6 @@ class ExternalRunConfig:
     executable: Optional[str] = None
     secondary_executable: Optional[str] = None
     work_dir: Optional[str] = None
-    keep_files: bool = True
     run_solver: bool = False
     timeout_s: float = 3600.0
     job_name: str = "pylcss_case"
@@ -84,13 +83,55 @@ def as_bool(value: Any) -> bool:
     return bool(value)
 
 
+# Managed root for solver scratch dirs.  Keeping runs here (next to the solver
+# binaries) instead of the system temp folder makes them discoverable, and the
+# auto-prune below caps growth so they can't silently fill the disk.
+_RUNS_ROOT = Path(__file__).resolve().parent.parent.parent / "external_solvers" / "runs"
+_DEFAULT_KEEP_RUNS = 6
+
+
+def _keep_runs_count() -> int:
+    """Retained runs per prefix; override with ``PYLCSS_KEEP_SOLVER_RUNS``."""
+    try:
+        return max(1, int(os.environ.get("PYLCSS_KEEP_SOLVER_RUNS", _DEFAULT_KEEP_RUNS)))
+    except (TypeError, ValueError):
+        return _DEFAULT_KEEP_RUNS
+
+
+def _prune_solver_runs(root: Path, prefix: str, keep: int) -> None:
+    """Delete all but the newest ``keep`` run dirs sharing ``prefix`` under ``root``."""
+    if keep <= 0:
+        return
+    try:
+        runs = sorted(
+            (p for p in root.glob(f"{prefix}*") if p.is_dir()),
+            key=lambda p: p.stat().st_mtime,
+        )
+    except OSError:
+        return
+    for old in runs[:-keep]:
+        shutil.rmtree(old, ignore_errors=True)
+
+
 def make_work_dir(prefix: str, requested_dir: Optional[str]) -> Path:
-    """Create or reuse a working directory for generated solver artifacts."""
+    """Create (or reuse) a working directory for generated solver artifacts.
+
+    With no explicit ``requested_dir`` the run is created under
+    ``external_solvers/runs/`` rather than the system temp folder, and the
+    oldest sibling runs (same ``prefix``) are pruned so the folder cannot grow
+    without bound.  An explicit ``requested_dir`` is used verbatim and never
+    pruned — set it when you want to keep a run's artifacts.
+    """
     if requested_dir:
         path = Path(os.path.expandvars(os.path.expanduser(str(requested_dir))))
         path.mkdir(parents=True, exist_ok=True)
         return path.resolve()
-    return Path(tempfile.mkdtemp(prefix=prefix))
+
+    _RUNS_ROOT.mkdir(parents=True, exist_ok=True)
+    work_dir = Path(tempfile.mkdtemp(prefix=prefix, dir=str(_RUNS_ROOT)))
+    # Prune AFTER creating this run so the just-made dir (newest) always survives.
+    _prune_solver_runs(_RUNS_ROOT, prefix, _keep_runs_count())
+    return work_dir.resolve()
 
 
 def resolve_executable(
@@ -314,6 +355,62 @@ def mesh_to_tet4(mesh: Any, warnings: List[str]) -> Tuple[np.ndarray, np.ndarray
         warnings.append(
             f"{n_deg} tetrahedra have a near-zero signed volume — the input mesh "
             "is degenerate and the solver may still reject it."
+        )
+
+    return points, cells
+
+
+def mesh_to_tet10(mesh: Any, warnings: List[str]) -> Tuple[np.ndarray, np.ndarray]:
+    """Return points and right-hand-oriented 10-node tetrahedra (C3D10).
+
+    The mesh must already carry a quadratic connectivity in ``mesh.t`` of shape
+    ``(10, N_elem)`` using CalculiX/Abaqus C3D10 node ordering:
+
+        corners 1-4, then midsides of edges
+        (1-2), (2-3), (3-1), (1-4), (2-4), (3-4)
+        → 0-indexed positions 4..9 = mid(0,1),(1,2),(2,0),(0,3),(1,3),(2,3).
+
+    Like :func:`mesh_to_tet4`, any element with a negative corner signed volume
+    is reoriented so ccx accepts it.  Swapping corner positions 0↔1 inverts the
+    orientation; the midside labels then have to follow that swap, which means
+    exchanging the (1-2-relative) midsides: positions 5↔6 (n6↔n7) and 7↔8
+    (n8↔n9).  Positions 4 (n5) and 9 (n10) lie on edges that are invariant under
+    the 0↔1 swap and stay put.
+    """
+    if mesh is None or not hasattr(mesh, "p") or not hasattr(mesh, "t"):
+        raise SolverBackendError("C3D10 deck writer expected a mesh with .p and .t.")
+
+    points = np.asarray(mesh.p, dtype=float).T            # (N_nodes, 3)
+    cells = np.asarray(mesh.t, dtype=int).T                # (N_elem, 10)
+    if cells.ndim != 2 or cells.shape[1] != 10:
+        raise SolverBackendError(
+            f"C3D10 deck writer expected a (10, N_elem) connectivity, got "
+            f"{np.asarray(mesh.t).shape!r}."
+        )
+    cells = cells.copy()
+
+    # Signed volume from the four corner nodes only.
+    v0, v1, v2, v3 = (points[cells[:, k]] for k in range(4))
+    signed_vol = np.einsum("ij,ij->i", np.cross(v1 - v0, v2 - v0), v3 - v0)
+
+    flipped = signed_vol < 0.0
+    n_flipped = int(np.count_nonzero(flipped))
+    if n_flipped:
+        cells[flipped, 0], cells[flipped, 1] = cells[flipped, 1], cells[flipped, 0].copy()
+        # Relabel midsides to match the corner 0↔1 swap.
+        cells[flipped, 5], cells[flipped, 6] = cells[flipped, 6], cells[flipped, 5].copy()
+        cells[flipped, 7], cells[flipped, 8] = cells[flipped, 8], cells[flipped, 7].copy()
+        warnings.append(
+            f"Reoriented {n_flipped}/{cells.shape[0]} C3D10 tetrahedra with "
+            "negative corner signed volume so CalculiX accepts them."
+        )
+
+    degenerate = np.isclose(signed_vol, 0.0)
+    n_deg = int(np.count_nonzero(degenerate))
+    if n_deg:
+        warnings.append(
+            f"{n_deg} C3D10 tetrahedra have a near-zero corner signed volume — "
+            "the input mesh is degenerate and the solver may still reject it."
         )
 
     return points, cells
@@ -648,7 +745,6 @@ def tet_face_sets_for_geometries(
     if mesh is None or not hasattr(mesh, "p") or not hasattr(mesh, "t"):
         return []
 
-    p = np.asarray(mesh.p, dtype=float)             # (3, N_nodes)
     # Match the connectivity emitted by ``mesh_to_tet4``.  Pressure surfaces
     # use CalculiX local face ids, so their numbering must follow the same
     # reorientation used in the exported *ELEMENT block.
