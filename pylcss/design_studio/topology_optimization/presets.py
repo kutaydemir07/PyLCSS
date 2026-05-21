@@ -10,7 +10,7 @@ INDUSTRIAL_DESIGN_GOALS = (
     'Lightweight Stiffness',
     'Minimum Mass Under Stress',
 )
-INDUSTRIAL_QUALITY_PRESETS = ('Draft', 'Balanced', 'Final')
+INDUSTRIAL_QUALITY_PRESETS = ('Automatic',)
 INDUSTRIAL_MANUFACTURING_PROCESSES = (
     'None',
     'Additive',
@@ -59,18 +59,16 @@ def industrial_topopt_defaults(
     the Qt property panel without tying the solver backend to Qt.
     """
     goal = _choice(design_goal, INDUSTRIAL_DESIGN_GOALS, 'Lightweight Stiffness')
-    quality = _choice(quality_preset, INDUSTRIAL_QUALITY_PRESETS, 'Balanced')
+    # Kept as an argument for older saved graphs/API calls, but guided TopOpt
+    # now has one automatic quality policy instead of user-facing presets.
+    _ = quality_preset
     manufacturing = _choice(manufacturing_process, INDUSTRIAL_MANUFACTURING_PROCESSES, 'None')
 
-    target_max = {'Draft': 40, 'Balanced': 80, 'Final': 120}[quality]
+    target_max = 100
     out_nelx, out_nely, out_nelz = _scaled_grid(nelx, nely, nelz, target_max)
     max_dim = max(out_nelx, out_nely, out_nelz)
-    filter_ratio = {'Draft': 0.025, 'Balanced': 0.030, 'Final': 0.035}[quality]
-    quality_settings = {
-        'Draft':    dict(max_iter=45,  tol=0.0200, density_cutoff=0.40, mesh_decimate_ratio=1.00),
-        'Balanced': dict(max_iter=100, tol=0.0050, density_cutoff=0.45, mesh_decimate_ratio=1.00),
-        'Final':    dict(max_iter=160, tol=0.0025, density_cutoff=0.50, mesh_decimate_ratio=1.00),
-    }[quality]
+    filter_ratio = 0.030
+    quality_settings = dict(max_iter=100, tol=0.0050, density_cutoff=0.45, mesh_decimate_ratio=1.00)
 
     settings: Dict[str, Any] = {
         'nelx': out_nelx,

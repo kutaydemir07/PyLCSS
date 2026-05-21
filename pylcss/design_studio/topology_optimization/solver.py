@@ -41,6 +41,9 @@ class TopologyOptVoxelProblem:
     patience: int   = 5
     bc:       VoxelBC = field(default_factory=VoxelBC)
     mc:       ManufacturingConstraints = field(default_factory=ManufacturingConstraints)
+    # Optional source CAD/mesh volume mask, shape (nelx, nely, nelz).
+    # True means designable material exists there; False is clamped to void.
+    design_domain: Optional[np.ndarray] = None
     # Phase 3 — stress constraint (P-norm aggregated von Mises ≤ yield).
     # When enabled the optimiser is forced to MMA (OC cannot handle a second
     # constraint beyond the volume budget).  Only the FIRST load case feeds
@@ -210,6 +213,19 @@ def _density_grid_from_state(x: np.ndarray, domain: Any) -> np.ndarray:
     return np.asarray(x, dtype=float)[domain.elements]
 
 
+def _density_grid_with_passive_clamps(
+    x: np.ndarray,
+    domain: Any,
+    active_mask: np.ndarray,
+    passive_density: np.ndarray,
+) -> np.ndarray:
+    """Map a filtered density state to a grid and restore passive clamps."""
+    flat = np.asarray(x, dtype=float).reshape(-1).copy()
+    if flat.size == np.asarray(active_mask).size:
+        flat[~active_mask] = passive_density[~active_mask]
+    return _density_grid_from_state(flat, domain)
+
+
 
 class TopologyOptVoxelSolver:
     """3-D SIMP topology optimiser backed by pyMOTO."""
@@ -255,18 +271,39 @@ class TopologyOptVoxelSolver:
         # ── supports, loads, passive regions ──────────────────────────────
         boundary_dofs = self._assemble_supports(domain, p.bc)
         load_cases    = self._assemble_load_cases(domain, p.bc, ndof)
+        load_cases = [
+            (name, weight, np.asarray(f_vec, dtype=float).reshape(-1))
+            for name, weight, f_vec in load_cases
+        ]
         active_mask, passive_density = self._assemble_passive_masks(domain, p.bc)
         n_active      = int(np.sum(active_mask))
-
-        if not load_cases:
-            logger.warning(
-                "TopologyOptVoxelNode: no load cases produced a non-zero force "
-                "vector — optimisation will return a trivial (uniform) result."
-            )
 
         # ── initial state — design = volfrac, passive = clamp value ───────
         x0 = np.ones(domain.nel) * p.volfrac
         x0[~active_mask] = passive_density[~active_mask]
+
+        if not load_cases:
+            logger.warning(
+                "TopologyOptVoxelNode: no load cases produced a non-zero force "
+                "vector — returning a trivial (uniform) result."
+            )
+            density_3d = _density_grid_from_state(x0, domain)
+            result = TopologyOptVoxelResult(
+                density=density_3d.copy(),
+                design_density=density_3d.copy(),
+                compliance_history=[0.0],
+                change_history=[0.0],
+                n_iter=0,
+                converged=True,
+                message=(
+                    "No non-zero load cases; returned the initial uniform "
+                    "density field."
+                ),
+            )
+            if callback is not None:
+                callback(0, 0.0, 0.0, density_3d.copy())
+            return result
+
         sx = pym.Signal("x", state=x0)
 
         # Volume budget incorporates passive solid mass so `volfrac` keeps its
@@ -359,8 +396,11 @@ class TopologyOptVoxelSolver:
 
         # ── iteration loop ────────────────────────────────────────────────
         result = TopologyOptVoxelResult(
-            density=_density_grid_from_state(
-                np.asarray(sxfilt.state, dtype=float), domain
+            density=_density_grid_with_passive_clamps(
+                np.asarray(sxfilt.state, dtype=float),
+                domain,
+                active_mask,
+                passive_density,
             ),
             design_density=_density_grid_from_state(sx.state, domain),
         )
@@ -481,8 +521,11 @@ class TopologyOptVoxelSolver:
                 stress_hist.append(float(np.sqrt(max(pn_val, 0.0))))
             result.n_iter = it
 
-            density_3d = _density_grid_from_state(
-                np.asarray(sxfilt.state, dtype=float), domain
+            density_3d = _density_grid_with_passive_clamps(
+                np.asarray(sxfilt.state, dtype=float),
+                domain,
+                active_mask,
+                passive_density,
             )
             if callback is not None:
                 callback(it, comp_val, change, density_3d.copy())
@@ -512,8 +555,11 @@ class TopologyOptVoxelSolver:
 
         net.response()
         result.design_density   = _density_grid_from_state(sx.state, domain)
-        result.density          = _density_grid_from_state(
-            np.asarray(sxfilt.state, dtype=float), domain
+        result.density          = _density_grid_with_passive_clamps(
+            np.asarray(sxfilt.state, dtype=float),
+            domain,
+            active_mask,
+            passive_density,
         )
         result.compliance_history = comp_hist
         result.change_history   = change_hist
@@ -684,6 +730,32 @@ class TopologyOptVoxelSolver:
         active_mask     = np.ones(n_total, dtype=bool)
         passive_density = np.zeros(n_total, dtype=float)
 
+        source_active = None
+        if p.design_domain is not None:
+            try:
+                source_grid = np.asarray(p.design_domain, dtype=bool)
+                if source_grid.shape == (p.nelx, p.nely, p.nelz):
+                    source_active = np.zeros(n_total, dtype=bool)
+                    source_active[domain.elements] = source_grid
+                    active_mask[~source_active] = False
+                    passive_density[~source_active] = 1e-3
+                else:
+                    logger.warning(
+                        "TopologyOptVoxelNode: ignoring design-domain mask "
+                        "with shape %s; expected (%d, %d, %d).",
+                        source_grid.shape, p.nelx, p.nely, p.nelz,
+                    )
+            except Exception:
+                logger.warning(
+                    "TopologyOptVoxelNode: failed to apply design-domain mask.",
+                    exc_info=True,
+                )
+
+        def _limit_to_source(indices: np.ndarray) -> np.ndarray:
+            if source_active is None or indices.size == 0:
+                return indices
+            return indices[source_active[indices]]
+
         def _voxel_slice(lo: float, hi: float, nmax: int) -> slice:
             lo_i = int(round(float(lo) * nmax))
             hi_i = int(round(float(hi) * nmax))
@@ -704,14 +776,18 @@ class TopologyOptVoxelSolver:
         cylinder_grid = None
 
         def _cylinder_indices(
-            cylinder: Tuple[str, float, float, float, float, float],
+            cylinder: Tuple[Any, ...],
         ) -> np.ndarray:
             nonlocal cylinder_grid
-            axis, c0, c1, lo, hi, radius = cylinder
+            if len(cylinder) < 6:
+                return np.array([], dtype=int)
+            axis, c0, c1, lo, hi, radius_a = cylinder[:6]
+            radius_b = cylinder[6] if len(cylinder) > 6 else radius_a
             axis = str(axis or 'z').lower()
             lo, hi = sorted((float(lo), float(hi)))
-            r2 = float(radius) ** 2
-            if r2 <= 0.0:
+            radius_a = float(radius_a)
+            radius_b = float(radius_b)
+            if radius_a <= 0.0 or radius_b <= 0.0:
                 return np.array([], dtype=int)
 
             if cylinder_grid is None:
@@ -723,26 +799,26 @@ class TopologyOptVoxelSolver:
 
             if axis == 'x':
                 axial = xx
-                dist2 = (yy - float(c0)) ** 2 + (zz - float(c1)) ** 2
+                dist2 = ((yy - float(c0)) / radius_a) ** 2 + ((zz - float(c1)) / radius_b) ** 2
             elif axis == 'y':
                 axial = yy
-                dist2 = (xx - float(c0)) ** 2 + (zz - float(c1)) ** 2
+                dist2 = ((xx - float(c0)) / radius_a) ** 2 + ((zz - float(c1)) / radius_b) ** 2
             else:
                 axial = zz
-                dist2 = (xx - float(c0)) ** 2 + (yy - float(c1)) ** 2
+                dist2 = ((xx - float(c0)) / radius_a) ** 2 + ((yy - float(c1)) / radius_b) ** 2
 
-            mask = (axial >= lo) & (axial <= hi) & (dist2 <= r2)
+            mask = (axial >= lo) & (axial <= hi) & (dist2 <= 1.0)
             return np.asarray(domain.elements[mask], dtype=int).ravel()
 
         for box in bc.solid_boxes:
-            idx = _flat_indices(box)
+            idx = _limit_to_source(_flat_indices(box))
             if idx.size == 0:
                 continue
             active_mask[idx] = False
             passive_density[idx] = 1.0
 
         for cylinder in getattr(bc, 'solid_cylinders', []):
-            idx = _cylinder_indices(cylinder)
+            idx = _limit_to_source(_cylinder_indices(cylinder))
             if idx.size == 0:
                 continue
             active_mask[idx] = False

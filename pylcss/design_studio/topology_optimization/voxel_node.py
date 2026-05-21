@@ -18,7 +18,7 @@ from .boundary_conditions import (
 from .presets import (
     industrial_topopt_defaults,
     INDUSTRIAL_WORKFLOW_MODES, INDUSTRIAL_DESIGN_GOALS,
-    INDUSTRIAL_QUALITY_PRESETS, INDUSTRIAL_MANUFACTURING_PROCESSES,
+    INDUSTRIAL_MANUFACTURING_PROCESSES,
 )
 from .solver import TopologyOptVoxelSolver, TopologyOptVoxelProblem
 from .recovery import _recover_voxel_shape
@@ -135,6 +135,50 @@ def _is_load_payload(entry: Any) -> bool:
         isinstance(entry, dict)
         and str(entry.get('type') or '').lower() in {'force', 'pressure', 'gravity'}
     )
+
+
+def _force_components_nonzero(values: Any) -> bool:
+    try:
+        vals = [float(v) for v in values]
+    except Exception:
+        return False
+    return sum(v * v for v in vals) > 1e-24
+
+
+def _bc_has_nonzero_load(bc: VoxelBC) -> bool:
+    for point in bc.point_forces:
+        if _force_components_nonzero(point[3:6]):
+            return True
+    for box in bc.box_forces:
+        if _force_components_nonzero(box[6:9]):
+            return True
+    for distributed in bc.distributed_forces:
+        if _force_components_nonzero(distributed[1:4]):
+            return True
+    for load_case in bc.load_cases:
+        for point in load_case.point_forces:
+            if _force_components_nonzero(point[3:6]):
+                return True
+        for box in load_case.box_forces:
+            if _force_components_nonzero(box[6:9]):
+                return True
+        for distributed in load_case.distributed_forces:
+            if _force_components_nonzero(distributed[1:4]):
+                return True
+    return False
+
+
+def _bc_has_support(bc: VoxelBC) -> bool:
+    if any((
+        bc.fixed_left_face_dofs,
+        bc.fixed_right_face_dofs,
+        bc.fixed_top_face_dofs,
+        bc.fixed_bottom_face_dofs,
+        bc.fixed_front_face_dofs,
+        bc.fixed_back_face_dofs,
+    )):
+        return True
+    return any(bool(box[-1]) for box in bc.fixed_boxes)
 
 
 def _point_xyz(point: Any) -> Optional[np.ndarray]:
@@ -300,6 +344,311 @@ def _bounds_payload(bounds: Optional[Tuple[np.ndarray, np.ndarray]]) -> Optional
     }
 
 
+def _bc_feature_bboxes(
+    constraints: List[Any],
+    loads: List[Any],
+) -> List[Tuple[float, float, float, float, float, float]]:
+    bboxes: List[Tuple[float, float, float, float, float, float]] = []
+    for entry in list(constraints or []) + list(loads or []):
+        if isinstance(entry, dict):
+            bboxes.extend(_entry_bboxes(entry))
+    return bboxes
+
+
+def _cylinder_void_region_from_face(
+    face: Any,
+    bounds: Optional[Tuple[np.ndarray, np.ndarray]],
+) -> Optional[Tuple[Any, ...]]:
+    if face is None or bounds is None:
+        return None
+    try:
+        if str(face.geomType()).upper() != 'CYLINDER':
+            return None
+    except Exception:
+        return None
+    try:
+        surface = face._geomAdaptor()
+        radius = float(surface.Radius())
+    except Exception:
+        return None
+    if radius <= 0.0:
+        return None
+
+    try:
+        axis_dir = surface.Axis().Direction()
+        direction = np.asarray(
+            [float(axis_dir.X()), float(axis_dir.Y()), float(axis_dir.Z())],
+            dtype=float,
+        )
+    except Exception:
+        direction = np.zeros(3, dtype=float)
+    try:
+        bbox = _bbox_tuple(face.BoundingBox())
+    except Exception:
+        bbox = None
+    if bbox is None:
+        return None
+
+    mins, maxs = bounds
+    mins = np.asarray(mins[:3], dtype=float)
+    maxs = np.asarray(maxs[:3], dtype=float)
+    span = np.maximum(maxs - mins, 1e-12)
+    ext = np.asarray([bbox[1] - bbox[0], bbox[3] - bbox[2], bbox[5] - bbox[4]], dtype=float)
+    axis_idx = int(np.argmax(np.abs(direction))) if np.any(direction) else int(np.argmax(ext))
+    radial_axes = [idx for idx in range(3) if idx != axis_idx]
+    axis_names = ['x', 'y', 'z']
+
+    try:
+        center = _point_xyz(face.Center())
+    except Exception:
+        center = None
+    if center is None:
+        center = np.asarray(
+            [
+                0.5 * (bbox[0] + bbox[1]),
+                0.5 * (bbox[2] + bbox[3]),
+                0.5 * (bbox[4] + bbox[5]),
+            ],
+            dtype=float,
+        )
+
+    lo = (float(bbox[axis_idx * 2]) - mins[axis_idx]) / span[axis_idx]
+    hi = (float(bbox[axis_idx * 2 + 1]) - mins[axis_idx]) / span[axis_idx]
+    c0 = (float(center[radial_axes[0]]) - mins[radial_axes[0]]) / span[radial_axes[0]]
+    c1 = (float(center[radial_axes[1]]) - mins[radial_axes[1]]) / span[radial_axes[1]]
+    r0 = radius / span[radial_axes[0]]
+    r1 = radius / span[radial_axes[1]]
+    return (
+        axis_names[axis_idx],
+        float(np.clip(c0, 0.0, 1.0)),
+        float(np.clip(c1, 0.0, 1.0)),
+        float(np.clip(min(lo, hi), 0.0, 1.0)),
+        float(np.clip(max(lo, hi), 0.0, 1.0)),
+        float(r0),
+        float(r1),
+    )
+
+
+def _guided_voxel_grid(
+    bounds: Optional[Tuple[np.ndarray, np.ndarray]],
+    quality_preset: Any,
+    feature_bboxes: Optional[List[Tuple[float, float, float, float, float, float]]] = None,
+) -> Optional[Tuple[int, int, int]]:
+    """Choose the automatic aspect-correct grid for guided mode.
+
+    Guided mode hides raw voxel counts, so it must derive them from the actual
+    CAD extents and the smallest selected support/load features. The
+    `quality_preset` argument is ignored and remains only for saved-graph
+    compatibility.
+    """
+    if bounds is None:
+        return None
+    mins, maxs = bounds
+    span = np.maximum(np.asarray(maxs[:3], dtype=float) - np.asarray(mins[:3], dtype=float), 1e-9)
+    volume = float(np.prod(span))
+    if volume <= 0.0:
+        return None
+
+    _ = quality_preset
+    target_cells, min_axis, max_axis = (18_000, 5, 100)
+    voxel_size = (volume / float(target_cells)) ** (1.0 / 3.0)
+    dims = np.ceil(span / max(voxel_size, 1e-12)).astype(int)
+    dims = np.maximum(dims, int(min_axis))
+
+    feature_lengths: List[float] = []
+    for bbox in feature_bboxes or []:
+        try:
+            ext = np.asarray(
+                [
+                    float(bbox[1]) - float(bbox[0]),
+                    float(bbox[3]) - float(bbox[2]),
+                    float(bbox[5]) - float(bbox[4]),
+                ],
+                dtype=float,
+            )
+        except Exception:
+            continue
+        ext = np.abs(ext)
+        positive = ext[ext > max(1e-6, float(np.max(span)) * 1e-6)]
+        if positive.size:
+            feature_lengths.append(float(np.min(positive)))
+    if feature_lengths:
+        feature_size = min(feature_lengths)
+        target_across = 6.0
+        feature_voxel_size = feature_size / max(float(target_across), 1.0)
+        feature_dims = np.ceil(span / max(feature_voxel_size, 1e-12)).astype(int)
+        dims = np.maximum(dims, feature_dims)
+
+    longest = int(np.max(dims))
+    guided_max_axis = max(int(max_axis), 120 if feature_lengths else int(max_axis))
+    if longest > guided_max_axis:
+        scale = float(guided_max_axis) / float(longest)
+        dims = np.maximum(np.ceil(dims * scale).astype(int), int(min_axis))
+
+    return int(dims[0]), int(dims[1]), int(dims[2])
+
+
+def _initial_design_density(
+    nelx: int,
+    nely: int,
+    nelz: int,
+    volfrac: float,
+    design_domain: Optional[np.ndarray],
+) -> np.ndarray:
+    density = np.full(
+        (max(1, int(nelx)), max(1, int(nely)), max(1, int(nelz))),
+        float(volfrac),
+        dtype=float,
+    )
+    if design_domain is not None:
+        mask = np.asarray(design_domain, dtype=bool)
+        if mask.shape == density.shape:
+            density[~mask] = 1e-3
+    return density
+
+
+def _source_material_fraction(
+    density: np.ndarray,
+    design_domain: Optional[np.ndarray],
+) -> float:
+    rho = np.asarray(density, dtype=float)
+    if design_domain is not None:
+        mask = np.asarray(design_domain, dtype=bool)
+        if mask.shape == rho.shape and np.any(mask):
+            return float(np.mean(rho[mask]))
+    return float(np.mean(rho)) if rho.size else 0.0
+
+
+def _source_volume_fraction(
+    density: np.ndarray,
+    design_domain: Optional[np.ndarray],
+) -> float:
+    rho = np.asarray(density, dtype=float)
+    if design_domain is not None:
+        mask = np.asarray(design_domain, dtype=bool)
+        if mask.shape == rho.shape and mask.size:
+            return float(np.mean(mask))
+    return 1.0 if rho.size else 0.0
+
+
+def _mesh_design_domain_grid(
+    mesh: Any,
+    bounds: Optional[Tuple[np.ndarray, np.ndarray]],
+    nelx: int,
+    nely: int,
+    nelz: int,
+) -> Optional[np.ndarray]:
+    """Voxelize the actual tetra mesh volume into the optimizer grid.
+
+    This keeps FreeCAD cutouts and holes as voids automatically instead of
+    treating the whole bounding box as designable material.
+    """
+    if mesh is None or bounds is None or not hasattr(mesh, 'p') or not hasattr(mesh, 't'):
+        return None
+    try:
+        points = np.asarray(mesh.p, dtype=float)
+        cells = np.asarray(mesh.t, dtype=int)
+    except Exception:
+        return None
+    if points.ndim != 2 or points.shape[0] < 3 or points.shape[1] == 0:
+        return None
+    if cells.ndim != 2 or cells.shape[0] < 4 or cells.shape[1] == 0:
+        return None
+
+    nelx, nely, nelz = max(1, int(nelx)), max(1, int(nely)), max(1, int(nelz))
+    mins, maxs = bounds
+    mins = np.asarray(mins[:3], dtype=float)
+    maxs = np.asarray(maxs[:3], dtype=float)
+    span = np.maximum(maxs - mins, 1e-12)
+    step = span / np.asarray([nelx, nely, nelz], dtype=float)
+
+    samples = 3
+    occupancy_threshold = 0.5
+    sub_step = step / float(samples)
+    xs = mins[0] + (np.arange(nelx * samples, dtype=float) + 0.5) * sub_step[0]
+    ys = mins[1] + (np.arange(nely * samples, dtype=float) + 0.5) * sub_step[1]
+    zs = mins[2] + (np.arange(nelz * samples, dtype=float) + 0.5) * sub_step[2]
+    active_samples = np.zeros((nelx, nely, nelz, samples ** 3), dtype=bool)
+
+    pts = points[:3].T
+    tets = cells[:4].T
+    tol = 1e-9
+
+    def _index_bounds(lo_xyz: np.ndarray, hi_xyz: np.ndarray) -> Optional[Tuple[slice, slice, slice]]:
+        lo = np.ceil((lo_xyz - mins) / sub_step - 0.5).astype(int)
+        hi = np.floor((hi_xyz - mins) / sub_step - 0.5).astype(int)
+        lo = np.maximum(lo, 0)
+        hi = np.minimum(
+            hi,
+            np.asarray(
+                [nelx * samples - 1, nely * samples - 1, nelz * samples - 1],
+                dtype=int,
+            ),
+        )
+        if np.any(hi < lo):
+            return None
+        return (
+            slice(int(lo[0]), int(hi[0]) + 1),
+            slice(int(lo[1]), int(hi[1]) + 1),
+            slice(int(lo[2]), int(hi[2]) + 1),
+        )
+
+    for tet in tets:
+        if np.any(tet < 0) or np.any(tet >= len(pts)):
+            continue
+        verts = pts[tet]
+        ranges = _index_bounds(np.min(verts, axis=0) - tol, np.max(verts, axis=0) + tol)
+        if ranges is None:
+            continue
+
+        mat = np.column_stack((verts[1] - verts[0], verts[2] - verts[0], verts[3] - verts[0]))
+        try:
+            inv = np.linalg.inv(mat)
+        except np.linalg.LinAlgError:
+            continue
+
+        sx, sy, sz = ranges
+        gx, gy, gz = np.meshgrid(xs[sx], ys[sy], zs[sz], indexing='ij')
+        query = np.column_stack((gx.ravel(), gy.ravel(), gz.ravel()))
+        if query.size == 0:
+            continue
+        bary123 = (query - verts[0]) @ inv.T
+        bary0 = 1.0 - np.sum(bary123, axis=1)
+        inside = (
+            (bary0 >= -1e-8)
+            & np.all(bary123 >= -1e-8, axis=1)
+            & (bary0 <= 1.0 + 1e-8)
+            & np.all(bary123 <= 1.0 + 1e-8, axis=1)
+        )
+        if not np.any(inside):
+            continue
+        ix_s, iy_s, iz_s = np.meshgrid(
+            np.arange(sx.start, sx.stop, dtype=int),
+            np.arange(sy.start, sy.stop, dtype=int),
+            np.arange(sz.start, sz.stop, dtype=int),
+            indexing='ij',
+        )
+        hit = np.flatnonzero(inside)
+        vx = ix_s.ravel()[hit] // samples
+        vy = iy_s.ravel()[hit] // samples
+        vz = iz_s.ravel()[hit] // samples
+        lx = ix_s.ravel()[hit] % samples
+        ly = iy_s.ravel()[hit] % samples
+        lz = iz_s.ravel()[hit] % samples
+        sub = (lx * samples + ly) * samples + lz
+        active_samples[vx, vy, vz, sub] = True
+
+    active = np.mean(active_samples, axis=3) >= occupancy_threshold
+
+    if not np.any(active):
+        logger.warning(
+            "TopologyOptVoxelNode: source mesh produced an empty voxel design domain; "
+            "falling back to the bounding-box domain."
+        )
+        return None
+    return active
+
+
 # ---------------------------------------------------------------------------
 # CadQueryNode
 # ---------------------------------------------------------------------------
@@ -331,10 +680,9 @@ class TopologyOptVoxelNode(CadQueryNode):
                              'Lightweight Stiffness',
                              widget_type='combo',
                              items=list(INDUSTRIAL_DESIGN_GOALS))
-        self.create_property('quality_preset',
-                             'Balanced',
-                             widget_type='combo',
-                             items=list(INDUSTRIAL_QUALITY_PRESETS))
+        # Legacy saved studies may still carry a quality_preset. Guided mode
+        # now chooses a single automatic feature-aware grid instead.
+        self.create_property('quality_preset', 'Automatic', widget_type='string')
         self.create_property('manufacturing_process',
                              'None',
                              widget_type='combo',
@@ -395,15 +743,10 @@ class TopologyOptVoxelNode(CadQueryNode):
         # convergence.  8–16 typical; default 8.
         self.create_property('stress_pnorm_p',    8.0,   widget_type='float')
 
-        # ── BC Preset (convenience only) ─────────────────────────────────
-        self.create_property('bc_preset', 'Cantilever Tip', widget_type='combo',
-                             items=['Custom',
-                                    'Cantilever Tip',
-                                    'Cantilever Distributed',
-                                    'MBB Beam',
-                                    'Bridge',
-                                    'Cantilever Bi-Axial',
-                                    'Printable Cantilever'])
+        # Legacy saved graphs may still carry this property. It is ignored:
+        # graph-connected Constraint/Load nodes and explicit fields are the
+        # only sources of topology-optimization boundary conditions.
+        self.create_property('bc_preset', 'Custom', widget_type='string')
 
         # ── Manufacturing constraints (Phase 2) ───────────────────────────
         # `symmetry`: subset of {X,Y,Z} meaning "axes to mirror across the
@@ -475,117 +818,11 @@ class TopologyOptVoxelNode(CadQueryNode):
 
     # ── Property helpers ───────────────────────────────────────────────────
 
-    def _apply_preset(self, preset: str) -> None:
-        """Pre-fill support and force properties from a named preset."""
-        # Every preset clears the manufacturing-constraint properties by
-        # default; the "Printable Cantilever" preset sets them explicitly.
-        _mc_defaults = dict(
-            symmetry='None',
-            extrusion='None',
-            overhang_build_axis='None',
-            max_member_size_voxels=0.0,
-            pattern_repeat=1,
-            pattern_axis='Y',
-        )
-        _presets = {
-            'Cantilever Tip': dict(
-                left_support='Fix XYZ', right_support='None',
-                top_support='None',     bottom_support='None',
-                front_support='None',   back_support='None',
-                support_regions='[]',
-                load_cases='[]',
-                force_type='Point',
-                force_ix_frac=1.0, force_iy_frac=0.5, force_iz_frac=0.5,
-                force_dir_x=0.0,   force_dir_y=-1.0,  force_dir_z=0.0,
-                force_magnitude=1.0,
-                **_mc_defaults,
-            ),
-            'Cantilever Distributed': dict(
-                left_support='Fix XYZ', right_support='None',
-                top_support='None',     bottom_support='None',
-                front_support='None',   back_support='None',
-                support_regions='[]',
-                load_cases='[]',
-                force_type='Distributed Face', force_face='Right',
-                force_dir_x=0.0,   force_dir_y=-1.0,  force_dir_z=0.0,
-                force_magnitude=1.0,
-                **_mc_defaults,
-            ),
-            'MBB Beam': dict(
-                left_support='None',  right_support='None',
-                top_support='None',   bottom_support='None',
-                front_support='None', back_support='None',
-                support_regions=json.dumps([
-                    {"x": [0.00, 0.04], "y": [0.00, 0.04], "z": [0.0, 1.0], "dofs": "Fix XYZ"},
-                    {"x": [0.96, 1.00], "y": [0.00, 0.04], "z": [0.0, 1.0], "dofs": "Fix YZ"},
-                ]),
-                load_cases='[]',
-                force_type='Point',
-                force_ix_frac=0.5, force_iy_frac=1.0, force_iz_frac=0.5,
-                force_dir_x=0.0,   force_dir_y=-1.0,  force_dir_z=0.0,
-                force_magnitude=1.0,
-                **_mc_defaults,
-            ),
-            'Bridge': dict(
-                left_support='None',  right_support='None',
-                top_support='None',   bottom_support='Fix Y',
-                front_support='None', back_support='None',
-                support_regions='[]',
-                load_cases='[]',
-                force_type='Point',
-                force_ix_frac=0.5, force_iy_frac=1.0, force_iz_frac=0.5,
-                force_dir_x=0.0,   force_dir_y=-1.0,  force_dir_z=0.0,
-                force_magnitude=1.0,
-                **_mc_defaults,
-            ),
-            'Cantilever Bi-Axial': dict(
-                left_support='Fix XYZ', right_support='None',
-                top_support='None',     bottom_support='None',
-                front_support='None',   back_support='None',
-                support_regions='[]',
-                # Two equally-weighted independent loads at the tip:
-                #   downward Y force and lateral Z force.  Together they push
-                #   the optimiser toward a structure that resists both — the
-                #   classic demo of why multi-load matters in industry.
-                load_cases=json.dumps([
-                    {"name": "Tip-Down",
-                     "weight": 1.0,
-                     "point_forces": [
-                         {"x": 1.0, "y": 0.5, "z": 0.5, "fx": 0.0, "fy": -1.0, "fz": 0.0}
-                     ]},
-                    {"name": "Tip-Lateral",
-                     "weight": 1.0,
-                     "point_forces": [
-                         {"x": 1.0, "y": 0.5, "z": 0.5, "fx": 0.0, "fy": 0.0, "fz": 1.0}
-                     ]},
-                ]),
-                **_mc_defaults,
-            ),
-            # AM-aware demo: tip-loaded cantilever printed in +Y, mirror in Z.
-            'Printable Cantilever': dict(
-                left_support='Fix XYZ', right_support='None',
-                top_support='None',     bottom_support='None',
-                front_support='None',   back_support='None',
-                support_regions='[]',
-                load_cases='[]',
-                force_type='Point',
-                force_ix_frac=1.0, force_iy_frac=0.5, force_iz_frac=0.5,
-                force_dir_x=0.0,   force_dir_y=-1.0,  force_dir_z=0.0,
-                force_magnitude=1.0,
-                symmetry='Z',
-                extrusion='None',
-                overhang_build_axis='+Y',
-            ),
-        }
-        if preset in _presets:
-            for k, v in _presets[preset].items():
-                self.set_property(k, v)
-
     def apply_guided_defaults(self) -> Dict[str, Any]:
         """Apply guided workflow defaults to this node and return the changes."""
         settings = industrial_topopt_defaults(
             self.get_property('design_goal'),
-            self.get_property('quality_preset'),
+            'Automatic',
             self.get_property('manufacturing_process'),
             nelx=self.get_property('nelx') or 30,
             nely=self.get_property('nely') or 20,
@@ -749,9 +986,24 @@ class TopologyOptVoxelNode(CadQueryNode):
                 dofs = []
             if not dofs:
                 continue
-            for bbox in _entry_bboxes(constraint):
+            for face in constraint.get('geometries') or []:
+                cylinder = _cylinder_void_region_from_face(face, bounds)
+                if cylinder is not None:
+                    bc.void_cylinders.append(cylinder)
+            bboxes = _entry_bboxes(constraint)
+            if not bboxes:
+                logger.warning(
+                    "TopologyOptVoxelNode: connected constraint did not "
+                    "include face geometry or bbox metadata; it cannot be "
+                    "mapped to voxel supports."
+                )
+                continue
+            for bbox in bboxes:
                 frac_box = _fraction_box(bbox, bounds)
                 bc.fixed_boxes.append((*frac_box, dofs))
+                # Fixture/contact interfaces are non-design solid, clipped
+                # later to the source mesh so holes themselves remain void.
+                bc.solid_boxes.append(frac_box)
 
         for load in loads:
             if not isinstance(load, dict):
@@ -763,8 +1015,17 @@ class TopologyOptVoxelNode(CadQueryNode):
                     fx, fy, fz = (float(vector[0]), float(vector[1]), float(vector[2]))
                 except Exception:
                     continue
+                for face in _iter_load_faces(load):
+                    cylinder = _cylinder_void_region_from_face(face, bounds)
+                    if cylinder is not None:
+                        bc.void_cylinders.append(cylinder)
                 bboxes = _entry_bboxes(load)
                 if not bboxes:
+                    logger.warning(
+                        "TopologyOptVoxelNode: connected force load did not "
+                        "include face geometry or bbox metadata; it cannot be "
+                        "mapped to voxel forces."
+                    )
                     continue
                 scale = 1.0 / max(1, len(bboxes))
                 for bbox in bboxes:
@@ -773,7 +1034,12 @@ class TopologyOptVoxelNode(CadQueryNode):
                     # not mathematical point loads.  The same patch is also kept
                     # local so CAD face loads stay tied to their source face.
                     bc.box_forces.append((*frac_box, fx * scale, fy * scale, fz * scale))
+                    bc.solid_boxes.append(frac_box)
             elif load_type == 'pressure':
+                for face in _iter_load_faces(load):
+                    cylinder = _cylinder_void_region_from_face(face, bounds)
+                    if cylinder is not None:
+                        bc.void_cylinders.append(cylinder)
                 pressure_patches = _pressure_load_patches(load, bounds)
                 if not pressure_patches:
                     logger.warning(
@@ -783,6 +1049,7 @@ class TopologyOptVoxelNode(CadQueryNode):
                     continue
                 for frac_box, fx, fy, fz in pressure_patches:
                     bc.box_forces.append((*frac_box, fx, fy, fz))
+                    bc.solid_boxes.append(frac_box)
             else:
                 logger.debug(
                     "TopologyOptVoxelNode: load type %r is not supported by "
@@ -793,10 +1060,6 @@ class TopologyOptVoxelNode(CadQueryNode):
     # ── Node run ───────────────────────────────────────────────────────────
 
     def run(self, progress_callback=None) -> Optional[Dict[str, Any]]:
-        preset = self.get_property('bc_preset')
-        if preset != 'Custom':
-            self._apply_preset(preset)
-
         mesh = self.get_input_value('mesh', None)
         bounds = _mesh_bounds(mesh)
         material = self.get_input_value('material', None)
@@ -831,10 +1094,33 @@ class TopologyOptVoxelNode(CadQueryNode):
             bc.distributed_forces = []
             bc.load_cases = []  # graph-supplied loads override node-property load cases
         self._merge_graph_bcs(bc, mesh, constraint_list, load_list)
+        if constraint_list and not _bc_has_support(bc):
+            self.set_error(
+                "Connected constraints could not be mapped to voxel supports. "
+                "Re-run the face selection on the current FreeCAD shape, then "
+                "run TopOpt again."
+            )
+            return None
+        if load_list and not _bc_has_nonzero_load(bc):
+            self.set_error(
+                "Connected loads could not be mapped to a non-zero voxel force. "
+                "Check the selected load face and force components, then run "
+                "TopOpt again."
+            )
+            return None
 
         nelx = int(self.get_property('nelx') or 30)
         nely = int(self.get_property('nely') or 20)
         nelz = int(self.get_property('nelz') or 10)
+        if str(self.get_property('workflow_mode') or 'Guided') != 'Expert':
+            guided_grid = _guided_voxel_grid(
+                bounds,
+                'Automatic',
+                feature_bboxes=_bc_feature_bboxes(constraint_list, load_list),
+            )
+            if guided_grid is not None:
+                nelx, nely, nelz = guided_grid
+        design_domain = _mesh_design_domain_grid(mesh, bounds, nelx, nely, nelz)
         unitx = unity = unitz = 1.0
         if bounds is not None:
             mins, maxs = bounds
@@ -871,32 +1157,58 @@ class TopologyOptVoxelNode(CadQueryNode):
             patience = int(self.get_property('convergence_patience') or 5),
             bc       = bc,
             mc       = mc,
+            design_domain = design_domain,
             stress_constraint_enabled = bool(self.get_property('stress_constraint')),
             yield_stress              = float(self.get_property('yield_stress') or 1.0),
             stress_penalty            = float(self.get_property('stress_penalty') or 1.0),
             stress_pnorm_p            = float(self.get_property('stress_pnorm_p') or 8.0),
         )
 
-        solver = TopologyOptVoxelSolver(problem)
+        def _preview_payload(density: np.ndarray, stage: Optional[str] = None) -> Dict[str, Any]:
+            payload = {
+                'type': 'topopt_voxel',
+                'density': density,
+                'design_domain': design_domain,
+                'grid_shape': density.shape,
+                'bounds': _bounds_payload(bounds),
+                'density_cutoff': float(self.get_property('density_cutoff') or 0.45),
+                'target_vol_frac': problem.volfrac,
+                'final_vol_frac': _source_material_fraction(density, design_domain),
+                'bounding_vol_frac': float(np.mean(density)) if density.size else 0.0,
+                '_preview': True,
+            }
+            if stage:
+                payload['stage'] = stage
+            return payload
 
-        def _cb(it: int, comp: float, change: float, density: np.ndarray) -> None:
+        def _emit_preview(
+            density: np.ndarray,
+            step: int,
+            total: int,
+            stage: Optional[str] = None,
+        ) -> None:
             if progress_callback is not None:
                 try:
                     progress_callback(
-                        {
-                            'type': 'topopt_voxel',
-                            'density': density,
-                            'grid_shape': density.shape,
-                            'bounds': _bounds_payload(bounds),
-                            'density_cutoff': float(self.get_property('density_cutoff') or 0.45),
-                            '_preview': True,
-                        },
+                        _preview_payload(density, stage=stage),
                         density,
-                        max(0, it - 1),
-                        problem.max_iter,
+                        max(0, int(step)),
+                        max(1, int(total)),
                     )
                 except Exception:
                     pass
+
+        _emit_preview(
+            _initial_design_density(nelx, nely, nelz, problem.volfrac, design_domain),
+            0,
+            problem.max_iter,
+            stage='Design domain preview',
+        )
+
+        solver = TopologyOptVoxelSolver(problem)
+
+        def _cb(it: int, comp: float, change: float, density: np.ndarray) -> None:
+            _emit_preview(density, max(0, it - 1), problem.max_iter)
 
         try:
             result = solver.run(callback=_cb)
@@ -919,17 +1231,22 @@ class TopologyOptVoxelNode(CadQueryNode):
             solid_cylinders=bc.solid_cylinders,
             void_cylinders=bc.void_cylinders,
             extrusion_axis=mc.extrusion,
+            source_mask=design_domain,
         )
         if bounds is not None:
             mins, maxs = bounds
             total_volume = float(np.prod(np.maximum(maxs[:3] - mins[:3], 0.0)))
         else:
             total_volume = float(np.prod(density.shape))
-        final_volume = float(np.mean(density) * total_volume)
+        source_volume_fraction = _source_volume_fraction(density, design_domain)
+        source_volume = float(total_volume * source_volume_fraction)
+        source_material_fraction = _source_material_fraction(density, design_domain)
+        final_volume = float(source_material_fraction * source_volume)
         material_density = float(material.get('rho', material.get('density', 0.0)))
         output: Dict[str, Any] = {
             'type': 'topopt_voxel',
             'density': density,
+            'design_domain': design_domain,
             'design_density': (
                 np.asarray(result.design_density, dtype=float)
                 if result.design_density is not None else None
@@ -941,9 +1258,12 @@ class TopologyOptVoxelNode(CadQueryNode):
             'extrusion_axis': mc.extrusion,
             'visualization_mode': self.get_property('visualization') or 'Density',
             'target_vol_frac': problem.volfrac,
-            'final_vol_frac': float(np.mean(density)),
+            'final_vol_frac': source_material_fraction,
+            'bounding_vol_frac': float(np.mean(density)) if density.size else 0.0,
+            'source_volume_fraction': source_volume_fraction,
             'volume': final_volume,
             'total_volume': total_volume,
+            'source_volume': source_volume,
             'mass': final_volume * material_density,
             'compliance': (
                 float(result.compliance_history[-1])

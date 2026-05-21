@@ -13,6 +13,27 @@ logger = logging.getLogger(__name__)
 CylinderRegion = Tuple[str, float, float, float, float, float]
 BoxRegion = Tuple[float, float, float, float, float, float]
 
+
+def _split_cylinder_region(cylinder) -> Optional[Tuple[str, float, float, float, float, float, float]]:
+    if cylinder is None or len(cylinder) < 6:
+        return None
+    axis, c0, c1, lo, hi, radius_a = cylinder[:6]
+    radius_b = cylinder[6] if len(cylinder) > 6 else radius_a
+    radius_a = float(radius_a)
+    radius_b = float(radius_b)
+    if radius_a <= 0.0 or radius_b <= 0.0:
+        return None
+    return (
+        str(axis or 'z').lower(),
+        float(c0),
+        float(c1),
+        float(lo),
+        float(hi),
+        radius_a,
+        radius_b,
+    )
+
+
 def _voxel_origin_cell(
     shape: Tuple[int, int, int],
     bounds: Optional[Tuple[np.ndarray, np.ndarray]],
@@ -82,15 +103,14 @@ def _project_passive_cylinder_surfaces(
 
     axis_map = {'x': (0, 1, 2), 'y': (1, 0, 2), 'z': (2, 0, 1)}
     for cylinder in cylinders or ():
-        axis, c0, c1, lo, hi, radius = cylinder
-        axis = str(axis or 'z').lower()
+        parsed = _split_cylinder_region(cylinder)
+        if parsed is None:
+            continue
+        axis, c0, c1, lo, hi, radius_a, radius_b = parsed
         if axis not in axis_map:
             continue
         axial_idx, a_idx, b_idx = axis_map[axis]
         lo, hi = sorted((float(lo), float(hi)))
-        radius = float(radius)
-        if radius <= 0.0:
-            continue
 
         # Convert the physical smoothing tolerance to the normalized fractional
         # space used by passive-region definitions.
@@ -101,16 +121,16 @@ def _project_passive_cylinder_surfaces(
 
         da = frac[:, a_idx] - float(c0)
         db = frac[:, b_idx] - float(c1)
-        dist = np.sqrt(da * da + db * db)
+        dist = np.sqrt((da / radius_a) ** 2 + (db / radius_b) ** 2)
         mask = (
             (frac[:, axial_idx] >= lo - tol_frac)
             & (frac[:, axial_idx] <= hi + tol_frac)
             & (dist > 1e-9)
-            & (np.abs(dist - radius) <= tol_frac)
+            & (np.abs(dist - 1.0) <= tol_frac / max(min(radius_a, radius_b), 1e-12))
         )
         if not np.any(mask):
             continue
-        scale = radius / np.maximum(dist[mask], 1e-12)
+        scale = 1.0 / np.maximum(dist[mask], 1e-12)
         frac[mask, a_idx] = float(c0) + da[mask] * scale
         frac[mask, b_idx] = float(c1) + db[mask] * scale
 
@@ -287,33 +307,32 @@ def _apply_passive_density_regions(
         field[xs, ys, zs] = float(value)
 
     def apply_cylinder(cylinder: CylinderRegion, value: float) -> None:
-        axis, c0, c1, lo, hi, radius = cylinder
-        axis = str(axis or 'z').lower()
-        c0, c1, lo, hi, radius = [float(v) for v in (c0, c1, lo, hi, radius)]
-        if radius <= 0.0:
+        parsed = _split_cylinder_region(cylinder)
+        if parsed is None:
             return
+        axis, c0, c1, lo, hi, radius_a, radius_b = parsed
 
         if axis == 'x':
             axial = x
             sl = [_axis_slice_from_fraction(axial, lo, hi), slice(None), slice(None)]
-            dist = np.sqrt((y[:, None] - c0) ** 2 + (z[None, :] - c1) ** 2)
-            mask = dist <= radius
+            dist2 = ((y[:, None] - c0) / radius_a) ** 2 + ((z[None, :] - c1) / radius_b) ** 2
+            mask = dist2 <= 1.0
             block = field[tuple(sl)]
             if block.size:
                 np.copyto(block, float(value), where=np.broadcast_to(mask[None, :, :], block.shape))
         elif axis == 'y':
             axial = y
             sl = [slice(None), _axis_slice_from_fraction(axial, lo, hi), slice(None)]
-            dist = np.sqrt((x[:, None] - c0) ** 2 + (z[None, :] - c1) ** 2)
-            mask = dist <= radius
+            dist2 = ((x[:, None] - c0) / radius_a) ** 2 + ((z[None, :] - c1) / radius_b) ** 2
+            mask = dist2 <= 1.0
             block = field[tuple(sl)]
             if block.size:
                 np.copyto(block, float(value), where=np.broadcast_to(mask[:, None, :], block.shape))
         else:
             axial = z
             sl = [slice(None), slice(None), _axis_slice_from_fraction(axial, lo, hi)]
-            dist = np.sqrt((x[:, None] - c0) ** 2 + (y[None, :] - c1) ** 2)
-            mask = dist <= radius
+            dist2 = ((x[:, None] - c0) / radius_a) ** 2 + ((y[None, :] - c1) / radius_b) ** 2
+            mask = dist2 <= 1.0
             block = field[tuple(sl)]
             if block.size:
                 np.copyto(block, float(value), where=np.broadcast_to(mask[:, :, None], block.shape))
@@ -350,32 +369,31 @@ def _apply_passive_cylinder_sdf(
     x, y, z = _fractional_axes(tuple(signed_distance.shape), pad=int(pad))
 
     def apply(cylinder: CylinderRegion, solid: bool) -> None:
-        axis, c0, c1, lo, hi, radius = cylinder
-        axis = str(axis or 'z').lower()
-        c0, c1, lo, hi, radius = [float(v) for v in (c0, c1, lo, hi, radius)]
-        if radius <= 0.0:
+        parsed = _split_cylinder_region(cylinder)
+        if parsed is None:
             return
+        axis, c0, c1, lo, hi, radius_a, radius_b = parsed
 
         if axis == 'x':
             sl = [_axis_slice_from_fraction(x, lo, hi), slice(None), slice(None)]
-            dist = np.sqrt((y[:, None] - c0) ** 2 + (z[None, :] - c1) ** 2)
-            cyl_sdf = dist - radius if solid else radius - dist
+            dist = np.sqrt(((y[:, None] - c0) / radius_a) ** 2 + ((z[None, :] - c1) / radius_b) ** 2)
+            cyl_sdf = dist - 1.0 if solid else 1.0 - dist
             block = signed_distance[tuple(sl)]
             if block.size:
                 op = np.minimum if solid else np.maximum
                 op(block, cyl_sdf[None, :, :], out=block)
         elif axis == 'y':
             sl = [slice(None), _axis_slice_from_fraction(y, lo, hi), slice(None)]
-            dist = np.sqrt((x[:, None] - c0) ** 2 + (z[None, :] - c1) ** 2)
-            cyl_sdf = dist - radius if solid else radius - dist
+            dist = np.sqrt(((x[:, None] - c0) / radius_a) ** 2 + ((z[None, :] - c1) / radius_b) ** 2)
+            cyl_sdf = dist - 1.0 if solid else 1.0 - dist
             block = signed_distance[tuple(sl)]
             if block.size:
                 op = np.minimum if solid else np.maximum
                 op(block, cyl_sdf[:, None, :], out=block)
         else:
             sl = [slice(None), slice(None), _axis_slice_from_fraction(z, lo, hi)]
-            dist = np.sqrt((x[:, None] - c0) ** 2 + (y[None, :] - c1) ** 2)
-            cyl_sdf = dist - radius if solid else radius - dist
+            dist = np.sqrt(((x[:, None] - c0) / radius_a) ** 2 + ((y[None, :] - c1) / radius_b) ** 2)
+            cyl_sdf = dist - 1.0 if solid else 1.0 - dist
             block = signed_distance[tuple(sl)]
             if block.size:
                 op = np.minimum if solid else np.maximum
@@ -386,6 +404,34 @@ def _apply_passive_cylinder_sdf(
     for cylinder in void_cylinders or ():
         apply(cylinder, solid=False)
     return signed_distance
+
+
+def _resample_source_mask(
+    source_mask: Optional[np.ndarray],
+    target_shape: Tuple[int, int, int],
+) -> Optional[np.ndarray]:
+    if source_mask is None:
+        return None
+    source = np.asarray(source_mask, dtype=bool)
+    if source.ndim != 3 or min(source.shape) < 1:
+        return None
+    if tuple(source.shape) == tuple(target_shape):
+        return source
+    try:
+        import scipy.ndimage as ndi
+
+        zoom = tuple(float(t) / float(s) for t, s in zip(target_shape, source.shape))
+        resized = ndi.zoom(source.astype(float), zoom=zoom, order=0, mode='nearest')
+        out = resized >= 0.5
+        if out.shape != tuple(target_shape):
+            cropped = np.zeros(target_shape, dtype=bool)
+            common = tuple(slice(0, min(a, b)) for a, b in zip(cropped.shape, out.shape))
+            cropped[common] = out[common]
+            return cropped
+        return out
+    except Exception:
+        logger.debug("Failed to resample topology source mask", exc_info=True)
+        return None
 
 
 def _recover_voxel_shape(
@@ -399,6 +445,7 @@ def _recover_voxel_shape(
     solid_cylinders: Sequence[CylinderRegion] = (),
     void_cylinders: Sequence[CylinderRegion] = (),
     extrusion_axis: str = 'none',
+    source_mask: Optional[np.ndarray] = None,
 ) -> Optional[Dict[str, np.ndarray]]:
     """Extract a recovered surface from a structured voxel density field.
 
@@ -446,6 +493,7 @@ def _recover_voxel_shape(
             field = grid.copy()
 
         field = np.clip(field, 0.0, 1.0)
+        source_field = _resample_source_mask(source_mask, tuple(field.shape))
         sigma = 0.20 if float(np.max(zoom_factors)) <= 1.0 else 0.35
         field = ndi.gaussian_filter(field, sigma=sigma)
         field = _apply_passive_density_regions(
@@ -455,6 +503,8 @@ def _recover_voxel_shape(
             solid_cylinders=solid_cylinders,
             void_cylinders=void_cylinders,
         )
+        if source_field is not None:
+            field[~source_field] = 0.0
         pad = max(3, min(10, int(np.ceil(float(np.max(zoom_factors))))))
         field = np.pad(field, pad_width=pad, mode='constant', constant_values=0.0)
 

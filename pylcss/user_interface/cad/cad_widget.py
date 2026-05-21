@@ -30,7 +30,6 @@ from pylcss.design_studio.node_library import NODE_CLASS_MAPPING, NODE_NAME_MAPP
 from pylcss.design_studio.topology_optimization.presets import (
     INDUSTRIAL_DESIGN_GOALS,
     INDUSTRIAL_MANUFACTURING_PROCESSES,
-    INDUSTRIAL_QUALITY_PRESETS,
     INDUSTRIAL_WORKFLOW_MODES,
     industrial_topopt_defaults,
 )
@@ -424,6 +423,7 @@ class TopOptStepExportWorker(QtCore.QThread):
             solid_cylinders=passive.get("solid_cylinders", ()),
             void_cylinders=passive.get("void_cylinders", ()),
             extrusion_axis=self.extrusion_axis,
+            source_mask=payload.get("design_domain"),
         )
         if recovered is not None and len(recovered.get("faces", [])) > 0:
             payload["recovered_shape"] = recovered
@@ -822,7 +822,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         def _apply_guided_defaults(refresh=True):
             settings = industrial_topopt_defaults(
                 node.get_property("design_goal"),
-                node.get_property("quality_preset"),
+                "Automatic",
                 node.get_property("manufacturing_process"),
                 nelx=node.get_property("nelx") or 30,
                 nely=node.get_property("nely") or 20,
@@ -872,10 +872,6 @@ class PropertiesPanel(QtWidgets.QWidget):
         intent_layout.addRow(
             "Goal:",
             _intent_combo("design_goal", INDUSTRIAL_DESIGN_GOALS, "Lightweight Stiffness"),
-        )
-        intent_layout.addRow(
-            "Quality:",
-            _intent_combo("quality_preset", INDUSTRIAL_QUALITY_PRESETS, "Balanced"),
         )
         intent_layout.addRow(
             "Manufacturing:",
@@ -1118,22 +1114,6 @@ class PropertiesPanel(QtWidgets.QWidget):
 
         setup_group = QtWidgets.QGroupBox("Setup & Load Cases")
         setup_layout = QtWidgets.QFormLayout()
-        setup_layout.addRow(
-            "Preset:",
-            _combo(
-                "bc_preset",
-                [
-                    "Custom",
-                    "Cantilever Tip",
-                    "Cantilever Distributed",
-                    "MBB Beam",
-                    "Bridge",
-                    "Cantilever Bi-Axial",
-                    "Printable Cantilever",
-                ],
-                "Cantilever Tip",
-            ),
-        )
         support_items = ["None", "Fix X", "Fix Y", "Fix Z", "Fix XY", "Fix YZ", "Fix XZ", "Fix XYZ"]
         support_row = QtWidgets.QWidget()
         support_grid = QtWidgets.QGridLayout(support_row)
@@ -1271,6 +1251,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                     or node.get_property('extrusion')
                     or 'none'
                 ).lower(),
+                source_mask=result.get('design_domain'),
             )
             if recovered is not None and len(recovered.get('faces', [])) > 0:
                 result['recovered_shape'] = recovered
@@ -1517,6 +1498,8 @@ class PropertiesPanel(QtWidgets.QWidget):
         #   *CLOAD or OpenRadioss; only force_x/y/z are exported.
         'min_safety_factor',
         'fixed_faces',
+        'bc_preset',
+        'quality_preset',
         'moment_x', 'moment_y', 'moment_z',
     })
 
@@ -5305,14 +5288,26 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         try:
             import numpy as np
             now = time.monotonic()
+            stage = mesh.get('stage') if isinstance(mesh, dict) else None
+            vol_frac = None
+            if isinstance(mesh, dict):
+                try:
+                    vol_frac = float(mesh.get('final_vol_frac'))
+                except Exception:
+                    vol_frac = None
+            if vol_frac is None or not np.isfinite(vol_frac):
+                vol_frac = float(np.mean(densities))
             is_final_step = (step + 1) >= total
-            if not is_final_step and (now - self._last_preview_update_time) < 0.1:
+            if not stage and not is_final_step and (now - self._last_preview_update_time) < 0.1:
                 return
 
             self._last_preview_update_time = now
-            self.statusBar().showMessage(
-                f"TopOpt: Iteration {step+1}/{total} (Vol: {np.mean(densities):.1%})"
-            )
+            if stage:
+                self.statusBar().showMessage(f"TopOpt: {stage} (Vol: {vol_frac:.1%})")
+            else:
+                self.statusBar().showMessage(
+                    f"TopOpt: Iteration {step+1}/{total} (Vol: {vol_frac:.1%})"
+                )
             
             if isinstance(mesh, dict) and mesh.get('type') == 'topopt_voxel':
                 result = dict(mesh)
