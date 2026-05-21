@@ -39,6 +39,7 @@ crackle-codec==0.42.0
 nevergrad==1.0.4
 SALib==1.5.2
 pymoto==2.0.1
+pypardiso==0.4.7
 
 # Machine learning and surrogate models
 torch==2.9.1
