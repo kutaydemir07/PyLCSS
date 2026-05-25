@@ -26,6 +26,31 @@ from pylcss.design_studio.core.base_node import (
 logger = logging.getLogger(__name__)
 
 
+def _resolve_data_path(filepath: str) -> str:
+    """Return an existing absolute path for ``filepath`` or the original.
+
+    Saved projects historically stored absolute paths (e.g. the shipped
+    sample .cad files), which break the moment another machine clones
+    the repo. New saves prefer repo-relative paths like
+    ``data/cantilever.stl``. This resolver lets both work: tries the
+    path as given first (absolute and cwd-relative), then falls back to
+    joining it with the PyLCSS repo root (parent of the pylcss package).
+    """
+    if not filepath:
+        return filepath
+    if os.path.isfile(filepath):
+        return filepath
+    try:
+        from pylcss.config import BASE_DIR
+        repo_root = os.path.dirname(BASE_DIR)
+        candidate = os.path.join(repo_root, filepath)
+        if os.path.isfile(candidate):
+            return candidate
+    except Exception:
+        pass
+    return filepath
+
+
 class ImportStepNode(CadQueryNode):
     """Import a STEP/IGES file as geometry."""
 
@@ -40,7 +65,7 @@ class ImportStepNode(CadQueryNode):
 
     def run(self, **kwargs):
         self.clear_error()
-        filepath = self.get_property("filepath") or ""
+        filepath = _resolve_data_path(self.get_property("filepath") or "")
         if not filepath or not os.path.isfile(filepath):
             self.set_error("No valid file path")
             return None
@@ -72,7 +97,7 @@ class ImportStlNode(CadQueryNode):
         incoming = resolve_any_input(self.get_input("filepath_in"))
         if isinstance(incoming, dict):
             incoming = incoming.get("file") or incoming.get("path")
-        filepath = str(incoming or self.get_property("filepath") or "")
+        filepath = _resolve_data_path(str(incoming or self.get_property("filepath") or ""))
         if not filepath or not os.path.isfile(filepath):
             self.set_error("No valid file path")
             return None

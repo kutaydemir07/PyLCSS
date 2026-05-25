@@ -233,7 +233,7 @@
               "use_surrogate": false,
               "surrogate_status": "Not Trained",
               "surrogate_train_trigger": 0.0,
-              "code_content": "global _fea_plate_solution_surrogate\ntry:\n    _fea_plate_solution_surrogate\nexcept NameError:\n    _fea_plate_solution_surrogate = None\n\nfea_graph = r'C:/Users/ukdlde/Documents/PyLCSS/data/fea_plate.cad'\nresult = cad.fea(\n        fea_graph,\n        H=float(H),\n        big_R=float(big_R),\n        bolt_d=float(bolt_d),\n    )\nmax_stress = float(result.max_stress)\npeak_deflection = float(result.peak_disp)\n"
+              "code_content": "global _fea_plate_solution_surrogate\ntry:\n    _fea_plate_solution_surrogate\nexcept NameError:\n    _fea_plate_solution_surrogate = None\n\nfea_graph = r'data/fea_plate.cad'\nresult = cad.fea(\n        fea_graph,\n        H=float(H),\n        big_R=float(big_R),\n        bolt_d=float(bolt_d),\n    )\nmax_stress = float(result.max_stress)\npeak_deflection = float(result.peak_disp)\n"
             }
           },
           "0x17c1de7dd90": {

@@ -53,6 +53,21 @@ def _connected_upstream_nodes(node):
                 continue
 
 
+# Light-weight nodes that should still run during preview/skip-simulation
+# updates even when their upstream is a simulation node (e.g. Remesh).  Without
+# this carve-out, picking faces on an STL → Remesh → InteractiveSelectFace
+# pipeline never refreshes the picker's _last_result after the user clicks
+# Done, and the BC overlay shows the previous (or empty) selection.
+PREVIEW_SAFE_IDENTIFIERS = {
+    'com.cad.select_face',
+    'com.cad.select_face_interactive',
+}
+
+
+def _is_preview_safe(node):
+    return getattr(node, '__identifier__', '') in PREVIEW_SAFE_IDENTIFIERS
+
+
 def _filter_for_preview(nodes):
     """Skip simulation nodes and all downstream consumers during preview.
 
@@ -60,6 +75,10 @@ def _filter_for_preview(nodes):
     left Export STEP / STL and other downstream nodes in the execution list;
     their input resolvers could then call heavy upstream TopOpt/FEA nodes
     directly, bypassing the worker's progress callback and confusing the GUI.
+
+    Face-selector nodes are exempt from the downstream-of-simulation rule:
+    they only read cached mesh patches and are essential for refreshing the
+    picker's _last_result after the user picks faces on a remeshed surface.
     """
     blocked = {n for n in nodes if _is_simulation_node(n)}
     changed = True
@@ -67,6 +86,8 @@ def _filter_for_preview(nodes):
         changed = False
         for node in nodes:
             if node in blocked:
+                continue
+            if _is_preview_safe(node):
                 continue
             if any(upstream in blocked for upstream in _connected_upstream_nodes(node)):
                 blocked.add(node)

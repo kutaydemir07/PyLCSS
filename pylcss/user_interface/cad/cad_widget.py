@@ -599,47 +599,59 @@ class PropertiesPanel(QtWidgets.QWidget):
     def display_node(self, node):
         """Display specialized inspector for a selected node."""
         self.current_node = node
-        
-        # Clear previous UI
-        while self.props_layout.count():
-            item = self.props_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        self.property_widgets.clear()
-        
-        if node is None:
-            lbl = QtWidgets.QLabel("No Selection")
-            lbl.setAlignment(QtCore.Qt.AlignCenter)
-            lbl.setStyleSheet("color: #666; font-style: italic;")
-            self.props_layout.addWidget(lbl)
-            return
-        
-        # Node Header
-        node_name = node.name() if callable(node.name) else node.name
-        header = QtWidgets.QLabel(f"{node_name}")
-        header.setStyleSheet("font-weight: bold; font-size: 16px; margin-bottom: 5px;")
-        header.setAlignment(QtCore.Qt.AlignCenter)
-        self.props_layout.addWidget(header)
-        
-        sub_header = QtWidgets.QLabel(f"{node.__identifier__.split('.')[-1].upper()}")
-        sub_header.setStyleSheet("color: #888; font-size: 10px; font-weight: bold; margin-bottom: 15px;")
-        sub_header.setAlignment(QtCore.Qt.AlignCenter)
-        self.props_layout.addWidget(sub_header)
-        
-        # Route: specialized builders based on node class
-        node_class = node.__class__.__name__
-        if node_class == 'TopologyOptVoxelNode':
-            self._build_topopt_voxel_ui(node)
-        elif node_class == 'CadQueryCodeNode':
-            self._build_code_part_ui(node)
-        elif node_class == 'InteractiveSelectFaceNode':
-            self._build_interactive_select_ui(node)
-        elif node_class == 'SelectFaceNode':
-            self._build_select_face_ui(node)
-        elif node_class in ('ConstraintNode', 'LoadNode', 'PressureLoadNode'):
-            self._build_fea_bc_ui(node)
-        else:
-            self._build_generic_ui(node)
+
+        # Clear previous UI. takeAt() drops the item from the layout but
+        # leaves the widget parented to props_widget, so deleteLater()
+        # alone keeps it painted at its old geometry until the event loop
+        # fires — when display_node() is called several times in a row
+        # (e.g. after a face pick) the survivors stack up as ghost
+        # widgets. setParent(None) detaches them from the paint tree
+        # immediately so only the freshly built panel is visible.
+        self.props_widget.setUpdatesEnabled(False)
+        try:
+            while self.props_layout.count():
+                item = self.props_layout.takeAt(0)
+                w = item.widget() if item is not None else None
+                if w is not None:
+                    w.setParent(None)
+                    w.deleteLater()
+            self.property_widgets.clear()
+
+            if node is None:
+                lbl = QtWidgets.QLabel("No Selection")
+                lbl.setAlignment(QtCore.Qt.AlignCenter)
+                lbl.setStyleSheet("color: #666; font-style: italic;")
+                self.props_layout.addWidget(lbl)
+                return
+
+            # Node Header
+            node_name = node.name() if callable(node.name) else node.name
+            header = QtWidgets.QLabel(f"{node_name}")
+            header.setStyleSheet("font-weight: bold; font-size: 16px; margin-bottom: 5px;")
+            header.setAlignment(QtCore.Qt.AlignCenter)
+            self.props_layout.addWidget(header)
+
+            sub_header = QtWidgets.QLabel(f"{node.__identifier__.split('.')[-1].upper()}")
+            sub_header.setStyleSheet("color: #888; font-size: 10px; font-weight: bold; margin-bottom: 15px;")
+            sub_header.setAlignment(QtCore.Qt.AlignCenter)
+            self.props_layout.addWidget(sub_header)
+
+            # Route: specialized builders based on node class
+            node_class = node.__class__.__name__
+            if node_class == 'TopologyOptVoxelNode':
+                self._build_topopt_voxel_ui(node)
+            elif node_class == 'CadQueryCodeNode':
+                self._build_code_part_ui(node)
+            elif node_class == 'InteractiveSelectFaceNode':
+                self._build_interactive_select_ui(node)
+            elif node_class == 'SelectFaceNode':
+                self._build_select_face_ui(node)
+            elif node_class in ('ConstraintNode', 'LoadNode', 'PressureLoadNode'):
+                self._build_fea_bc_ui(node)
+            else:
+                self._build_generic_ui(node)
+        finally:
+            self.props_widget.setUpdatesEnabled(True)
 
     def _build_code_part_ui(self, node):
         """Inspector for the code-based parametric geometry node.
@@ -2679,13 +2691,29 @@ class PropertiesPanel(QtWidgets.QWidget):
                 viewer.face_picked.disconnect(_on_faces_picked)
             except Exception:
                 pass
-            # Map OCC face objects → indices in the viewer's list
+            # Map picked face objects → indices that the InteractiveSelectFace
+            # node understands. Two flavours:
+            #   * Mesh virtual-face dicts already carry their own 'stored_index'
+            #     (a >=1000 patch id encoding direction+component). Read it
+            #     directly — no identity check needed.
+            #   * OCC face objects: locate them in viewer._all_occ_faces by
+            #     hashCode equality so we can record their position.
             all_occ = viewer._all_occ_faces
             picked_indices = []
             picked_labels = []
             for face in occ_faces:
+                if isinstance(face, dict):
+                    stored = face.get('stored_index')
+                    if stored is None:
+                        stored = face.get('face_index', 0)
+                    picked_indices.append(int(stored))
+                    picked_labels.append(
+                        face.get('label')
+                        or face.get('selector')
+                        or None
+                    )
+                    continue
                 for i, f in enumerate(all_occ):
-                    # Identity check via hash code (OCC)
                     try:
                         if face.hashCode(10000) == f.hashCode(10000):
                             picked_indices.append(i)
@@ -2693,42 +2721,36 @@ class PropertiesPanel(QtWidgets.QWidget):
                             break
                     except Exception:
                         if face is f:
-                            if isinstance(f, dict):
-                                picked_indices.append(int(f.get('stored_index', i)))
-                                picked_labels.append(
-                                    f.get('label')
-                                    or f.get('selector')
-                                    or None
-                                )
-                            else:
-                                picked_indices.append(i)
-                                picked_labels.append(None)
+                            picked_indices.append(i)
+                            picked_labels.append(None)
                             break
 
-            if hasattr(node, 'set_picked_faces'):
-                node.set_picked_faces(picked_indices)
-            else:
-                node.set_property('picked_face_indices',
-                                  ','.join(str(i) for i in picked_indices))
-            if picked_indices and any(picked_labels):
-                chunks = []
-                for idx, label in zip(picked_indices, picked_labels):
-                    chunks.append(f"{idx} / {label}" if label else str(idx))
-                node.set_property(
-                    'selection_label',
-                    f"{len(picked_indices)} face{'s' if len(picked_indices) != 1 else ''} selected  (idx: {', '.join(chunks)})",
-                )
-
-            # Invalidate and re-run
-            if hasattr(node, '_last_hash'):
-                node._last_hash = None
+            # Suppress the graph's property-changed handler while we write
+            # both properties; otherwise each set_property fires its own
+            # display_node() and the panel rebuilds 3-4 times in a row,
+            # leaving stale Clear-Selection buttons (red, deleteLater-pending)
+            # stacked on top of each other until the event loop drains.
+            app._suppress_graph_property_changed = True
             try:
-                self.property_changed.emit(node, 'picked_face_indices',
-                                           '', node.get_property('picked_face_indices'))
-            except Exception:
-                pass
+                if hasattr(node, 'set_picked_faces'):
+                    node.set_picked_faces(picked_indices)
+                else:
+                    node.set_property('picked_face_indices',
+                                      ','.join(str(i) for i in picked_indices))
+                if picked_indices and any(picked_labels):
+                    chunks = []
+                    for idx, label in zip(picked_indices, picked_labels):
+                        chunks.append(f"{idx} / {label}" if label else str(idx))
+                    node.set_property(
+                        'selection_label',
+                        f"{len(picked_indices)} face{'s' if len(picked_indices) != 1 else ''} selected  (idx: {', '.join(chunks)})",
+                    )
+                if hasattr(node, '_last_hash'):
+                    node._last_hash = None
+            finally:
+                app._suppress_graph_property_changed = False
 
-            # Refresh the panel
+            # Single rebuild of the inspector with final state.
             self.display_node(node)
 
             if hasattr(app, '_execute_graph'):
@@ -3880,6 +3902,10 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             self.viewer.render_sketch(obj)
         else:
             self.viewer.render_shape(obj)
+        # Remember what's on screen so _on_node_selected can skip re-rendering
+        # the same geometry when the user clicks a sibling node that resolves
+        # to the same upstream payload.
+        self._last_rendered_geom_id = id(obj)
 
     @staticmethod
     def _port_name(port):
@@ -4018,50 +4044,67 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         )
 
     def _on_node_selected(self, node):
-        """Handle node selection."""
-        if node:
-            self.properties.display_node(node)
-            self.statusBar().showMessage(f"Selected: {node.name}")
+        """Handle node selection.
 
+        NodeGraphQt can fire node_selected rapidly (rubber-band drag,
+        keyboard arrow selection, programmatic selection from undo/redo),
+        and each tick triggers a synchronous inspector rebuild + viewer
+        re-render which causes a perceptible freeze for large meshes.
+        Two cheap guards make this robust:
+          * Skip everything when the node is already the current selection.
+          * Skip the heavy viewer re-render when the geometry to be drawn
+            is the same object as what's already on screen — overlays and
+            highlights still update because they're cheap.
+        """
+        if not node:
+            return
+        if self.properties.current_node is node and self._last_rendered_node is node:
+            return
+
+        self.properties.display_node(node)
+        self.statusBar().showMessage(f"Selected: {node.name}")
+
+        if self._is_topopt_result_consumer(node):
+            own = getattr(node, '_last_result', None)
+            if self._is_renderable_result(own):
+                source_node, geometry = node, own
+            else:
+                source_node, geometry = self._find_upstream_topopt_result(node)
+        else:
+            source_node, geometry = self._get_render_context_for_node(node)
+
+        if geometry is not None:
+            self._last_rendered_node = source_node or node
+            if getattr(self, '_last_rendered_geom_id', None) != id(geometry):
+                self._render_result_in_viewer(geometry)  # also updates _last_rendered_geom_id
+
+            # Re-apply face highlights if it's the interactive picker
+            if node.__class__.__name__ == 'InteractiveSelectFaceNode':
+                raw = node.get_property('picked_face_indices') or ''
+                idx_list = [int(x.strip()) for x in raw.split(',') if x.strip().isdigit()]
+                if idx_list and hasattr(self.viewer, 'highlight_faces'):
+                    self.viewer.highlight_faces(idx_list)
+
+            # Show BC overlays for this node (load/support highlights + arrows)
+            try:
+                self._show_bc_for_node(node)
+            except Exception:
+                pass
+        else:
+            # No cached result yet — execute the shape pipeline automatically
+            # (skip_simulation=True means heavy FEA/TopOpt nodes are skipped,
+            # so this is fast and behaves the same as when any property changes).
             if self._is_topopt_result_consumer(node):
-                own = getattr(node, '_last_result', None)
-                if self._is_renderable_result(own):
-                    source_node, geometry = node, own
-                else:
-                    source_node, geometry = self._find_upstream_topopt_result(node)
-            else:
-                source_node, geometry = self._get_render_context_for_node(node)
-
-            if geometry is not None:
-                self._last_rendered_node = source_node or node
-                self._render_result_in_viewer(geometry)
-
-                # Re-apply face highlights if it's the interactive picker
-                if node.__class__.__name__ == 'InteractiveSelectFaceNode':
-                    raw = node.get_property('picked_face_indices') or ''
-                    idx_list = [int(x.strip()) for x in raw.split(',') if x.strip().isdigit()]
-                    if idx_list:
-                        if hasattr(self.viewer, 'highlight_faces'):
-                            self.viewer.highlight_faces(idx_list)
-
-                # Show BC overlays for this node (load/support highlights + arrows)
-                try:
-                    self._show_bc_for_node(node)
-                except Exception:
-                    pass
-            else:
-                # No cached result yet — execute the shape pipeline automatically
-                # (skip_simulation=True means heavy FEA/TopOpt nodes are skipped,
-                # so this is fast and behaves the same as when any property changes).
-                if self._is_topopt_result_consumer(node):
-                    self._last_rendered_node = node
-                    self.viewer.clear()
-                    self.statusBar().showMessage(
-                        "Run Simulation to compute the upstream topology result first."
-                    )
-                    return
                 self._last_rendered_node = node
-                self._execute_graph(skip_simulation=True)
+                self._last_rendered_geom_id = None
+                self.viewer.clear()
+                self.statusBar().showMessage(
+                    "Run Simulation to compute the upstream topology result first."
+                )
+                return
+            self._last_rendered_node = node
+            self._last_rendered_geom_id = None
+            self._execute_graph(skip_simulation=True)
 
     def _get_upstream_shape(self, node):
         """Walk input ports to find the first cached shape result upstream."""
@@ -4571,6 +4614,15 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         # itself is torn down (the launcher's QProcess is parented to us).
 
 
+    # Property names whose changes don't affect anything the inspector renders
+    # (purely internal book-keeping written by node.run() / set_error /
+    # clear_error). Rebuilding the inspector for these is wasted work — every
+    # worker tick used to fire 2-4 of them per executed node.
+    _SILENT_PROP_NAMES = frozenset({
+        'error_state',
+        'error_message',
+    })
+
     def _on_graph_property_changed(self, node, prop_name, prop_value):
         """Handle property changes from the graph (including widgets on nodes)."""
         # Mark node as dirty so it re-executes
@@ -4581,9 +4633,13 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
         # Update the properties panel if this node is selected.
         # Skip if the inspector itself triggered the change to avoid a reset loop.
-        if self.properties.current_node == node and not self.properties._updating_property:
+        # Skip "silent" book-keeping props that the panel never displays —
+        # rebuilding for those just causes UI freezes during graph execution.
+        if (prop_name not in self._SILENT_PROP_NAMES
+                and self.properties.current_node == node
+                and not self.properties._updating_property):
             self.properties.display_node(node)
-        
+
         # SPECIAL CASE: Visualization mode changes should update display immediately
         # without requiring full graph re-execution
         if prop_name == 'visualization':
@@ -5703,15 +5759,24 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
     def _topopt_preflight_error(self, node):
         if getattr(node, "__identifier__", "") != "com.cad.sim.topopt_voxel":
             return None
-        if self._topopt_has_property_support(node):
-            return None
-        if self._port_has_connections(node, 'constraints'):
-            return None
-        return (
-            "Topology Opt needs at least one fixed support. Add a Constraint "
-            "node to the TopOpt constraints input, or set a face support / "
-            "support region in the TopOpt node."
-        )
+        # Design domain: a mesh input is mandatory. Without one the optimiser
+        # falls back to a default unit voxel grid and produces meaningless
+        # results — so block the run rather than let it appear to "succeed".
+        if not self._port_has_connections(node, 'mesh'):
+            return (
+                "Topology Opt needs a design-domain mesh. Connect a Remesh, "
+                "Import STL, or FreeCAD Part node to the TopOpt 'mesh' input."
+            )
+        # Fixed support: either a property-based support (e.g. left_support)
+        # or a wired Constraint node on the 'constraints' input.
+        if (not self._topopt_has_property_support(node)
+                and not self._port_has_connections(node, 'constraints')):
+            return (
+                "Topology Opt needs at least one fixed support. Add a Constraint "
+                "node to the TopOpt constraints input, or set a face support / "
+                "support region in the TopOpt node."
+            )
+        return None
 
     @staticmethod
     def _topopt_cached_mesh_value(node):

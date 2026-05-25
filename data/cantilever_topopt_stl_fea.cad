@@ -44,7 +44,7 @@
       "port_deletion_allowed": false,
       "subgraph_session": {},
       "custom": {
-        "filepath": "C:/Users/ukdlde/Documents/PyLCSS/data/cantilever.stl"
+        "filepath": "data/cantilever.stl"
       }
     },
     "0x1e974c78b60": {

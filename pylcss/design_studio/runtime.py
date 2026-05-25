@@ -212,6 +212,16 @@ def _evaluate(
 ) -> CadResult:
     abs_path = os.path.abspath(str(cad_path))
     if not os.path.isfile(abs_path):
+        # Fallback: resolve repo-relative paths against the PyLCSS repo root
+        # so that saved system models can reference `data/foo.cad` portably.
+        try:
+            from pylcss.config import BASE_DIR
+            repo_relative = os.path.join(os.path.dirname(BASE_DIR), str(cad_path))
+            if os.path.isfile(repo_relative):
+                abs_path = os.path.abspath(repo_relative)
+        except Exception:
+            pass
+    if not os.path.isfile(abs_path):
         raise FileNotFoundError(f"CAD graph file not found: {abs_path}")
 
     try:
