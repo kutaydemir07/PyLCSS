@@ -1,0 +1,462 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "0x1e983b5b560": {
+      "type_": "com.cad.import_stl.ImportStlNode",
+      "icon": null,
+      "name": "Import Optimized STL",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 292.84375,
+      "height": 85.80000000000001,
+      "pos": [
+        360.9707471480315,
+        -105.01919023930408
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "filepath": "C:/Users/ukdlde/Documents/PyLCSS/data/cantilever.stl"
+      }
+    },
+    "0x1e974c78b60": {
+      "type_": "com.cad.sim.remesh.RemeshNode",
+      "icon": null,
+      "name": "Remesh Imported STL",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 73.2,
+      "pos": [
+        775.6540909090909,
+        -106.91590909090908
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "element_size": 8.5,
+        "mesh_quality": "Coarse",
+        "repair_surface": true,
+        "close_holes": true,
+        "max_surface_faces": 12000,
+        "allow_voxel_fallback": false
+      }
+    },
+    "0x1e96d50aa10": {
+      "type_": "com.cad.select_face_interactive.InteractiveSelectFaceNode",
+      "icon": null,
+      "name": "Select Fixed End",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 190,
+      "height": 119.4,
+      "pos": [
+        930.0,
+        -250.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "picked_face_indices": "1000",
+        "selection_label": "1 face selected  (idx: 1000 / <X patch 1)"
+      }
+    },
+    "0x1e96d50ab20": {
+      "type_": "com.cad.select_face_interactive.InteractiveSelectFaceNode",
+      "icon": null,
+      "name": "Select Tip Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 190,
+      "height": 119.4,
+      "pos": [
+        930.0,
+        10.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "picked_face_indices": "2000",
+        "selection_label": "1 face selected  (idx: 2000 / >X patch 1)"
+      }
+    },
+    "0x1e96d505250": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "icon": null,
+      "name": "Validation Fixed End",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 73.2,
+      "pos": [
+        1080.0,
+        -190.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "constraint_type": "Fixed",
+        "displacement_x": 0.0,
+        "displacement_y": 0.0,
+        "displacement_z": 0.0,
+        "condition": ""
+      }
+    },
+    "0x1e974c79730": {
+      "type_": "com.cad.sim.load.LoadNode",
+      "icon": null,
+      "name": "Validation Tip Load",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 142.5,
+      "pos": [
+        1080.0,
+        10.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "load_type": "Force",
+        "condition": "",
+        "force_x": 0.0,
+        "force_y": -1000.0,
+        "force_z": 0.0,
+        "moment_x": 0.0,
+        "moment_y": 0.0,
+        "moment_z": 0.0,
+        "gravity_accel": 9810.0,
+        "gravity_direction": "-Y"
+      }
+    },
+    "0x1e974c79a30": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "Steel Validation Material",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 174.25,
+      "height": 96.3,
+      "pos": [
+        1080.0,
+        210.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "preset": "Steel (Structural)",
+        "youngs_modulus": 210000.0,
+        "poissons_ratio": 0.3,
+        "density": 7.85e-09,
+        "yield_strength": 0.0,
+        "tangent_modulus": 0.0
+      }
+    },
+    "0x1e974c7acc0": {
+      "type_": "com.cad.sim.solver.SolverNode",
+      "icon": null,
+      "name": "FEA Imported TopOpt STL",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": true,
+      "visible": true,
+      "width": 169.828125,
+      "height": 119.4,
+      "pos": [
+        1330.0,
+        -70.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "external_solver_path": "",
+        "external_work_dir": "",
+        "deck_only": false,
+        "external_timeout_s": 1800.0,
+        "visualization": "Von Mises Stress",
+        "deformation_scale": "Auto",
+        "analysis_type": "Linear",
+        "solver_backend": "CalculiX",
+        "run_external_solver": true
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "0x1e983b5b560",
+        "mesh_out"
+      ],
+      "in": [
+        "0x1e974c78b60",
+        "topopt_result"
+      ]
+    },
+    {
+      "out": [
+        "0x1e974c78b60",
+        "mesh"
+      ],
+      "in": [
+        "0x1e96d50aa10",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1e974c78b60",
+        "mesh"
+      ],
+      "in": [
+        "0x1e96d50ab20",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1e96d50aa10",
+        "workplane"
+      ],
+      "in": [
+        "0x1e96d505250",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x1e96d50ab20",
+        "workplane"
+      ],
+      "in": [
+        "0x1e974c79730",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x1e974c78b60",
+        "mesh"
+      ],
+      "in": [
+        "0x1e96d505250",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1e974c78b60",
+        "mesh"
+      ],
+      "in": [
+        "0x1e974c79730",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1e974c78b60",
+        "mesh"
+      ],
+      "in": [
+        "0x1e974c7acc0",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1e96d505250",
+        "constraints"
+      ],
+      "in": [
+        "0x1e974c7acc0",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "0x1e974c79730",
+        "loads"
+      ],
+      "in": [
+        "0x1e974c7acc0",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x1e974c79a30",
+        "material"
+      ],
+      "in": [
+        "0x1e974c7acc0",
+        "material"
+      ]
+    }
+  ]
+}

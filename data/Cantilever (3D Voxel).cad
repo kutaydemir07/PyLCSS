@@ -9,7 +9,7 @@
     "reject_connection_types": "{}"
   },
   "nodes": {
-    "0x2de21d65d30": {
+    "0x170782a1b50": {
       "type_": "com.cad.code_part.CadQueryCodeNode",
       "icon": null,
       "name": "Cantilever Domain",
@@ -60,7 +60,7 @@
         "param_6_value": 0.0
       }
     },
-    "0x2de21d66f00": {
+    "0x170782a3530": {
       "type_": "com.cad.sim.mesh.MeshNode",
       "icon": null,
       "name": "Mesh",
@@ -102,7 +102,7 @@
         "shell_nip": 5
       }
     },
-    "0x2de21d67350": {
+    "0x170783b6840": {
       "type_": "com.cad.sim.material.MaterialNode",
       "icon": null,
       "name": "Material",
@@ -145,58 +145,7 @@
         "tangent_modulus": 0.0
       }
     },
-    "0x2de21a94b00": {
-      "type_": "com.cad.select_face.SelectFaceNode",
-      "icon": null,
-      "name": "Select Fixed Face",
-      "color": [
-        13,
-        18,
-        23,
-        255
-      ],
-      "border_color": [
-        74,
-        84,
-        85,
-        255
-      ],
-      "text_color": [
-        255,
-        255,
-        255,
-        180
-      ],
-      "disabled": false,
-      "selected": false,
-      "visible": true,
-      "width": 160,
-      "height": 60,
-      "pos": [
-        -230.0,
-        -330.0
-      ],
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
-      "custom": {
-        "selector_type": "Direction",
-        "direction": "<X",
-        "near_x": 0.0,
-        "near_y": 0.0,
-        "near_z": 0.0,
-        "box_min_x": -10.0,
-        "box_max_x": 10.0,
-        "box_min_y": -10.0,
-        "box_max_y": 10.0,
-        "box_min_z": -10.0,
-        "box_max_z": 10.0,
-        "range_expr": "(x > 0) & (y < 20)",
-        "face_index": 0,
-        "tag": "top"
-      }
-    },
-    "0x2de21d67b00": {
+    "0x170783b7560": {
       "type_": "com.cad.sim.constraint.ConstraintNode",
       "icon": null,
       "name": "Fixed Support",
@@ -238,58 +187,7 @@
         "condition": ""
       }
     },
-    "0x2de21d67e90": {
-      "type_": "com.cad.select_face.SelectFaceNode",
-      "icon": null,
-      "name": "Select Load Face",
-      "color": [
-        13,
-        18,
-        23,
-        255
-      ],
-      "border_color": [
-        74,
-        84,
-        85,
-        255
-      ],
-      "text_color": [
-        255,
-        255,
-        255,
-        180
-      ],
-      "disabled": false,
-      "selected": false,
-      "visible": true,
-      "width": 160,
-      "height": 60,
-      "pos": [
-        -230.0,
-        -120.0
-      ],
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
-      "custom": {
-        "selector_type": "Direction",
-        "direction": ">X",
-        "near_x": 0.0,
-        "near_y": 0.0,
-        "near_z": 0.0,
-        "box_min_x": -10.0,
-        "box_max_x": 10.0,
-        "box_min_y": -10.0,
-        "box_max_y": 10.0,
-        "box_min_z": -10.0,
-        "box_max_z": 10.0,
-        "range_expr": "(x > 0) & (y < 20)",
-        "face_index": 0,
-        "tag": "top"
-      }
-    },
-    "0x2de21d64c50": {
+    "0x170783b7fe0": {
       "type_": "com.cad.sim.load.LoadNode",
       "icon": null,
       "name": "Tip Load",
@@ -336,7 +234,7 @@
         "gravity_direction": "-Y"
       }
     },
-    "0x2de21a5ca70": {
+    "0x170783d0860": {
       "type_": "com.cad.sim.topopt_voxel.TopologyOptVoxelNode",
       "icon": null,
       "name": "Voxel Topology Opt",
@@ -359,7 +257,7 @@
         180
       ],
       "disabled": false,
-      "selected": false,
+      "selected": true,
       "visible": true,
       "width": 187.125,
       "height": 119.4,
@@ -388,7 +286,7 @@
         "rmin": 2.4,
         "penal": 3.0,
         "density_cutoff": 0.45,
-        "visualization": "Density",
+        "visualization": "Recovered Shape",
         "print_ready_mesh": true,
         "mesh_decimate_ratio": 0.65,
         "E0": 1.0,
@@ -400,8 +298,6 @@
         "convergence_patience": 5,
         "stress_constraint": false,
         "yield_stress": 1.0,
-        "stress_penalty": 1.0,
-        "stress_pnorm_p": 8.0,
         "bc_preset": "Custom",
         "symmetry": "Z",
         "extrusion": "None",
@@ -429,116 +325,194 @@
         "force_dir_z": 0.0,
         "force_magnitude": 1.0
       }
+    },
+    "0x170782a3c50": {
+      "type_": "com.cad.select_face_interactive.InteractiveSelectFaceNode",
+      "icon": null,
+      "name": "Select Face (Interactive)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 60,
+      "pos": [
+        -311.2029847881376,
+        -312.56322280339754
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "picked_face_indices": "0",
+        "selection_label": "1 face selected  (idx: 0)"
+      }
+    },
+    "0x170783b6300": {
+      "type_": "com.cad.select_face_interactive.InteractiveSelectFaceNode",
+      "icon": null,
+      "name": "Select Face (Interactive) 1",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 167.234375,
+      "height": 60,
+      "pos": [
+        -238.7878497048803,
+        -82.85690292240513
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "picked_face_indices": "1",
+        "selection_label": "1 face selected  (idx: 1)"
+      }
     }
   },
   "connections": [
     {
       "out": [
-        "0x2de21d65d30",
+        "0x170782a1b50",
         "shape"
       ],
       "in": [
-        "0x2de21d66f00",
-        "shape"
-      ]
-    },
-    {
-      "out": [
-        "0x2de21d65d30",
-        "shape"
-      ],
-      "in": [
-        "0x2de21a94b00",
+        "0x170782a3530",
         "shape"
       ]
     },
     {
       "out": [
-        "0x2de21d65d30",
+        "0x170782a1b50",
         "shape"
       ],
       "in": [
-        "0x2de21d67e90",
+        "0x170782a3c50",
         "shape"
       ]
     },
     {
       "out": [
-        "0x2de21d66f00",
+        "0x170782a1b50",
+        "shape"
+      ],
+      "in": [
+        "0x170783b6300",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x170782a3530",
         "mesh"
       ],
       "in": [
-        "0x2de21d67b00",
+        "0x170783b7560",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x2de21d66f00",
+        "0x170782a3530",
         "mesh"
       ],
       "in": [
-        "0x2de21d64c50",
+        "0x170783b7fe0",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x2de21d66f00",
+        "0x170782a3530",
         "mesh"
       ],
       "in": [
-        "0x2de21a5ca70",
+        "0x170783d0860",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x2de21d67350",
+        "0x170783b6840",
         "material"
       ],
       "in": [
-        "0x2de21a5ca70",
+        "0x170783d0860",
         "material"
       ]
     },
     {
-      "out": [
-        "0x2de21a94b00",
-        "workplane"
-      ],
       "in": [
-        "0x2de21d67b00",
+        "0x170783b7560",
         "target_face"
+      ],
+      "out": [
+        "0x170782a3c50",
+        "workplane"
       ]
     },
     {
       "out": [
-        "0x2de21d67b00",
+        "0x170783b7560",
         "constraints"
       ],
       "in": [
-        "0x2de21a5ca70",
+        "0x170783d0860",
         "constraints"
       ]
     },
     {
-      "out": [
-        "0x2de21d67e90",
-        "workplane"
-      ],
       "in": [
-        "0x2de21d64c50",
+        "0x170783b7fe0",
         "target_face"
+      ],
+      "out": [
+        "0x170783b6300",
+        "workplane"
       ]
     },
     {
       "out": [
-        "0x2de21d64c50",
+        "0x170783b7fe0",
         "loads"
       ],
       "in": [
-        "0x2de21a5ca70",
+        "0x170783d0860",
         "loads"
       ]
     }

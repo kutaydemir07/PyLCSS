@@ -481,10 +481,12 @@ def load_vector(load: dict) -> np.ndarray:
 
 
 def normalize_geometries(value: Any) -> List[Any]:
-    """Normalize node outputs and dictionaries into a list of CadQuery faces."""
+    """Normalize node outputs into CAD faces or mesh-selection dictionaries."""
     if value is None:
         return []
     if isinstance(value, dict):
+        if value.get("mesh_selection") or value.get("node_ids") is not None or value.get("condition"):
+            return [value]
         faces = value.get("geometries") or value.get("faces")
         if faces:
             return [f for f in faces if f is not None]
@@ -667,19 +669,46 @@ def nodes_matching_geometries(
     geometries: Sequence[Any],
     tolerance: float = 1.5,
 ) -> np.ndarray:
-    """Find mesh node indices close to one or more CadQuery faces."""
+    """Find mesh node indices close to CAD faces or stored mesh selections."""
     geoms = [g for g in geometries if g is not None]
     if not geoms:
         return np.array([], dtype=int)
+
+    if mesh is None or not hasattr(mesh, "p"):
+        return np.array([], dtype=int)
+
+    p = np.asarray(mesh.p, dtype=float)
+    selected: List[int] = []
+    cad_geoms: List[Any] = []
+
+    for geom in geoms:
+        if isinstance(geom, dict):
+            if geom.get("node_ids") is not None:
+                arr = np.asarray(geom.get("node_ids"), dtype=int).reshape(-1)
+                arr = arr[(arr >= 0) & (arr < p.shape[1])]
+                selected.extend(int(v) for v in arr.tolist())
+                continue
+            condition = str(geom.get("condition") or "").strip()
+            if condition:
+                selected.extend(
+                    int(v) for v in nodes_matching_condition(mesh, condition).tolist()
+                )
+                continue
+            face = geom.get("face") or geom.get("geometry")
+            if face is not None:
+                cad_geoms.append(face)
+                continue
+        cad_geoms.append(geom)
+
+    if not cad_geoms:
+        return np.array(sorted(set(selected)), dtype=int)
 
     try:
         from cadquery import Vector
     except Exception:  # pragma: no cover - cadquery is expected in the app.
         Vector = None
 
-    p = np.asarray(mesh.p, dtype=float)
-    selected: List[int] = []
-    for geom in geoms:
+    for geom in cad_geoms:
         candidates = range(p.shape[1])
         try:
             bb = geom.BoundingBox()

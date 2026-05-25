@@ -62,11 +62,13 @@ class ExportStlNode(CadQueryNode):
     def __init__(self):
         super(ExportStlNode, self).__init__()
         self.add_input('shape', color=(100, 255, 100))
+        self.add_output('file', color=(180, 220, 255))
         self.create_property('filename', 'output.stl', widget_type='string')
         # Smoothing options for TopOpt mesh
         self.create_property('smoothing', 10, widget_type='int')  # Number of smoothing iterations (0=off)
 
     def run(self):
+        import os
         import numpy as np
         from pylcss.design_studio.core.base_node import resolve_any_input
         
@@ -89,6 +91,10 @@ class ExportStlNode(CadQueryNode):
         fname = self.get_property('filename')
         if not fname.endswith(".stl"):
             fname += ".stl"
+        fname = os.path.abspath(fname)
+        out_dir = os.path.dirname(fname)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
         
         try:
             vertices = None
@@ -142,7 +148,7 @@ class ExportStlNode(CadQueryNode):
                 else:
                     shape_to_export = shape
                 cq.exporters.export(shape_to_export, fname)
-                return True
+                return {'ok': True, 'file': fname, 'path': fname}
             
             # Apply mesh smoothing for organic shapes (if enabled and we have mesh data)
             smoothing_iters = int(self.get_property('smoothing'))
@@ -151,7 +157,13 @@ class ExportStlNode(CadQueryNode):
             
             # Write binary STL using raw NumPy (no numpy-stl dependency)
             self._write_binary_stl(fname, vertices, faces)
-            return True
+            return {
+                'ok': True,
+                'file': fname,
+                'path': fname,
+                'triangles': int(len(faces)) if faces is not None else 0,
+                'vertices': int(len(vertices)) if vertices is not None else 0,
+            }
             
         except Exception:
             return False

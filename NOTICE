@@ -1,5 +1,5 @@
 # PyLCSS Third-Party Notices
-Document Version: 1.6 Last Updated: May 16, 2026
+Document Version: 1.7 Last Updated: May 24, 2026
 
 This document outlines the third-party libraries and components used in PyLCSS, along with their respective licenses. PyLCSS is committed to respecting the intellectual property of all contributors and provides this information in accordance with open-source licensing requirements.
 
@@ -76,6 +76,13 @@ The following components are licensed under the MIT License. This permissive lic
 - **Version**: 1.5.2 (1.0+)
 - **Note**: Versions 1.0+ are MIT licensed. Earlier versions of this library were licensed under the LGPL.
 
+### pyMOTO
+- **Copyright**: Copyright (c) 2023 Arnoud Delissen
+- **License**: MIT
+- **Source**: [https://github.com/aatmdelissen/pyMOTO](https://github.com/aatmdelissen/pyMOTO)
+- **Version**: 2.0.1
+- **Note**: Modular topology-optimization framework used by the voxel topology-optimization solver path.
+
 ### meshio
 - **Copyright**: © 2015-2025, Nico Schlömer and contributors
 - **Note**: A library for reading and writing unstructured meshes in various formats.
@@ -127,6 +134,20 @@ QtAwesome bundles several third-party icon fonts. These assets are governed by t
 - **License**: MIT
 - **Source**: [https://github.com/mikedh/trimesh](https://github.com/mikedh/trimesh)
 - **Note**: Used for mesh loading, SDF computation, and geometry preprocessing in geometric surrogate models.
+
+### fast-simplification
+- **Copyright**: Copyright (c) 2017-2021 The PyVista Developers
+- **License**: MIT
+- **Source**: [https://github.com/pyvista/fast-simplification](https://github.com/pyvista/fast-simplification)
+- **Version**: 0.1.13
+- **Note**: Optional quadric mesh decimation backend used to simplify recovered topology-optimization STL surfaces.
+
+### tetgen Python wrapper
+- **Copyright**: Copyright (c) 2017-2026 The PyVista Developers
+- **License**: MIT
+- **Source**: [https://github.com/pyvista/tetgen](https://github.com/pyvista/tetgen)
+- **Version**: 0.8.4
+- **Note**: Python interface used for tetrahedral remeshing. The bundled/native TetGen C++ core is not MIT; see the GPL/AGPL section below.
 
 ### rtree
 - **Copyright**: © 2008-2026, Sean Gillies and contributors
@@ -286,6 +307,20 @@ h5py serves as a Pythonic interface to the HDF5 library. The distribution includ
 - **License**: BSD 3-Clause
 - **Source**: [https://github.com/WoLpH/numpy-stl](https://github.com/WoLpH/numpy-stl)
 
+### pypardiso
+- **Copyright**: Copyright (c) 2016, Adrian Haas and ETH Zurich
+- **License**: BSD 3-Clause
+- **Source**: [https://github.com/haasad/PyPardiso](https://github.com/haasad/PyPardiso)
+- **Version**: 0.4.7
+- **Note**: Python interface to Intel MKL Pardiso for sparse linear solves.
+
+### crackle-codec
+- **Copyright**: Copyright (c) 2022,2023 William Silversmith
+- **License**: BSD 3-Clause
+- **Source**: [https://github.com/seung-lab/crackle](https://github.com/seung-lab/crackle)
+- **Version**: 0.42.0
+- **Note**: Dense 3D segmentation compression codec used by the kimimaro skeletonization dependency stack.
+
 ### BSD 3-Clause License Text
 ```text
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
@@ -299,7 +334,28 @@ Neither the name of the copyright holder nor the names of its contributors may b
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## 5. Additional License Texts
+## 5. GPL/AGPL Licensed Software
+
+The following components are copyleft-licensed. If these packages are bundled or distributed with PyLCSS, distributors must satisfy the applicable GPL or AGPL obligations.
+
+### kimimaro
+- **Copyright**: Jingpeng Wu, William Silversmith, and contributors
+- **License**: GPL-3.0-or-later
+- **Source**: [https://github.com/seung-lab/kimimaro](https://github.com/seung-lab/kimimaro)
+- **Version**: 5.8.1
+- **Note**: TEASAR-style skeletonization dependency for dense labeled 3D volumes.
+
+### TetGen C++ core (via tetgen)
+- **Copyright**: TetGen authors and contributors
+- **License**: AGPL-3.0-or-later or commercial license from WIAS
+- **Source**: [https://github.com/libigl/tetgen](https://github.com/libigl/tetgen)
+- **Version**: 1.6.0 source bundled by tetgen 0.8.4
+- **Note**: The PyVista `tetgen` Python wrapper is MIT licensed, but the underlying C++ TetGen source is distributed under a dual AGPL/commercial licensing scheme.
+
+Full GPL-3.0 text is available at: [https://www.gnu.org/licenses/gpl-3.0.html](https://www.gnu.org/licenses/gpl-3.0.html)
+Full AGPL-3.0 text is available at: [https://www.gnu.org/licenses/agpl-3.0.html](https://www.gnu.org/licenses/agpl-3.0.html)
+
+## 6. Additional License Texts
 
 ### SIL Open Font License 1.1
 The following fonts are licensed under the SIL OFL 1.1:
@@ -317,7 +373,7 @@ Full text available at: [https://scripts.sil.org/OFL](https://scripts.sil.org/OF
 ### Creative Commons Attribution 4.0 (CC-BY 4.0)
 The Microsoft Codicons bundled with QtAwesome are licensed under CC-BY 4.0. Full text available at: [https://creativecommons.org/licenses/by/4.0/](https://creativecommons.org/licenses/by/4.0/)
 
-## 6. Version Verification
+## 7. Version Verification
 
 The following versions are explicitly verified for license compliance. Deviating from these versions or sources may alter the licensing obligations.
 
@@ -326,6 +382,12 @@ The following versions are explicitly verified for license compliance. Deviating
 | NodeGraphQt | 0.6.43 | MIT | Must be the jchanvfx fork. Do not use the GPL-licensed dsideb fork. |
 | CadQuery | 2.6.1 | Apache 2.0 | Version 2.0+ required (pre-2.0 versions were LGPL). |
 | SALib | 1.5.2 | MIT | Version 1.0+ required (pre-1.0 versions were LGPL). |
+| fast-simplification | 0.1.13 | MIT | Optional quadric decimation backend for recovered TopOpt STL surfaces. |
+| pyMOTO | 2.0.1 | MIT | Topology-optimization framework used by the voxel TopOpt solver. |
+| tetgen | 0.8.4 | MIT wrapper / AGPL core | Python wrapper is MIT; bundled TetGen C++ source is AGPL-3.0-or-later or commercial. |
+| pypardiso | 0.4.7 | BSD 3-Clause | Sparse linear solver interface for MKL Pardiso. |
+| kimimaro | 5.8.1 | GPL-3.0-or-later | Skeletonization dependency; review distribution obligations before bundling. |
+| crackle-codec | 0.42.0 | BSD 3-Clause | Runtime dependency in the kimimaro stack. |
 
 ---
 

@@ -13,6 +13,9 @@ from pylcss.design_studio.core.base_node import CadQueryNode
 
 logger = logging.getLogger(__name__)
 
+INDUSTRIAL_HOURGLASS_IHQ = 4
+INDUSTRIAL_HOURGLASS_COEFFICIENT = 0.10
+
 
 class CrashSolverNode(CadQueryNode):
     """Explicit transient crash solver — dispatches to OpenRadioss."""
@@ -48,9 +51,9 @@ class CrashSolverNode(CadQueryNode):
         # Multiplies displayed displacement; does not affect physics.
         self.create_property('disp_scale', 3.0, widget_type='float')
 
-        # Deprecated — kept so projects saved before the OpenRadioss-only cut
-        # load cleanly. The in-house CPU/GPU explicit solver no longer exists;
-        # OpenRadioss is the only backend and is always used.
+        # `run_external_solver` is the legacy "write deck without running solver"
+        # toggle. New projects use `deck_only` instead; this stays for backward
+        # load of pre-deck_only saves and is honored below if explicitly False.
         self.create_property('solver_backend', 'OpenRadioss', widget_type='combo',
                              items=['OpenRadioss'])
         self.create_property('run_external_solver', True, widget_type='checkbox')
@@ -58,20 +61,20 @@ class CrashSolverNode(CadQueryNode):
         # OpenRadioss mass-scaling target.  When enable_mass_scaling is true,
         # the engine deck requests /DT/NODA/CST with dt = end_time / time_steps.
         self.create_property('time_steps', 500, widget_type='int')
+        self.create_property('enable_mass_scaling', False, widget_type='checkbox')
 
-        # Deprecated in-house solver tuning knobs retained for old project
-        # files.  They are hidden in the inspector and ignored by OpenRadioss.
-        self.create_property('damping_alpha', 10.0, widget_type='float')
+        # Legacy in-house crash-solver knobs.  They are intentionally ignored by
+        # the OpenRadioss backend, but keeping the properties lets older .cad
+        # examples deserialize cleanly.
+        self.create_property('damping_alpha', 0.0, widget_type='float')
+        self.create_property('damping_beta', 0.0, widget_type='float')
         self.create_property('enable_corotation', True, widget_type='checkbox')
         self.create_property('enable_contact', False, widget_type='checkbox')
         self.create_property('contact_stiffness', 0.1, widget_type='float')
         self.create_property('contact_thickness', 0.2, widget_type='float')
-        self.create_property('contact_update_interval', 10, widget_type='int')
-        self.create_property('mass_scaling_threshold', 0.05, widget_type='float')
+        self.create_property('contact_update_interval', 5, widget_type='int')
+        self.create_property('mass_scaling_threshold', 0.0, widget_type='float')
 
-        # OpenRadioss /DT/NODA/CST toggle.  Uses time_steps above to derive
-        # the target timestep.
-        self.create_property('enable_mass_scaling', False, widget_type='checkbox')
         # Impactor (sled) mass in kg.  In "Fixed specimen + moving impactor"
         # this becomes the moving rigid wall mass; in "Moving body + fixed wall"
         # it is lumped onto the projectile's trailing edge.
@@ -112,6 +115,19 @@ class CrashSolverNode(CadQueryNode):
             self.set_error(msg)
             return None
 
+        scope = str(impact.get('application_scope') or '').strip().lower().replace('_', ' ')
+        if not scope.startswith('moving body'):
+            if not (impact.get('face_list') or []):
+                msg = "Fixed-specimen crash requires a selected impact face."
+                print(f"Crash Solver: {msg}")
+                self.set_error(msg)
+                return None
+            if not constraints and not scope.startswith('prescribed'):
+                msg = "Fixed-specimen moving-impactor crash requires a rear support constraint."
+                print(f"Crash Solver: {msg}")
+                self.set_error(msg)
+                return None
+
         n_frames = max(1, int(self.get_property('n_frames') or 1))
         end_time = float(self.get_property('end_time') or 0.0)
         output_dt = end_time / n_frames if end_time > 0 else 1.0
@@ -145,6 +161,10 @@ class CrashSolverNode(CadQueryNode):
                 steps_req = max(int(self.get_property('time_steps') or 500), 1)
                 ms_dt_target = float(end_time) / steps_req
 
+            # Hourglass control is solver policy, not a study knob.
+            hg_ihq = INDUSTRIAL_HOURGLASS_IHQ
+            hg_coef = INDUSTRIAL_HOURGLASS_COEFFICIENT
+
             result = run_openradioss_crash(
                 mesh=mesh,
                 material=material,
@@ -158,6 +178,8 @@ class CrashSolverNode(CadQueryNode):
                 mass_scaling_dt=ms_dt_target,
                 mass_scaling_scale=0.67,
                 impactor_mass=impactor_mass,
+                hourglass_ihq=hg_ihq,
+                hourglass_coefficient=hg_coef,
             )
             warnings = result.get('warnings') or []
             if warnings:

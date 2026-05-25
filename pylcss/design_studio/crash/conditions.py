@@ -80,6 +80,13 @@ class ImpactConditionNode(CadQueryNode):
             else:
                 face_list = [face_data]
 
+        scope = str(self.get_property('application_scope') or CRASH_SCENARIOS[0])
+        if not face_list and not scope.lower().replace("_", " ").startswith("moving body"):
+            self.set_error(
+                "Select an impact face for fixed-specimen or prescribed-wall crash."
+            )
+            return None
+
         wall_friction = self.get_property('wall_friction')
         wall_gap_mm = self.get_property('wall_gap_mm')
         return {
@@ -89,7 +96,7 @@ class ImpactConditionNode(CadQueryNode):
                 float(self.get_property('velocity_y')),
                 float(self.get_property('velocity_z')),
             ]),
-            'application_scope': str(self.get_property('application_scope') or CRASH_SCENARIOS[0]),
+            'application_scope': scope,
             'node_tolerance': float(self.get_property('node_tolerance')),
             'wall_friction': float(wall_friction if wall_friction is not None else -1.0),
             'wall_gap_mm': float(wall_gap_mm if wall_gap_mm is not None else 0.0),

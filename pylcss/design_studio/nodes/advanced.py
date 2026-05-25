@@ -63,12 +63,16 @@ class ImportStlNode(CadQueryNode):
     def __init__(self):
         super().__init__()
         self.add_text_input("filepath", "File Path", text="")
+        self.add_input("filepath_in")
         self.add_output("mesh_out")
         self.set_color(100, 160, 100)
 
     def run(self, **kwargs):
         self.clear_error()
-        filepath = self.get_property("filepath") or ""
+        incoming = resolve_any_input(self.get_input("filepath_in"))
+        if isinstance(incoming, dict):
+            incoming = incoming.get("file") or incoming.get("path")
+        filepath = str(incoming or self.get_property("filepath") or "")
         if not filepath or not os.path.isfile(filepath):
             self.set_error("No valid file path")
             return None

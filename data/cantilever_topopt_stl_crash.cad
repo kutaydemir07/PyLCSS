@@ -1,0 +1,465 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "0x2414492dcd0": {
+      "type_": "com.cad.import_stl.ImportStlNode",
+      "icon": null,
+      "name": "Import Optimized STL",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 292.84375,
+      "height": 85.80000000000001,
+      "pos": [
+        422.63721351025333,
+        -71.35162846803377
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "filepath": "C:/Users/ukdlde/Documents/PyLCSS/data/cantilever.stl"
+      }
+    },
+    "0x2414492e7e0": {
+      "type_": "com.cad.sim.remesh.RemeshNode",
+      "icon": null,
+      "name": "Remesh Imported STL",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 73.2,
+      "pos": [
+        840.0,
+        -95.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "element_size": 8.5,
+        "mesh_quality": "Coarse",
+        "repair_surface": true,
+        "close_holes": true,
+        "max_surface_faces": 12000,
+        "allow_voxel_fallback": false
+      }
+    },
+    "0x2414492e5d0": {
+      "type_": "com.cad.sim.crash_material.CrashMaterialNode",
+      "icon": null,
+      "name": "Al 5052-H32 Crush Material",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 178.828125,
+      "height": 60,
+      "pos": [
+        1080.0,
+        80.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "preset": "Aluminum 5052-H32 (Crush)",
+        "youngs_modulus": 70300.0,
+        "poissons_ratio": 0.33,
+        "density": 2.68e-09,
+        "yield_strength": 193.0,
+        "tangent_modulus": 500.0,
+        "failure_strain": 0.14,
+        "enable_fracture": false,
+        "strain_rate_sensitive": true
+      }
+    },
+    "0x2414492eff0": {
+      "type_": "com.cad.sim.impact.ImpactConditionNode",
+      "icon": null,
+      "name": "Front-Face Moving Impactor",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 182.75,
+      "height": 60,
+      "pos": [
+        1080.0,
+        -125.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "velocity_x": -10.0,
+        "velocity_y": 0.0,
+        "velocity_z": 0.0,
+        "application_scope": "Fixed specimen + moving impactor",
+        "node_tolerance": 3.0,
+        "wall_friction": -1.0,
+        "wall_gap_mm": 0.5
+      }
+    },
+    "0x2414492fcb0": {
+      "type_": "com.cad.sim.crash_solver.CrashSolverNode",
+      "icon": null,
+      "name": "OpenRadioss Axial Crush Solver",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": true,
+      "visible": true,
+      "width": 198.265625,
+      "height": 119.4,
+      "pos": [
+        1330.0,
+        -65.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "openradioss_starter_path": "",
+        "openradioss_engine_path": "",
+        "external_work_dir": "",
+        "deck_only": false,
+        "external_timeout_s": 3600.0,
+        "end_time": 1.2,
+        "n_frames": 24,
+        "visualization": "Von Mises Stress",
+        "disp_scale": 1.0,
+        "solver_backend": "OpenRadioss",
+        "run_external_solver": true,
+        "time_steps": 9000,
+        "enable_mass_scaling": true,
+        "damping_alpha": 1.0,
+        "damping_beta": 0.0,
+        "enable_corotation": true,
+        "enable_contact": false,
+        "contact_stiffness": 0.1,
+        "contact_thickness": 0.2,
+        "contact_update_interval": 5,
+        "mass_scaling_threshold": 0.03,
+        "impactor_mass_kg": 50.0
+      }
+    },
+    "0x2414492c7d0": {
+      "type_": "com.cad.select_face_interactive.InteractiveSelectFaceNode",
+      "icon": null,
+      "name": "Select Rear Fixed Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 60,
+      "pos": [
+        1040.0,
+        -240.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "picked_face_indices": "1000",
+        "selection_label": "1 face selected  (idx: 1000 / <X patch 1)"
+      }
+    },
+    "0x2414492c3b0": {
+      "type_": "com.cad.select_face_interactive.InteractiveSelectFaceNode",
+      "icon": null,
+      "name": "Select Front Impact Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 162.984375,
+      "height": 60,
+      "pos": [
+        1040.0,
+        -20.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "picked_face_indices": "2000",
+        "selection_label": "1 face selected  (idx: 2000 / >X patch 1)"
+      }
+    },
+    "0x2414497dca0": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "icon": null,
+      "name": "Clamped Rear Support",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 73.2,
+      "pos": [
+        1230.0,
+        -240.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "constraint_type": "Fixed",
+        "displacement_x": 0.0,
+        "displacement_y": 0.0,
+        "displacement_z": 0.0,
+        "condition": ""
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "0x2414492dcd0",
+        "mesh_out"
+      ],
+      "in": [
+        "0x2414492e7e0",
+        "topopt_result"
+      ]
+    },
+    {
+      "out": [
+        "0x2414492e7e0",
+        "mesh"
+      ],
+      "in": [
+        "0x2414492fcb0",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x2414492e7e0",
+        "mesh"
+      ],
+      "in": [
+        "0x2414492c7d0",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x2414492e7e0",
+        "mesh"
+      ],
+      "in": [
+        "0x2414492c3b0",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x2414492e7e0",
+        "mesh"
+      ],
+      "in": [
+        "0x2414497dca0",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x2414492e5d0",
+        "crash_material"
+      ],
+      "in": [
+        "0x2414492fcb0",
+        "crash_material"
+      ]
+    },
+    {
+      "in": [
+        "0x2414492eff0",
+        "impact_face"
+      ],
+      "out": [
+        "0x2414492c3b0",
+        "workplane"
+      ]
+    },
+    {
+      "out": [
+        "0x2414492eff0",
+        "impact"
+      ],
+      "in": [
+        "0x2414492fcb0",
+        "impact"
+      ]
+    },
+    {
+      "in": [
+        "0x2414492fcb0",
+        "constraints"
+      ],
+      "out": [
+        "0x2414497dca0",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "0x2414492c7d0",
+        "workplane"
+      ],
+      "in": [
+        "0x2414497dca0",
+        "target_face"
+      ]
+    }
+  ]
+}

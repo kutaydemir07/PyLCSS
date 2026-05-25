@@ -181,6 +181,8 @@ def _build_keyword_deck(
     warnings: List[str],
     impactor_mass: float = 0.0,
     out_meta: dict | None = None,
+    hourglass_ihq: int = 4,
+    hourglass_coefficient: float = 0.10,
 ) -> str:
     """Create a minimal LS-DYNA keyword deck for OpenRadioss Starter.
 
@@ -261,11 +263,16 @@ def _build_keyword_deck(
         # validated for sheet metal crush.  SHRF=5/6 (Mindlin shear factor),
         # NIP integration points through thickness (plastic stress recovered
         # each cycle), QR/IRID=1.0 (one in-plane Gauss point).
+        # *PART card 4 is HGID — the *HOURGLASS id below — so hourglass control
+        # is active on the part instead of the OpenRadioss Ihq=1 viscous default.
+        hgid = max(0, int(hourglass_ihq) or 0)
+        ihq_int = hgid if hgid > 0 else 0
+        qm = max(0.0, float(hourglass_coefficient))
         lines.extend([
             "*PART",
             "PyLCSS shell part",
-            "$#     pid     secid       mid",
-            "1, 1, 1",
+            "$#     pid     secid       mid     eosid     hgid",
+            f"1, 1, 1, 0, {hgid}",
             "*SECTION_SHELL",
             "$#   secid    elform      shrf       nip     propt   qr/irid     icomp     setyp",
             f"1, 2, 0.833333, {shell_nip}, 1.0, 0, 0, 1",
@@ -273,6 +280,12 @@ def _build_keyword_deck(
             (f"{shell_thickness:.12g}, {shell_thickness:.12g}, "
              f"{shell_thickness:.12g}, {shell_thickness:.12g}"),
         ])
+        if hgid > 0:
+            lines.extend([
+                "*HOURGLASS",
+                "$#    hgid       ihq        qm       ibq        q1        q2     qb/vdc        qw",
+                f"{hgid}, {ihq_int}, {qm:.6g}, 0, 1.5, 0.06, {qm:.6g}, {qm:.6g}",
+            ])
     else:
         lines.extend(["*ELEMENT_SOLID", "$#   eid     pid      n1      n2      n3      n4"])
         for idx, conn in enumerate(tets, start=1):
@@ -1239,6 +1252,8 @@ def run_openradioss_crash(
     mass_scaling_dt: float = 0.0,
     mass_scaling_scale: float = 0.9,
     impactor_mass: float = 0.0,
+    hourglass_ihq: int = 4,
+    hourglass_coefficient: float = 0.10,
 ) -> dict:
     """Write deck, run Starter + Engine, then import animation frames."""
     if impact is None:
@@ -1261,6 +1276,8 @@ def run_openradioss_crash(
             warnings=warnings,
             impactor_mass=impactor_mass,
             out_meta=deck_meta,
+            hourglass_ihq=hourglass_ihq,
+            hourglass_coefficient=hourglass_coefficient,
         ),
         encoding="utf-8",
     )

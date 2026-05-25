@@ -18,6 +18,15 @@ from .projections import (
 
 logger = logging.getLogger(__name__)
 
+INDUSTRIAL_STRESS_RELAXATION_Q = 0.5
+INDUSTRIAL_STRESS_PNORM_P = 8.0
+INDUSTRIAL_HEAVISIDE_ENABLED = True
+INDUSTRIAL_HEAVISIDE_BETA_INIT = 1.0
+INDUSTRIAL_HEAVISIDE_BETA_MAX = 16.0
+INDUSTRIAL_HEAVISIDE_BETA_STEP_ITERS = 30
+INDUSTRIAL_HEAVISIDE_ETA = 0.5
+
+
 @dataclass
 class TopologyOptVoxelProblem:
     """All parameters needed to solve a 3-D voxel topology optimisation."""
@@ -46,12 +55,22 @@ class TopologyOptVoxelProblem:
     design_domain: Optional[np.ndarray] = None
     # Phase 3 — stress constraint (P-norm aggregated von Mises ≤ yield).
     # When enabled the optimiser is forced to MMA (OC cannot handle a second
-    # constraint beyond the volume budget).  Only the FIRST load case feeds
-    # the stress constraint; multi-LC aggregation is a future enhancement.
+    # constraint beyond the volume budget). All load cases are aggregated
+    # into a single PNorm so a hot-spot under any LC is penalised.
     stress_constraint_enabled: bool  = False
     yield_stress:              float = 1.0
-    stress_penalty:            float = 1.0   # q in σ_relaxed = ρ^q · σ_linear
-    stress_pnorm_p:            float = 8.0   # exponent for PNorm aggregation
+    # Internal qp stress relaxation and P-norm aggregation policy. The user
+    # enters the allowable stress; the solver owns these numerical defaults.
+    stress_penalty:            float = INDUSTRIAL_STRESS_RELAXATION_Q
+    stress_pnorm_p:            float = INDUSTRIAL_STRESS_PNORM_P
+
+    # Three-field SIMP projection is an internal solver default. It drives
+    # intermediate densities toward 0/1 without exposing continuation knobs.
+    heaviside_enabled:         bool  = INDUSTRIAL_HEAVISIDE_ENABLED
+    heaviside_beta_init:       float = INDUSTRIAL_HEAVISIDE_BETA_INIT
+    heaviside_beta_max:        float = INDUSTRIAL_HEAVISIDE_BETA_MAX
+    heaviside_beta_step_iters: int   = INDUSTRIAL_HEAVISIDE_BETA_STEP_ITERS
+    heaviside_eta:             float = INDUSTRIAL_HEAVISIDE_ETA
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +126,94 @@ def _oc_update(
     return xnew
 
 
+def _restore_active_volume(
+    x: np.ndarray,
+    active_mask: np.ndarray,
+    volfrac: float,
+    passive_density: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Restore the active-design volume after non-volume-preserving projections."""
+    xnew = np.asarray(x, dtype=float).copy()
+    active = np.asarray(active_mask, dtype=bool)
+    if passive_density is not None:
+        xnew[~active] = np.asarray(passive_density, dtype=float)[~active]
+    if not np.any(active):
+        return xnew
+
+    target = float(np.clip(volfrac, 1e-3, 1.0)) * float(np.sum(active))
+    lo, hi = -1.0, 1.0
+    x_act = xnew[active]
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        shifted = np.clip(x_act + mid, 1e-3, 1.0)
+        if float(np.sum(shifted)) < target:
+            lo = mid
+        else:
+            hi = mid
+    xnew[active] = np.clip(x_act + 0.5 * (lo + hi), 1e-3, 1.0)
+    if passive_density is not None:
+        xnew[~active] = np.asarray(passive_density, dtype=float)[~active]
+    return xnew
+
+
+def _volume_budget_from_masks(
+    volfrac: float,
+    active_mask: np.ndarray,
+    passive_density: np.ndarray,
+    source_mask: Optional[np.ndarray] = None,
+    *,
+    min_density: float = 1e-3,
+) -> dict:
+    """Translate a total source-domain volume target into an active budget.
+
+    `volfrac` is user-facing, so it should mean material fraction of the source
+    design domain including passive solid/void regions. Passive solid material
+    is subtracted from the budget; the remainder is what active voxels may use.
+    """
+    active = np.asarray(active_mask, dtype=bool).reshape(-1)
+    passive = np.asarray(passive_density, dtype=float).reshape(-1)
+    if passive.size != active.size:
+        passive = np.resize(passive, active.size)
+    if source_mask is None:
+        source = np.ones(active.size, dtype=bool)
+    else:
+        source = np.asarray(source_mask, dtype=bool).reshape(-1)
+        if source.size != active.size:
+            source = np.ones(active.size, dtype=bool)
+
+    source_count = max(1, int(np.sum(source)))
+    active_source = active & source
+    passive_source = (~active) & source
+    passive_outside = (~active) & (~source)
+
+    n_active = int(np.sum(active_source))
+    target_source_sum = float(np.clip(volfrac, min_density, 1.0)) * float(source_count)
+    passive_source_sum = float(np.sum(passive[passive_source]))
+    passive_outside_sum = float(np.sum(passive[passive_outside]))
+
+    min_active_sum = float(min_density) * float(n_active)
+    raw_active_sum = target_source_sum - passive_source_sum
+    feasible_active_sum = float(np.clip(raw_active_sum, min_active_sum, float(n_active)))
+    active_volfrac = (
+        feasible_active_sum / float(n_active)
+        if n_active > 0 else float(min_density)
+    )
+    source_total_sum = passive_source_sum + feasible_active_sum
+    flat_total_target = source_total_sum + passive_outside_sum
+    min_source_sum = passive_source_sum + min_active_sum
+
+    return {
+        "active_volfrac": float(np.clip(active_volfrac, min_density, 1.0)),
+        "flat_total_target": float(flat_total_target),
+        "source_total_target": float(source_total_sum),
+        "source_count": float(source_count),
+        "active_count": float(n_active),
+        "passive_source_sum": float(passive_source_sum),
+        "min_source_volfrac": float(min_source_sum / float(source_count)),
+        "target_was_clamped": bool(abs(feasible_active_sum - raw_active_sum) > 1e-9),
+    }
+
+
 
 def _density_3d_to_flat(x_3d: np.ndarray, domain: Any) -> np.ndarray:
     """Inverse of `_density_grid_from_state` — write a (nelx,nely,nelz) grid back
@@ -114,6 +221,134 @@ def _density_3d_to_flat(x_3d: np.ndarray, domain: Any) -> np.ndarray:
     flat = np.empty(domain.nel, dtype=float)
     flat[domain.elements] = np.asarray(x_3d, dtype=float)
     return flat
+
+
+def _make_passive_clamp_module():
+    import pymoto as pym
+    import numpy as np
+
+    class _PassiveClamp(pym.Module):
+        def __init__(self, active_mask, passive_density):
+            super().__init__()
+            self.active_mask = np.asarray(active_mask, dtype=bool)
+            self.passive_density = np.asarray(passive_density, dtype=float)
+
+        def __call__(self, x):
+            y = np.asarray(x, dtype=float).copy()
+            y[~self.active_mask] = self.passive_density[~self.active_mask]
+            return y
+
+        def _sensitivity(self, dy):
+            dx = np.asarray(dy, dtype=float).copy()
+            dx[~self.active_mask] = 0.0
+            return [dx]
+
+    return _PassiveClamp
+
+
+def _make_concat_module():
+    """Concatenate N vectors of length nel into one length-N·nel vector.
+
+    Used to aggregate per-load-case vm² fields into a single PNorm.
+    Concatenation + PNorm is mathematically equivalent to a single PNorm
+    over the union of all elemental stresses.
+    """
+    import pymoto as pym
+
+    class _Concat(pym.Module):
+        def __call__(self, *inputs):
+            self._sizes = [int(np.asarray(x).size) for x in inputs]
+            return np.concatenate([np.asarray(x, dtype=float).ravel() for x in inputs])
+
+        def _sensitivity(self, dy):
+            dy_flat = np.asarray(dy, dtype=float).ravel()
+            out = []
+            offset = 0
+            for sz in self._sizes:
+                out.append(dy_flat[offset:offset + sz].copy())
+                offset += sz
+            return out
+
+    return _Concat
+
+
+def _make_heaviside_module():
+    """Build the smooth-Heaviside projection pyMOTO Module class.
+
+    Three-field SIMP (Sigmund/Wang/Lazarov 2011): physical density =
+    H_β(filtered density), with β stepped from ~1 → ~32 by the iteration
+    loop. β is a *mutable attribute* so the loop can update it between
+    `net.response()` calls without rebuilding the network.
+    """
+    import pymoto as pym
+
+    class _HeavisideProjection(pym.Module):
+        def __init__(self, beta: float = 1.0, eta: float = 0.5):
+            super().__init__()
+            self.beta = float(beta)
+            self.eta = float(eta)
+
+        def __call__(self, x):
+            x_arr = np.asarray(x, dtype=float)
+            self._x = x_arr
+            beta = float(self.beta)
+            eta = float(self.eta)
+            if beta < 1e-6:
+                return x_arr.copy()
+            tanh_be = np.tanh(beta * eta)
+            tanh_b1e = np.tanh(beta * (1.0 - eta))
+            denom = tanh_be + tanh_b1e
+            return (tanh_be + np.tanh(beta * (x_arr - eta))) / denom
+
+        def _sensitivity(self, dy):
+            dy_arr = np.asarray(dy, dtype=float)
+            beta = float(self.beta)
+            eta = float(self.eta)
+            if beta < 1e-6:
+                return [dy_arr.copy()]
+            x = self._x
+            tanh_be = np.tanh(beta * eta)
+            tanh_b1e = np.tanh(beta * (1.0 - eta))
+            denom = tanh_be + tanh_b1e
+            dproj = beta * (1.0 - np.tanh(beta * (x - eta)) ** 2) / denom
+            return [dy_arr * dproj]
+
+    return _HeavisideProjection
+
+
+def _make_sparse_to_csc_module():
+    import pymoto as pym
+    from scipy.sparse import csc_matrix, isspmatrix_csc
+
+    class _SparseToCSC(pym.Module):
+        """Convert sparse matrices to CSC before SciPy splu.
+
+        This is mathematically an identity operation; it only changes sparse
+        storage format so pyMOTO/SciPy does not warn during factorization.
+        """
+
+        def __call__(self, A):
+            self._input_format = getattr(A, "format", None)
+
+            if isspmatrix_csc(A):
+                return A
+
+            if hasattr(A, "tocsc"):
+                return A.tocsc(copy=False)
+
+            return csc_matrix(A)
+
+        def _sensitivity(self, dA):
+            # Format conversion is identity with respect to matrix entries.
+            try:
+                fmt = getattr(self, "_input_format", None)
+                if fmt and hasattr(dA, "asformat"):
+                    return [dA.asformat(fmt)]
+            except Exception:
+                pass
+            return [dA]
+
+    return _SparseToCSC
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +441,9 @@ class TopologyOptVoxelResult:
     n_iter:             int   = 0
     converged:          bool  = False
     message:            str   = ""
+    active_target_volfrac: float = 0.0
+    min_source_volfrac:    float = 0.0
+    passive_source_volfrac: float = 0.0
 
 
 def _density_grid_from_state(x: np.ndarray, domain: Any) -> np.ndarray:
@@ -278,8 +516,34 @@ class TopologyOptVoxelSolver:
         active_mask, passive_density = self._assemble_passive_masks(domain, p.bc)
         n_active      = int(np.sum(active_mask))
 
+        source_mask_flat = np.ones(domain.nel, dtype=bool)
+        if p.design_domain is not None:
+            try:
+                source_grid = np.asarray(p.design_domain, dtype=bool)
+                if source_grid.shape == (p.nelx, p.nely, p.nelz):
+                    source_mask_flat[:] = False
+                    source_mask_flat[domain.elements] = source_grid
+            except Exception:
+                source_mask_flat[:] = True
+
+        volume_budget = _volume_budget_from_masks(
+            p.volfrac,
+            active_mask,
+            passive_density,
+            source_mask_flat,
+        )
+        active_volfrac = float(volume_budget["active_volfrac"])
+        total_vol_target = float(volume_budget["flat_total_target"]) / float(domain.nel)
+        if volume_budget["target_was_clamped"]:
+            logger.warning(
+                "Topology volume target %.3f is infeasible with passive regions; "
+                "minimum source-domain volume is %.3f.",
+                float(p.volfrac),
+                float(volume_budget["min_source_volfrac"]),
+            )
+
         # ── initial state — design = volfrac, passive = clamp value ───────
-        x0 = np.ones(domain.nel) * p.volfrac
+        x0 = np.ones(domain.nel) * active_volfrac
         x0[~active_mask] = passive_density[~active_mask]
 
         if not load_cases:
@@ -295,6 +559,12 @@ class TopologyOptVoxelSolver:
                 change_history=[0.0],
                 n_iter=0,
                 converged=True,
+                active_target_volfrac=active_volfrac,
+                min_source_volfrac=float(volume_budget["min_source_volfrac"]),
+                passive_source_volfrac=(
+                    float(volume_budget["passive_source_sum"])
+                    / max(float(volume_budget["source_count"]), 1.0)
+                ),
                 message=(
                     "No non-zero load cases; returned the initial uniform "
                     "density field."
@@ -306,22 +576,45 @@ class TopologyOptVoxelSolver:
 
         sx = pym.Signal("x", state=x0)
 
-        # Volume budget incorporates passive solid mass so `volfrac` keeps its
-        # familiar meaning of "fraction of the DESIGN region kept as material".
-        passive_solid_vol = float(np.sum(passive_density[~active_mask] >= 0.5))
-        total_vol_target  = (
-            (p.volfrac * float(n_active) + passive_solid_vol) / float(domain.nel)
-        )
+        def _physical_density_grid(signal_state: np.ndarray) -> np.ndarray:
+            physical = _restore_active_volume(
+                np.asarray(signal_state, dtype=float),
+                active_mask,
+                active_volfrac,
+                passive_density=passive_density,
+            )
+            return _density_grid_from_state(physical, domain)
 
         # ── pyMOTO network ────────────────────────────────────────────────
+        # Three-field SIMP when heaviside_enabled: raw sx → filter → passive
+        # clamp → Heaviside(β) → SIMP. The Heaviside module exposes a mutable
+        # `beta` attribute so the iteration loop can step it (continuation).
+        heaviside_module_ref: Any = None
         with pym.Network() as net:
-            sxfilt = pym.DensityFilter(domain=domain, radius=p.rmin)(sx)
+            sxfilt_raw = pym.DensityFilter(domain=domain, radius=p.rmin)(sx)
+            PassiveClamp = _make_passive_clamp_module()
+            sxfilt = PassiveClamp(active_mask, passive_density)(sxfilt_raw)
+            if p.heaviside_enabled:
+                HeavisideCls = _make_heaviside_module()
+                heaviside_module_ref = HeavisideCls(
+                    beta=float(p.heaviside_beta_init),
+                    eta=float(p.heaviside_eta),
+                )
+                sxphys = heaviside_module_ref(sxfilt)
+                sxphys.tag = "physical_density"
+                # Re-clamp passive voxels after the projection — the smooth
+                # Heaviside is not exactly identity on the clamped endpoints.
+                sxphys = PassiveClamp(active_mask, passive_density)(sxphys)
+            else:
+                sxphys = sxfilt
             sSIMP  = pym.MathExpression(
                 expression=f"{p.Emin} + {p.E0 - p.Emin}*inp0^{p.penal}"
-            )(sxfilt)
-            sK  = pym.AssembleStiffness(
+            )(sxphys)
+            sK_raw = pym.AssembleStiffness(
                 domain=domain, bc=boundary_dofs, poisson_ratio=p.nu
             )(sSIMP)
+            SparseToCSC = _make_sparse_to_csc_module()
+            sK = SparseToCSC()(sK_raw)
 
             # Per-load-case compliance, then weighted sum → objective.
             # pym.Scaling normalises (NOT multiplies) so we use MathExpression
@@ -346,13 +639,13 @@ class TopologyOptVoxelSolver:
                 sg0 = pym.MathExpression(expression=expr)(*scomps)
             else:
                 # No loads — fabricate a zero compliance signal so the graph builds.
-                sg0 = pym.MathExpression(expression="0*inp0")(sxfilt)
+                sg0 = pym.MathExpression(expression="0*inp0")(sxphys)
             sg0.tag = "compliance"
 
             sg0_scaled = pym.Scaling(scaling=100.0)(sg0)
             sg0_scaled.tag = "objective"
 
-            svol = pym.EinSum(expression="i->")(sxfilt)
+            svol = pym.EinSum(expression="i->")(sxphys)
             svol.tag = "volume"
             sg1 = pym.MathExpression(
                 expression=f"10*(inp0/{domain.nel} - {total_vol_target})"
@@ -360,31 +653,41 @@ class TopologyOptVoxelSolver:
             sg1.tag = "volume constraint"
 
             # ── Phase 3: stress constraint (P-norm aggregated von Mises) ───
+            # Aggregate vm² over ALL load cases into a single PNorm so a
+            # hot-spot under any LC is penalised. Previously only LC[0] was
+            # used — blind to peak stresses under secondary loadings.
             sg_stress  = None
             s_pn_stress = None
             if p.stress_constraint_enabled and sus:
-                if len(sus) > 1:
-                    logger.warning(
-                        "Stress constraint: using only LC '%s' for stress "
-                        "(multi-LC stress aggregation is a future enhancement).",
-                        load_cases[0][0],
-                    )
                 yield_sq = float(p.yield_stress) ** 2
                 if yield_sq <= 0.0:
                     yield_sq = 1.0
 
-                s_voigt = pym.Stress(
-                    domain=domain,
-                    e_modulus=float(p.E0),
-                    poisson_ratio=float(p.nu),
-                )(sus[0])
-                s_voigt.tag = "stress_voigt"
-
                 VonMisesCls = _make_vm_module()
-                vm_sq = VonMisesCls(stress_penalty=float(p.stress_penalty))(s_voigt, sxfilt)
-                vm_sq.tag = "vm_squared"
+                vm_sq_signals: List[Any] = []
+                for lc_idx, su_i in enumerate(sus):
+                    s_voigt_i = pym.Stress(
+                        domain=domain,
+                        e_modulus=float(p.E0),
+                        poisson_ratio=float(p.nu),
+                    )(su_i)
+                    s_voigt_i.tag = f"stress_voigt:LC{lc_idx}"
+                    vm_sq_i = VonMisesCls(
+                        stress_penalty=float(p.stress_penalty)
+                    )(s_voigt_i, sxphys)
+                    vm_sq_i.tag = f"vm_squared:LC{lc_idx}"
+                    vm_sq_signals.append(vm_sq_i)
 
-                s_pn_stress = pym.PNorm(p=float(p.stress_pnorm_p))(vm_sq)
+                if len(vm_sq_signals) == 1:
+                    vm_sq_all = vm_sq_signals[0]
+                else:
+                    # PNorm of the concatenation = (Σ_lc Σ_e (vm²_{e,lc})^p)^(1/p),
+                    # the tightest single envelope over all elements and LCs.
+                    ConcatCls = _make_concat_module()
+                    vm_sq_all = ConcatCls()(*vm_sq_signals)
+                    vm_sq_all.tag = "vm_squared:all_LCs"
+
+                s_pn_stress = pym.PNorm(p=float(p.stress_pnorm_p))(vm_sq_all)
                 s_pn_stress.tag = "stress_pnorm_sq"
 
                 sg_stress = pym.MathExpression(
@@ -395,14 +698,18 @@ class TopologyOptVoxelSolver:
         net.response()
 
         # ── iteration loop ────────────────────────────────────────────────
+        # `sxphys` is the physical-density signal that drives the FEA: it is
+        # the Heaviside-projected field when projection is on, otherwise
+        # identical to `sxfilt`. The recovery + final report must use it too.
         result = TopologyOptVoxelResult(
-            density=_density_grid_with_passive_clamps(
-                np.asarray(sxfilt.state, dtype=float),
-                domain,
-                active_mask,
-                passive_density,
-            ),
+            density=_physical_density_grid(np.asarray(sxphys.state, dtype=float)),
             design_density=_density_grid_from_state(sx.state, domain),
+            active_target_volfrac=active_volfrac,
+            min_source_volfrac=float(volume_budget["min_source_volfrac"]),
+            passive_source_volfrac=(
+                float(volume_budget["passive_source_sum"])
+                / max(float(volume_budget["source_count"]), 1.0)
+            ),
         )
         comp_hist:   List[float] = []
         change_hist: List[float] = []
@@ -417,11 +724,27 @@ class TopologyOptVoxelSolver:
             optimizer_choice = 'MMA'
 
         if optimizer_choice == 'MMA':
-            # Passive DOFs pinned via xmin == xmax == passive value.
+            # Keep passive DOFs in a tiny non-zero interval. pyMOTO's MMA
+            # computes asymptotes from xmax-xmin, so exact equal bounds produce
+            # divide-by-zero warnings before we get a chance to re-clamp.
             xmin = np.full(domain.nel, 1e-3)
             xmax = np.ones(domain.nel)
-            xmin[~active_mask] = passive_density[~active_mask]
-            xmax[~active_mask] = passive_density[~active_mask]
+            passive = ~active_mask
+            if np.any(passive):
+                passive_values = passive_density[passive]
+                eps_bound = 1e-6
+                xmin[passive] = np.clip(passive_values - eps_bound, 1e-3, 1.0)
+                xmax[passive] = np.clip(passive_values + eps_bound, 1e-3, 1.0)
+                collapsed = xmax[passive] <= xmin[passive]
+                if np.any(collapsed):
+                    xlo = xmin[passive]
+                    xhi = xmax[passive]
+                    xhi[collapsed] = np.minimum(1.0, xlo[collapsed] + eps_bound)
+                    xlo[collapsed & (xhi >= 1.0)] = np.maximum(
+                        1e-3, xhi[collapsed & (xhi >= 1.0)] - eps_bound
+                    )
+                    xmin[passive] = xlo
+                    xmax[passive] = xhi
             mma_responses = [sg0_scaled, sg1]
             if sg_stress is not None:
                 mma_responses.append(sg_stress)
@@ -450,10 +773,17 @@ class TopologyOptVoxelSolver:
         # by the OC move limit near ρ≈0.5 pins it above tol while the design has
         # long since settled, so the run always burns through to max_iter.
         obj_tol      = float(p.tol)
-        density_gate = max(10.0 * obj_tol, 0.05)
+        density_gate = max(2.0 * obj_tol, 0.015)
         patience     = max(1, int(getattr(p, 'patience', 5) or 5))
+        min_iter     = min(int(p.max_iter), max(20, 4 * patience))
         stall        = 0
         prev_comp    = None
+
+        # β-continuation schedule for the Heaviside projection. β doubles
+        # every `heaviside_beta_step_iters` iterations, capped at β_max.
+        hv_beta = float(p.heaviside_beta_init) if heaviside_module_ref is not None else 0.0
+        hv_beta_max = float(p.heaviside_beta_max)
+        hv_step = max(1, int(p.heaviside_beta_step_iters))
 
         it, change = 0, 1.0
         while it < p.max_iter:
@@ -464,13 +794,20 @@ class TopologyOptVoxelSolver:
             it     += 1
             x_old   = sx.state.copy()
 
+            # Step β BEFORE this iteration's response so the optimiser sees
+            # the same β it just took a step under, and the sensitivities are
+            # consistent with the projected field used in the FEA.
+            if heaviside_module_ref is not None and it > 1 and (it - 1) % hv_step == 0:
+                hv_beta = min(hv_beta * 2.0, hv_beta_max)
+                heaviside_module_ref.beta = hv_beta
+
             if optimizer_choice == 'OC':
                 net.reset()
                 sg0.sensitivity = 1.0
                 net.sensitivity()
                 dc = sx.sensitivity.copy()
                 sx.state = _oc_update(
-                    sx.state, dc, p.volfrac,
+                    sx.state, dc, active_volfrac,
                     active_mask=active_mask,
                     passive_density=passive_density,
                 )
@@ -502,7 +839,12 @@ class TopologyOptVoxelSolver:
                 proj = _density_3d_to_flat(x3, domain)
                 # Re-clamp passive voxels — projections may have nudged them.
                 proj[~active_mask] = passive_density[~active_mask]
-                sx.state = proj
+                sx.state = _restore_active_volume(
+                    proj,
+                    active_mask,
+                    active_volfrac,
+                    passive_density=passive_density,
+                )
 
             net.response()
 
@@ -521,12 +863,7 @@ class TopologyOptVoxelSolver:
                 stress_hist.append(float(np.sqrt(max(pn_val, 0.0))))
             result.n_iter = it
 
-            density_3d = _density_grid_with_passive_clamps(
-                np.asarray(sxfilt.state, dtype=float),
-                domain,
-                active_mask,
-                passive_density,
-            )
+            density_3d = _physical_density_grid(np.asarray(sxphys.state, dtype=float))
             if callback is not None:
                 callback(it, comp_val, change, density_3d.copy())
 
@@ -540,7 +877,7 @@ class TopologyOptVoxelSolver:
                     stall += 1
                 else:
                     stall = 0
-                if stall >= patience:
+                if it >= min_iter and stall >= patience:
                     result.converged = True
                     result.message = (
                         f"Converged in {it} iterations "
@@ -555,12 +892,7 @@ class TopologyOptVoxelSolver:
 
         net.response()
         result.design_density   = _density_grid_from_state(sx.state, domain)
-        result.density          = _density_grid_with_passive_clamps(
-            np.asarray(sxfilt.state, dtype=float),
-            domain,
-            active_mask,
-            passive_density,
-        )
+        result.density          = _physical_density_grid(np.asarray(sxphys.state, dtype=float))
         result.compliance_history = comp_hist
         result.change_history   = change_hist
         result.stress_history   = stress_hist
@@ -723,7 +1055,9 @@ class TopologyOptVoxelSolver:
 
         Voxels in `bc.solid_boxes` are clamped to ρ=1 (must-keep material).
         Voxels in `bc.void_boxes`  are clamped to ρ=1e-3 (must-be-empty).
-        Where boxes overlap, void wins (final pass).
+        Explicit passive solids are not clipped by source-mask voxelisation;
+        this preserves selected rings/sleeves even when the coarse source grid
+        misses a thin wall. Void regions still run last and win in overlaps.
         """
         p = self.problem
         n_total = int(domain.nel)
@@ -751,17 +1085,23 @@ class TopologyOptVoxelSolver:
                     exc_info=True,
                 )
 
-        def _limit_to_source(indices: np.ndarray) -> np.ndarray:
-            if source_active is None or indices.size == 0:
-                return indices
-            return indices[source_active[indices]]
-
         def _voxel_slice(lo: float, hi: float, nmax: int) -> slice:
-            lo_i = int(round(float(lo) * nmax))
-            hi_i = int(round(float(hi) * nmax))
-            lo_i, hi_i = sorted((lo_i, hi_i))
+            lo_f, hi_f = sorted((float(lo), float(hi)))
+            lo_f = max(0.0, min(1.0, lo_f))
+            hi_f = max(0.0, min(1.0, hi_f))
+            if abs(hi_f - lo_f) < 1e-12:
+                if lo_f <= 0.0:
+                    return slice(0, min(1, nmax))
+                if hi_f >= 1.0:
+                    return slice(max(0, nmax - 1), nmax)
+                idx = max(0, min(nmax - 1, int(np.floor(lo_f * nmax))))
+                return slice(idx, idx + 1)
+            lo_i = int(np.floor(lo_f * nmax))
+            hi_i = int(np.ceil(hi_f * nmax))
             lo_i = max(0, min(nmax, lo_i))
             hi_i = max(0, min(nmax, hi_i))
+            if hi_i <= lo_i:
+                hi_i = min(nmax, lo_i + 1)
             return slice(lo_i, hi_i)
 
         def _flat_indices(box: Tuple[float, float, float, float, float, float]) -> np.ndarray:
@@ -811,14 +1151,14 @@ class TopologyOptVoxelSolver:
             return np.asarray(domain.elements[mask], dtype=int).ravel()
 
         for box in bc.solid_boxes:
-            idx = _limit_to_source(_flat_indices(box))
+            idx = _flat_indices(box)
             if idx.size == 0:
                 continue
             active_mask[idx] = False
             passive_density[idx] = 1.0
 
         for cylinder in getattr(bc, 'solid_cylinders', []):
-            idx = _limit_to_source(_cylinder_indices(cylinder))
+            idx = _cylinder_indices(cylinder)
             if idx.size == 0:
                 continue
             active_mask[idx] = False
@@ -839,5 +1179,4 @@ class TopologyOptVoxelSolver:
             passive_density[idx] = 1e-3
 
         return active_mask, passive_density
-
 

@@ -31,6 +31,45 @@ from pylcss.solver_backends.common import (
 from pylcss.solver_backends.frd_reader import read_frd
 
 
+def _surface_area_weights_from_mesh_selection(geometries: List[Any]) -> dict[int, float]:
+    """Return tributary nodal areas from mesh-selection surface triangles."""
+    weights: dict[int, float] = {}
+    for geom in geometries or []:
+        if not isinstance(geom, dict):
+            continue
+        node_ids = geom.get("surface_node_ids")
+        vertices = geom.get("surface_vertices")
+        triangles = geom.get("surface_triangles")
+        if node_ids is None or vertices is None or triangles is None:
+            continue
+        try:
+            node_ids_arr = np.asarray(node_ids, dtype=int).reshape(-1)
+            verts = np.asarray(vertices, dtype=float)
+            tris = np.asarray(triangles, dtype=int)
+        except Exception:
+            continue
+        if (
+            verts.ndim != 2 or verts.shape[1] < 3
+            or tris.ndim != 2 or tris.shape[1] < 3
+            or node_ids_arr.size != verts.shape[0]
+        ):
+            continue
+        for tri in tris[:, :3]:
+            if np.any(tri < 0) or np.any(tri >= len(verts)):
+                continue
+            a, b, c = (int(v) for v in tri)
+            pa, pb, pc = verts[a, :3], verts[b, :3], verts[c, :3]
+            area = 0.5 * float(np.linalg.norm(np.cross(pb - pa, pc - pa)))
+            if area <= 1e-16:
+                continue
+            share = area / 3.0
+            for local_idx in (a, b, c):
+                weights[int(node_ids_arr[local_idx])] = (
+                    weights.get(int(node_ids_arr[local_idx]), 0.0) + share
+                )
+    return weights
+
+
 def _collect_calculix_failure_context(
     work_dir: Path, job_name: str, returncode: int, executable: str
 ) -> str:
@@ -133,6 +172,25 @@ def _build_sets_and_step(
                 warnings.append(f"Force load {idx} did not match any mesh nodes.")
                 continue
             force = load_vector(load)
+            area_weights = _surface_area_weights_from_mesh_selection(geoms)
+            if area_weights:
+                total_area = float(sum(area_weights.values()))
+                valid_nodes = set(int(v) for v in (node_ids - 1).tolist())
+                if total_area > 1e-16:
+                    for node_idx0, area in sorted(area_weights.items()):
+                        if node_idx0 not in valid_nodes:
+                            continue
+                        nodal_force = force * (float(area) / total_area)
+                        for dof_idx, value in enumerate(nodal_force, start=1):
+                            if abs(float(value)) > 1e-16:
+                                cload_lines.append(
+                                    f"{int(node_idx0) + 1}, {dof_idx}, {float(value):.12g}"
+                                )
+                    warnings.append(
+                        f"Force load {idx} distributed by tributary surface area "
+                        f"over {len(area_weights)} selected mesh nodes."
+                    )
+                    continue
             nodal_force = force / max(len(node_ids), 1)
             for node_id in node_ids:
                 for dof_idx, value in enumerate(nodal_force, start=1):

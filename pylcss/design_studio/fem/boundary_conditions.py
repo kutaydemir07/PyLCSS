@@ -7,6 +7,59 @@ from pylcss.design_studio.core.base_node import CadQueryNode
 
 logger = logging.getLogger(__name__)
 
+
+def _target_face_objects(target_wp):
+    """Normalize OCC face and mesh-selection payloads from Select Face nodes."""
+    if isinstance(target_wp, dict):
+        faces = target_wp.get('faces', None)
+        if faces:
+            return [f for f in faces if f is not None]
+        if target_wp.get('mesh_selection') or target_wp.get('node_ids') is not None:
+            return [target_wp]
+        face = target_wp.get('face', None)
+        return [face] if face is not None else []
+    return target_wp.vals() if hasattr(target_wp, 'vals') else []
+
+
+def _selection_center(item):
+    if isinstance(item, dict):
+        center = item.get('center')
+        if center is not None:
+            return [float(v) for v in center[:3]]
+        bbox = item.get('bbox') or {}
+        try:
+            return [
+                (float(bbox['xmin']) + float(bbox['xmax'])) / 2.0,
+                (float(bbox['ymin']) + float(bbox['ymax'])) / 2.0,
+                (float(bbox['zmin']) + float(bbox['zmax'])) / 2.0,
+            ]
+        except Exception:
+            return None
+    try:
+        bb = item.BoundingBox()
+        return [
+            (bb.xmin + bb.xmax) / 2,
+            (bb.ymin + bb.ymax) / 2,
+            (bb.zmin + bb.zmax) / 2,
+        ]
+    except Exception:
+        return None
+
+
+def _selection_bbox(item):
+    if isinstance(item, dict):
+        return item.get('bbox')
+    try:
+        bb = item.BoundingBox()
+        return {
+            'xmin': bb.xmin, 'xmax': bb.xmax,
+            'ymin': bb.ymin, 'ymax': bb.ymax,
+            'zmin': bb.zmin, 'zmax': bb.zmax,
+        }
+    except Exception:
+        return None
+
+
 class ConstraintNode(CadQueryNode):
     """Applies boundary constraints (fixed, roller, pinned, displacement) to a face."""
     __identifier__ = 'com.cad.sim.constraint'
@@ -93,12 +146,7 @@ class ConstraintNode(CadQueryNode):
 
         # Extract faces from SelectFaceNode dict format {'workplane': ..., 'faces': [...]}
         try:
-            if isinstance(target_wp, dict):
-                # Use 'faces' list if available, otherwise fallback to 'face'
-                face_objs = target_wp.get('faces', [target_wp.get('face')])
-            else:
-                # Fallback: try to get vals from workplane (legacy support)
-                face_objs = target_wp.vals() if hasattr(target_wp, 'vals') else []
+            face_objs = _target_face_objects(target_wp)
 
             if not face_objs or face_objs[0] is None:
                 self.set_error("No faces found in target face input")
@@ -109,22 +157,14 @@ class ConstraintNode(CadQueryNode):
             for f in face_objs:
                 if f is None:
                     continue
-                try:
-                    bb = f.BoundingBox()
+                bbox = _selection_bbox(f)
+                center = _selection_center(f)
+                if bbox is not None and center is not None:
                     viz_faces.append({
-                        'bbox': {
-                            'xmin': bb.xmin, 'xmax': bb.xmax,
-                            'ymin': bb.ymin, 'ymax': bb.ymax,
-                            'zmin': bb.zmin, 'zmax': bb.zmax,
-                        },
-                        'center': [
-                            (bb.xmin + bb.xmax) / 2,
-                            (bb.ymin + bb.ymax) / 2,
-                            (bb.zmin + bb.zmax) / 2,
-                        ]
+                        'bbox': bbox,
+                        'center': center,
+                        'points': f.get('points') if isinstance(f, dict) else None,
                     })
-                except Exception:
-                    pass
 
             return {
                 'type': constraint_type.lower().replace(' ', '_'),
@@ -232,10 +272,7 @@ class LoadNode(CadQueryNode):
 
         # Extract faces from SelectFaceNode dict format {'workplane': ..., 'faces': [...]}
         try:
-            if isinstance(target_wp, dict):
-                face_objs = target_wp.get('faces', [target_wp.get('face')])
-            else:
-                face_objs = target_wp.vals() if hasattr(target_wp, 'vals') else []
+            face_objs = _target_face_objects(target_wp)
 
             if not face_objs or face_objs[0] is None:
                 self.set_error("No faces found in target face input")
@@ -249,17 +286,12 @@ class LoadNode(CadQueryNode):
             for f in face_objs:
                 if f is None:
                     continue
-                try:
-                    bb = f.BoundingBox()
+                center = _selection_center(f)
+                if center is not None:
                     viz_faces.append({
-                        'center': [
-                            (bb.xmin + bb.xmax) / 2,
-                            (bb.ymin + bb.ymax) / 2,
-                            (bb.zmin + bb.zmax) / 2,
-                        ]
+                        'center': center,
+                        'points': f.get('points') if isinstance(f, dict) else None,
                     })
-                except Exception:
-                    pass
 
             return {
                 'type': 'force',
@@ -306,14 +338,7 @@ class PressureLoadNode(CadQueryNode):
 
         try:
             # Extract the face geometry
-            if isinstance(target_wp, dict):
-                # Handle SelectFaceNode output dict {'workplane', 'face', 'faces'}
-                face_objs = target_wp.get('faces', [])
-                if not face_objs and 'face' in target_wp:
-                    face_objs = [target_wp['face']]
-            else:
-                # Handle direct Workplane input
-                face_objs = target_wp.vals() if hasattr(target_wp, 'vals') else []
+            face_objs = _target_face_objects(target_wp)
 
             if not face_objs:
                 self.set_error("No faces found in target face input")
@@ -330,7 +355,7 @@ class PressureLoadNode(CadQueryNode):
                 'pressure': float(pressure) * sign,
                 'viz': {
                     'load_type': 'Pressure',
-                    'bbox': face_objs[0].BoundingBox(),
+                    'bbox': _selection_bbox(face_objs[0]),
                     'color': '#ff00ff'
                 }
             }

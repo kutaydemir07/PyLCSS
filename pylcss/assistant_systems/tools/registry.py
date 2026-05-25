@@ -1578,7 +1578,6 @@ CAD_NODE_TYPES = {
     "com.cad.sim.topopt_voxel": {
         "name": "Topology Optimization",
         "properties": {
-            "workflow_mode": "Guided",
             "design_goal": "Lightweight Stiffness",
             "quality_preset": "Balanced",
             "manufacturing_process": "None",

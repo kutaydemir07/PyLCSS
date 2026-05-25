@@ -52,9 +52,13 @@ class RunRadiossDeckNode(CadQueryNode):
 
     @staticmethod
     def _repo_root():
-        """Return the PyLCSS install root (parent of the ``pylcss`` package)."""
+        """Return the PyLCSS install root (parent of the ``pylcss`` package).
+
+        File lives at ``<repo>/pylcss/design_studio/crash/radioss_deck.py`` →
+        ``parents[3]`` is ``<repo>``.
+        """
         from pathlib import Path
-        return Path(__file__).resolve().parents[4]
+        return Path(__file__).resolve().parents[3]
 
     @classmethod
     def _resolve_deck_path(cls, value):

@@ -75,9 +75,6 @@ def _apply_am_overhang(x_3d: np.ndarray, build_axis: str) -> np.ndarray:
     start = 1 if step > 0 else n_layers - 2
     stop  = n_layers if step > 0 else -1
 
-    # 3×3 max kernel applied in the two in-plane axes only
-    kernel = [1, 1, 1]
-    kernel[axis] = 1
     for k in range(start, stop, step):
         k_below = k - step
         idx       = [slice(None), slice(None), slice(None)]

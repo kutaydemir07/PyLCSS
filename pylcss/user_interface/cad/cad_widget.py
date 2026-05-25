@@ -1,7 +1,7 @@
-﻿# Copyright (c) 2026 Kutay Demir.
+# Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""Engineering design studio - full-featured Simulink-like interface.
+"""Engineering design studio - full-featured interface.
 
 Features:
 - Advanced node library (Sketches, Constraints, Assembly, Analysis, Simulation)
@@ -30,8 +30,6 @@ from pylcss.design_studio.node_library import NODE_CLASS_MAPPING, NODE_NAME_MAPP
 from pylcss.design_studio.topology_optimization.presets import (
     INDUSTRIAL_DESIGN_GOALS,
     INDUSTRIAL_MANUFACTURING_PROCESSES,
-    INDUSTRIAL_WORKFLOW_MODES,
-    industrial_topopt_defaults,
 )
 
 try:
@@ -60,13 +58,13 @@ class CadCodeEditorDialog(QtWidgets.QDialog):
 
     # (display, snippet, tooltip).  Snippet is inserted at cursor on double-click.
     _CHEATSHEET = (
-        ("â€” Primitives â€”", None, None),
+        ("— Primitives —", None, None),
         ("cq.Workplane('XY')",
          "cq.Workplane('XY')",
          "Start a workplane on the XY plane (X-right, Y-up, Z-out)."),
         (".box(L, W, H)",
          ".box(L, W, H)",
-         "Centered rectangular block â€” L along X, W along Y, H along Z."),
+         "Centered rectangular block — L along X, W along Y, H along Z."),
         (".circle(R).extrude(H)",
          ".circle(R).extrude(H)",
          "Circle of radius R, extruded by H along the workplane normal."),
@@ -76,14 +74,14 @@ class CadCodeEditorDialog(QtWidgets.QDialog):
         (".cylinder(H, R)",
          ".cylinder(H, R)",
          "Cylinder along Z with height H and radius R, centred at origin."),
-        ("â€” Sketch & extrude â€”", None, None),
-        (".polyline([(x,y),â€¦]).close().extrude(H)",
+        ("— Sketch & extrude —", None, None),
+        (".polyline([(x,y),…]).close().extrude(H)",
          ".polyline([(0,0),(1,0),(1,1),(0,1)]).close().extrude(H)",
          "Sketch a closed polygon from 2-D points, then extrude by H."),
         (".workplane(offset=z)",
          ".workplane(offset=z)",
          "Move the workplane along its normal by `z` (useful for stacking layers)."),
-        ("â€” Modifications â€”", None, None),
+        ("— Modifications —", None, None),
         (".faces('>Z').workplane().hole(d)",
          ".faces('>Z').workplane().hole(d)",
          "Drill a through-hole of diameter `d` from the top face."),
@@ -102,7 +100,7 @@ class CadCodeEditorDialog(QtWidgets.QDialog):
         (".rotate((0,0,0),(0,0,1), deg)",
          ".rotate((0,0,0), (0,0,1), deg)",
          "Rotate `deg` degrees about the Z-axis through the origin."),
-        ("â€” Boolean / Compose â€”", None, None),
+        ("— Boolean / Compose —", None, None),
         (".union(other)",
          ".union(other)",
          "Boolean union with another shape."),
@@ -114,10 +112,10 @@ class CadCodeEditorDialog(QtWidgets.QDialog):
          "Boolean intersection."),
         ("cq.Assembly()",
          "asm = cq.Assembly()\nasm.add(part, name='name')\nresult = asm",
-         "Build a multi-part assembly â€” no boolean unions, every child is\n"
+         "Build a multi-part assembly — no boolean unions, every child is\n"
          "addressable downstream."),
-        ("â€” Result â€”", None, None),
-        ("result = â€¦",
+        ("— Result —", None, None),
+        ("result = …",
          "result = ",
          "The node looks for `result`, then `shape`, then `assembly` in the\n"
          "evaluated namespace.  Assign a CadQuery Workplane, Shape, or Assembly."),
@@ -132,7 +130,7 @@ class CadCodeEditorDialog(QtWidgets.QDialog):
 
         main_layout = QtWidgets.QHBoxLayout(self)
 
-        # â”€â”€ Left: editor + buttons â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Left: editor + buttons ─────────────────────────────────────
         editor_panel = QtWidgets.QWidget()
         ev = QtWidgets.QVBoxLayout(editor_panel)
         self.editor = _CodeEditor([])
@@ -157,7 +155,7 @@ class CadCodeEditorDialog(QtWidgets.QDialog):
         btn_row.addWidget(ok_cancel)
         ev.addLayout(btn_row)
 
-        # â”€â”€ Right: sidebar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Right: sidebar ─────────────────────────────────────────────
         sidebar = QtWidgets.QWidget()
         sidebar.setFixedWidth(320)
         sv = QtWidgets.QVBoxLayout(sidebar)
@@ -184,7 +182,7 @@ class CadCodeEditorDialog(QtWidgets.QDialog):
         splitter.setStretchFactor(0, 1)
         main_layout.addWidget(splitter)
 
-    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ──────────────────────────────────────────────────────────────
     def _refresh_params(self):
         self.params_list.clear()
         names = []
@@ -225,7 +223,7 @@ class CadCodeEditorDialog(QtWidgets.QDialog):
         self.editor.insertPlainText(snippet)
         self.editor.setFocus()
 
-    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ──────────────────────────────────────────────────────────────
     def _show_help(self) -> None:
         QtWidgets.QMessageBox.information(
             self, "CadQuery quick reference",
@@ -237,7 +235,7 @@ class CadCodeEditorDialog(QtWidgets.QDialog):
             "# \n"
             "# Available in the namespace:\n"
             "#   cq, math, np, params\n"
-            "#   plus your 6 parameter names (e.g. L, W, H, â€¦)\n"
+            "#   plus your 6 parameter names (e.g. L, W, H, …)\n"
             "# \n"
             "# Inside helper functions, capture parameters as default args:\n"
             "#     def make_part(L=L, W=W):   # <-- default-arg capture\n"
@@ -253,8 +251,8 @@ class CadCodeEditorDialog(QtWidgets.QDialog):
             "#     result = asm\n"
             "# \n"
             "# Sidebar:\n"
-            "#   - 'Available Parameters' â€” double-click to insert a param name.\n"
-            "#   - 'CadQuery cheat-sheet' â€” double-click to insert a snippet.\n"
+            "#   - 'Available Parameters' — double-click to insert a param name.\n"
+            "#   - 'CadQuery cheat-sheet' — double-click to insert a snippet.\n"
         )
 
     def _show_find_replace(self) -> None:
@@ -357,14 +355,19 @@ class GraphExecutionWorker(QtCore.QThread):
             self._is_running = False
 
 
-class TopOptStepExportWorker(QtCore.QThread):
-    """Background worker for TopOpt faceted STEP export.
+def _external_write_cad_step(payload, path):
+    import cadquery as cq
+    from pylcss.design_studio.topology_optimization.cad_reconstruction import reconstruct_topopt_cad
+    shape = reconstruct_topopt_cad(
+        payload,
+        source_geometry="Recovered Shape",
+        sew_tolerance=1e-4,
+    )
+    cq.exporters.export(shape, str(path), exportType="STEP")
+    return True
 
-    TopOpt STEP export intentionally mirrors the recovered STL surface: every
-    recovered triangle becomes a planar STEP face.  This avoids the slow and
-    fragile CAD-reconstruction choices (NURBS, voxel fallback, sewn solid) while
-    still producing a STEP file for handoff.
-    """
+class TopOptStepExportWorker(QtCore.QThread):
+    """Background worker for TopOpt STEP export."""
 
     export_finished = QtCore.Signal(str)
     export_error = QtCore.Signal(str)
@@ -428,6 +431,20 @@ class TopOptStepExportWorker(QtCore.QThread):
         if recovered is not None and len(recovered.get("faces", [])) > 0:
             payload["recovered_shape"] = recovered
 
+    def _write_cad_step(self, payload, path):
+        import cadquery as cq
+
+        from pylcss.design_studio.topology_optimization.cad_reconstruction import (
+            reconstruct_topopt_cad,
+        )
+
+        shape = reconstruct_topopt_cad(
+            payload,
+            source_geometry="Recovered Shape",
+            sew_tolerance=1e-4,
+        )
+        cq.exporters.export(shape, str(path), exportType="STEP")
+
     @staticmethod
     def _write_faceted_step(recovered, path):
         import numpy as np
@@ -436,6 +453,14 @@ class TopOptStepExportWorker(QtCore.QThread):
         faces = np.asarray(recovered.get("faces"), dtype=int)
         if vertices.ndim != 2 or vertices.shape[1] < 3 or faces.ndim != 2 or faces.shape[1] < 3:
             raise RuntimeError("Recovered shape does not contain triangle vertices/faces.")
+
+        max_faceted_faces = 5000
+        if len(faces) > max_faceted_faces:
+            raise RuntimeError(
+                f"Recovered mesh has {len(faces)} triangles; dense faceted STEP "
+                "export is disabled. Use STL/OBJ for mesh output or CAD STEP "
+                "reconstruction for an interactive B-rep."
+            )
 
         from OCP.BRep import BRep_Builder
         from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
@@ -491,14 +516,17 @@ class TopOptStepExportWorker(QtCore.QThread):
         try:
             payload = dict(self.topo_output)
             payload["density_cutoff"] = self.density_cutoff
-            payload.setdefault("passive_regions", self.passive_regions)
-            payload.setdefault("extrusion_axis", self.extrusion_axis)
-            self._refresh_recovered_shape(payload)
+            if self.passive_regions:
+                payload["passive_regions"] = self.passive_regions
+            else:
+                payload.setdefault("passive_regions", {})
+            payload["extrusion_axis"] = self.extrusion_axis
 
-            recovered = payload.get("recovered_shape")
-            if not isinstance(recovered, dict):
-                raise RuntimeError("Run topology optimisation first - no recovered shape available.")
-            self._write_faceted_step(recovered, self.path)
+            from concurrent.futures import ProcessPoolExecutor
+            with ProcessPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_external_write_cad_step, payload, self.path)
+                future.result()
+
             self.export_finished.emit(self.path)
         except Exception as exc:
             import traceback
@@ -617,21 +645,21 @@ class PropertiesPanel(QtWidgets.QWidget):
         """Inspector for the code-based parametric geometry node.
 
         The full CadQuery script lives in a separate dialog (opened by the
-        ``Edit Codeâ€¦`` button below, or by double-clicking the node on the
+        ``Edit Code…`` button below, or by double-clicking the node on the
         graph).  Keeping it out of the inspector lets the script grow
         without squeezing everything else into a postage stamp.
         """
-        # â”€â”€ Code-edit launcher â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Code-edit launcher ───────────────────────────────────────
         code_group = QtWidgets.QGroupBox("CadQuery Code")
         code_layout = QtWidgets.QVBoxLayout()
         hint = QtWidgets.QLabel(
-            "Double-click the node on the graph â€” or click the button below â€” "
+            "Double-click the node on the graph — or click the button below — "
             "to open the CAD code editor."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #9aa0a6; font-size: 11px;")
         code_layout.addWidget(hint)
-        btn_edit = QtWidgets.QPushButton("Edit Codeâ€¦")
+        btn_edit = QtWidgets.QPushButton("Edit Code…")
         btn_edit.setStyleSheet(
             "QPushButton {"
             "  background: #1e5aab; color: white; border-radius: 4px;"
@@ -643,7 +671,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         code_layout.addWidget(btn_edit)
         btn_preview = QtWidgets.QPushButton("Preview in 3D")
         btn_preview.setToolTip(
-            "Run the graph (CAD only â€” skips FEA/crash) and render this part."
+            "Run the graph (CAD only — skips FEA/crash) and render this part."
         )
         btn_preview.clicked.connect(
             lambda _checked=False, n=node: self._preview_cad_part(n)
@@ -652,7 +680,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         code_group.setLayout(code_layout)
         self.props_layout.addWidget(code_group)
 
-        # â”€â”€ Parameters (small, named scalars that flow into the script) â”€â”€
+        # ── Parameters (small, named scalars that flow into the script) ──
         param_group = QtWidgets.QGroupBox("Parameters")
         param_group.setToolTip(
             "Up to six named scalars.  Each becomes a top-level variable inside\n"
@@ -683,7 +711,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         param_group.setLayout(param_layout)
         self.props_layout.addWidget(param_group)
 
-        # â”€â”€ Extra parameters (free-form dict / k=v lines) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Extra parameters (free-form dict / k=v lines) ────────────
         extra_group = QtWidgets.QGroupBox("Extra Parameters")
         extra_group.setToolTip(
             "Free-form parameters in 'name=value' lines (one per line) or a\n"
@@ -704,7 +732,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         extra_group.setLayout(extra_layout)
         self.props_layout.addWidget(extra_group)
 
-    # â”€â”€ helpers shared with the double-click handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── helpers shared with the double-click handler ────────────────
     def _open_cad_code_editor(self, node) -> None:
         """Open the full-screen CadQuery script editor for ``node``."""
         current = str(node.get_property('code') or '')
@@ -819,19 +847,172 @@ class PropertiesPanel(QtWidgets.QWidget):
                 lambda n=node: self.display_node(n) if self.current_node is n else None,
             )
 
-        def _apply_guided_defaults(refresh=True):
-            settings = industrial_topopt_defaults(
-                node.get_property("design_goal"),
-                "Automatic",
-                node.get_property("manufacturing_process"),
-                nelx=node.get_property("nelx") or 30,
-                nely=node.get_property("nely") or 20,
-                nelz=node.get_property("nelz") or 10,
-            )
+        def _points_bounds(points, *, column_major=False):
+            try:
+                import numpy as np
+
+                pts = np.asarray(points, dtype=float)
+                if pts.ndim != 2 or pts.size == 0:
+                    return None
+                if column_major:
+                    if pts.shape[0] < 3 or pts.shape[1] == 0:
+                        return None
+                    coords = pts[:3, :]
+                    return coords.min(axis=1), coords.max(axis=1)
+                if pts.shape[1] >= 3:
+                    coords = pts[:, :3]
+                    return coords.min(axis=0), coords.max(axis=0)
+                if pts.shape[0] >= 3:
+                    coords = pts[:3, :]
+                    return coords.min(axis=1), coords.max(axis=1)
+            except Exception:
+                return None
+            return None
+
+        def _bbox_bounds(value):
+            try:
+                bb = value.BoundingBox()
+            except Exception:
+                bb = value
+            try:
+                return (
+                    (float(bb.xmin), float(bb.ymin), float(bb.zmin)),
+                    (float(bb.xmax), float(bb.ymax), float(bb.zmax)),
+                )
+            except Exception:
+                return None
+
+        def _bounds_from_value(value, depth=0):
+            if value is None or depth > 3:
+                return None
+            if isinstance(value, dict):
+                for key in ("mesh", "shape", "cad", "cadquery_object", "result"):
+                    bounds = _bounds_from_value(value.get(key), depth + 1)
+                    if bounds is not None:
+                        return bounds
+                return None
+            if isinstance(value, (list, tuple)) and not isinstance(value, (str, bytes)):
+                bounds_list = [
+                    bounds for bounds in (_bounds_from_value(item, depth + 1) for item in value)
+                    if bounds is not None
+                ]
+                if bounds_list:
+                    try:
+                        import numpy as np
+
+                        mins = np.vstack([b[0] for b in bounds_list]).min(axis=0)
+                        maxs = np.vstack([b[1] for b in bounds_list]).max(axis=0)
+                        return mins, maxs
+                    except Exception:
+                        return None
+                return None
+            if hasattr(value, "p"):
+                bounds = _points_bounds(value.p, column_major=True)
+                if bounds is not None:
+                    return bounds
+            for attr in ("vertices", "points"):
+                if hasattr(value, attr):
+                    bounds = _points_bounds(getattr(value, attr))
+                    if bounds is not None:
+                        return bounds
+            if hasattr(value, "val"):
+                try:
+                    bounds = _bounds_from_value(value.val(), depth + 1)
+                    if bounds is not None:
+                        return bounds
+                except Exception:
+                    pass
+            if hasattr(value, "wrapped"):
+                try:
+                    bounds = _bounds_from_value(value.wrapped, depth + 1)
+                    if bounds is not None:
+                        return bounds
+                except Exception:
+                    pass
+            return _bbox_bounds(value)
+
+        def _topopt_input_spans():
+            try:
+                bounds = _bounds_from_value(node.get_input_value("mesh", None))
+            except Exception:
+                bounds = None
+            if bounds is None:
+                return None
+            try:
+                import numpy as np
+
+                mins, maxs = bounds
+                spans = np.asarray(maxs, dtype=float) - np.asarray(mins, dtype=float)
+                if spans.shape[0] < 3 or not np.all(np.isfinite(spans)):
+                    return None
+                positive = spans[spans > 1e-9]
+                if positive.size == 0:
+                    return None
+                fill = float(positive.min())
+                return np.where(spans > 1e-9, spans, fill)
+            except Exception:
+                return None
+
+        def _generalized_grid():
+            import numpy as np
+
+            spans = _topopt_input_spans()
+            if spans is None:
+                spans = np.asarray([
+                    max(1, _get_int("nelx", 30)),
+                    max(1, _get_int("nely", 20)),
+                    max(1, _get_int("nelz", 10)),
+                ], dtype=float)
+
+            target_cells = 24000.0
+            max_cells = 50000
+            min_axis = 6
+            max_axis = 160
+
+            voxel = max(float(np.prod(spans) / target_cells) ** (1.0 / 3.0), 1e-9)
+            dims = np.ceil(spans / voxel).astype(int)
+            dims = np.maximum(dims, min_axis)
+
+            if int(dims.max()) > max_axis:
+                scale = max_axis / float(dims.max())
+                dims = np.maximum(np.floor(dims * scale).astype(int), min_axis)
+
+            while int(np.prod(dims)) > max_cells and int(dims.max()) > min_axis:
+                scale = (max_cells / float(np.prod(dims))) ** (1.0 / 3.0) * 0.98
+                dims = np.maximum(np.floor(dims * scale).astype(int), min_axis)
+
+            return [int(v) for v in dims[:3]]
+
+        def _apply_generalized_defaults(refresh=True):
+            nelx, nely, nelz = _generalized_grid()
+            stress_enabled = _get_bool("stress_constraint")
+            goal = str(node.get_property("design_goal") or "").lower()
+            stress_goal = "stress" in goal
+            optimizer = "MMA" if stress_enabled or stress_goal else "OC"
+            max_dim = max(nelx, nely, nelz)
+            rmin = round(max(1.2, min(5.0, max_dim * 0.030)), 2)
+
+            settings = {
+                "advanced_settings_visible": False,
+                "nelx": nelx,
+                "nely": nely,
+                "nelz": nelz,
+                "rmin": rmin,
+                "penal": 3.0,
+                "density_cutoff": 0.45,
+                "optimizer": optimizer,
+                "max_iter": 100,
+                "tol": 0.005,
+                "convergence_patience": 5,
+                "print_ready_mesh": False,
+                "mesh_decimate_ratio": 1.0,
+            }
             for key, value in settings.items():
                 self.update_property(key, value)
             if hasattr(self.window(), "statusBar") and self.window().statusBar():
-                self.window().statusBar().showMessage("Applied guided topology defaults")
+                self.window().statusBar().showMessage(
+                    "Applied generalized fine topology defaults"
+                )
             if refresh:
                 _refresh_topopt_later()
 
@@ -840,8 +1021,6 @@ class PropertiesPanel(QtWidgets.QWidget):
 
             def _changed(value, p=prop):
                 self.update_property(p, value)
-                if str(node.get_property("workflow_mode") or "Guided") != "Expert":
-                    _apply_guided_defaults(refresh=True)
 
             try:
                 widget.currentTextChanged.disconnect()
@@ -850,25 +1029,16 @@ class PropertiesPanel(QtWidgets.QWidget):
             widget.currentTextChanged.connect(_changed)
             return widget
 
-        intent_group = QtWidgets.QGroupBox("Design Intent")
-        intent_layout = QtWidgets.QFormLayout()
-        mode_combo = _combo("workflow_mode", INDUSTRIAL_WORKFLOW_MODES, "Guided")
         try:
-            mode_combo.currentTextChanged.disconnect()
+            self._suppress_graph_property_changed = True
+            node.set_property("advanced_settings_visible", False)
         except Exception:
             pass
+        finally:
+            self._suppress_graph_property_changed = False
 
-        def _mode_changed(value):
-            self.update_property("workflow_mode", value)
-            is_expert = value == "Expert"
-            self.update_property("advanced_settings_visible", is_expert)
-            if is_expert:
-                _refresh_topopt_later()
-            else:
-                _apply_guided_defaults(refresh=True)
-
-        mode_combo.currentTextChanged.connect(_mode_changed)
-        intent_layout.addRow("Mode:", mode_combo)
+        intent_group = QtWidgets.QGroupBox("Design Intent")
+        intent_layout = QtWidgets.QFormLayout()
         intent_layout.addRow(
             "Goal:",
             _intent_combo("design_goal", INDUSTRIAL_DESIGN_GOALS, "Lightweight Stiffness"),
@@ -879,47 +1049,38 @@ class PropertiesPanel(QtWidgets.QWidget):
         )
 
         volfrac = max(0.01, min(0.99, _get_float("volfrac", 0.5)))
-        guided_vol_container = QtWidgets.QWidget()
-        guided_vol_layout = QtWidgets.QHBoxLayout(guided_vol_container)
-        guided_vol_layout.setContentsMargins(0, 0, 0, 0)
-        guided_vol_layout.setSpacing(6)
-        guided_vol_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        guided_vol_slider.setRange(1, 99)
-        guided_vol_slider.setValue(int(round(volfrac * 100)))
-        guided_vol_spin = QtWidgets.QSpinBox()
-        guided_vol_spin.setRange(1, 99)
-        guided_vol_spin.setSuffix("%")
-        guided_vol_spin.setValue(int(round(volfrac * 100)))
+        material_container = QtWidgets.QWidget()
+        material_layout = QtWidgets.QHBoxLayout(material_container)
+        material_layout.setContentsMargins(0, 0, 0, 0)
+        material_layout.setSpacing(6)
+        material_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        material_slider.setRange(1, 99)
+        material_slider.setValue(int(round(volfrac * 100)))
+        material_spin = QtWidgets.QSpinBox()
+        material_spin.setRange(1, 99)
+        material_spin.setSuffix("%")
+        material_spin.setValue(int(round(volfrac * 100)))
 
-        def update_guided_volfrac(percent):
-            guided_vol_slider.blockSignals(True)
-            guided_vol_spin.blockSignals(True)
-            guided_vol_slider.setValue(percent)
-            guided_vol_spin.setValue(percent)
-            guided_vol_slider.blockSignals(False)
-            guided_vol_spin.blockSignals(False)
+        def update_material_volfrac(percent):
+            material_slider.blockSignals(True)
+            material_spin.blockSignals(True)
+            material_slider.setValue(percent)
+            material_spin.setValue(percent)
+            material_slider.blockSignals(False)
+            material_spin.blockSignals(False)
             self.update_property("volfrac", percent / 100.0)
 
-        guided_vol_slider.valueChanged.connect(update_guided_volfrac)
-        guided_vol_spin.valueChanged.connect(update_guided_volfrac)
-        guided_vol_layout.addWidget(guided_vol_slider, 1)
-        guided_vol_layout.addWidget(guided_vol_spin)
-        intent_layout.addRow("Material:", guided_vol_container)
+        material_slider.valueChanged.connect(update_material_volfrac)
+        material_spin.valueChanged.connect(update_material_volfrac)
+        material_layout.addWidget(material_slider, 1)
+        material_layout.addWidget(material_spin)
+        intent_layout.addRow("Material:", material_container)
 
-        btn_apply_defaults = QtWidgets.QPushButton("Apply Program Defaults")
-        btn_apply_defaults.clicked.connect(lambda: _apply_guided_defaults(refresh=True))
-        intent_layout.addRow("Defaults:", btn_apply_defaults)
         intent_group.setLayout(intent_layout)
         self.props_layout.addWidget(intent_group)
 
-        pipeline_group = QtWidgets.QGroupBox("Validation & CAD")
+        pipeline_group = QtWidgets.QGroupBox("CAD Export")
         pipeline_layout = QtWidgets.QFormLayout()
-        pipeline_layout.addRow("Validate:", _check("validate_after_optimize"))
-        pipeline_layout.addRow(
-            "Validation:",
-            _combo("validation_quality", ["Standard", "Mesh Convergence"], "Standard"),
-        )
-        pipeline_layout.addRow("CAD Body:", _check("generate_cad_after_optimize"))
         step_name = QtWidgets.QLineEdit(str(node.get_property("cad_export_filename") or "topology_optimized.step"))
         step_name.editingFinished.connect(
             lambda w=step_name: self.update_property("cad_export_filename", w.text())
@@ -927,38 +1088,14 @@ class PropertiesPanel(QtWidgets.QWidget):
         pipeline_layout.addRow("STEP Name:", step_name)
         btn_export_step = QtWidgets.QPushButton("Export STEP")
         btn_export_step.clicked.connect(lambda: self._export_topopt_step(node))
-        pipeline_layout.addRow("CAD Export:", btn_export_step)
-        pipeline_group.setToolTip(
-            "Optional sign-off and CAD handoff stages run inside the topology study."
-        )
+        pipeline_layout.addRow("Export:", btn_export_step)
+        pipeline_group.setToolTip("Export the recovered topology shape after a run.")
         pipeline_group.setLayout(pipeline_layout)
         self.props_layout.addWidget(pipeline_group)
 
-        advanced_group = QtWidgets.QGroupBox("Expert Solver Settings")
-        advanced_group.setCheckable(True)
-        expert_mode = str(node.get_property("workflow_mode") or "Guided") == "Expert"
-        advanced_visible = expert_mode and _get_bool("advanced_settings_visible", True)
-        advanced_group.setChecked(advanced_visible)
-        advanced_group.setToolTip("Raw solver controls for expert studies and reproducibility.")
+        advanced_group = QtWidgets.QGroupBox("Solver Settings")
+        advanced_group.setToolTip("Raw solver controls for topology studies and reproducibility.")
         advanced_layout = QtWidgets.QVBoxLayout()
-
-        def _set_advanced_children_visible(enabled):
-            for idx in range(advanced_layout.count()):
-                item = advanced_layout.itemAt(idx)
-                widget = item.widget()
-                if widget is not None:
-                    widget.setVisible(bool(enabled))
-
-        def _set_expert_mode(enabled):
-            self.update_property("advanced_settings_visible", bool(enabled))
-            self.update_property("workflow_mode", "Expert" if enabled else "Guided")
-            _set_advanced_children_visible(enabled)
-            if enabled:
-                _refresh_topopt_later()
-            else:
-                _apply_guided_defaults(refresh=True)
-
-        advanced_group.toggled.connect(_set_expert_mode)
 
         domain_group = QtWidgets.QGroupBox("Voxel Grid")
         domain_layout = QtWidgets.QFormLayout()
@@ -1070,16 +1207,10 @@ class PropertiesPanel(QtWidgets.QWidget):
             "Yield Stress:",
             _double("yield_stress", 1.0, 0.0, 1_000_000.0, decimals=3, step=10.0),
         )
-        stress_layout.addRow(
-            "Stress Relaxation:",
-            _double("stress_penalty", 1.0, 0.0, 5.0, decimals=2, step=0.1),
-        )
-        stress_layout.addRow(
-            "P-Norm Exponent:",
-            _double("stress_pnorm_p", 8.0, 2.0, 64.0, decimals=1, step=1.0),
-        )
         stress_group.setToolTip(
-            "Adds a P-norm von Mises stress constraint. The solver switches to MMA when enabled."
+            "P-norm von Mises stress constraint aggregated over ALL load cases.\n"
+            "Forces the optimiser to MMA. The numerical relaxation and\n"
+            "aggregation policy is selected internally by the solver."
         )
         stress_group.setLayout(stress_layout)
         advanced_layout.addWidget(stress_group)
@@ -1105,12 +1236,13 @@ class PropertiesPanel(QtWidgets.QWidget):
             "Projection-style constraints applied after each density update: symmetry, extrusion, AM overhang, max member size, and repeated patterns."
         )
         mfg_group.setLayout(mfg_layout)
-        advanced_layout.addWidget(mfg_group)
+        self.props_layout.addWidget(mfg_group)
 
-        _set_advanced_children_visible(advanced_visible)
         advanced_group.setLayout(advanced_layout)
-        advanced_group.setVisible(expert_mode)
-        self.props_layout.addWidget(advanced_group)
+        # Industrial TopOpt keeps solver/grid knobs automated.  The controls
+        # above still exist as node properties for reproducibility and saved
+        # studies, but the normal GUI exposes only design intent, setup, CAD,
+        # and manufacturing choices.
 
         setup_group = QtWidgets.QGroupBox("Setup & Load Cases")
         setup_layout = QtWidgets.QFormLayout()
@@ -1171,12 +1303,13 @@ class PropertiesPanel(QtWidgets.QWidget):
             _json_editor("void_regions", '[{"type":"cylinder","axis":"z","center":[0.5,0.5],"radius":0.2,"z":[0,1]}]'),
         )
         setup_group.setToolTip(
-            "Expert-only standalone defaults. In normal graph workflows, use "
+            "Standalone defaults. In normal graph workflows, use "
             "the topology block's constraints and loads input ports."
         )
         setup_group.setLayout(setup_layout)
-        setup_group.setVisible(expert_mode)
-        self.props_layout.addWidget(setup_group)
+        # Boundary conditions are supplied through the TopOpt input ports.
+        # Keep the legacy property editors available in saved projects, but do
+        # not expose duplicate setup/load controls in the normal inspector.
 
         post_group = QtWidgets.QGroupBox("Post-Processing")
         post_layout = QtWidgets.QFormLayout()
@@ -1189,8 +1322,8 @@ class PropertiesPanel(QtWidgets.QWidget):
             "Controls marching-cubes cleanup, hole filling, smoothing, and optional mesh decimation before STL/CAD handoff."
         )
         post_group.setLayout(post_layout)
-        post_group.setVisible(expert_mode)
-        self.props_layout.addWidget(post_group)
+        # Post-processing is part of the automated industrial preset now.
+        # Keep the properties for saved studies, but do not show this group.
 
         view_group = QtWidgets.QGroupBox("Visualization")
         view_layout = QtWidgets.QFormLayout()
@@ -1327,7 +1460,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         def _finish(export_path):
             self._topopt_step_export_worker = None
             if hasattr(self.window(), 'statusBar') and self.window().statusBar():
-                self.window().statusBar().showMessage(f"Exported faceted STEP to {export_path}")
+                self.window().statusBar().showMessage(f"Exported CAD STEP to {export_path}")
 
         def _fail(message):
             self._topopt_step_export_worker = None
@@ -1337,7 +1470,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         worker.export_error.connect(_fail)
         worker.finished.connect(worker.deleteLater)
         if hasattr(self.window(), 'statusBar') and self.window().statusBar():
-            self.window().statusBar().showMessage("Exporting faceted STEP in background...")
+            self.window().statusBar().showMessage("Exporting CAD STEP in background...")
         worker.start()
 
     def _export_topopt_stl(self, node):
@@ -1345,7 +1478,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         result = getattr(node, '_last_result', None)
         if not isinstance(result, dict):
             QtWidgets.QMessageBox.warning(self, "No Shape",
-                "Run topology optimisation first â€” no recovered shape available.")
+                "Run topology optimisation first — no recovered shape available.")
             return
         recovered = self._refresh_topopt_recovered_shape(node, result)
         if recovered is None:
@@ -1391,7 +1524,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         result = getattr(node, '_last_result', None)
         if not isinstance(result, dict) or 'recovered_shape' not in result or result['recovered_shape'] is None:
             QtWidgets.QMessageBox.warning(self, "No Shape",
-                "Run topology optimisation first â€” no recovered shape available.")
+                "Run topology optimisation first — no recovered shape available.")
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Export OBJ", "", "OBJ Files (*.obj)")
@@ -1446,7 +1579,7 @@ class PropertiesPanel(QtWidgets.QWidget):
     # via the sectioned, items-aware widget loop).  Removed to keep this file
     # focused on the UI that's actually displayed.
 
-    # Ordered list of (section title, prefix list) â€” first match wins.
+    # Ordered list of (section title, prefix list) — first match wins.
     # Properties that match no section land in "General".
     _PROPERTY_SECTIONS = [
         ("External Solver", ("external_", "openradioss_", "calculix_", "run_external", "deck_only", "solver_backend",
@@ -1455,11 +1588,17 @@ class PropertiesPanel(QtWidgets.QWidget):
         ("Visualization",   ("visualization", "deformation_scale", "disp_scale", "n_frames")),
         ("Solver",          ("end_time", "time_steps", "damping", "enable_", "contact_", "mass_scaling", "iterations",
                              "convergence_tol", "move_limit", "min_density", "penal", "filter_radius",
-                             "update_scheme", "filter_type", "projection", "heaviside_", "continuation",
+                             "update_scheme", "filter_type",
                              "element_type", "shape_recovery", "recovery_resolution", "smoothing_iterations",
-                             "density_cutoff", "vol_frac", "symmetry_")),
+                             "density_cutoff", "vol_frac", "symmetry_",
+                             # TopOpt stress constraint. Use exact name for
+                             # yield_stress so we don't steal Material's
+                             # yield_strength into Solver.
+                             "yield_stress", "stress_")),
         ("Material",        ("preset", "E", "nu", "rho", "density", "poissons_ratio", "yield_strength",
-                             "tangent_modulus", "failure_strain", "enable_fracture")),
+                             "tangent_modulus", "failure_strain", "enable_fracture",
+                             # Crash-only: engineering-facing rate sensitivity.
+                             "strain_rate_")),
         ("Mesh",            ("mesh_type", "element_size", "max_size", "min_size", "order")),
         ("Impact",          ("velocity_", "application_scope", "node_tolerance", "wall_", "impactor_mass_kg")),
         ("Geometry",        ("box_", "length", "width", "depth", "height", "radius", "thickness",
@@ -1471,7 +1610,7 @@ class PropertiesPanel(QtWidgets.QWidget):
     # Hide these unless they have a meaningful value (truthy non-empty).
     _PROPERTY_HIDE_IF_EMPTY = ("condition", "range_expr", "tag")
 
-    # Hide these *always* â€” they exist on the node only so projects saved
+    # Hide these *always* — they exist on the node only so projects saved
     # before the CalculiX-only / OpenRadioss-only cut keep deserialising.  The
     # node code ignores them; showing them in the inspector just confuses the
     # user with knobs that look meaningful but do nothing.
@@ -1483,16 +1622,16 @@ class PropertiesPanel(QtWidgets.QWidget):
         # In-house crash-solver tuning knobs (OpenRadioss has its own).  The
         # `time_steps` property remains visible because the OpenRadioss path
         # uses it as the mass-scaling cycle target (end_time / time_steps).
-        'damping_alpha',
+        'damping_alpha', 'damping_beta',
         'enable_corotation', 'enable_contact',
         'contact_stiffness', 'contact_thickness', 'contact_update_interval',
         'mass_scaling_threshold',
-        # Duplicate of the on-canvas value_input text field â€” kept for
+        # Duplicate of the on-canvas value_input text field — kept for
         # NodeGraphQt back-compat but redundant in the inspector.
         'value',
         # Carried on legacy nodes but not honoured by the new solver paths:
         # 'min_safety_factor' is computed by the optimiser, not set by user;
-        # 'fixed_faces' was a JSON-string condition list â€” the new ShapeOpt
+        # 'fixed_faces' was a JSON-string condition list — the new ShapeOpt
         #   only supports SelectFaceNode-driven constraints (logged warning);
         # 'moment_x/y/z' on LoadNode were never wired to either CalculiX
         #   *CLOAD or OpenRadioss; only force_x/y/z are exported.
@@ -1501,6 +1640,15 @@ class PropertiesPanel(QtWidgets.QWidget):
         'bc_preset',
         'quality_preset',
         'moment_x', 'moment_y', 'moment_z',
+        # Internal topology-optimization numerical policy. These may exist in
+        # old project JSON but are no longer engineering-facing controls.
+        'projection', 'stress_penalty', 'stress_pnorm_p',
+        'heaviside_projection', 'heaviside_beta_init', 'heaviside_beta_max',
+        'heaviside_beta_step_iters', 'heaviside_eta', 'continuation',
+        # Internal OpenRadioss/crash numerical policy.
+        'hourglass_formulation', 'hourglass_coefficient',
+        # Replaced by the engineering-facing strain_rate_sensitive checkbox.
+        'strain_rate_c', 'strain_rate_p',
     })
 
     # Tooltips for properties that aren't self-explanatory.  Looked up by
@@ -1508,10 +1656,10 @@ class PropertiesPanel(QtWidgets.QWidget):
     # mechanical engineer reading the inspector knows what to change.
     _PROPERTY_TOOLTIPS = {
         'analysis_type':
-            "Linear           â€” fastest, valid for small deflections and elastic only.\n"
-            "Nonlinear (Geometric) â€” large rotations / deflections (NLGEOM).\n"
-            "Nonlinear (Plastic)   â€” plastic yielding too (requires yield_strength on Material).",
-        'analysis_mode': "Same as analysis_type â€” legacy alias.",
+            "Linear           — fastest, valid for small deflections and elastic only.\n"
+            "Nonlinear (Geometric) — large rotations / deflections (NLGEOM).\n"
+            "Nonlinear (Plastic)   — plastic yielding too (requires yield_strength on Material).",
+        'analysis_mode': "Same as analysis_type — legacy alias.",
         'visualization': "Field used to colour the result mesh in the 3-D viewer.",
         'deformation_scale':
             "Multiplier on the displayed displacement (visual only). "
@@ -1527,11 +1675,11 @@ class PropertiesPanel(QtWidgets.QWidget):
             "Hold the explicit time step at end_time / time_steps by adding mass to\n"
             "nodes whose CFL bound is below that value (Radioss /DT/NODA/CST).\n"
             "Prevents the 'estimated remaining time' from drifting upward during\n"
-            "the run.  Slight artificial inertia is added â€” turn off for inertia-\n"
+            "the run.  Slight artificial inertia is added — turn off for inertia-\n"
             "sensitive impact studies.",
         'deck_only':
             "Write the solver deck (.inp for CalculiX / .k+.rad for OpenRadioss)\n"
-            "but do NOT launch the solver â€” useful for inspecting the deck.",
+            "but do NOT launch the solver — useful for inspecting the deck.",
         'external_solver_path':  "Override the auto-discovered CalculiX ccx binary path.",
         'external_work_dir':     "Solver working directory.  Empty = a temp dir is created per run.",
         'external_timeout_s':    "Wall-clock timeout for the external solver run (seconds).",
@@ -1539,8 +1687,8 @@ class PropertiesPanel(QtWidgets.QWidget):
         'openradioss_engine_path':  "Override the auto-discovered OpenRadioss engine binary.",
         'preset':           "Pick a material from the built-in database, or 'Custom' to set fields manually.",
         'youngs_modulus':   "Young's modulus E (MPa in the standard mm/t/s unit system).",
-        'poissons_ratio':   "Poisson's ratio Î½ (typical 0.27â€“0.34 for metals).",
-        'density':          "Mass density Ï (tonne/mmÂ³ â€” 7.85e-9 for steel).",
+        'poissons_ratio':   "Poisson's ratio Î½ (typical 0.27–0.34 for metals).",
+        'density':          "Mass density ρ (tonne/mm³ — 7.85e-9 for steel).",
         'yield_strength':   "Initial yield stress Ïƒ_y (MPa).  Non-zero triggers *PLASTIC in CalculiX.",
         'tangent_modulus':  "Bilinear hardening slope after yield (MPa).  Set to 0 for perfectly plastic.",
         'failure_strain':   "Equivalent plastic strain at element deletion (crash only).",
@@ -1549,7 +1697,7 @@ class PropertiesPanel(QtWidgets.QWidget):
             "the system-modeling tab via cad.fea(...)/cad.crash(...)/cad.topopt(...).\n"
             "Empty = not exposed; for VariableNode it defaults to 'variable_name'.",
 
-        # â”€â”€ SizeOptimization â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── SizeOptimization ───────────────────────────────────────────
         'parameters':
             "JSON list of upstream-shape property names to optimise, e.g.\n"
             '    ["wall_thickness", "fillet_r"]',
@@ -1557,63 +1705,63 @@ class PropertiesPanel(QtWidgets.QWidget):
             "JSON dict of (min, max) per parameter, e.g.\n"
             '    {"wall_thickness": [1.0, 20.0], "fillet_r": [0.5, 5.0]}',
         'optimizer':
-            "SciPy optimiser. COBYLA is the safest gradient-free choice for 1â€“5\n"
+            "SciPy optimiser. COBYLA is the safest gradient-free choice for 1–5\n"
             "parameters when meshing topology may change between evaluations.\n"
-            "SLSQP / L-BFGS-B / trust-constr use finite-difference gradients â€”\n"
-            "each step costs (n_params+1) full CADâ†’meshâ†’CalculiX evaluations.",
+            "SLSQP / L-BFGS-B / trust-constr use finite-difference gradients —\n"
+            "each step costs (n_params+1) full CAD→mesh→CalculiX evaluations.",
         'gradient_step':
             "FD step size for the gradient-based optimisers (SLSQP / L-BFGS-B /\n"
             "trust-constr).  Ignored by COBYLA and Nelder-Mead.",
         'max_iterations': "Outer iteration cap on the optimiser.",
         'tolerance':      "Convergence tolerance for the optimiser.",
         'element_size':   "Target element size [mm] used when re-meshing each evaluation.",
-        'max_stress':     "Stress constraint [MPa] â€” used when chosen optimiser supports inequality constraints.",
-        'max_volume':     "Volume constraint [mmÂ³].  Zero disables the constraint.",
+        'max_stress':     "Stress constraint [MPa] — used when chosen optimiser supports inequality constraints.",
+        'max_volume':     "Volume constraint [mm³].  Zero disables the constraint.",
         'objective':
             "What the optimiser minimises.  For SizeOpt: Min Weight = volume,\n"
-            "Min Compliance = uÂ·f, Min Max Stress = peak Von Mises.",
+            "Min Compliance = u·f, Min Max Stress = peak Von Mises.",
 
-        # â”€â”€ ShapeOptimization â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── ShapeOptimization ──────────────────────────────────────────
         'sensitivity_method':
-            "Biological Stress Leveling: heuristic â€” moves boundary inward at\n"
+            "Biological Stress Leveling: heuristic — moves boundary inward at\n"
             "low-stress nodes, outward at high-stress nodes.  Reduces stress\n"
             "concentrations.\n"
-            "Adjoint Compliance: rigorous shape derivative âˆ’2Â·W(u).  Drives the\n"
+            "Adjoint Compliance: rigorous shape derivative −2·W(u).  Drives the\n"
             "boundary toward uniform strain-energy density (minimum compliance).",
         'volume_preservation':
             "If checked, rescale boundary motion each iteration so total volume\n"
             "stays equal to the initial volume.  Recommended for compliance opt.",
         'step_size':        "Per-iteration boundary motion scale (mm).",
-        'smoothing_weight': "Laplacian sensitivity smoothing â€” higher = smoother boundary updates.",
+        'smoothing_weight': "Laplacian sensitivity smoothing — higher = smoother boundary updates.",
         'max_displacement': "Cap on per-node motion across the whole optimisation [mm].",
         'convergence_tol':  "Relative-objective change below which the optimiser stops.",
 
-        # â”€â”€ TopologyOptimization (advanced) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── TopologyOptimization (advanced) ────────────────────────────
         'penal':             "SIMP penalisation p.  Higher = sharper 0/1 split (3.0 is standard).",
-        'min_density':       "Ersatz minimum density Ï_min.  Prevents singular stiffness.",
-        'move_limit':        "Max change in Ï_e per iteration (0.2 = Â±20 %).",
-        'filter_radius':     "Density / sensitivity filter radius [mm] â€” controls minimum feature size.",
+        'min_density':       "Ersatz minimum density ρ_min.  Prevents singular stiffness.",
+        'move_limit':        "Max change in ρ_e per iteration (0.2 = ±20 %).",
+        'filter_radius':     "Density / sensitivity filter radius [mm] — controls minimum feature size.",
         'filter_type':       "density: physical density filter (preferred).\nsensitivity: heuristic sensitivity smoothing.",
-        'projection':        "Heaviside projection sharpens grey densities into crisp 0/1 designs.",
-        'heaviside_beta':    "Heaviside sharpness Î².  Higher = crisper, but harder to converge.",
-        'heaviside_eta':     "Heaviside threshold Î· (default 0.5).",
-        'continuation':      "Gradually ramp Î² from 1 â†’ heaviside_beta over the run.",
+        'yield_stress':       "Yield stress σ_y for the PNorm constraint: ||vm||_PNorm ≤ σ_y.",
+        'stress_constraint':  "Add a P-norm von Mises stress constraint.  Forces the optimiser to MMA.",
+        'strain_rate_sensitive':
+            "Use the material preset's internal strain-rate sensitivity for crash runs.",
         'update_scheme':     "MMA: gradient-based, robust.  OC: simpler optimality-criteria update.",
         'simp_bins':         "Number of discrete moduli the CalculiX deck quantises into per iteration.",
         'shape_recovery':    "Run marching-cubes shape recovery with Taubin smoothing on the final density field.",
         'recovery_resolution': "Marching-cubes voxel-grid resolution for recovered shape extraction.",
         'smoothing_iterations': "Gaussian smoothing passes on the recovered shape.",
         'density_cutoff':    "Density threshold below which material is removed in the recovered shape.",
-        'vol_frac':          "Target volume fraction (kept / total) â€” the SIMP constraint.",
+        'vol_frac':          "Target volume fraction (kept / total) — the SIMP constraint.",
         'symmetry_x':        "Mirror-plane X coordinate [mm].  None = no X-symmetry.",
         'symmetry_y':        "Mirror-plane Y coordinate [mm].  None = no Y-symmetry.",
         'symmetry_z':        "Mirror-plane Z coordinate [mm].  None = no Z-symmetry.",
         'iterations':        "Outer iteration cap on the SIMP loop.",
 
-        # â”€â”€ Mesh / Remesh / Impact â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Mesh / Remesh / Impact ─────────────────────────────────────
         'mesh_type':         "Tet:  linear C3D4 (fast).  Tet10: quadratic C3D10 (more accurate, ~4Ã— slower).",
         'refinement_size':   "Local element size at refinement zones [mm].  0 = no local refinement.",
-        'close_holes':       "Cap small holes during remesh â€” helps surface watertightness.",
+        'close_holes':       "Cap small holes during remesh — helps surface watertightness.",
         'repair_surface':    "Run topological repair before remeshing.",
         'mesh_quality':      "Target mesh-quality factor for remeshing.",
         'velocity_x':        "Initial impactor velocity along X [mm/ms = m/s].",
@@ -1640,7 +1788,7 @@ class PropertiesPanel(QtWidgets.QWidget):
             "A zero mass moving wall is prescribed velocity, not inertial impact.",
         'enable_fracture':   "Delete elements whose plastic strain exceeds failure_strain.",
 
-        # â”€â”€ Constraint / Load extras â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Constraint / Load extras ───────────────────────────────────
         'condition':
             "Optional NumPy boolean expression over the mesh-node coordinates\n"
             "x, y, z (mm).  Used only when no SelectFace node is connected.\n"
@@ -1648,11 +1796,11 @@ class PropertiesPanel(QtWidgets.QWidget):
         'displacement_x':    "Prescribed X-displacement [mm] (only when constraint_type = Displacement).",
         'displacement_y':    "Prescribed Y-displacement [mm] (only when constraint_type = Displacement).",
         'displacement_z':    "Prescribed Z-displacement [mm] (only when constraint_type = Displacement).",
-        'gravity_accel':     "Gravity magnitude [mm/sÂ²].  9810 = standard Earth gravity.",
+        'gravity_accel':     "Gravity magnitude [mm/s²].  9810 = standard Earth gravity.",
         'gravity_direction': "Sign and axis of the gravity vector.",
-        'pressure':          "Surface pressure [N/mmÂ² = MPa].  Positive = outward, negative = inward.",
+        'pressure':          "Surface pressure [N/mm² = MPa].  Positive = outward, negative = inward.",
 
-        # â”€â”€ SelectFace â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── SelectFace ─────────────────────────────────────────────────
         'selector_type':     "How this node picks faces (see the dropdown's own tooltip).",
         'direction':         "Outward-normal direction the selected face(s) must point in.",
     }
@@ -1682,6 +1830,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         'yield_strength': 'Yield Strength (MPa)',
         'tangent_modulus': 'Tangent Modulus (MPa)',
         'failure_strain': 'Failure Strain',
+        'strain_rate_sensitive': 'Strain-Rate Sensitive',
     }
 
     @classmethod
@@ -1692,7 +1841,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                     return title
         return "General"
 
-    # â”€â”€ Path / directory property helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Path / directory property helpers ─────────────────────────────────
     # File-filter strings keyed by property name (most specific first).
     # Each entry: (substring match, dialog title, filter pattern).
     _PATH_PROP_FILTERS = (
@@ -1742,8 +1891,8 @@ class PropertiesPanel(QtWidgets.QWidget):
 
         edit = QtWidgets.QLineEdit(str(val) if val is not None else "")
         edit.setPlaceholderText(
-            "Browse to a folderâ€¦" if self._is_directory_prop(name)
-            else "Browse to a fileâ€¦"
+            "Browse to a folder…" if self._is_directory_prop(name)
+            else "Browse to a file…"
         )
         edit.editingFinished.connect(
             lambda n=name, w=edit: self.update_property(n, w.text())
@@ -1787,7 +1936,7 @@ class PropertiesPanel(QtWidgets.QWidget):
 
         Properties are grouped into semantic sections (External Solver,
         Visualization, Solver, Material, Mesh, Geometry, Load, Constraint,
-        General) and rendered with the right widget per type â€” sliders when
+        General) and rendered with the right widget per type — sliders when
         the node declared a range, checkboxes for bools, combos when items
         are declared, expression-aware edits for numerics.
         """
@@ -1804,7 +1953,7 @@ class PropertiesPanel(QtWidgets.QWidget):
             return
 
         # Collect NodeGraphQt's per-property metadata once.  Items and ranges
-        # both live on the model â€” items are how we know it's a combo, range
+        # both live on the model — items are how we know it's a combo, range
         # is how we pick a slider over a spinbox.
         prop_attrs = {}
         try:
@@ -1870,16 +2019,10 @@ class PropertiesPanel(QtWidgets.QWidget):
                 'Recovered Shape',
             ],
             'source_geometry': [
-                'Smooth, fallback to Voxel',
-                'NURBS Surface',
-                'Smooth Recovered Shape',
-                'Fitted NURBS Surface',
-                'Voxel Boundary',
-                'Skeleton NURBS Sweep',
+                'Recovered Shape',
             ],
             'filter_type': ['sensitivity', 'density'],
             'update_scheme': ['MMA', 'OC'],
-            'projection': ['None', 'Heaviside'],
             # New combos introduced by the CalculiX / OpenRadioss rewrites.
             'analysis_type': ['Linear', 'Nonlinear (Geometric)', 'Nonlinear (Plastic)'],
             'deformation_scale': ['Auto', '1x', '5x', '10x', '50x', '100x', '200x'],
@@ -1909,9 +2052,8 @@ class PropertiesPanel(QtWidgets.QWidget):
                     'Steel (Ultra-High UHSS 1500)',
                     'Aluminum 6061-T6',
                     'Aluminum 5052-H32 (Crush)',
-                    'CFRP (Quasi-Isotropic)',
+                    'CFRP (Quasi-Isotropic, proxy)',
                 ]
-
         rendered_any = False
         for title in section_order:
             entries = buckets[title]
@@ -2018,16 +2160,16 @@ class PropertiesPanel(QtWidgets.QWidget):
             lbl.setStyleSheet("color: #888; font-style: italic;")
             self.props_layout.addWidget(lbl)
     
-    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ──────────────────────────────────────────────────
     # Interactive Select Face UI
-    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ──────────────────────────────────────────────────
 
     def _build_select_face_ui(self, node):
         """Selector-aware UI for SelectFaceNode.
 
         SelectFaceNode is a swiss-army-knife with seven different selection
         strategies (bounding box, nearest point, face index, direction tag,
-        range expressionâ€¦).  The generic inspector shows *all* of their
+        range expression…).  The generic inspector shows *all* of their
         fields at once which is overwhelming.  Here we render only the
         fields relevant to the currently chosen ``selector_type``.
         """
@@ -2078,7 +2220,7 @@ class PropertiesPanel(QtWidgets.QWidget):
             ('Tag', 'Tag'),
         ]
 
-        # â”€â”€ 1. Selector type combo â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── 1. Selector type combo ──────────────────────────────────────
         grp_type = QtWidgets.QGroupBox("Selector")
         lay_type = QtWidgets.QFormLayout()
         combo = QtWidgets.QComboBox()
@@ -2091,12 +2233,12 @@ class PropertiesPanel(QtWidgets.QWidget):
             combo.blockSignals(False)
         combo.setToolTip(
             "How this node picks faces:\n"
-            "  Bounding Box     â€” every face whose centroid is inside the box\n"
-            "  Nearest Point    â€” the single face closest to (near_x, near_y, near_z)\n"
-            "  Direction        â€” every face whose normal is +X / âˆ’Z / â€¦\n"
-            "  Face Index       â€” pick by integer face id (zero-based, brittle)\n"
-            "  Range Expression â€” Python boolean over x, y, z of the face centroid\n"
-            "  Tag              â€” match a user-set tag string on the upstream node"
+            "  Bounding Box     — every face whose centroid is inside the box\n"
+            "  Nearest Point    — the single face closest to (near_x, near_y, near_z)\n"
+            "  Direction        — every face whose normal is +X / −Z / …\n"
+            "  Face Index       — pick by integer face id (zero-based, brittle)\n"
+            "  Range Expression — Python boolean over x, y, z of the face centroid\n"
+            "  Tag              — match a user-set tag string on the upstream node"
         )
         combo.currentIndexChanged.connect(
             lambda _i, c=combo: (self.update_property('selector_type', c.currentData()),
@@ -2106,7 +2248,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         grp_type.setLayout(lay_type)
         self.props_layout.addWidget(grp_type)
 
-        # â”€â”€ 2. Type-specific field group â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── 2. Type-specific field group ────────────────────────────────
         grp = QtWidgets.QGroupBox("Parameters")
         lay = QtWidgets.QFormLayout()
 
@@ -2157,7 +2299,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                 dir_combo.addItem(label, value)
             dir_combo.setToolTip(
                 "Pick every face whose outward normal points in this direction "
-                "(within ~10Â° tolerance)."
+                "(within ~10° tolerance)."
             )
             cur = _canonical_direction(node.get_property('direction'))
             current_idx = dir_combo.findData(cur)
@@ -2171,7 +2313,7 @@ class PropertiesPanel(QtWidgets.QWidget):
             w = _intspin('face_index', 0, 100_000)
             w.setToolTip(
                 "Zero-based face index from CadQuery's `faces()` iteration order.\n"
-                "Fragile â€” adding a fillet or boolean upstream renumbers faces."
+                "Fragile — adding a fillet or boolean upstream renumbers faces."
             )
             lay.addRow("Index:", w)
         elif sel_type == 'Coordinate Range':
@@ -2292,11 +2434,214 @@ class PropertiesPanel(QtWidgets.QWidget):
 
         # -- Hint --
         hint = QtWidgets.QLabel(
-            "<i>Note: Execute the graph first so the 3D viewer has geometry to pick from.</i>"
+            "<i>Note: The picker prepares cached upstream geometry when possible. "
+            "If the upstream topology optimization has not run yet, run it first.</i>"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#666; font-size:10px; margin-top:8px;")
         self.props_layout.addWidget(hint)
+
+    @staticmethod
+    def _viewer_has_pickable_faces(viewer):
+        try:
+            faces = list(getattr(viewer, '_all_occ_faces', []) or [])
+            polydata = list(getattr(viewer, '_face_polydata_list', []) or [])
+            return bool(faces) and any(pd is not None for pd in polydata)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _upstream_nodes_for(node):
+        ordered = []
+        visited = set()
+
+        def _walk(current):
+            marker = id(current)
+            if marker in visited:
+                return
+            visited.add(marker)
+            try:
+                ports = current.input_ports()
+                if isinstance(ports, dict):
+                    ports = list(ports.values())
+                else:
+                    ports = list(ports)
+            except Exception:
+                ports = []
+            for port in ports:
+                try:
+                    connected = list(port.connected_ports())
+                except Exception:
+                    connected = []
+                for conn_port in connected:
+                    try:
+                        _walk(conn_port.node())
+                    except Exception:
+                        pass
+            ordered.append(current)
+
+        _walk(node)
+        return ordered
+
+    def _prepare_viewer_for_picking(self, app, node):
+        """Render or compute the nearest upstream geometry for face picking."""
+        viewer = getattr(app, 'viewer', None)
+        if viewer is None:
+            return False
+
+        # Always prefer the selected picker node's own upstream geometry over
+        # whatever happens to be displayed.  This prevents a Crash/FEA picker
+        # from trying to split a stale dense TopOpt STL currently in the viewer.
+        try:
+            source_node, geometry = app._get_render_context_for_node(node)
+        except Exception:
+            source_node, geometry = None, None
+        if geometry is not None:
+            try:
+                app._last_rendered_node = source_node or node
+                app._render_result_in_viewer(geometry)
+            except Exception:
+                pass
+            if self._viewer_has_pickable_faces(viewer):
+                return True
+            if hasattr(viewer, 'ensure_mesh_face_picking') and viewer.ensure_mesh_face_picking():
+                return True
+
+        if self._viewer_has_pickable_faces(viewer):
+            return True
+        if hasattr(viewer, 'ensure_mesh_face_picking') and viewer.ensure_mesh_face_picking():
+            return True
+
+        if hasattr(app, '_execution_is_active') and app._execution_is_active():
+            message = "Wait for the current graph run to finish before picking faces."
+            try:
+                app.statusBar().showMessage(message)
+            except Exception:
+                pass
+            QtWidgets.QMessageBox.information(self, "Graph Running", message)
+            return "pending"
+
+        worker = getattr(self, '_pick_prepare_worker', None)
+        try:
+            worker_running = bool(worker is not None and worker.isRunning())
+        except Exception:
+            worker_running = False
+        if worker_running:
+            message = "Geometry is already being prepared for face picking."
+            try:
+                app.statusBar().showMessage(message)
+            except Exception:
+                pass
+            return "pending"
+
+        upstream_nodes = [n for n in self._upstream_nodes_for(node) if n is not node]
+        blocked_ids = {
+            'com.cad.sim.solver',
+            'com.cad.sim.crash_solver',
+            'com.cad.sim.topopt_voxel',
+        }
+        blocked = [
+            n for n in upstream_nodes
+            if getattr(n, '__identifier__', '') in blocked_ids
+            and getattr(n, '_last_result', None) is None
+        ]
+        if blocked:
+            message = (
+                "Run the upstream topology/solver node once, then pick faces. "
+                "The picker can prepare STL import and remesh geometry, but it "
+                "will not silently start a new topology optimization."
+            )
+            try:
+                app.statusBar().showMessage(message)
+            except Exception:
+                pass
+            QtWidgets.QMessageBox.information(self, "Run Upstream First", message)
+            return "pending"
+
+        if not upstream_nodes:
+            if bool(getattr(viewer, '_mesh_picking_too_dense', False)):
+                message = (
+                    "This displayed topology/STL surface is too dense for direct "
+                    "interactive patch picking. Pick from a face selector connected "
+                    "after Remesh, so the picker can use the volume-mesh surface."
+                )
+                try:
+                    app.statusBar().showMessage(message)
+                except Exception:
+                    pass
+                QtWidgets.QMessageBox.information(self, "Use Remeshed Surface", message)
+                return "pending"
+            return False
+
+        try:
+            try:
+                app.statusBar().showMessage("Preparing geometry for face picking...")
+            except Exception:
+                pass
+            worker = GraphExecutionWorker(upstream_nodes, skip_simulation=False, parent=self)
+            self._pick_prepare_worker = worker
+
+            def _finish(_results):
+                try:
+                    self._pick_prepare_worker = None
+                    source_node, geometry = app._get_render_context_for_node(node)
+                    if geometry is not None:
+                        app._last_rendered_node = source_node or node
+                        app._render_result_in_viewer(geometry)
+                    ready = self._viewer_has_pickable_faces(viewer)
+                    if not ready and hasattr(viewer, 'ensure_mesh_face_picking'):
+                        ready = viewer.ensure_mesh_face_picking()
+                    if ready:
+                        try:
+                            app.statusBar().showMessage("Geometry ready. Pick faces in the viewer.")
+                        except Exception:
+                            pass
+                        self._start_picking_session(node)
+                    else:
+                        if bool(getattr(viewer, '_mesh_picking_too_dense', False)):
+                            text = (
+                                "The rendered surface is too dense for direct "
+                                "interactive patch picking. Run Remesh first, "
+                                "then pick on the remeshed surface."
+                            )
+                        else:
+                            text = "The upstream geometry finished, but no pickable face patches were found."
+                        QtWidgets.QMessageBox.information(
+                            self,
+                            "No Pickable Faces",
+                            text,
+                        )
+                finally:
+                    try:
+                        worker.deleteLater()
+                    except Exception:
+                        pass
+
+            def _error(message):
+                try:
+                    self._pick_prepare_worker = None
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Could Not Prepare Picker",
+                        f"Could not prepare upstream geometry for face picking:\n{message}",
+                    )
+                finally:
+                    try:
+                        worker.deleteLater()
+                    except Exception:
+                        pass
+
+            worker.computation_finished.connect(_finish)
+            worker.computation_error.connect(_error)
+            worker.start()
+            return "pending"
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Could Not Prepare Picker",
+                f"Could not prepare upstream geometry for face picking:\n{exc}",
+            )
+            return False
 
     def _start_picking_session(self, node):
         """Enable picking mode in the 3D viewer for this node."""
@@ -2314,13 +2659,15 @@ class PropertiesPanel(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, "No Viewer", "3D viewer not found.")
             return
 
-        # Build indexâ†’OCC mapping from the viewer's stored face list
-        # The viewer must have already rendered the upstream shape
-        if not viewer._all_occ_faces:
+        prepared = self._prepare_viewer_for_picking(app, node)
+        if prepared is not True:
+            if prepared == "pending":
+                return
             QtWidgets.QMessageBox.information(
-                self, "Run Graph First",
-                "Please execute the graph (â–¶ Run) so the 3D viewer has the shape loaded,"
-                " then try picking again."
+                self,
+                "No Pickable Faces",
+                "No pickable face patches are available yet. Run the upstream "
+                "geometry/remesh or topology step, then try picking again."
             )
             return
 
@@ -2332,19 +2679,30 @@ class PropertiesPanel(QtWidgets.QWidget):
                 viewer.face_picked.disconnect(_on_faces_picked)
             except Exception:
                 pass
-            # Map OCC face objects â†’ indices in the viewer's list
+            # Map OCC face objects → indices in the viewer's list
             all_occ = viewer._all_occ_faces
             picked_indices = []
+            picked_labels = []
             for face in occ_faces:
                 for i, f in enumerate(all_occ):
                     # Identity check via hash code (OCC)
                     try:
                         if face.hashCode(10000) == f.hashCode(10000):
                             picked_indices.append(i)
+                            picked_labels.append(None)
                             break
                     except Exception:
                         if face is f:
-                            picked_indices.append(i)
+                            if isinstance(f, dict):
+                                picked_indices.append(int(f.get('stored_index', i)))
+                                picked_labels.append(
+                                    f.get('label')
+                                    or f.get('selector')
+                                    or None
+                                )
+                            else:
+                                picked_indices.append(i)
+                                picked_labels.append(None)
                             break
 
             if hasattr(node, 'set_picked_faces'):
@@ -2352,6 +2710,14 @@ class PropertiesPanel(QtWidgets.QWidget):
             else:
                 node.set_property('picked_face_indices',
                                   ','.join(str(i) for i in picked_indices))
+            if picked_indices and any(picked_labels):
+                chunks = []
+                for idx, label in zip(picked_indices, picked_labels):
+                    chunks.append(f"{idx} / {label}" if label else str(idx))
+                node.set_property(
+                    'selection_label',
+                    f"{len(picked_indices)} face{'s' if len(picked_indices) != 1 else ''} selected  (idx: {', '.join(chunks)})",
+                )
 
             # Invalidate and re-run
             if hasattr(node, '_last_hash'):
@@ -2398,9 +2764,9 @@ class PropertiesPanel(QtWidgets.QWidget):
             widget = widget.parent() if hasattr(widget, 'parent') else None
         return None
 
-    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ──────────────────────────────────────────────────
     # FEA Boundary Condition Rich UI
-    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ——————————————————————————————————————————————————————————
 
     def _build_fea_bc_ui(self, node):
         """Rich Properties Panel UI for ConstraintNode, LoadNode, PressureLoadNode."""
@@ -2440,7 +2806,7 @@ class PropertiesPanel(QtWidgets.QWidget):
             grp.setLayout(lay)
             self.props_layout.addWidget(grp)
 
-            # Condition expression â€” used when no face is connected (e.g. all .cad examples)
+            # Condition expression — used when no face is connected (e.g. all .cad examples)
             cond_val = node.get_property('condition') or ''
             grp2 = QtWidgets.QGroupBox("Applied To (Condition Expression)")
             grp2.setToolTip("NumPy boolean expression over mesh node coordinates x, y, z.\n"
@@ -2484,13 +2850,13 @@ class PropertiesPanel(QtWidgets.QWidget):
                     spin.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
                     lay.addRow(f"F{axis}:", spin)
                 mag = (fx**2 + fy**2 + fz**2) ** 0.5
-                # Direction arrow label  e.g. "â†’ (-1000, 0, 0)"
+                # Direction arrow label  e.g. "→ (-1000, 0, 0)"
                 def _dir_arrow(x, y, z):
                     dominant = max([(abs(x),'X',x),(abs(y),'Y',y),(abs(z),'Z',z)], key=lambda t: t[0])
-                    sign = 'âˆ’' if dominant[2] < 0 else '+'
+                    sign = '−' if dominant[2] < 0 else '+'
                     return f"{sign}{dominant[1]}"
                 dir_lbl = QtWidgets.QLabel(
-                    f"({fx:+.0f}, {fy:+.0f}, {fz:+.0f}) N   â”‚   {mag:.2f} N   â”‚   dir â‰ˆ {_dir_arrow(fx,fy,fz)}")
+                    f"({fx:+.0f}, {fy:+.0f}, {fz:+.0f}) N   │   {mag:.2f} N   │   dir ≈ {_dir_arrow(fx,fy,fz)}")
                 dir_lbl.setStyleSheet("color:#6dde8d; font-weight:bold; font-size:11px;")
                 lay.addRow("", dir_lbl)
 
@@ -2501,7 +2867,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                 spin_g.setRange(0, 100000)
                 spin_g.setDecimals(2)
                 spin_g.setValue(grav_accel)
-                spin_g.setSuffix(' mm/sÂ²')
+                spin_g.setSuffix(' mm/s²')
                 spin_g.valueChanged.connect(lambda v: self.update_property('gravity_accel', v))
                 lay.addRow("Accel:", spin_g)
                 cb_dir = QtWidgets.QComboBox()
@@ -2533,13 +2899,13 @@ class PropertiesPanel(QtWidgets.QWidget):
             grp2.setLayout(lay2)
             self.props_layout.addWidget(grp2)
 
-        # â”€â”€ Preview in 3D button (Constraint + Load) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Preview in 3D button (Constraint + Load) ──────────────────────────
         if node_class in ('ConstraintNode', 'LoadNode'):
-            btn_preview = QtWidgets.QPushButton("ðŸ‘  Preview in 3D")
+            btn_preview = QtWidgets.QPushButton("Preview in 3D")
             btn_preview.setToolTip(
-                "Run the CAD graph (geometry only â€” no FEA/crash solve) and "
+                "Run the CAD graph (geometry only — no FEA/crash solve) and "
                 "highlight the faces selected by the SelectFace node upstream\n"
-                "of this BC.  Requires a SelectFace â†’ Constraint / Load link;\n"
+                "of this BC.  Requires a SelectFace → Constraint / Load link;\n"
                 "a bare condition-string BC has no face to highlight."
             )
             btn_preview.setStyleSheet(
@@ -2562,7 +2928,7 @@ class PropertiesPanel(QtWidgets.QWidget):
 
                 # 1. Render the upstream geometry first.  Many bugs reported as
                 # "Preview does nothing" turn out to be that the user never ran
-                # the graph â€” _last_result is None on every upstream node, so
+                # the graph — _last_result is None on every upstream node, so
                 # the viewer has no shape to draw the overlay on.
                 source, renderable = app._get_render_context_for_node(_node)
                 if renderable is None:
@@ -2583,7 +2949,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                         self, "Nothing to preview",
                         "No upstream geometry is connected to this BC, or the "
                         "CAD graph hasn't produced one yet.\n\n"
-                        "Connect a primitive / sketch / import node â†’ â€¦ â†’ this "
+                        "Connect a primitive / sketch / import node → … → this "
                         "BC and try again."
                     )
                     return
@@ -2653,9 +3019,9 @@ class PropertiesPanel(QtWidgets.QWidget):
         else:
             self._build_generic_ui(node)
 
-    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ──────────────────────────────────────────────────
     # Property update
-    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ──────────────────────────────────────────────────
 
     def update_property(self, prop_name, value):
         """Update node property and mark as dirty for recalculation."""
@@ -2701,7 +3067,7 @@ class TimelinePanel(QtWidgets.QWidget):
 class ResultsPanel(QtWidgets.QWidget):
     """Summary of the most recent FEA / Crash / TopOpt solve.
 
-    Pulled from the result dict that the solver nodes already produce â€” so we
+    Pulled from the result dict that the solver nodes already produce — so we
     do not duplicate any computation; this is purely a presentation surface
     for what otherwise only goes to stdout.
     """
@@ -2712,7 +3078,6 @@ class ResultsPanel(QtWidgets.QWidget):
             """
             QGroupBox { font-weight: bold; margin-top: 8px; padding-top: 10px; border: 1px solid #444; border-radius: 4px; }
             QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; color: #BBDEFB; }
-            QLabel#empty { color: #888; font-style: italic; padding: 24px; }
             QLabel.metric-key { color: #B0BEC5; }
             QLabel.metric-val { color: #FAFAFA; font-weight: bold; }
             """
@@ -2721,12 +3086,7 @@ class ResultsPanel(QtWidgets.QWidget):
         outer.setContentsMargins(6, 6, 6, 6)
         outer.setSpacing(6)
 
-        self._empty = QtWidgets.QLabel("No solver results yet â€” run an FEA, Crash, or Topology node.")
-        self._empty.setObjectName("empty")
-        self._empty.setAlignment(QtCore.Qt.AlignCenter)
-        self._empty.setWordWrap(True)
-        outer.addWidget(self._empty)
-
+        self._empty = QtWidgets.QLabel("No solver results yet — run an FEA, Crash, or Topology node.")
         self._scroll = QtWidgets.QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
@@ -2741,7 +3101,7 @@ class ResultsPanel(QtWidgets.QWidget):
     @staticmethod
     def _fmt(value, unit=""):
         if value is None:
-            return "â€”"
+            return "—"
         try:
             v = float(value)
         except (TypeError, ValueError):
@@ -2783,7 +3143,7 @@ class ResultsPanel(QtWidgets.QWidget):
         v = QtWidgets.QVBoxLayout(group)
         v.setContentsMargins(10, 6, 10, 10)
         for w in warnings:
-            label = QtWidgets.QLabel(f"â€¢ {w}")
+            label = QtWidgets.QLabel(f"• {w}")
             label.setWordWrap(True)
             label.setStyleSheet("color: #FFCC80;")
             label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
@@ -2807,7 +3167,7 @@ class ResultsPanel(QtWidgets.QWidget):
         self._scroll.setVisible(True)
 
         backend = data.get('backend') or ('CalculiX' if rtype == 'fea' else
-                                          'OpenRadioss' if rtype == 'crash' else 'â€”')
+                                          'OpenRadioss' if rtype == 'crash' else '—')
         meta_rows = [
             ("Type",            rtype.upper()),
             ("Backend",         str(backend)),
@@ -2864,7 +3224,7 @@ class ResultsPanel(QtWidgets.QWidget):
             if 'peak_stress' in data:
                 crash_rows.append(("Peak Von Mises", self._fmt(data['peak_stress'], "MPa")))
             if 'absorbed_energy' in data:
-                crash_rows.append(("Plastic dissipation", self._fmt(data['absorbed_energy'], "NÂ·mm")))
+                crash_rows.append(("Plastic dissipation", self._fmt(data['absorbed_energy'], "N·mm")))
             if 'n_failed' in data:
                 crash_rows.append(("Failed elements", str(data['n_failed'])))
             if 'frames' in data and data['frames']:
@@ -2916,7 +3276,7 @@ class LibraryPanel(QtWidgets.QWidget):
         self.layout.setContentsMargins(6, 6, 6, 6)
         self.layout.setSpacing(4)
 
-        # Search box â€” title was redundant with the dock title, dropped.
+        # Search box — title was redundant with the dock title, dropped.
         self.search = QtWidgets.QLineEdit()
         self.search.setPlaceholderText("Search components...")
         self.search.setClearButtonEnabled(True)
@@ -2953,7 +3313,7 @@ class LibraryPanel(QtWidgets.QWidget):
         self.tree.setDragEnabled(True)
         self.tree.itemPressed.connect(self._start_drag)
         
-        # Component categories â€” only entries reachable in the new code-first
+        # Component categories — only entries reachable in the new code-first
         # workflow are listed.  Hand-placed primitives / sketches / 3-D ops /
         # transforms / patterns have been removed; geometry is created either
         # in a Code Part / Assembly node (one readable CadQuery script) or
@@ -2979,13 +3339,13 @@ class LibraryPanel(QtWidgets.QWidget):
                  "Import an STL / OBJ surface mesh."),
             ],
 
-            # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+            # ───────────────────────────────────────────────────────────────
             # WORKBENCH: SIMULATION (FEA)
-            # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+            # ───────────────────────────────────────────────────────────────
             "Simulation - Pre-Processing": [
-                ("Select Face", "com.cad.select_face", "Select face for BCs using text selectors (Direction, Index, Boxâ€¦)"),
+                ("Select Face", "com.cad.select_face", "Select face for BCs using text selectors (Direction, Index, Box…)"),
                 ("Select Face (Interactive)", "com.cad.select_face_interactive",
-                 "Click faces directly in the 3D viewer to select them â€” no code required"),
+                 "Click faces directly in the 3D viewer to select them — no code required"),
                 ("Material", "com.cad.sim.material", "Define material"),
                 ("Generate Mesh", "com.cad.sim.mesh", "Create FEM mesh"),
             ],
@@ -3000,23 +3360,23 @@ class LibraryPanel(QtWidgets.QWidget):
                 ("Remesh Surface", "com.cad.sim.remesh", "Convert TopOpt surface to volume mesh"),
             ],
 
-            # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+            # ───────────────────────────────────────────────────────────────
             # WORKBENCH: CRASH / IMPACT SIMULATION
-            # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+            # ───────────────────────────────────────────────────────────────
             "Crash Simulation": [
                 ("Crash Material",    "com.cad.sim.crash_material",
                  "Elasto-plastic material with yield strength, hardening and failure strain (presets: A36, DP780, UHSS 1500, Al 6061, Al 5052, CFRP)"),
                 ("Impact Condition",  "com.cad.sim.impact",
                  "Define initial velocity (mm/ms = m/s) applied to impact face nodes"),
                 ("Crash Solver",       "com.cad.sim.crash_solver",
-                 "Explicit transient crash solver â€” runs OpenRadioss on the connected mesh, material, constraints and impact condition"),
+                 "Explicit transient crash solver — runs OpenRadioss on the connected mesh, material, constraints and impact condition"),
                 ("Run Radioss Deck",    "com.cad.sim.radioss_deck",
                  "Run an existing OpenRadioss/LS-DYNA `.k` or `.rad` deck (e.g. the Chrysler Neon HPC benchmark) end-to-end and play the animation in the viewer"),
             ],
 
-            # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+            # ───────────────────────────────────────────────────────────────
             # WORKBENCH: ANALYSIS & UTILITIES
-            # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+            # ───────────────────────────────────────────────────────────────
             "Analysis & Assembly": [
                 ("Assembly", "com.cad.assembly", "Combine parts"),
                 ("Mass Properties", "com.cad.mass_properties", "Calculate mass/volume"),
@@ -3221,12 +3581,11 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             self.properties.property_changed.connect(self._on_property_changed)
         except Exception:
             pass
-        self.results = ResultsPanel()
+        self.results = None
         self.timeline = TimelinePanel()
         right_splitter.addWidget(self.properties)
-        right_splitter.addWidget(self.results)
         right_splitter.addWidget(self.timeline)
-        right_splitter.setSizes([380, 280, 180])
+        right_splitter.setSizes([520, 180])
         
         # Main splitter
         main_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
@@ -3356,7 +3715,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         )
         self.addToolBar(self.toolbar)
 
-        # â”€â”€ File / project â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── File / project ──────────────────────────────────────────────
         self.toolbar.addAction(_icon("fa5s.file"),       "New",    self._new_project).setShortcut("Ctrl+N")
         self.toolbar.addAction(_icon("fa5s.folder-open"),"Open",   self._open_project).setShortcut("Ctrl+O")
         self.toolbar.addAction(_icon("fa5s.save"),       "Save",   self._save_project).setShortcut("Ctrl+S")
@@ -3364,7 +3723,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         act_import.setToolTip("Import a STEP / IGES / STL / OBJ file as a node")
         self.toolbar.addSeparator()
 
-        # â”€â”€ Edit (icon-only â€” short labels add noise) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Edit (icon-only — short labels add noise) ───────────────────
         # setShortcut() on the action makes Qt route Ctrl+Z / Ctrl+Y to our
         # handler from a single owner; the previous QShortcut bindings were
         # removed in _setup_shortcuts to stop the "Ambiguous shortcut" warning.
@@ -3382,7 +3741,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         act_redo.setToolTip("Redo (Ctrl+Y)")
         self.toolbar.addSeparator()
 
-        # â”€â”€ Run is the most-used action â€” give it accent color via icon â”€
+        # ── Run is the most-used action — give it accent color via icon ─
         run_act = self.toolbar.addAction(_icon("fa5s.play", "#66BB6A"), "Run", self._execute_graph)
         run_act.setShortcut("F5")
         run_act.setToolTip("Execute the node graph (F5)")
@@ -3395,11 +3754,11 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                                ).setToolTip("Save FEA / TopOpt / Crash results to disk")
         self.toolbar.addSeparator()
 
-        # â”€â”€ View â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── View ────────────────────────────────────────────────────────
         self.toolbar.addAction(_icon("fa5s.expand"), "", self._fit_all
                                ).setToolTip("Fit view to all (F)")
 
-        # â”€â”€ Right-aligned cluster: Auto-update toggle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Right-aligned cluster: Auto-update toggle ───────────────────
         spacer = QtWidgets.QWidget()
         spacer.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
         self.toolbar.addWidget(spacer)
@@ -3431,6 +3790,14 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             node = node_class()
             node.set_name(label)
             node.set_pos(x, y)
+            if node_id == "com.cad.sim.topopt_voxel":
+                try:
+                    self._suppress_graph_property_changed = True
+                    self._apply_topopt_industrial_defaults(node)
+                except Exception:
+                    pass
+                finally:
+                    self._suppress_graph_property_changed = False
             self.graph.add_node(node)
             # record undo action
             try:
@@ -3480,6 +3847,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         if isinstance(obj, dict):
             return (
                 'mesh' in obj
+                or ('vertices' in obj and 'faces' in obj)
                 or obj.get('type') == 'topopt_voxel'
                 or (obj.get('type') == 'crash' and bool(obj.get('frames')))
             )
@@ -3503,7 +3871,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             return
         if self._is_simulation_render_result(obj):
             self.viewer.render_simulation(obj)
-            if isinstance(obj, dict):
+            if isinstance(obj, dict) and self.results is not None:
                 try:
                     self.results.show_result(obj)
                 except Exception:
@@ -3682,7 +4050,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 except Exception:
                     pass
             else:
-                # No cached result yet â€” execute the shape pipeline automatically
+                # No cached result yet — execute the shape pipeline automatically
                 # (skip_simulation=True means heavy FEA/TopOpt nodes are skipped,
                 # so this is fast and behaves the same as when any property changes).
                 if self._is_topopt_result_consumer(node):
@@ -3711,7 +4079,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                     upstream_result = getattr(upstream, '_last_result', None)
                     if upstream_result is None:
                         continue
-                    # Skip face-dicts â€” keep walking up
+                    # Skip face-dicts — keep walking up
                     if isinstance(upstream_result, dict) and 'faces' in upstream_result:
                         shape = self._get_upstream_shape(upstream)
                         if shape is not None:
@@ -3725,13 +4093,26 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             pass
         return None
 
-    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ──────────────────────────────────────────────────────────────────────────
     # BC OVERLAY HELPERS
-    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ──────────────────────────────────────────────────────────────────────────
 
     @staticmethod
     def _get_face_centroid(occ_face):
         """Compute centroid of an OCC face from its bounding-box mid-point."""
+        if isinstance(occ_face, dict):
+            center = occ_face.get('center')
+            if center is not None:
+                return [float(v) for v in center[:3]]
+            bbox = occ_face.get('bbox') or {}
+            try:
+                return [
+                    (float(bbox['xmin']) + float(bbox['xmax'])) / 2.0,
+                    (float(bbox['ymin']) + float(bbox['ymax'])) / 2.0,
+                    (float(bbox['zmin']) + float(bbox['zmax'])) / 2.0,
+                ]
+            except Exception:
+                return [0.0, 0.0, 0.0]
         try:
             bb = occ_face.BoundingBox()
             return [
@@ -3894,7 +4275,22 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 result = getattr(node, '_last_result', None)
                 viz_meta = (result.get('viz') if isinstance(result, dict) else None) or {}
                 for g in faces:
-                    constraint_faces.append({'face': g, 'viz': viz_meta})
+                    if isinstance(g, dict) and (g.get('mesh_selection') or g.get('node_ids') is not None):
+                        mesh_viz = dict(viz_meta)
+                        if not mesh_viz.get('faces'):
+                            mesh_viz['faces'] = [{
+                                'center': g.get('center'),
+                                'points': g.get('points'),
+                                'bbox': g.get('bbox'),
+                            }]
+                        constraint_faces.append({
+                            'pos': g.get('center'),
+                            'points': g.get('points'),
+                            'viz': mesh_viz,
+                            'mesh_selection': g,
+                        })
+                    else:
+                        constraint_faces.append({'face': g, 'viz': viz_meta})
                 if not faces:
                     centroid, samples = _condition_centroid_and_points(node)
                     if centroid is not None:
@@ -3929,14 +4325,22 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                     import math as _m
                     force_mag = _m.sqrt(fx*fx + fy*fy + fz*fz)
                     for g in faces:
-                        load_faces.append(g)
+                        is_mesh_selection = isinstance(g, dict) and (
+                            g.get('mesh_selection') or g.get('node_ids') is not None
+                        )
+                        if is_mesh_selection:
+                            load_faces.append({'mesh_selection': g})
+                        else:
+                            load_faces.append(g)
                         centroid = self._get_face_centroid(g)
                         # FIX #V2: pass magnitude for log-scaled arrow in the viewer
                         load_vectors.append({
                             'centroid': centroid,
-                            'face': g,
+                            'face': None if is_mesh_selection else g,
+                            'mesh_selection': g if is_mesh_selection else None,
                             'vector': vec,
                             'magnitude_N': force_mag,
+                            'points': g.get('points') if isinstance(g, dict) else None,
                         })
                     if not faces and force_mag > 1e-9:
                         centroid, samples = _condition_centroid_and_points(node)
@@ -3950,7 +4354,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 except Exception:
                     pass
 
-            # ---- PressureLoadNode â”€ yellow face highlight, no arrow (normal varies) ----
+            # ---- PressureLoadNode ─ yellow face highlight, no arrow (normal varies) ----
             elif cls == 'PressureLoadNode':
                 if anchor_cls == 'ConstraintNode':
                     continue
@@ -3958,7 +4362,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 for g in faces:
                     load_faces.append(g)
 
-            # ---- ImpactConditionNode â”€ yellow face highlight + cyan velocity arrow ----
+            # ---- ImpactConditionNode ─ yellow face highlight + cyan velocity arrow ----
             elif cls == 'ImpactConditionNode':
                 if anchor_cls == 'ConstraintNode':
                     continue
@@ -3975,10 +4379,14 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 for g in faces:
                     try:
                         load_faces.append(g)
+                        is_mesh_selection = isinstance(g, dict) and (
+                            g.get('mesh_selection') or g.get('node_ids') is not None
+                        )
                         centroid = self._get_face_centroid(g)
                         load_vectors.append({
                             'centroid': centroid,
-                            'face': g,
+                            'face': None if is_mesh_selection else g,
+                            'mesh_selection': g if is_mesh_selection else None,
                             'vector': [vx, vy, vz],
                             'magnitude_N': v_mag,
                             'color': '#00e5ff',
@@ -4004,7 +4412,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         """
         Collect all BC data visible from *node* and push it to both the viewer
         cache and render_bc_overlays().  Safe to call after render_shape() or
-        render_simulation() â€” overlays are layered on top.
+        render_simulation() — overlays are layered on top.
         """
         try:
             cls = node.__class__.__name__
@@ -4034,7 +4442,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                     load_vectors=l_vecs or None,
                 )
             else:
-                # Nothing to show â€” clear any stale overlays
+                # Nothing to show — clear any stale overlays
                 self.viewer.set_bc_overlay_data()
                 self.viewer.render_bc_overlays()
         except Exception:
@@ -4043,8 +4451,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
     def _on_node_double_clicked(self, node):
         """Handle a double-click on a node on the graph canvas.
 
-        For ``CadQueryCodeNode`` this opens the full-screen CAD code editor â€”
-        the same one the inspector's *Edit Codeâ€¦* button uses.
+        For ``CadQueryCodeNode`` this opens the full-screen CAD code editor —
+        the same one the inspector's *Edit Code…* button uses.
         For ``FreeCadPartNode`` this launches the FreeCAD GUI subprocess on
         the node's .FCStd file and wires the save-watcher so the viewer
         refreshes automatically when the user saves inside FreeCAD.
@@ -4104,7 +4512,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
         if not launcher.is_available():
             self.timeline.add_event(
-                "FreeCAD not installed â€” run "
+                "FreeCAD not installed — run "
                 "`python scripts/install_solvers.py --only freecad`"
             )
             return
@@ -4167,6 +4575,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         """Handle property changes from the graph (including widgets on nodes)."""
         # Mark node as dirty so it re-executes
         setattr(node, '_dirty', True)
+
+        if getattr(self, '_suppress_graph_property_changed', False):
+            return
 
         # Update the properties panel if this node is selected.
         # Skip if the inspector itself triggered the change to avoid a reset loop.
@@ -4258,7 +4669,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 # Decide what to draw after a run.  Priority:
                 #   1. The selected node's OWN result, if it's renderable
                 #      (so clicking CAD shows the B-rep, validation shows FEA,
-                #       topopt shows density â€” note _is_renderable_result
+                #       topopt shows density — note _is_renderable_result
                 #       recognises the 'topopt_voxel' dict, which has a
                 #       'density' field but no 'mesh'/'vertices' key).
                 #   2. Otherwise the optimisation / FEA result produced in this
@@ -4269,8 +4680,20 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 selected = next(iter(self.graph.selected_nodes()), None)
                 target_node = None
                 geom = None
+                prefer_topopt = bool(getattr(self, '_prefer_topopt_after_run', False))
 
-                if selected is not None:
+                if prefer_topopt:
+                    sim_node = self._find_renderable_simulation_node()
+                    if sim_node is not None:
+                        result = getattr(sim_node, '_last_result', None)
+                        if self._is_topopt_render_result(result):
+                            target_node, geom = sim_node, result
+                    if geom is None:
+                        preview = getattr(self, '_last_topopt_preview_payload', None)
+                        if self._is_renderable_result(preview):
+                            geom = preview
+
+                if geom is None and selected is not None:
                     own = results.get(selected, getattr(selected, '_last_result', None))
                     if self._is_renderable_result(own):
                         target_node, geom = selected, own
@@ -4312,6 +4735,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             except Exception:
                 pass
         finally:
+            self._prefer_topopt_after_run = False
             self.result_mutex.unlock()
 
     def _is_2d_sketch(self, obj):
@@ -4893,6 +5317,10 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 return 1
             if rtype == 'crash':
                 return 2
+            if rtype == 'remesh':
+                return 3
+            if isinstance(result, dict) and 'vertices' in result and 'faces' in result:
+                return 4
             return 3
 
         sim_nodes.sort(key=_rank)
@@ -5140,7 +5568,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             
             # OPTIMIZATION: Check if this is a visualization-only property change
             # These properties don't need a re-run, just a re-render
-            visualization_only_props = ['visualization', 'density_cutoff', 'element_type', 'projection']
+            visualization_only_props = ['visualization', 'density_cutoff', 'element_type']
             
             if prop_name in visualization_only_props:
                 # Check if the node has cached results (_last_result)
@@ -5243,6 +5671,166 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.information(
             self, "About",
         )
+
+    @staticmethod
+    def _port_has_connections(node, port_name):
+        try:
+            port = node.get_input(port_name)
+            return bool(port and port.connected_ports())
+        except Exception:
+            return False
+
+    @staticmethod
+    def _topopt_has_property_support(node):
+        support_props = (
+            'left_support', 'right_support', 'top_support',
+            'bottom_support', 'front_support', 'back_support',
+        )
+        for prop in support_props:
+            value = str(node.get_property(prop) or '').strip().lower()
+            if value and value != 'none':
+                return True
+
+        text = str(node.get_property('support_regions') or '').strip()
+        if not text or text == '[]':
+            return False
+        try:
+            regions = json.loads(text)
+            return bool(regions)
+        except Exception:
+            return True
+
+    def _topopt_preflight_error(self, node):
+        if getattr(node, "__identifier__", "") != "com.cad.sim.topopt_voxel":
+            return None
+        if self._topopt_has_property_support(node):
+            return None
+        if self._port_has_connections(node, 'constraints'):
+            return None
+        return (
+            "Topology Opt needs at least one fixed support. Add a Constraint "
+            "node to the TopOpt constraints input, or set a face support / "
+            "support region in the TopOpt node."
+        )
+
+    @staticmethod
+    def _topopt_cached_mesh_value(node):
+        try:
+            port = node.get_input('mesh')
+            connected = list(port.connected_ports()) if port else []
+        except Exception:
+            connected = []
+        if not connected:
+            return None
+        source_port = connected[0]
+        source = source_port.node()
+        value = getattr(source, '_last_result', None)
+        if isinstance(value, dict):
+            try:
+                output_name = source_port.name()
+            except Exception:
+                output_name = ''
+            if output_name and output_name in value:
+                value = value[output_name]
+            elif 'mesh' in value:
+                value = value['mesh']
+        return value
+
+    @staticmethod
+    def _topopt_spans_from_value(value):
+        try:
+            import numpy as np
+
+            if isinstance(value, dict):
+                if 'mesh' in value:
+                    return ProfessionalCadApp._topopt_spans_from_value(value['mesh'])
+                if 'vertices' in value:
+                    pts = np.asarray(value['vertices'], dtype=float)
+                    if pts.ndim == 2 and pts.shape[1] >= 3 and len(pts) > 0:
+                        spans = pts[:, :3].max(axis=0) - pts[:, :3].min(axis=0)
+                        positive = spans[spans > 1e-9]
+                        if positive.size:
+                            return np.where(spans > 1e-9, spans, float(positive.min()))
+            if hasattr(value, 'p'):
+                pts = np.asarray(value.p, dtype=float)
+                if pts.ndim == 2 and pts.shape[0] >= 3 and pts.shape[1] > 0:
+                    spans = pts[:3].max(axis=1) - pts[:3].min(axis=1)
+                    positive = spans[spans > 1e-9]
+                    if positive.size:
+                        return np.where(spans > 1e-9, spans, float(positive.min()))
+        except Exception:
+            return None
+        return None
+
+    @staticmethod
+    def _topopt_industrial_grid_from_spans(spans):
+        import numpy as np
+
+        spans = np.asarray(spans, dtype=float)
+        if spans.shape[0] < 3 or not np.all(np.isfinite(spans)):
+            spans = np.asarray([80.0, 28.0, 8.0])
+        positive = spans[spans > 1e-9]
+        if positive.size == 0:
+            spans = np.asarray([80.0, 28.0, 8.0])
+
+        target_cells = 24000.0
+        max_cells = 50000
+        min_axis = 6
+        max_axis = 160
+
+        voxel = max(float(np.prod(spans[:3]) / target_cells) ** (1.0 / 3.0), 1e-9)
+        dims = np.ceil(spans[:3] / voxel).astype(int)
+        dims = np.maximum(dims, min_axis)
+        if int(dims.max()) > max_axis:
+            dims = np.maximum(
+                np.floor(dims * (max_axis / float(dims.max()))).astype(int),
+                min_axis,
+            )
+        while int(np.prod(dims)) > max_cells and int(dims.max()) > min_axis:
+            scale = (max_cells / float(np.prod(dims))) ** (1.0 / 3.0) * 0.98
+            dims = np.maximum(np.floor(dims * scale).astype(int), min_axis)
+        return [int(v) for v in dims]
+
+    def _apply_topopt_industrial_defaults(self, node):
+        if getattr(node, "__identifier__", "") != "com.cad.sim.topopt_voxel":
+            return
+
+        spans = self._topopt_spans_from_value(self._topopt_cached_mesh_value(node))
+        if spans is None:
+            try:
+                spans = [
+                    max(1, int(node.get_property('nelx') or 80)),
+                    max(1, int(node.get_property('nely') or 28)),
+                    max(1, int(node.get_property('nelz') or 8)),
+                ]
+            except Exception:
+                spans = [80, 28, 8]
+        nelx, nely, nelz = self._topopt_industrial_grid_from_spans(spans)
+        stress_enabled = str(node.get_property('stress_constraint') or '').lower() in {
+            '1', 'true', 'yes', 'on',
+        }
+        goal = str(node.get_property('design_goal') or '').lower()
+        stress_goal = 'stress' in goal
+        settings = {
+            'advanced_settings_visible': False,
+            'nelx': nelx,
+            'nely': nely,
+            'nelz': nelz,
+            'rmin': round(max(1.2, min(5.0, max(nelx, nely, nelz) * 0.030)), 2),
+            'penal': 3.0,
+            'density_cutoff': 0.45,
+            'optimizer': 'MMA' if stress_enabled or stress_goal else 'OC',
+            'max_iter': 100,
+            'tol': 0.005,
+            'convergence_patience': 5,
+            'print_ready_mesh': False,
+            'mesh_decimate_ratio': 1.0,
+        }
+        for key, value in settings.items():
+            try:
+                node.set_property(key, value)
+            except Exception:
+                pass
     
     def _execute_graph(self, skip_simulation=False):
         """Start graph execution in a background thread.
@@ -5265,8 +5853,26 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             self._last_topopt_preview_payload = None
             self.timeline.add_event("Graph execution started (Full)")
 
-        # Capture the list of nodes on the MAIN THREAD
+        # Capture the list of nodes on the MAIN THREAD.  Do not rewrite TopOpt
+        # solver settings here; saved studies and explicit user edits must run
+        # as-authored. Defaults remain available from the TopOpt property panel.
         all_nodes_snapshot = list(self.graph.all_nodes())
+        has_topopt_run = False
+        for node in all_nodes_snapshot:
+            if getattr(node, "__identifier__", "") == "com.cad.sim.topopt_voxel":
+                has_topopt_run = True
+                if not skip_simulation:
+                    message = self._topopt_preflight_error(node)
+                    if message:
+                        try:
+                            node.set_error(message)
+                        except Exception:
+                            pass
+                        self.statusBar().showMessage(message)
+                        self.timeline.add_event(message)
+                        QtWidgets.QMessageBox.warning(self, "Topology Opt Setup", message)
+                        return
+        self._prefer_topopt_after_run = bool(has_topopt_run and not skip_simulation)
         
         # Initialize worker with skip_simulation parameter
         self.worker = GraphExecutionWorker(all_nodes_snapshot, skip_simulation=skip_simulation, parent=self)

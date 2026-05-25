@@ -15,6 +15,24 @@ def is_shape(val):
     # Assemblies have 'toCompound', 'add', etc.
     return any(hasattr(val, attr) for attr in ('val', 'tessellate', 'faces', 'extrude', 'edges', 'toCompound', 'add'))
 
+def _value_for_connected_output(connected_port, result):
+    """Select a named output from dict results when a specific port is wired."""
+    if not isinstance(result, dict):
+        return result
+    try:
+        output_name = connected_port.name()
+    except Exception:
+        output_name = ""
+    # SelectFace/InteractiveSelectFace expose a port named "workplane", but the
+    # downstream BC/TopOpt nodes need the full payload so the selected OCC faces
+    # and bbox metadata survive.  Returning only result["workplane"] makes the
+    # UI look mapped while the solver receives no support geometry.
+    if output_name == "workplane" and "faces" in result:
+        return result
+    if output_name and output_name in result:
+        return result[output_name]
+    return result
+
 def resolve_numeric_input(port, fallback):
     """If port is connected to a numeric-producing node, return that number, else fallback."""
     if port and port.connected_ports():
@@ -39,12 +57,14 @@ def resolve_shape_input(port):
     """If port is connected to a shape-producing node, return that shape, else None."""
     if port and port.connected_ports():
         try:
-            node = port.connected_ports()[0].node()
+            connected_port = port.connected_ports()[0]
+            node = connected_port.node()
             
             # Use cached result if available
             res = getattr(node, '_last_result', None)
             if res is None:
                 res = node.run()
+            res = _value_for_connected_output(connected_port, res)
             
             if is_shape(res):
 
@@ -63,11 +83,12 @@ def resolve_any_input(port):
     """Resolve any input type (dict, list, object) from the first connection."""
     if port and port.connected_ports():
         try:
-            node = port.connected_ports()[0].node()
+            connected_port = port.connected_ports()[0]
+            node = connected_port.node()
             res = getattr(node, '_last_result', None)
             if res is None:
                 res = node.run()
-            return res
+            return _value_for_connected_output(connected_port, res)
         except Exception:
             pass
     return None
@@ -82,6 +103,7 @@ def resolve_all_inputs(port):
                 res = getattr(node, '_last_result', None)
                 if res is None:
                     res = node.run()
+                res = _value_for_connected_output(cp, res)
                 if res is not None:
                     results.append(res)
             except Exception:

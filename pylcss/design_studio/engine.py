@@ -10,6 +10,7 @@ import pickle
 SIMULATION_NODE_IDENTIFIERS = {
     'com.cad.sim.material',
     'com.cad.sim.mesh',
+    'com.cad.sim.remesh',
     'com.cad.sim.constraint',
     'com.cad.sim.load',
     'com.cad.sim.pressure_load',

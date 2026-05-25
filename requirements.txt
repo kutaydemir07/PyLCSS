@@ -29,7 +29,9 @@ meshio==5.3.5
 scikit-image==0.26.0
 numpy-stl==3.2.0
 trimesh==4.5.3
+fast-simplification==0.1.13
 rtree==1.4.1
+tetgen==0.8.4
 # 3-D centreline skeletonisation (TEASAR) for the Skeleton NURBS Sweep CAD mode.
 # crackle-codec is a required kimimaro runtime dependency not pulled in by default.
 kimimaro==5.8.1

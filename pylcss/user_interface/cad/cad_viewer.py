@@ -7,6 +7,11 @@ from PySide6 import QtWidgets, QtCore, QtGui
 from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
 
+_MESH_COMPONENT_INDEX_BASE = 1000
+_MESH_COMPONENT_INDEX_STRIDE = 1000
+_MESH_PICKING_MAX_SURFACE_CELLS = 50000
+
+
 class NavCubeWidget(QtWidgets.QWidget):
     """Clickable orientation cube overlay.
     Mirrors the scene camera orientation; click any face, edge or corner
@@ -330,7 +335,7 @@ class CQ3DViewer(QtWidgets.QWidget):
     """
 
     # Signals emitted during interactive picking
-    face_picked = QtCore.Signal(list)      # list of OCC face objects
+    face_picked = QtCore.Signal(list)      # OCC faces or mesh virtual-face dicts
     edge_picked = QtCore.Signal(list)      # list of OCC edge objects
     picking_cancelled = QtCore.Signal()
     face_picking_requested = QtCore.Signal()
@@ -504,6 +509,7 @@ class CQ3DViewer(QtWidgets.QWidget):
         self._face_map = {}                  # vtk_cell_id -> occ_face_index
         self._all_occ_faces = []             # list of OCC face objects (from last render_shape)
         self._face_polydata_list = []        # per-face vtkPolyData for highlighting
+        self._pickable_surface_dataset = None
         self._pick_callback_id = None
         self._rotation_locked = False        # True → no-op interactor style installed; left-click picks
 
@@ -1821,6 +1827,7 @@ class CQ3DViewer(QtWidgets.QWidget):
         self._face_map = {}
         self._all_occ_faces = []
         self._face_polydata_list = []
+        self._pickable_surface_dataset = None
 
         topo_shape = shape
 
@@ -2010,6 +2017,264 @@ class CQ3DViewer(QtWidgets.QWidget):
     # BC OVERLAYS
     # ──────────────────────────────────────────────────────────────────────────
 
+    def _polydata_from_cells(self, dataset, cell_ids):
+        """Build standalone polydata from selected cells in a VTK dataset."""
+        if dataset is None or not cell_ids:
+            return None
+        try:
+            pts = vtk.vtkPoints()
+            polys = vtk.vtkCellArray()
+            point_map = {}
+            for cell_id in cell_ids:
+                cell = dataset.GetCell(int(cell_id))
+                if cell is None or cell.GetNumberOfPoints() < 3:
+                    continue
+                local_ids = []
+                for i in range(cell.GetNumberOfPoints()):
+                    pid = int(cell.GetPointId(i))
+                    if pid not in point_map:
+                        point_map[pid] = pts.InsertNextPoint(dataset.GetPoint(pid))
+                    local_ids.append(point_map[pid])
+                polys.InsertNextCell(len(local_ids))
+                for pid in local_ids:
+                    polys.InsertCellPoint(pid)
+            if pts.GetNumberOfPoints() == 0 or polys.GetNumberOfCells() == 0:
+                return None
+            pd = vtk.vtkPolyData()
+            pd.SetPoints(pts)
+            pd.SetPolys(polys)
+            return pd
+        except Exception:
+            return None
+
+    def _configure_mesh_face_picking_from_surface(self, dataset):
+        """Expose six directional surface patches for interactive picking on meshes."""
+        self._face_map = {}
+        self._all_occ_faces = []
+        self._face_polydata_list = []
+        self._mesh_picking_too_dense = False
+
+        if dataset is None:
+            return
+        try:
+            n_cells = int(dataset.GetNumberOfCells())
+            n_points = int(dataset.GetNumberOfPoints())
+            if n_cells == 0 or n_points == 0:
+                return
+            if n_cells > _MESH_PICKING_MAX_SURFACE_CELLS:
+                # Splitting hundreds of thousands of triangles into connected
+                # pick patches on the GUI thread makes the application appear
+                # frozen.  The Properties panel will prepare/render the
+                # remeshed upstream geometry instead; if none exists, picking is
+                # deliberately unavailable for this dense raw surface.
+                self._mesh_picking_too_dense = True
+                return
+
+            all_points = np.array([dataset.GetPoint(i) for i in range(n_points)], dtype=float)
+            mins = np.min(all_points, axis=0)
+            maxs = np.max(all_points, axis=0)
+            spans = maxs - mins
+            body_center = 0.5 * (mins + maxs)
+
+            valid_cell_ids = []
+            valid_point_ids = []
+            centers = []
+            normals = []
+            areas = []
+            edge_lengths = []
+            for cell_id in range(n_cells):
+                cell = dataset.GetCell(cell_id)
+                if cell is None or cell.GetNumberOfPoints() < 3:
+                    continue
+                point_ids = [int(cell.GetPointId(i)) for i in range(cell.GetNumberOfPoints())]
+                coords = np.array(
+                    [dataset.GetPoint(point_id) for point_id in point_ids],
+                    dtype=float,
+                )
+                if coords.shape[0] < 3:
+                    continue
+                normal = np.cross(coords[1] - coords[0], coords[2] - coords[0])
+                norm = float(np.linalg.norm(normal))
+                if norm < 1e-12:
+                    continue
+                normal = normal / norm
+                center = np.mean(coords, axis=0)
+                if float(np.dot(normal, center - body_center)) < 0.0:
+                    normal *= -1.0
+                valid_cell_ids.append(cell_id)
+                valid_point_ids.append(point_ids)
+                centers.append(center)
+                normals.append(normal)
+                areas.append(0.5 * norm)
+                for i in range(coords.shape[0]):
+                    edge_lengths.append(float(np.linalg.norm(coords[(i + 1) % coords.shape[0]] - coords[i])))
+
+            if not valid_cell_ids:
+                return
+
+            valid_cell_ids = np.asarray(valid_cell_ids, dtype=int)
+            centers = np.asarray(centers, dtype=float)
+            normals = np.asarray(normals, dtype=float)
+            areas = np.asarray(areas, dtype=float)
+            edge_lengths = np.asarray([v for v in edge_lengths if v > 1e-9], dtype=float)
+            edge_scale = float(np.median(edge_lengths)) if edge_lengths.size else 1.0
+
+            def _components_for_mask(mask):
+                selected = np.where(np.asarray(mask, dtype=bool))[0]
+                if selected.size == 0:
+                    return []
+
+                edge_to_faces = {}
+                for local_idx, valid_idx in enumerate(selected):
+                    ids = valid_point_ids[int(valid_idx)]
+                    if len(ids) < 3:
+                        continue
+                    for i in range(len(ids)):
+                        edge = tuple(sorted((int(ids[i]), int(ids[(i + 1) % len(ids)]))))
+                        edge_to_faces.setdefault(edge, []).append(local_idx)
+
+                adjacency = [set() for _ in range(len(selected))]
+                for owners in edge_to_faces.values():
+                    if len(owners) < 2:
+                        continue
+                    for owner in owners:
+                        adjacency[owner].update(v for v in owners if v != owner)
+
+                components = []
+                visited = np.zeros(len(selected), dtype=bool)
+                for start in range(len(selected)):
+                    if visited[start]:
+                        continue
+                    stack = [start]
+                    visited[start] = True
+                    current = []
+                    while stack:
+                        item = stack.pop()
+                        current.append(item)
+                        for nxt in adjacency[item]:
+                            if not visited[nxt]:
+                                visited[nxt] = True
+                                stack.append(nxt)
+                    components.append(selected[np.asarray(current, dtype=int)])
+
+                def _component_sort_key(component):
+                    comp_area = float(np.sum(areas[component]))
+                    if comp_area > 1e-12:
+                        comp_center = np.sum(
+                            centers[component] * areas[component, None],
+                            axis=0,
+                        ) / comp_area
+                    else:
+                        comp_center = np.mean(centers[component], axis=0)
+                    return (
+                        -comp_area,
+                        float(comp_center[0]),
+                        float(comp_center[1]),
+                        float(comp_center[2]),
+                    )
+
+                components.sort(key=_component_sort_key)
+                return components
+
+            directions = (('<X', 0, -1.0), ('>X', 0, 1.0),
+                          ('<Y', 1, -1.0), ('>Y', 1, 1.0),
+                          ('<Z', 2, -1.0), ('>Z', 2, 1.0))
+            face_cell_scores = {}
+            for direction_index, (selector, axis, sign) in enumerate(directions):
+                direction = np.zeros(3, dtype=float)
+                direction[axis] = sign
+                normal_mask = np.dot(normals, direction) >= 0.30
+                if np.any(normal_mask):
+                    candidate_centers = centers[normal_mask]
+                    extreme = (
+                        float(np.min(candidate_centers[:, axis]))
+                        if sign < 0.0 else
+                        float(np.max(candidate_centers[:, axis]))
+                    )
+                    axis_span = float(spans[axis])
+                    tol = max(
+                        1e-6,
+                        0.005 * axis_span,
+                        min(3.0 * edge_scale, 0.08 * axis_span) if axis_span > 1e-9 else 3.0 * edge_scale,
+                    )
+                    near_mask = (
+                        centers[:, axis] <= extreme + tol
+                        if sign < 0.0 else
+                        centers[:, axis] >= extreme - tol
+                    )
+                    mask = normal_mask & near_mask
+                else:
+                    extreme = (
+                        float(np.min(centers[:, axis]))
+                        if sign < 0.0 else
+                        float(np.max(centers[:, axis]))
+                    )
+                    axis_span = float(spans[axis])
+                    tol = max(
+                        1e-6,
+                        0.005 * axis_span,
+                        min(3.0 * edge_scale, 0.08 * axis_span) if axis_span > 1e-9 else 3.0 * edge_scale,
+                    )
+                    mask = (
+                        centers[:, axis] <= extreme + tol
+                        if sign < 0.0 else
+                        centers[:, axis] >= extreme - tol
+                    )
+
+                for component_index, component in enumerate(_components_for_mask(mask)):
+                    cell_ids = [int(v) for v in valid_cell_ids[component].tolist()]
+                    if not cell_ids:
+                        continue
+                    face_idx = len(self._all_occ_faces)
+                    stored_index = (
+                        _MESH_COMPONENT_INDEX_BASE
+                        + direction_index * _MESH_COMPONENT_INDEX_STRIDE
+                        + component_index
+                    )
+                    comp_area = float(np.sum(areas[component]))
+                    if comp_area > 1e-12:
+                        comp_center = np.sum(
+                            centers[component] * areas[component, None],
+                            axis=0,
+                        ) / comp_area
+                    else:
+                        comp_center = np.mean(centers[component], axis=0)
+                    self._all_occ_faces.append({
+                        'mesh_virtual_face': True,
+                        'selector': selector,
+                        'component_index': int(component_index),
+                        'stored_index': int(stored_index),
+                        'label': f"{selector} patch {component_index + 1}",
+                        'face_index': face_idx,
+                        'center': [float(v) for v in comp_center.tolist()],
+                        'area': comp_area,
+                    })
+                    self._face_polydata_list.append(self._polydata_from_cells(dataset, cell_ids))
+                    scores = np.dot(normals[component], direction)
+                    for local_cell_id, score in zip(cell_ids, scores):
+                        previous = face_cell_scores.get(int(local_cell_id), -1e9)
+                        if float(score) > previous:
+                            face_cell_scores[int(local_cell_id)] = float(score)
+                            self._face_map[int(local_cell_id)] = face_idx
+        except Exception:
+            self._face_map = {}
+            self._all_occ_faces = []
+            self._face_polydata_list = []
+
+    def ensure_mesh_face_picking(self):
+        """Build mesh virtual-face picking data lazily for the current render."""
+        try:
+            self._mesh_picking_too_dense = False
+            if self._all_occ_faces and any(pd is not None for pd in self._face_polydata_list):
+                return True
+            dataset = getattr(self, '_pickable_surface_dataset', None)
+            if dataset is None:
+                return False
+            self._configure_mesh_face_picking_from_surface(dataset)
+            return bool(self._all_occ_faces) and any(pd is not None for pd in self._face_polydata_list)
+        except Exception:
+            return False
+
     def set_bc_overlay_data(self, constraint_faces=None, load_faces=None, load_vectors=None):
         """
         Cache BC overlay data so it can be re-applied after render_simulation().
@@ -2080,6 +2345,74 @@ class CQ3DViewer(QtWidgets.QWidget):
                 return pd
             except Exception:
                 return None
+
+        def _mesh_selection_to_polydata(selection):
+            if not isinstance(selection, dict):
+                return None
+            try:
+                verts = np.asarray(selection.get('surface_vertices') or [], dtype=float)
+                tris = np.asarray(selection.get('surface_triangles') or [], dtype=int)
+                if verts.ndim != 2 or verts.shape[1] < 3 or len(verts) == 0:
+                    return None
+                if tris.ndim != 2 or tris.shape[1] < 3 or len(tris) == 0:
+                    return None
+                pts = vtk.vtkPoints()
+                polys = vtk.vtkCellArray()
+                for v in verts[:, :3]:
+                    pts.InsertNextPoint(float(v[0]), float(v[1]), float(v[2]))
+                for tri in tris[:, :3]:
+                    if np.any(tri < 0) or np.any(tri >= len(verts)):
+                        continue
+                    polys.InsertNextCell(3)
+                    polys.InsertCellPoint(int(tri[0]))
+                    polys.InsertCellPoint(int(tri[1]))
+                    polys.InsertCellPoint(int(tri[2]))
+                if polys.GetNumberOfCells() == 0:
+                    return None
+                pd = vtk.vtkPolyData()
+                pd.SetPoints(pts)
+                pd.SetPolys(polys)
+                return pd
+            except Exception:
+                return None
+
+        def _mesh_selection_sample_points(selection, max_points=6):
+            if not isinstance(selection, dict):
+                return []
+            try:
+                verts = np.asarray(selection.get('surface_vertices') or [], dtype=float)
+                tris = np.asarray(selection.get('surface_triangles') or [], dtype=int)
+                if verts.ndim != 2 or verts.shape[1] < 3 or tris.ndim != 2 or tris.shape[1] < 3:
+                    return selection.get('points') or []
+                centroids = []
+                areas = []
+                for tri in tris[:, :3]:
+                    if np.any(tri < 0) or np.any(tri >= len(verts)):
+                        continue
+                    pa, pb, pc = verts[int(tri[0])], verts[int(tri[1])], verts[int(tri[2])]
+                    centroids.append((pa + pb + pc) / 3.0)
+                    areas.append(0.5 * np.linalg.norm(np.cross(pb - pa, pc - pa)))
+                if not centroids:
+                    return selection.get('points') or []
+                order = np.argsort(np.asarray(areas, dtype=float))[::-1]
+                selected = []
+                bbox = selection.get('bbox') or {}
+                try:
+                    dx = float(bbox['xmax']) - float(bbox['xmin'])
+                    dy = float(bbox['ymax']) - float(bbox['ymin'])
+                    dz = float(bbox['zmax']) - float(bbox['zmin'])
+                    min_spacing = max(0.25, 0.12 * ((dx * dx + dy * dy + dz * dz) ** 0.5))
+                except Exception:
+                    min_spacing = 0.25
+                for idx in order:
+                    point = np.asarray(centroids[int(idx)], dtype=float)
+                    if all(np.linalg.norm(point - other) >= min_spacing for other in selected):
+                        selected.append(point)
+                    if len(selected) >= max_points:
+                        break
+                return [p.tolist() for p in selected]
+            except Exception:
+                return selection.get('points') or []
 
         def _face_boundary_polydata(occ_face):
             verts, tris = _triangulate_face(occ_face)
@@ -2194,6 +2527,27 @@ class CQ3DViewer(QtWidgets.QWidget):
             self.renderer.AddActor(actor)
             self._bc_overlay_actors.append(actor)
 
+        def _add_mesh_selection_overlay(selection, color, opacity=0.16, line_width=2.5, edge_color=None):
+            pd = _mesh_selection_to_polydata(selection)
+            if pd is None:
+                return
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputData(pd)
+            mapper.ScalarVisibilityOff()
+            mapper.SetResolveCoincidentTopologyToPolygonOffset()
+            mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2.0, -2.0)
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            actor.GetProperty().SetColor(*color)
+            actor.GetProperty().SetOpacity(opacity)
+            actor.GetProperty().EdgeVisibilityOn()
+            actor.GetProperty().SetEdgeColor(*(edge_color or color))
+            actor.GetProperty().SetLineWidth(line_width)
+            actor.GetProperty().LightingOff()
+            actor._bc_overlay = True
+            self.renderer.AddActor(actor)
+            self._bc_overlay_actors.append(actor)
+
         def _add_bc_arrow(start, vector, color):
             """Arrow tagged as a BC overlay so it is cleaned up with the rest.
 
@@ -2278,6 +2632,19 @@ class CQ3DViewer(QtWidgets.QWidget):
                         b = int(hex_col[5:7], 16) / 255.0
                     except Exception:
                         r, g, b = 0.16, 0.47, 1.0
+                    mesh_selection = item.get('mesh_selection')
+                    if isinstance(mesh_selection, dict):
+                        # Stress plots often render low-stress regions blue, so a
+                        # blue support patch disappears.  Use a high-contrast cyan
+                        # fill with a white outline for mesh-backed supports.
+                        _add_mesh_selection_overlay(
+                            mesh_selection,
+                            color=(0.0, 0.88, 1.0),
+                            opacity=0.34,
+                            line_width=4.0,
+                            edge_color=(1.0, 1.0, 1.0),
+                        )
+                        continue
                     fixed_dofs = viz_meta.get('fixed_dofs') or [0, 1, 2]
                     points = item.get('points') or [item.get('pos')]
                     for point in points:
@@ -2317,6 +2684,13 @@ class CQ3DViewer(QtWidgets.QWidget):
             for item in load_faces:
                 if item is None:
                     continue
+                if isinstance(item, dict):
+                    mesh_selection = item.get('mesh_selection')
+                    if mesh_selection is None and (item.get('node_ids') is not None or item.get('surface_triangles') is not None):
+                        mesh_selection = item
+                    if isinstance(mesh_selection, dict):
+                        _add_mesh_selection_overlay(mesh_selection, color=(1.0, 0.85, 0.0), opacity=0.18, line_width=2.5)
+                        continue
                 occ_face = item.get('face') if isinstance(item, dict) else item
                 if occ_face is not None:
                     _add_face_outline(occ_face, color=(1.0, 0.85, 0.0), line_width=2.5)
@@ -2355,6 +2729,8 @@ class CQ3DViewer(QtWidgets.QWidget):
                 unit_vec  = vec / (np.linalg.norm(vec) + 1e-12)
                 vis_vec   = unit_vec * arrow_len
                 sample_points = _sample_face_points(occ_face, max_points=5) if occ_face is not None else []
+                if not sample_points and isinstance(entry, dict):
+                    sample_points = _mesh_selection_sample_points(entry.get('mesh_selection'), max_points=5)
                 if not sample_points and isinstance(entry, dict):
                     sample_points = entry.get('points') or []
                 if sample_points:
@@ -2669,6 +3045,10 @@ class CQ3DViewer(QtWidgets.QWidget):
         if self.current_actor:
             self.renderer.RemoveActor(self.current_actor)
             self.current_actor = None
+        self._face_map = {}
+        self._all_occ_faces = []
+        self._face_polydata_list = []
+        self._pickable_surface_dataset = None
 
         # --- RECOVERED SHAPE VIZ (Triangulated Surface) ---
         if isinstance(data, dict) and data.get('visualization_mode') == 'Recovered Shape':
@@ -2676,13 +3056,13 @@ class CQ3DViewer(QtWidgets.QWidget):
             if rec and 'vertices' in rec and 'faces' in rec:
                 verts = rec['vertices']
                 faces = rec['faces']
-                
+
                 poly_data = vtk.vtkPolyData()
                 points = vtk.vtkPoints()
                 for v in verts:
                     points.InsertNextPoint(v[0], v[1], v[2])
                 poly_data.SetPoints(points)
-                
+
                 cells = vtk.vtkCellArray()
                 for f in faces:
                     triangle = vtk.vtkTriangle()
@@ -2698,10 +3078,10 @@ class CQ3DViewer(QtWidgets.QWidget):
                 normals.AutoOrientNormalsOn()
                 normals.SplittingOff()
                 normals.SetFeatureAngle(80.0)
-                
+
                 mapper = vtk.vtkPolyDataMapper()
                 mapper.SetInputConnection(normals.GetOutputPort())
-                
+
                 actor = vtk.vtkActor()
                 actor.SetMapper(mapper)
                 # Soft premium gray
@@ -2712,13 +3092,91 @@ class CQ3DViewer(QtWidgets.QWidget):
                 except AttributeError:
                     pass
                 actor.GetProperty().EdgeVisibilityOff()
-                
+
                 self.renderer.AddActor(actor)
                 self.current_actor = actor
-                
+
+                self._pickable_surface_dataset = vtk.vtkPolyData()
+                self._pickable_surface_dataset.DeepCopy(poly_data)
+
                 # Update scalar bar to be empty for geometry view
                 self._update_scalar_bar("", 0, 1, None)
-                
+
+                self.renderer.ResetCamera()
+                self.vtkWidget.GetRenderWindow().Render()
+                return
+
+        # Imported STL/OBJ meshes arrive as a plain surface dict.  Render that
+        # surface directly so users can inspect it before a volume remesh runs.
+        if (
+            isinstance(data, dict)
+            and data.get('type') != 'topopt_voxel'
+            and 'vertices' in data
+            and 'faces' in data
+        ):
+            try:
+                verts = np.asarray(data['vertices'], dtype=float)
+                faces = np.asarray(data['faces'], dtype=int)
+            except Exception:
+                verts = faces = None
+            if (
+                verts is not None
+                and faces is not None
+                and verts.ndim == 2
+                and verts.shape[1] >= 3
+                and faces.ndim == 2
+                and faces.shape[1] >= 3
+                and len(verts) > 0
+                and len(faces) > 0
+            ):
+                poly_data = vtk.vtkPolyData()
+                points = vtk.vtkPoints()
+                for v in verts:
+                    points.InsertNextPoint(v[0], v[1], v[2])
+                poly_data.SetPoints(points)
+
+                cells = vtk.vtkCellArray()
+                for f in faces:
+                    if len(f) == 3:
+                        cell = vtk.vtkTriangle()
+                        for j in range(3):
+                            cell.GetPointIds().SetId(j, int(f[j]))
+                    else:
+                        cell = vtk.vtkPolygon()
+                        cell.GetPointIds().SetNumberOfIds(len(f))
+                        for j, idx in enumerate(f):
+                            cell.GetPointIds().SetId(j, int(idx))
+                    cells.InsertNextCell(cell)
+                poly_data.SetPolys(cells)
+
+                normals = vtk.vtkPolyDataNormals()
+                normals.SetInputData(poly_data)
+                normals.ConsistencyOn()
+                normals.AutoOrientNormalsOn()
+                normals.SplittingOn()
+                normals.SetFeatureAngle(45.0)
+
+                mapper = vtk.vtkPolyDataMapper()
+                mapper.SetInputConnection(normals.GetOutputPort())
+
+                actor = vtk.vtkActor()
+                actor.SetMapper(mapper)
+                actor.GetProperty().SetColor(0.72, 0.76, 0.78)
+                actor.GetProperty().SetOpacity(1.0)
+                try:
+                    actor.GetProperty().SetInterpolationToPhong()
+                except AttributeError:
+                    pass
+                actor.GetProperty().EdgeVisibilityOff()
+
+                self.renderer.AddActor(actor)
+                self.current_actor = actor
+                self.actors.append(actor)
+
+                self._pickable_surface_dataset = vtk.vtkPolyData()
+                self._pickable_surface_dataset.DeepCopy(poly_data)
+
+                self._update_scalar_bar("", 0, 1, None)
                 self.renderer.ResetCamera()
                 self.vtkWidget.GetRenderWindow().Render()
                 return
@@ -2881,6 +3339,8 @@ class CQ3DViewer(QtWidgets.QWidget):
             mapper.SetInputData(surface.GetOutput())
 
             dataset = surface.GetOutput()
+            self._pickable_surface_dataset = vtk.vtkPolyData()
+            self._pickable_surface_dataset.DeepCopy(dataset)
 
             if dataset.GetPointData().GetScalars() is not None:
                 scalars = dataset.GetPointData().GetScalars()
@@ -2975,11 +3435,11 @@ class CQ3DViewer(QtWidgets.QWidget):
             actor.GetProperty().EdgeVisibilityOn()
         elif stress is not None or displacement is not None:
             actor.GetProperty().SetRepresentationToSurface()
-            actor.GetProperty().EdgeVisibilityOn()
+            actor.GetProperty().EdgeVisibilityOff()
         else:
             actor.GetProperty().SetColor(0.8, 0.4, 0.4)
             actor.GetProperty().SetRepresentationToSurface()
-            actor.GetProperty().EdgeVisibilityOn()
+            actor.GetProperty().EdgeVisibilityOff()
 
         self.renderer.AddActor(actor)
         self.current_actor = actor

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Tuple
 
-INDUSTRIAL_WORKFLOW_MODES = ('Guided', 'Expert')
+INDUSTRIAL_WORKFLOW_MODES = ('Guided',)
 INDUSTRIAL_DESIGN_GOALS = (
     'Lightweight Stiffness',
     'Minimum Mass Under Stress',
@@ -78,8 +78,6 @@ def industrial_topopt_defaults(
         'penal': 3.0,
         'optimizer': 'OC',
         'stress_constraint': False,
-        'stress_penalty': 1.0,
-        'stress_pnorm_p': 8.0,
         'symmetry': 'None',
         'extrusion': 'None',
         'overhang_build_axis': 'None',
