@@ -109,7 +109,10 @@ def _apply_max_member_size(
         return x_3d
 
     size = max(3, int(round(2.0 * float(radius_voxels) + 1.0)))
-    local_avg = uniform_filter(x_3d, size=size, mode='constant', cval=0.0)
+    # 'nearest' (not constant/0) so the local average is not pulled down by
+    # out-of-domain voxels — otherwise thick members anchored to a domain wall
+    # escape the cap and exceed the requested maximum member size.
+    local_avg = uniform_filter(x_3d, size=size, mode='nearest')
     safe_avg  = np.maximum(local_avg, float(threshold))
     return x_3d * (float(threshold) / safe_avg)
 

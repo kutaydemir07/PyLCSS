@@ -825,7 +825,7 @@ def _source_volume_fraction(
     return 1.0 if rho.size else 0.0
 
 
-def _effective_density_cutoff(cutoff: Any, volfrac: Any) -> float:
+def _effective_density_cutoff(cutoff: Any) -> float:
     """Use the saved threshold consistently for preview, recovery, and export."""
     try:
         cutoff_value = float(cutoff)
@@ -970,7 +970,6 @@ def _mesh_design_domain_grid(
 
     pts = points[:3].T
     tets = cells[:4].T
-    tol = 1e-9
 
     _numba_voxelize_tets(
         pts, tets, mins, sub_step, nelx, nely, nelz, samples,
@@ -1515,8 +1514,7 @@ class TopologyOptVoxelNode(CadQueryNode):
 
         def _preview_payload(density: np.ndarray, stage: Optional[str] = None) -> Dict[str, Any]:
             density_cutoff = _effective_density_cutoff(
-                self.get_property('density_cutoff') or 0.45,
-                problem.volfrac,
+                self.get_property('density_cutoff') or 0.45
             )
             payload = {
                 'type': 'topopt_voxel',
@@ -1573,8 +1571,7 @@ class TopologyOptVoxelNode(CadQueryNode):
         logger.info("TopologyOptVoxelNode: %s", result.message)
         density = np.asarray(result.density, dtype=float)
         density_cutoff = _effective_density_cutoff(
-            self.get_property('density_cutoff') or 0.45,
-            problem.volfrac,
+            self.get_property('density_cutoff') or 0.45
         )
         print_ready = bool(self.get_property('print_ready_mesh'))
         decimate    = float(self.get_property('mesh_decimate_ratio') or 1.0)

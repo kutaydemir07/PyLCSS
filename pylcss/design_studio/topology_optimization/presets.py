@@ -10,7 +10,6 @@ INDUSTRIAL_DESIGN_GOALS = (
     'Lightweight Stiffness',
     'Minimum Mass Under Stress',
 )
-INDUSTRIAL_QUALITY_PRESETS = ('Automatic',)
 INDUSTRIAL_MANUFACTURING_PROCESSES = (
     'None',
     'Additive',

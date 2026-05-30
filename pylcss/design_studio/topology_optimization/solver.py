@@ -104,17 +104,33 @@ def _oc_update(
 
     maxvol = volfrac * n_act
     move   = 0.2
-    l1, l2 = 0.0, 1e5
-    x_act_new = x_act
-    while l2 - l1 > 1e-4:
+    lower  = np.maximum(1e-3, x_act - move)
+    upper  = np.minimum(1.0,  x_act + move)
+
+    def _candidate(lmid: float) -> np.ndarray:
+        be = np.maximum(-dc_act / lmid, 0.0)
+        return np.clip(x_act * np.sqrt(be), lower, upper)
+
+    # Bracket the Lagrange multiplier λ. Volume V(λ) is non-increasing in λ, and
+    # |λ*| tracks the sensitivity scale (∝ material stiffness), so the old fixed
+    # [0, 1e5] bracket silently fails whenever run() is fed real-unit E. Grow a
+    # geometric bracket until V(l1) >= maxvol >= V(l2), then bisect with a
+    # scale-invariant relative test (Sigmund 88-line) instead of an absolute one.
+    l1 = l2 = 1e-9
+    for _ in range(200):
+        if float(np.sum(_candidate(l2))) <= maxvol:
+            break
+        l1, l2 = l2, l2 * 2.0
+    for _ in range(200):
+        if float(np.sum(_candidate(l1))) >= maxvol:
+            break
+        l1, l2 = l1 * 0.5, l1
+
+    x_act_new = _candidate(l2)
+    while (l2 - l1) > 1e-3 * (l1 + l2):
         lmid = 0.5 * (l1 + l2)
-        be   = np.maximum(-dc_act / lmid, 0.0)
-        x_act_new = np.clip(
-            x_act * np.sqrt(be),
-            np.maximum(1e-3, x_act - move),
-            np.minimum(1.0,  x_act + move),
-        )
-        if np.sum(x_act_new) > maxvol:
+        x_act_new = _candidate(lmid)
+        if float(np.sum(x_act_new)) > maxvol:
             l1 = lmid
         else:
             l2 = lmid
@@ -143,14 +159,19 @@ def _restore_active_volume(
     target = float(np.clip(volfrac, 1e-3, 1.0)) * float(np.sum(active))
     lo, hi = -1.0, 1.0
     x_act = xnew[active]
+    tol = 1e-9 * max(target, 1.0)
+    mid = 0.0
     for _ in range(60):
         mid = 0.5 * (lo + hi)
         shifted = np.clip(x_act + mid, 1e-3, 1.0)
-        if float(np.sum(shifted)) < target:
+        cur = float(np.sum(shifted))
+        if abs(cur - target) <= tol:
+            break
+        if cur < target:
             lo = mid
         else:
             hi = mid
-    xnew[active] = np.clip(x_act + 0.5 * (lo + hi), 1e-3, 1.0)
+    xnew[active] = np.clip(x_act + mid, 1e-3, 1.0)
     if passive_density is not None:
         xnew[~active] = np.asarray(passive_density, dtype=float)[~active]
     return xnew
@@ -225,7 +246,6 @@ def _density_3d_to_flat(x_3d: np.ndarray, domain: Any) -> np.ndarray:
 
 def _make_passive_clamp_module():
     import pymoto as pym
-    import numpy as np
 
     class _PassiveClamp(pym.Module):
         def __init__(self, active_mask, passive_density):
@@ -449,20 +469,6 @@ class TopologyOptVoxelResult:
 def _density_grid_from_state(x: np.ndarray, domain: Any) -> np.ndarray:
     """Map pyMOTO's flat element numbering to density[ix, iy, iz]."""
     return np.asarray(x, dtype=float)[domain.elements]
-
-
-def _density_grid_with_passive_clamps(
-    x: np.ndarray,
-    domain: Any,
-    active_mask: np.ndarray,
-    passive_density: np.ndarray,
-) -> np.ndarray:
-    """Map a filtered density state to a grid and restore passive clamps."""
-    flat = np.asarray(x, dtype=float).reshape(-1).copy()
-    if flat.size == np.asarray(active_mask).size:
-        flat[~active_mask] = passive_density[~active_mask]
-    return _density_grid_from_state(flat, domain)
-
 
 
 class TopologyOptVoxelSolver:
@@ -863,9 +869,9 @@ class TopologyOptVoxelSolver:
                 stress_hist.append(float(np.sqrt(max(pn_val, 0.0))))
             result.n_iter = it
 
-            density_3d = _physical_density_grid(np.asarray(sxphys.state, dtype=float))
             if callback is not None:
-                callback(it, comp_val, change, density_3d.copy())
+                density_3d = _physical_density_grid(np.asarray(sxphys.state, dtype=float))
+                callback(it, comp_val, change, density_3d)
 
             # Objective-based early stop: relative compliance change below tol
             # for `patience` consecutive iterations, with the robust density

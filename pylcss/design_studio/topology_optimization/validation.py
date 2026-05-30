@@ -151,29 +151,34 @@ def _voxel_density_to_tet_mesh(
     maxs = np.asarray(bounds[1], dtype=float)
     cell = (maxs - mins) / np.array([nelx, nely, nelz], dtype=float)
 
-    node_index: Dict[Tuple[int, int, int], int] = {}
-    points: List[np.ndarray] = []
+    # Vectorised corner-node welding.  Every solid voxel contributes the 6 Kuhn
+    # tets; each tet vertex is a cube corner (gi,gj,gk) on the
+    # (nelx+1, nely+1, nelz+1) node lattice.  Linearising the corner coordinate
+    # gives a collision-free key, so one np.unique welds all shared nodes at once
+    # — replacing a per-corner Python dict loop (24 lookups/voxel) with array ops
+    # while preserving element order (voxel-major, Kuhn-minor) exactly.
+    ny1, nz1 = nely + 1, nelz + 1
 
-    def _node(gi: int, gj: int, gk: int) -> int:
-        key = (gi, gj, gk)
-        idx = node_index.get(key)
-        if idx is None:
-            idx = len(points)
-            node_index[key] = idx
-            points.append(mins + np.array([gi, gj, gk], dtype=float) * cell)
-        return idx
-
-    corner_tets: List[List[int]] = []
-    for (i, j, k) in np.argwhere(solid):
-        i, j, k = int(i), int(j), int(k)
-        for tet in _KUHN_TETS:
-            corner_tets.append([_node(i + dx, j + dy, k + dz) for (dx, dy, dz) in tet])
-
-    if not corner_tets:
+    solid_ijk = np.argwhere(solid)                          # (V, 3) voxel indices
+    if solid_ijk.shape[0] == 0:
         raise RuntimeError("No solid voxels survived the density cutoff.")
 
-    pts = np.asarray(points, dtype=float)
-    corners = np.asarray(corner_tets, dtype=int)  # (M, 4)
+    kuhn = np.asarray(_KUHN_TETS, dtype=np.int64)           # (6, 4, 3)
+    corner_ijk = (
+        solid_ijk[:, None, None, :] + kuhn[None, :, :, :]
+    ).reshape(-1, 3)                                        # (V*6*4, 3)
+
+    lin = (corner_ijk[:, 0] * (ny1 * nz1)
+           + corner_ijk[:, 1] * nz1
+           + corner_ijk[:, 2])
+    unique_lin, inverse = np.unique(lin, return_inverse=True)
+    inverse = np.asarray(inverse).ravel()
+
+    gi, rem = np.divmod(unique_lin, ny1 * nz1)
+    gj, gk = np.divmod(rem, nz1)
+    pts = mins + np.stack([gi, gj, gk], axis=1).astype(float) * cell  # (N, 3)
+
+    corners = inverse.reshape(-1, 4).astype(int)           # (M, 4) M = 6·V
 
     # Reorient negative tets (swap corners 0/1) so all signed volumes are
     # positive before midside generation.

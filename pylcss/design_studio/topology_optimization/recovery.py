@@ -745,17 +745,6 @@ def _project_passive_shapes_surfaces(
     return out
 
 
-def _project_passive_cylinder_surfaces(
-    vertices: np.ndarray,
-    bounds: Optional[Tuple[np.ndarray, np.ndarray]],
-    cylinders: Sequence[CylinderRegion],
-    tolerance: float,
-) -> np.ndarray:
-    """Snap mesh vertices near passive cylinder walls back to analytic radii."""
-    shapes = _convert_legacy_to_physical_shapes(bounds, solid_cylinders=cylinders)
-    return _project_passive_shapes_surfaces(vertices, shapes, tolerance)
-
-
 def _enhanced_mesh_postprocess(
     verts: np.ndarray,
     faces: np.ndarray,
@@ -889,28 +878,6 @@ def _taubin_smooth_surface(
 
             verts[mask] += factor * displacement
     return verts
-
-
-def _axis_slice_from_fraction(
-    coords: np.ndarray,
-    lo: float,
-    hi: float,
-) -> slice:
-    mask = (coords >= float(lo)) & (coords <= float(hi))
-    idx = np.flatnonzero(mask)
-    if idx.size == 0:
-        return slice(0, 0)
-    return slice(int(idx[0]), int(idx[-1]) + 1)
-
-
-def _fractional_axes(shape: Tuple[int, int, int], pad: int = 0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Return fractional sample coordinates for a padded or unpadded field."""
-    nx, ny, nz = [max(1, int(v)) for v in shape]
-    return (
-        (np.arange(nx, dtype=float) - float(pad) + 0.5) / max(nx - 2 * int(pad), 1),
-        (np.arange(ny, dtype=float) - float(pad) + 0.5) / max(ny - 2 * int(pad), 1),
-        (np.arange(nz, dtype=float) - float(pad) + 0.5) / max(nz - 2 * int(pad), 1),
-    )
 
 
 def _apply_passive_density_regions(
