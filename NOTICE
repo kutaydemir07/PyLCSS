@@ -42,16 +42,6 @@ PyLCSS can launch native solver executables as separate external processes. Thes
 - **Version**: 6.2.2506+
 - **Note**: PyLCSS uses netgen-mesher for automatic 3D tetrahedral mesh generation. Users have the right to replace this library with their own version.
 
-### pygame
-- **Copyright**: © 2000-2022, Pygame Developers
-- **License**: GNU Lesser General Public License (LGPL)
-- **Source**: [https://www.pygame.org/](https://www.pygame.org/)
-
-### edge-tts
-- **Copyright**: © 2023-2026 rany2
-- **License**: LGPLv3
-- **Source**: [https://github.com/rany2/edge-tts](https://github.com/rany2/edge-tts)
-
 ## 2. MIT Licensed Software
 
 The following components are licensed under the MIT License. This permissive license requires the retention of copyright notices and license text in all copies of the software.
@@ -103,16 +93,6 @@ QtAwesome bundles several third-party icon fonts. These assets are governed by t
 | Microsoft Codicons | Creative Commons Attribution 4.0 (CC-BY 4.0) | © Microsoft Corporation |
 | Phosphor Icons | MIT License | © Phosphor Icons |
 
-### PyAudio
-- **Copyright**: © 2006 Hubert Pham
-- **License**: MIT
-- **Source**: [https://people.csail.mit.edu/hubert/pyaudio/](https://people.csail.mit.edu/hubert/pyaudio/)
-
-### faster-whisper
-- **Copyright**: © 2023-2026 Systran / Guillaume Klein
-- **License**: MIT
-- **Source**: [https://github.com/SYSTRAN/faster-whisper](https://github.com/SYSTRAN/faster-whisper)
-
 ### pydantic
 - **Copyright**: © 2017-2026 Samuel Colvin and contributors
 - **License**: MIT
@@ -160,30 +140,6 @@ QtAwesome bundles several third-party icon fonts. These assets are governed by t
 - **License**: MIT
 - **Source**: [https://github.com/pydantic/pydantic-ai](https://github.com/pydantic/pydantic-ai)
 - **Note**: Minimal distribution of Pydantic AI used with OpenAI, Anthropic, and Google provider extras for the PyLCSS assistant system.
-
-### RealtimeSTT
-- **Copyright**: © 2023-2026, Kolja Beigel
-- **License**: MIT
-- **Source**: [https://github.com/KoljaB/RealtimeSTT](https://github.com/KoljaB/RealtimeSTT)
-- **Note**: Streaming speech-to-text pipeline bundling Silero VAD + Faster-Whisper used by the PyLCSS voice controller. Silero VAD is itself MIT-licensed (snakers4/silero-vad).
-
-### RealtimeTTS
-- **Copyright**: © 2023-2026, Kolja Beigel
-- **License**: MIT
-- **Source**: [https://github.com/KoljaB/RealtimeTTS](https://github.com/KoljaB/RealtimeTTS)
-- **Note**: Streaming text-to-speech wrapper used with the Kokoro local TTS engine for the PyLCSS assistant; supports barge-in.
-
-### kokoro-onnx
-- **Copyright**: © 2024-2026, Roi Bechor (thewh1teagle) and Kokoro contributors
-- **License**: MIT
-- **Source**: [https://github.com/thewh1teagle/kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx)
-- **Note**: ONNX runtime for the Kokoro-82M text-to-speech model. The underlying Kokoro-82M model weights are licensed under Apache 2.0 (hexgrad/Kokoro-82M).
-
-### sounddevice
-- **Copyright**: © 2015-2026, Matthias Geier
-- **License**: MIT
-- **Source**: [https://github.com/spatialaudio/python-sounddevice](https://github.com/spatialaudio/python-sounddevice)
-- **Note**: PortAudio-based audio I/O used by the PyLCSS TTS playback stack.
 
 ### py7zr
 - **Copyright**: © 2019-2026, Hiroshi Miura

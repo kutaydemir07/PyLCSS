@@ -350,7 +350,8 @@ def run_topopt_validation(
         for f in factors:
             mesh, out = _solve_at(f)
             finest_output = out
-            peak_vm = out.get('max_stress_gauss')
+            peak_vm = out.get('peak_stress_nodal')
+            peak_vm = out.get('max_stress_gauss') if peak_vm is None else peak_vm
             if peak_vm is None and out.get('stress') is not None:
                 arr = np.asarray(out['stress'], dtype=float)
                 peak_vm = float(np.max(arr)) if arr.size else None

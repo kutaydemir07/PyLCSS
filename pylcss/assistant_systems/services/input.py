@@ -4,7 +4,7 @@
 """
 Mouse Controller Module using PyAutoGUI.
 
-Provides system-level mouse and keyboard control for hands-free operation.
+Provides system-level mouse and keyboard control for the AI assistant.
 """
 
 import logging
@@ -25,8 +25,8 @@ logger = logging.getLogger(__name__)
 
 class MouseController:
     """
-    Controls mouse cursor and keyboard for hands-free operation.
-    
+    Controls mouse cursor and keyboard for the AI assistant.
+
     Wraps PyAutoGUI to provide safe, controlled access to system input.
     """
     

@@ -74,7 +74,7 @@ class ConstraintNode(CadQueryNode):
         
         # Constraint type selection
         self.create_property('constraint_type', 'Fixed', widget_type='combo',
-                             items=['Fixed', 'Pinned (Fixed for solids)', 'Roller X', 'Roller Y', 'Roller Z',
+                             items=['Fixed', 'Pinned', 'Roller X', 'Roller Y', 'Roller Z',
                                     'Symmetry X', 'Symmetry Y', 'Symmetry Z',
                                     'Displacement'])
         
@@ -82,6 +82,11 @@ class ConstraintNode(CadQueryNode):
         self.create_property('displacement_x', 0.0, widget_type='float')
         self.create_property('displacement_y', 0.0, widget_type='float')
         self.create_property('displacement_z', 0.0, widget_type='float')
+        # Axis toggles allow a prescribed displacement without accidentally
+        # locking the other two translational degrees of freedom.
+        self.create_property('displacement_x_enabled', True, widget_type='checkbox')
+        self.create_property('displacement_y_enabled', True, widget_type='checkbox')
+        self.create_property('displacement_z_enabled', True, widget_type='checkbox')
         
         # Keep string condition as fallback for backward compatibility
         self.create_property('condition', '', widget_type='text')
@@ -91,9 +96,12 @@ class ConstraintNode(CadQueryNode):
         target_wp = self.get_input_value('target_face', None)
         constraint_type = self.get_property('constraint_type')
         fallback_condition = self.get_property('condition')
+        if constraint_type == 'Pinned (Fixed for solids)':
+            constraint_type = 'Pinned'
+
 
         if mesh is None:
-            print(f"DEBUG ConstraintNode ({self.NODE_NAME}): ABORTING - NO MESH")
+            self.set_error("Connect a mesh to the constraint node.")
             return None
 
         # Get displacement values
@@ -102,6 +110,16 @@ class ConstraintNode(CadQueryNode):
         disp_z = float(self.get_property('displacement_z'))
 
         # Map constraint type to DOF constraints
+        disp_enabled = [
+            bool(self.get_property('displacement_x_enabled')),
+            bool(self.get_property('displacement_y_enabled')),
+            bool(self.get_property('displacement_z_enabled')),
+        ]
+        prescribed_dofs = [idx for idx, enabled in enumerate(disp_enabled) if enabled]
+        if constraint_type == 'Displacement' and not prescribed_dofs:
+            self.set_error("Enable at least one displacement axis (UX, UY, or UZ).")
+            return None
+
         # 'fixed_dofs' indicates which DOFs (0=x, 1=y, 2=z) are fixed
         # NOTE on 'Pinned': for 3-D solid elements there are no rotational DOFs —
         # rotation is captured through relative translations of adjacent nodes.  A
@@ -116,7 +134,7 @@ class ConstraintNode(CadQueryNode):
             'Symmetry X': {'fixed_dofs': [0],        'displacement': None},  # No motion in X
             'Symmetry Y': {'fixed_dofs': [1],        'displacement': None},  # No motion in Y
             'Symmetry Z': {'fixed_dofs': [2],        'displacement': None},  # No motion in Z
-            'Displacement': {'fixed_dofs': [0, 1, 2], 'displacement': [disp_x, disp_y, disp_z]},
+            'Displacement': {'fixed_dofs': prescribed_dofs, 'displacement': [disp_x, disp_y, disp_z]},
         }
         # Colour coding used by the viewer for pre-solve BC overlay:
         #   Fixed / Pinned → blue    Roller → cyan    Symmetry → green
@@ -231,7 +249,7 @@ class LoadNode(CadQueryNode):
         target_wp = self.get_input_value('target_face', None)  # Not used for Gravity
 
         if mesh is None:
-            print(f"DEBUG LoadNode ({self.NODE_NAME}): ABORTING - NO MESH")
+            self.set_error("Connect a mesh to the load node.")
             return None
 
         # Resolve force inputs with fallback to properties
@@ -333,7 +351,11 @@ class PressureLoadNode(CadQueryNode):
         target_wp = self.get_input_value('target_face', None)
         pressure = self.get_input_value('pressure', 'pressure')
 
-        if mesh is None or target_wp is None:
+        if mesh is None:
+            self.set_error("Connect a mesh to the pressure-load node.")
+            return None
+        if target_wp is None:
+            self.set_error("Connect a selected target face to the pressure-load node.")
             return None
 
         try:
@@ -344,9 +366,11 @@ class PressureLoadNode(CadQueryNode):
                 self.set_error("No faces found in target face input")
                 return None
 
-            # Apply direction sign (Outward = positive normal, Inward = negative normal)
+            # CalculiX *DLOAD P is positive in compression (opposite the
+            # element's outward surface normal); negative pressure is tension.
+            # Therefore Inward is positive and Outward is negative.
             direction = self.get_property('direction')
-            sign = 1.0 if direction == 'Outward' else -1.0
+            sign = 1.0 if direction == 'Inward' else -1.0
 
             return {
                 'type': 'pressure',

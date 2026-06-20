@@ -26,6 +26,7 @@ from pylcss.solver_backends.common import (
     resolve_executable,
     run_process,
     tail,
+    tet10_connectivity,
     tet_face_sets_for_geometries,
 )
 from pylcss.solver_backends.frd_reader import read_frd
@@ -106,6 +107,24 @@ def _collect_calculix_failure_context(
             continue
         parts.append(f"--- {path.name} (last 2000 chars) ---\n{tail(content, 2000)}")
     return "\n".join(parts)
+
+
+def resolve_calculix_executable(override: str | None = None) -> str | None:
+    """Resolve the preferred CalculiX executable without launching it."""
+    return resolve_executable(
+        override,
+        env_vars=("PYLCSS_CALCULIX_CCX", "CALCULIX_CCX"),
+        # Prefer the self-contained static build.  Dynamic builds are a final
+        # fallback because they may require Intel MKL runtime DLLs.
+        candidates=(
+            "ccx_static",
+            "ccx_static.exe",
+            "ccx",
+            "ccx.exe",
+            "ccx_dynamic",
+            "ccx_dynamic.exe",
+        ),
+    )
 
 
 def _build_sets_and_step(
@@ -334,7 +353,7 @@ def _build_input_deck(
     # A 10-row connectivity is a quadratic (C3D10) mesh — emit it verbatim;
     # anything else is treated as linear C3D4 (mesh_to_tet4 downgrades higher
     # orders to their corner nodes, preserving the prior behaviour).
-    quadratic = bool(np.asarray(mesh.t).shape[0] == 10) if hasattr(mesh, "t") else False
+    quadratic = tet10_connectivity(mesh) is not None
     if quadratic:
         points, tets = mesh_to_tet10(mesh, warnings)
         elem_type = "C3D10"
@@ -368,11 +387,36 @@ def _build_input_deck(
     return "\n".join(lines) + "\n"
 
 
+def _resolve_deformation_scale(requested: Any, auto_scale: float, warnings: List[str]) -> float:
+    """Resolve the visual-only deformation scale selected in the solver node."""
+    if requested is None:
+        return auto_scale
+    if isinstance(requested, str):
+        text = requested.strip().lower()
+        if not text or text == "auto":
+            return auto_scale
+        text = text.rstrip("x").strip()
+    else:
+        text = requested
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        warnings.append(f"Invalid deformation scale {requested!r}; using Auto.")
+        return auto_scale
+    if value <= 0.0:
+        warnings.append(f"Deformation scale must be positive, got {value:g}; using Auto.")
+        return auto_scale
+    return value
+
+
+
 def _ingest_frd_into_result(
     mesh: Any,
     frd_path: Path,
     visualization_mode: str,
     warnings: List[str],
+    deformation_scale: Any = "Auto",
+    analysis_type: str = "Linear",
 ) -> dict:
     """Read CalculiX ``.frd`` output and shape it into the viewer's result dict.
 
@@ -428,12 +472,15 @@ def _ingest_frd_into_result(
     flat_disp[1::3] = disp_xyz[:, 1]
     flat_disp[2::3] = disp_xyz[:, 2]
 
-    max_disp = float(np.max(np.abs(disp_xyz))) if disp_xyz.size else 0.0
+    max_disp = float(np.max(np.linalg.norm(disp_xyz, axis=1))) if disp_xyz.size else 0.0
     peak_vm = float(np.max(vm)) if vm.size else 0.0
 
     # Tet element volumes (used to integrate the nodal ENER density into the
     # total elastic strain energy and to project ENER back per-element for SIMP).
-    tets = np.asarray(mesh.t).T[:, :4].astype(int)
+    quadratic_conn = tet10_connectivity(mesh)
+    energy_conn = (quadratic_conn.T if quadratic_conn is not None
+                   else np.asarray(mesh.t).T[:, :4]).astype(int)
+    tets = energy_conn[:, :4]
     coords = np.asarray(mesh.p).T
     v0 = coords[tets[:, 0]]
     edges = np.stack(
@@ -442,26 +489,29 @@ def _ingest_frd_into_result(
     )
     elem_vol = np.abs(np.linalg.det(edges)) / 6.0
 
-    # Per-element ENER = mean of the 4 nodal density values; matches CCX's
-    # nodal-averaging convention so totals integrate consistently.
-    elem_ener = ener_nodal[tets].mean(axis=1) if ener_nodal.size else np.zeros(tets.shape[0])
+    # Average every element node (4 for C3D4, 10 for C3D10).
+    elem_ener = (ener_nodal[energy_conn].mean(axis=1) if ener_nodal.size
+                 else np.zeros(tets.shape[0]))
 
     # Total elastic strain energy ≈ Σ_e (ENER_e × V_e); compliance = 2 × SE for
     # linear elasticity (C = u·f = u·K·u = 2·SE).
     total_strain_energy = float(np.sum(elem_ener * elem_vol))
-    compliance = 2.0 * total_strain_energy
+    # The 2*SE identity is valid only for a linear elastic load path.
+    compliance = (2.0 * total_strain_energy
+                  if analysis_type == "Linear" else None)
 
     logger.debug(
         "FEA Solver (external): FRD ingest frd_nodes=%d, mesh_nodes=%d, "
         "max|u|=%.4e, peak VM=%.4e, compliance=%.4e",
-        n_frd, n_points, max_disp, peak_vm, compliance,
+        n_frd, n_points, max_disp, peak_vm, compliance if compliance is not None else float("nan"),
     )
 
     # Auto deformation scale so deformed shape is visible without misleading.
     bbox = np.ptp(np.asarray(mesh.p), axis=1)
     char_len = max(float(np.max(bbox)), 1e-9)
     auto_scale = (0.05 * char_len / max_disp) if max_disp > 1e-9 else 1.0
-    deformation_scale = float(np.clip(auto_scale, 1.0, 200.0))
+    auto_scale = float(np.clip(auto_scale, 1.0, 200.0))
+    resolved_scale = _resolve_deformation_scale(deformation_scale, auto_scale, warnings)
 
     total_volume = float(np.sum(elem_vol))
 
@@ -479,8 +529,10 @@ def _ingest_frd_into_result(
         "compliance": compliance,
         "volume": total_volume,
         "peak_displacement": max_disp,
-        "max_stress_gauss": peak_vm,
-        "deformation_scale": deformation_scale,
+        "peak_stress_nodal": peak_vm,
+        "stress_location": "nodal_extrapolated",
+        "auto_deformation_scale": auto_scale,
+        "deformation_scale": resolved_scale,
         "visualization_mode": visualization_mode,
         "frd_file": str(frd_path),
         "frd_steps": parsed.get("steps", []),
@@ -495,6 +547,7 @@ def run_calculix_static(
     config: ExternalRunConfig,
     visualization_mode: str = "Von Mises Stress",
     analysis_type: str = "Linear",
+    deformation_scale: Any = "Auto",
 ) -> dict:
     """Write and optionally run a CalculiX static analysis deck.
 
@@ -503,39 +556,42 @@ def run_calculix_static(
     the connected material dict carries ``yield_strength > 0``.
     """
     warnings: List[str] = []
+    allowed_analysis = {
+        "Linear", "Nonlinear (Geometric)", "Nonlinear (Plastic)"
+    }
+    if analysis_type not in allowed_analysis:
+        raise SolverBackendError(f"Unsupported CalculiX analysis type: {analysis_type!r}.")
+    sigma_y = float(material.get("yield_strength", 0.0) or 0.0)
+    effective_analysis_type = analysis_type
+    if analysis_type == "Nonlinear (Plastic)" and sigma_y <= 0.0:
+        raise SolverBackendError(
+            "Nonlinear (Plastic) requires Material.yield_strength greater than zero."
+        )
+    if sigma_y > 0.0 and analysis_type == "Linear":
+        effective_analysis_type = "Nonlinear (Plastic)"
+        warnings.append(
+            "Material yield strength is active; promoted Linear to Nonlinear (Plastic)."
+        )
+
     work_dir = make_work_dir("pylcss_calculix_", config.work_dir)
     job_name = config.job_name or "pylcss_calculix"
     inp_path = work_dir / f"{job_name}.inp"
     inp_path.write_text(
         _build_input_deck(
             mesh, material, constraints, loads, warnings,
-            analysis_type=analysis_type,
+            analysis_type=effective_analysis_type,
         ),
         encoding="utf-8",
     )
 
-    executable = resolve_executable(
-        config.executable,
-        env_vars=("PYLCSS_CALCULIX_CCX", "CALCULIX_CCX"),
-        # Prefer the self-contained static build on every platform.  The
-        # ``ccx_dynamic`` variant exists for users who have Intel MKL installed
-        # globally; we only fall through to it last.
-        candidates=(
-            "ccx_static",
-            "ccx_static.exe",
-            "ccx",
-            "ccx.exe",
-            "ccx_dynamic",
-            "ccx_dynamic.exe",
-        ),
-    )
+    executable = resolve_calculix_executable(config.executable)
 
     status = "deck_written"
     solver_log = ""
     result_payload: dict = {}
     if config.run_solver:
         if executable is None:
-            warnings.append(
+            raise SolverBackendError(
                 "CalculiX executable not found. Set the node path, add ccx to PATH, "
                 "define PYLCSS_CALCULIX_CCX, or run scripts/install_solvers.py."
             )
@@ -562,20 +618,22 @@ def run_calculix_static(
             status = "completed"
             frd_path = work_dir / f"{job_name}.frd"
             if not frd_path.is_file():
-                warnings.append(
+                raise SolverBackendError(
                     f"CalculiX run completed but {frd_path.name} was not produced. "
                     "Check the .dat / .sta logs in the work directory."
                 )
             else:
                 try:
                     result_payload = _ingest_frd_into_result(
-                        mesh, frd_path, visualization_mode, warnings
+                        mesh, frd_path, visualization_mode, warnings,
+                        deformation_scale=deformation_scale,
+                        analysis_type=effective_analysis_type,
                     )
                     rho = float(material.get("rho", material.get("density", 0.0)))
                     if rho > 0.0 and "volume" in result_payload:
                         result_payload["mass"] = float(result_payload["volume"] * rho)
-                except Exception as exc:  # parser problems should not kill the node
-                    warnings.append(f"FRD ingest failed: {exc}")
+                except Exception as exc:
+                    raise SolverBackendError(f"CalculiX FRD ingest failed: {exc}") from exc
 
     output = {
         "type": result_payload.get("type", "external_solver"),
@@ -587,6 +645,7 @@ def run_calculix_static(
         "work_dir": str(work_dir),
         "solver_executable": executable,
         "solver_log": solver_log,
+        "analysis_type": effective_analysis_type,
         "warnings": warnings,
         "message": (
             "CalculiX deck generated. Enable external execution and configure ccx "

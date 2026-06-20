@@ -2,14 +2,11 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 """
-Assistant Control System for PyLCSS.
+AI Assistant System for PyLCSS.
 
-This module provides assistant control capabilities using:
-- Offline speech recognition via Faster-Whisper for assistant voice input
-- LLM-powered assistant
-- System control via PyAutoGUI for mouse/keyboard simulation
-
-Note: Camera-based head tracking has been removed.
+Provides a text-driven, LLM-powered assistant (PydanticAI agent) that controls
+the application by calling its tools.  Requests are entered as natural language
+from the assistant side panel.
 """
 
 from pylcss.assistant_systems.core.manager import AssistantManager

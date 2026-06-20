@@ -11,10 +11,43 @@ graphical interface.
 
 import re
 from PySide6 import QtWidgets, QtCore, QtGui
+import qtawesome as qta
 import numpy as np
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Use the application's own professional palette (amber accent on dark panels)
+# so the modeling toolbar matches the rest of the app instead of clashing with
+# a different accent.
+from pylcss.user_interface.common.theme_manager import COLORS
+
+_MDO_ACCENT = COLORS["primary"]          # amber #d29922
+_MDO_TOOLBAR_QSS = f"""
+    QToolBar {{
+        background: {COLORS['bg_panel']}; border: none;
+        border-bottom: 1px solid {COLORS['bg_dark']};
+        spacing: 3px; padding: 5px 6px;
+    }}
+    QToolBar::separator {{ background: {COLORS['bg_input']}; width: 1px; margin: 5px 7px; }}
+    QToolButton {{
+        background: transparent; color: {COLORS['text_dim']};
+        border: 1px solid transparent; border-radius: 6px;
+        padding: 5px 10px; font-weight: 600;
+    }}
+    QToolButton:hover {{
+        background: {COLORS['bg_input']}; border: 1px solid {COLORS['primary']};
+        color: {COLORS['text_main']};
+    }}
+    QToolButton:pressed {{ background: {COLORS['bg_dark']}; }}
+    QLabel {{ color: {COLORS['text_dim']}; font-weight: 600; }}
+    QLineEdit {{
+        background: {COLORS['bg_input']}; border: 1px solid {COLORS['bg_dark']};
+        border-radius: 6px; padding: 4px 8px; color: {COLORS['text_main']};
+        selection-background-color: {COLORS['primary']};
+    }}
+    QLineEdit:focus {{ border: 1px solid {COLORS['primary']}; }}
+"""
 
 # Patch NodeGraphQt to use packaging.version instead of distutils.version
 import sys
@@ -40,7 +73,10 @@ def _patched_init(self, graph, nodes, emit_signal=True):
     self.node_views = [node.view for node in nodes]
 
 NodesRemovedCmd.__init__ = _patched_init
-from .system_node_types import CustomBlockNode, InputNode, OutputNode, IntermediateNode, CodeEditorDialog
+from .system_node_types import (
+    CustomBlockNode, InputNode, OutputNode, IntermediateNode, CodeEditorDialog,
+    apply_system_node_style,
+)
 from pylcss.system_modeling.model_builder import GraphBuilder
 from pylcss.system_modeling.system_list_manager import SystemManager
 from pylcss.system_modeling.graph_validation import validate_graph
@@ -99,72 +135,87 @@ class ModelingWidget(QtWidgets.QWidget):
         
         # --- Toolbar ---
         self.toolbar = QtWidgets.QToolBar()
+        self.toolbar.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        self.toolbar.setIconSize(QtCore.QSize(16, 16))
+        self.toolbar.setStyleSheet(_MDO_TOOLBAR_QSS)
+        self.toolbar.setMovable(False)
         self.layout.insertWidget(0, self.toolbar)
-        
-        self.action_save = QtGui.QAction("Save", self)
+
+        def _ico(name, color="#cdd2d9"):
+            return qta.icon(name, color=color)
+
+        self.action_save = QtGui.QAction(_ico("fa5s.save"), "Save", self)
         self.action_save.triggered.connect(self.save_graph)
         self.toolbar.addAction(self.action_save)
-        
-        self.action_load = QtGui.QAction("Load", self)
+
+        self.action_load = QtGui.QAction(_ico("fa5s.folder-open"), "Load", self)
         self.action_load.triggered.connect(self.load_graph)
         self.toolbar.addAction(self.action_load)
-        
-        self.toolbar.addSeparator()
-        
-        self.action_build = QtGui.QAction("Build Model", self)
-        self.action_build.triggered.connect(self.build_requested.emit)
-        self.toolbar.addAction(self.action_build)
-        
-        self.action_validate = QtGui.QAction("Validate", self)
-        self.action_validate.triggered.connect(self.validate_graph)
-        self.toolbar.addAction(self.action_validate)
-        
+
         self.toolbar.addSeparator()
 
-        self.action_undo = QtGui.QAction("Undo", self)
+        # Primary action — theme success green.
+        self.action_build = QtGui.QAction(_ico("fa5s.hammer", COLORS["success"]), "Build Model", self)
+        self.action_build.triggered.connect(self.build_requested.emit)
+        self.toolbar.addAction(self.action_build)
+
+        self.action_validate = QtGui.QAction(_ico("fa5s.check-circle", _MDO_ACCENT), "Validate", self)
+        self.action_validate.triggered.connect(self.validate_graph)
+        self.toolbar.addAction(self.action_validate)
+
+        self.toolbar.addSeparator()
+
+        self.action_undo = QtGui.QAction(_ico("fa5s.undo"), "Undo", self)
         self.action_undo.setShortcut(QtGui.QKeySequence.Undo)
         self.action_undo.triggered.connect(self.undo)
         self.toolbar.addAction(self.action_undo)
 
-        self.action_redo = QtGui.QAction("Redo", self)
+        self.action_redo = QtGui.QAction(_ico("fa5s.redo"), "Redo", self)
         self.action_redo.setShortcut(QtGui.QKeySequence.Redo)
         self.action_redo.triggered.connect(self.redo)
         self.toolbar.addAction(self.action_redo)
-        
+
         self.toolbar.addSeparator()
-        
-        self.action_delete = QtGui.QAction("Delete", self)
+
+        self.action_delete = QtGui.QAction(_ico("fa5s.trash-alt", COLORS["danger"]), "Delete", self)
         self.action_delete.triggered.connect(self.delete_current)
         self.action_delete.setShortcut(QtGui.QKeySequence.Delete)
         self.action_delete.setShortcutContext(QtCore.Qt.WidgetWithChildrenShortcut)
         self.toolbar.addAction(self.action_delete)
-        
+
         self.toolbar.addSeparator()
-        
-        # Node Buttons
-        self.action_add_input = QtGui.QAction("Design Var", self)
+
+        # Node-creation buttons — icon colour matches each node's role colour
+        # (blue = design variable, slate = intermediate, teal = QoI, violet =
+        # function block) so the toolbar reads as a legend for the graph.
+        self.action_add_input = QtGui.QAction(_ico("fa5s.sliders-h", COLORS["primary"]), "Design Var", self)
+        self.action_add_input.setToolTip("Design Variable — an optimizer-controlled input with units and bounds")
         self.action_add_input.triggered.connect(self.add_input_node)
         self.toolbar.addAction(self.action_add_input)
-        
-        self.action_add_intermediate = QtGui.QAction("Intermediate", self)
+
+        self.action_add_intermediate = QtGui.QAction(_ico("fa5s.dot-circle", "#9aa3b2"), "Intermediate", self)
+        self.action_add_intermediate.setToolTip("Intermediate Variable — route or rename a value between disciplines")
         self.action_add_intermediate.triggered.connect(self.add_intermediate_node)
         self.toolbar.addAction(self.action_add_intermediate)
-        
-        self.action_add_output = QtGui.QAction("QoI", self)
+
+        self.action_add_output = QtGui.QAction(_ico("fa5s.bullseye", "#3fc093"), "QoI", self)
+        self.action_add_output.setToolTip("Quantity of Interest — a result, constraint, or optimization objective")
         self.action_add_output.triggered.connect(self.add_output_node)
         self.toolbar.addAction(self.action_add_output)
-        
-        self.action_add_function = QtGui.QAction("Function Block", self)
+
+        self.action_add_function = QtGui.QAction(_ico("fa5s.code", "#a98be0"), "Function Block", self)
+        self.action_add_function.setToolTip("Function / Discipline — Python, FEA, crash, or TopOpt calculation")
         self.action_add_function.triggered.connect(self.add_function_node)
         self.toolbar.addAction(self.action_add_function)
-        
+
         # Search Bar
         self.toolbar.addSeparator()
-        lbl_search = QtWidgets.QLabel(" Search: ")
+        lbl_search = QtWidgets.QLabel(" Search ")
         self.toolbar.addWidget(lbl_search)
         self.search_bar = QtWidgets.QLineEdit()
         self.search_bar.setPlaceholderText("Find node...")
-        self.search_bar.setMaximumWidth(150)
+        self.search_bar.setMaximumWidth(170)
+        self.search_bar.setClearButtonEnabled(True)
         self.search_bar.returnPressed.connect(self.find_node)
         self.toolbar.addWidget(self.search_bar)
         
@@ -244,6 +295,8 @@ class ModelingWidget(QtWidgets.QWidget):
         # Ensure the context menu is set up for the current graph
         if self.current_graph:
             self.setup_context_menu_for_graph(self.current_graph)
+            for node in self.current_graph.all_nodes():
+                apply_system_node_style(node)
         
         # Update undo/redo connections
         self.update_undo_redo_actions()
@@ -307,7 +360,7 @@ class ModelingWidget(QtWidgets.QWidget):
         for action in actions_to_remove:
             qmenu.removeAction(action)
 
-        menu.add_command('Create Black Box Function', lambda: self.create_node_for_graph(graph, CustomBlockNode), 'Shift+F')
+        menu.add_command('Create Function / Discipline', lambda: self.create_node_for_graph(graph, CustomBlockNode), 'Shift+F')
         menu.add_command('Create Design Variable', lambda: self.create_node_for_graph(graph, InputNode), 'Shift+I')
         menu.add_command('Create Quantity of Interest', lambda: self.create_node_for_graph(graph, OutputNode), 'Shift+O')
         menu.add_command('Create Intermediate Variable', lambda: self.create_node_for_graph(graph, IntermediateNode), 'Shift+V')
@@ -337,6 +390,7 @@ class ModelingWidget(QtWidgets.QWidget):
             return None
         try:
             node = graph.create_node(full_id, pos=[0, 0])
+            apply_system_node_style(node)
             return node
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Node Error", f"Failed to create node {full_id}:\n{e}")

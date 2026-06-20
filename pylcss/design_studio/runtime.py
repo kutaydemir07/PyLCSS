@@ -22,7 +22,9 @@ function          terminal node identifier       backend
 
 Inputs are matched against ``NumberNode`` / ``VariableNode`` instances in the
 ``.cad`` graph whose ``exposed_name`` property equals the kwarg name, and
-against named ``CadQueryCodeNode`` parameters.  Results
+against named ``CadQueryCodeNode`` parameters.  The optional ``_settings``
+mapping can also drive validated numeric material, mesh, load, impact, crash,
+and topology-optimization properties discovered by the function-block UI. Results
 are wrapped in :class:`CadResult`, which gives attribute *and* dict access plus
 a small fixed-name standard subset (``max_stress``, ``compliance``, ``mass``,
 ``volume``, ``peak_disp``, …) so user code is stable across graph versions.
@@ -49,7 +51,10 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # Public API surface — kept short on purpose.
-__all__ = ["fea", "crash", "topopt", "CadResult", "clear_cache"]
+__all__ = [
+    "fea", "crash", "topopt", "CadResult", "clear_cache",
+    "discover_override_controls",
+]
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -58,6 +63,125 @@ __all__ = ["fea", "crash", "topopt", "CadResult", "clear_cache"]
 _FEA_ID    = "com.cad.sim.solver"
 _CRASH_ID  = "com.cad.sim.crash_solver"
 _TOPOPT_IDS = ("com.cad.sim.topopt_voxel",)
+
+
+# Numeric Design Studio controls that are safe and meaningful to drive from a
+# system-model function block.  File paths, display options, face selections,
+# and backend switches intentionally remain owned by the saved .cad study.
+_OVERRIDEABLE_PROPERTIES = {
+    "com.cad.sim.material": (
+        "youngs_modulus", "poissons_ratio", "density", "yield_strength",
+        "tangent_modulus",
+    ),
+    "com.cad.sim.crash_material": (
+        "youngs_modulus", "poissons_ratio", "density", "yield_strength",
+        "tangent_modulus", "failure_strain", "enable_fracture",
+        "strain_rate_sensitive",
+    ),
+    "com.cad.sim.mesh": (
+        "element_size", "refinement_size", "shell_thickness", "shell_nip",
+    ),
+    "com.cad.sim.constraint": (
+        "displacement_x", "displacement_y", "displacement_z",
+        "displacement_x_enabled", "displacement_y_enabled",
+        "displacement_z_enabled",
+    ),
+    "com.cad.sim.load": (
+        "force_x", "force_y", "force_z", "moment_x", "moment_y", "moment_z",
+        "gravity_accel",
+    ),
+    "com.cad.sim.pressure_load": ("pressure",),
+    "com.cad.sim.impact": (
+        "velocity_x", "velocity_y", "velocity_z", "node_tolerance",
+        "wall_friction", "wall_gap_mm",
+    ),
+    "com.cad.sim.crash_solver": (
+        "end_time", "n_frames", "time_steps", "enable_mass_scaling",
+        "damping_alpha", "damping_beta", "enable_corotation", "enable_contact",
+        "contact_stiffness", "contact_thickness", "contact_update_interval",
+        "mass_scaling_threshold", "impactor_mass_kg",
+    ),
+    "com.cad.sim.topopt_voxel": (
+        "nelx", "nely", "nelz", "volfrac", "rmin", "penal",
+        "density_cutoff", "max_iter", "tol", "convergence_patience",
+        "stress_constraint", "yield_stress", "max_member_size_voxels",
+        "pattern_repeat", "force_ix_frac", "force_iy_frac", "force_iz_frac",
+        "force_dir_x", "force_dir_y", "force_dir_z", "force_magnitude",
+    ),
+}
+
+_OVERRIDE_GROUPS = {
+    "com.cad.sim.material": "Material",
+    "com.cad.sim.crash_material": "Material",
+    "com.cad.sim.mesh": "Mesh",
+    "com.cad.sim.constraint": "Boundary condition",
+    "com.cad.sim.load": "Load",
+    "com.cad.sim.pressure_load": "Load",
+    "com.cad.sim.impact": "Impact",
+    "com.cad.sim.crash_solver": "Crash solver",
+    "com.cad.sim.topopt_voxel": "Topology optimization",
+}
+
+_PROPERTY_LABELS = {
+    "youngs_modulus": "Young's modulus",
+    "poissons_ratio": "Poisson's ratio",
+    "density": "Density",
+    "yield_strength": "Yield strength",
+    "tangent_modulus": "Tangent modulus",
+    "failure_strain": "Failure strain",
+    "element_size": "Element size",
+    "refinement_size": "Refinement size",
+    "shell_thickness": "Shell thickness",
+    "shell_nip": "Shell integration points",
+    "end_time": "End time",
+    "n_frames": "Result frames",
+    "time_steps": "Time steps",
+    "volfrac": "Target material fraction",
+    "rmin": "Filter radius",
+    "penal": "SIMP penalty",
+    "max_iter": "Maximum iterations",
+    "tol": "Convergence tolerance",
+    "force_magnitude": "Force magnitude",
+    "impactor_mass_kg": "Impactor mass",
+}
+
+
+def _override_identifier(type_name: str) -> str | None:
+    text = str(type_name or "")
+    for identifier in sorted(_OVERRIDEABLE_PROPERTIES, key=len, reverse=True):
+        if text == identifier or text.startswith(identifier + "."):
+            return identifier
+    return None
+
+
+def discover_override_controls(session_data: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return material/mesh/load/solver controls available in a saved study.
+
+    The returned ``key`` is stable for that saved graph and can be passed in
+    the private ``_settings`` mapping of :func:`fea`, :func:`crash`, or
+    :func:`topopt`.
+    """
+    controls: list[dict[str, Any]] = []
+    for node_id, node_data in (session_data.get("nodes", {}) or {}).items():
+        identifier = _override_identifier(node_data.get("type_", ""))
+        if not identifier:
+            continue
+        custom = node_data.get("custom", {}) or {}
+        node_name = str(node_data.get("name") or identifier.rsplit(".", 1)[-1])
+        for prop in _OVERRIDEABLE_PROPERTIES[identifier]:
+            value = custom.get(prop)
+            if not isinstance(value, (bool, int, float)):
+                continue
+            controls.append({
+                "key": f"{node_name}::{prop}",
+                "node_id": str(node_id),
+                "node": node_name,
+                "group": _OVERRIDE_GROUPS.get(identifier, "Analysis setting"),
+                "property": prop,
+                "label": _PROPERTY_LABELS.get(prop, prop.replace("_", " ").title()),
+                "value": value,
+            })
+    return controls
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -131,8 +255,9 @@ def _standardize(kind: str, raw: Mapping[str, Any]) -> Dict[str, Any]:
     std: Dict[str, Any] = {}
 
     if kind == "fea":
-        std["max_stress"]    = float(raw.get("max_stress_gauss", 0.0))
-        std["compliance"]    = float(raw.get("compliance", 0.0))
+        peak_stress = raw.get("peak_stress_nodal", raw.get("max_stress_gauss", 0.0))
+        std["max_stress"]    = float(peak_stress or 0.0)
+        std["compliance"]    = float(raw.get("compliance") or 0.0)
         std["strain_energy"] = float(raw.get("strain_energy", 0.0))
         std["volume"]        = float(raw.get("volume", 0.0))
         std["mass"]          = float(raw.get("mass", 0.0))
@@ -186,19 +311,19 @@ def clear_cache() -> None:
 # ──────────────────────────────────────────────────────────────────────
 # Public entry points
 # ──────────────────────────────────────────────────────────────────────
-def fea(cad_path: str, **inputs) -> CadResult:
+def fea(cad_path: str, _settings: Mapping[str, Any] | None = None, **inputs) -> CadResult:
     """Run the FEA-solver path of a CAD graph and return its scalar results."""
-    return _evaluate(cad_path, inputs, terminal_id=_FEA_ID, kind="fea")
+    return _evaluate(cad_path, inputs, terminal_id=_FEA_ID, kind="fea", settings=_settings)
 
 
-def crash(cad_path: str, **inputs) -> CadResult:
+def crash(cad_path: str, _settings: Mapping[str, Any] | None = None, **inputs) -> CadResult:
     """Run the crash-solver path of a CAD graph and return its scalar results."""
-    return _evaluate(cad_path, inputs, terminal_id=_CRASH_ID, kind="crash")
+    return _evaluate(cad_path, inputs, terminal_id=_CRASH_ID, kind="crash", settings=_settings)
 
 
-def topopt(cad_path: str, **inputs) -> CadResult:
+def topopt(cad_path: str, _settings: Mapping[str, Any] | None = None, **inputs) -> CadResult:
     """Run a SIMP topology-optimisation pass through a CAD graph."""
-    return _evaluate(cad_path, inputs, terminal_id=_TOPOPT_IDS, kind="topopt")
+    return _evaluate(cad_path, inputs, terminal_id=_TOPOPT_IDS, kind="topopt", settings=_settings)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -209,6 +334,7 @@ def _evaluate(
     inputs: Mapping[str, Any],
     terminal_id: str | Sequence[str],
     kind: str,
+    settings: Mapping[str, Any] | None = None,
 ) -> CadResult:
     abs_path = os.path.abspath(str(cad_path))
     if not os.path.isfile(abs_path):
@@ -230,7 +356,10 @@ def _evaluate(
         mtime = 0.0
 
     canonical_inputs = tuple(sorted((str(k), _to_float(v)) for k, v in inputs.items()))
-    cache_key = (abs_path, mtime, kind, canonical_inputs)
+    canonical_settings = tuple(
+        sorted((str(k), _to_float(v)) for k, v in (settings or {}).items())
+    )
+    cache_key = (abs_path, mtime, kind, canonical_inputs, canonical_settings)
 
     with _cache_lock:
         cached = _cache.get(cache_key)
@@ -256,6 +385,7 @@ def _evaluate(
             f"CAD graph {abs_path!r} has no exposed parameters named {missing}. "
             f"Available: {sorted(available_names)}"
         )
+    _apply_property_overrides(graph, dict(canonical_settings))
 
     from pylcss.design_studio.engine import execute_graph
     execute_graph(graph)
@@ -290,9 +420,11 @@ def _load_graph(abs_path: str):
     for node_class in NODE_CLASS_MAPPING.values():
         try:
             graph.register_node(node_class)
-        except Exception:
-            # NodeGraphQt rejects re-registration silently in most builds; ignore.
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Could not register CAD node %s while loading %s: %s",
+                getattr(node_class, "__name__", node_class), abs_path, exc,
+            )
 
     with open(abs_path, "r", encoding="utf-8") as f:
         session_data = json.load(f)
@@ -344,6 +476,48 @@ def _apply_exposed_inputs(graph, inputs: Mapping[str, float]) -> tuple[int, set]
             applied += _apply_code_part_inputs(node, inputs, available)
 
     return applied, available
+
+
+def _apply_property_overrides(graph, settings: Mapping[str, float]) -> int:
+    """Apply validated ``node_name::property`` overrides to a fresh CAD graph."""
+    if not settings:
+        return 0
+
+    nodes_by_name = {}
+    for node in graph.all_nodes():
+        node_name = node.name() if hasattr(node, "name") else ""
+        nodes_by_name[str(node_name)] = node
+
+    applied = 0
+    for key, numeric_value in settings.items():
+        if "::" not in key:
+            raise KeyError(
+                f"Invalid Design Studio setting key {key!r}; expected 'node_name::property'."
+            )
+        node_name, prop = key.rsplit("::", 1)
+        node = nodes_by_name.get(node_name)
+        if node is None:
+            raise KeyError(f"Design Studio node {node_name!r} no longer exists in the saved study.")
+
+        identifier = _override_identifier(getattr(node, "__identifier__", ""))
+        allowed = _OVERRIDEABLE_PROPERTIES.get(identifier or "", ())
+        if prop not in allowed or not node.has_property(prop):
+            node_name = node.name() if hasattr(node, "name") else node_name
+            raise KeyError(
+                f"Setting {prop!r} on {node_name!r} is not an externally controllable numeric setting."
+            )
+
+        current = node.get_property(prop)
+        if isinstance(current, bool):
+            value = bool(round(float(numeric_value)))
+        elif isinstance(current, int):
+            value = int(round(float(numeric_value)))
+        else:
+            value = float(numeric_value)
+        node.set_property(prop, value)
+        _mark_node_dirty(node)
+        applied += 1
+    return applied
 
 
 def _is_code_part_node(node) -> bool:

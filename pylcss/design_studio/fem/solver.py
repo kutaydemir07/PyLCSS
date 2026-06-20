@@ -14,6 +14,23 @@ from pylcss.design_studio.core.base_node import CadQueryNode
 logger = logging.getLogger(__name__)
 
 
+def _has_nonzero_prescribed_displacement(constraints, tol=1e-15):
+    """True when a constraint drives at least one DOF to a non-zero value."""
+    for constraint in constraints or []:
+        if not isinstance(constraint, dict):
+            continue
+        displacement = constraint.get('displacement')
+        if displacement is None:
+            continue
+        for dof in constraint.get('fixed_dofs', range(len(displacement))):
+            try:
+                if abs(float(displacement[int(dof)])) > tol:
+                    return True
+            except (IndexError, TypeError, ValueError):
+                continue
+    return False
+
+
 class SolverNode(CadQueryNode):
     """Static linear FEA solver — dispatches to CalculiX (ccx)."""
     __identifier__ = 'com.cad.sim.solver'
@@ -70,6 +87,13 @@ class SolverNode(CadQueryNode):
             len(constraint_list), len(load_list),
         )
 
+        if mesh is not None and getattr(getattr(mesh, 't', None), 'shape', (0,))[0] == 3:
+            msg = (
+                "The CalculiX FEA solver supports Tet and Tet10 solid meshes only. "
+                "Shell meshes are supported by the OpenRadioss Crash Solver."
+            )
+            self.set_error(msg)
+            return None
         missing = []
         if mesh is None:
             missing.append('mesh')
@@ -77,7 +101,8 @@ class SolverNode(CadQueryNode):
             missing.append('material')
         if not constraint_list:
             missing.append('at least one constraint')
-        if not load_list:
+        driven_by_displacement = _has_nonzero_prescribed_displacement(constraint_list)
+        if not load_list and not driven_by_displacement:
             missing.append('at least one load')
         if missing:
             msg = "CalculiX backend requires " + ", ".join(missing) + "."
@@ -112,6 +137,7 @@ class SolverNode(CadQueryNode):
                 config=config,
                 visualization_mode=self.get_property('visualization'),
                 analysis_type=(self.get_property('analysis_type') or 'Linear'),
+                deformation_scale=self.get_property('deformation_scale'),
             )
             warnings = result.get('warnings') or []
             if warnings:

@@ -53,6 +53,9 @@ class TopologyOptVoxelProblem:
     # Optional source CAD/mesh volume mask, shape (nelx, nely, nelz).
     # True means designable material exists there; False is clamped to void.
     design_domain: Optional[np.ndarray] = None
+    # Compliance minimization at a material budget, or true mass/volume
+    # minimization subject to the stress constraint.
+    objective_mode: str = 'compliance'  # 'compliance' | 'minimum_mass'
     # Phase 3 — stress constraint (P-norm aggregated von Mises ≤ yield).
     # When enabled the optimiser is forced to MMA (OC cannot handle a second
     # constraint beyond the volume budget). All load cases are aggregated
@@ -456,6 +459,7 @@ class TopologyOptVoxelResult:
     density:            np.ndarray
     design_density:     Optional[np.ndarray] = None
     compliance_history: List[float] = field(default_factory=list)
+    objective_history:  List[float] = field(default_factory=list)
     change_history:     List[float] = field(default_factory=list)
     stress_history:     List[float] = field(default_factory=list)  # σ_pn per iteration
     n_iter:             int   = 0
@@ -581,14 +585,19 @@ class TopologyOptVoxelSolver:
             return result
 
         sx = pym.Signal("x", state=x0)
+        minimum_mass_objective = str(p.objective_mode).lower() == 'minimum_mass'
 
         def _physical_density_grid(signal_state: np.ndarray) -> np.ndarray:
-            physical = _restore_active_volume(
-                np.asarray(signal_state, dtype=float),
-                active_mask,
-                active_volfrac,
-                passive_density=passive_density,
-            )
+            physical = np.asarray(signal_state, dtype=float).copy()
+            if minimum_mass_objective:
+                physical[~active_mask] = passive_density[~active_mask]
+            else:
+                physical = _restore_active_volume(
+                    physical,
+                    active_mask,
+                    active_volfrac,
+                    passive_density=passive_density,
+                )
             return _density_grid_from_state(physical, domain)
 
         # ── pyMOTO network ────────────────────────────────────────────────
@@ -657,6 +666,14 @@ class TopologyOptVoxelSolver:
                 expression=f"10*(inp0/{domain.nel} - {total_vol_target})"
             )(svol)
             sg1.tag = "volume constraint"
+            if minimum_mass_objective:
+                sobjective_raw = pym.MathExpression(
+                    expression=f"inp0/{domain.nel}"
+                )(svol)
+                sobjective_raw.tag = "material fraction objective"
+                sobjective_scaled = pym.Scaling(scaling=100.0)(sobjective_raw)
+            else:
+                sobjective_raw, sobjective_scaled = sg0, sg0_scaled
 
             # ── Phase 3: stress constraint (P-norm aggregated von Mises) ───
             # Aggregate vm² over ALL load cases into a single PNorm so a
@@ -720,8 +737,16 @@ class TopologyOptVoxelSolver:
         comp_hist:   List[float] = []
         change_hist: List[float] = []
 
+        objective_hist: List[float] = []
         # Stress constraint requires multi-constraint MMA (OC can't handle it).
         optimizer_choice = p.optimizer.upper()
+        if minimum_mass_objective and optimizer_choice != 'MMA':
+            logger.info(
+                "Minimum-mass objective requires MMA; forcing MMA (was '%s').",
+                optimizer_choice,
+            )
+            optimizer_choice = 'MMA'
+
         if sg_stress is not None and optimizer_choice != 'MMA':
             logger.info(
                 "Stress constraint enabled — forcing optimizer to MMA "
@@ -751,7 +776,7 @@ class TopologyOptVoxelSolver:
                     )
                     xmin[passive] = xlo
                     xmax[passive] = xhi
-            mma_responses = [sg0_scaled, sg1]
+            mma_responses = [sobjective_scaled, sg1]
             if sg_stress is not None:
                 mma_responses.append(sg_stress)
             mma = pym.MMA(
@@ -783,7 +808,7 @@ class TopologyOptVoxelSolver:
         patience     = max(1, int(getattr(p, 'patience', 5) or 5))
         min_iter     = min(int(p.max_iter), max(20, 4 * patience))
         stall        = 0
-        prev_comp    = None
+        prev_objective = None
 
         # β-continuation schedule for the Heaviside projection. β doubles
         # every `heaviside_beta_step_iters` iterations, capped at β_max.
@@ -845,16 +870,21 @@ class TopologyOptVoxelSolver:
                 proj = _density_3d_to_flat(x3, domain)
                 # Re-clamp passive voxels — projections may have nudged them.
                 proj[~active_mask] = passive_density[~active_mask]
-                sx.state = _restore_active_volume(
-                    proj,
-                    active_mask,
-                    active_volfrac,
-                    passive_density=passive_density,
-                )
+                if minimum_mass_objective:
+                    sx.state = proj
+                else:
+                    sx.state = _restore_active_volume(
+                        proj,
+                        active_mask,
+                        active_volfrac,
+                        passive_density=passive_density,
+                    )
 
             net.response()
 
             comp_val = float(sg0.state)
+            objective_val = float(sobjective_raw.state)
+            objective_hist.append(objective_val)
             # Robust density change: the MEAN over active voxels, not the single
             # worst one, so a handful of oscillating boundary voxels can't veto
             # the stop.  Reported to the callback / change_history.
@@ -877,8 +907,8 @@ class TopologyOptVoxelSolver:
             # for `patience` consecutive iterations, with the robust density
             # change also settled (a guard against stopping on a transient
             # compliance plateau while the topology is still reorganising).
-            if prev_comp is not None:
-                obj_change = abs(comp_val - prev_comp) / max(abs(comp_val), 1e-12)
+            if prev_objective is not None:
+                obj_change = abs(objective_val - prev_objective) / max(abs(objective_val), 1e-12)
                 if obj_change < obj_tol and change < density_gate:
                     stall += 1
                 else:
@@ -887,11 +917,11 @@ class TopologyOptVoxelSolver:
                     result.converged = True
                     result.message = (
                         f"Converged in {it} iterations "
-                        f"(rel. compliance change < {obj_tol:.1e} for "
+                        f"(relative objective change < {obj_tol:.1e} for "
                         f"{patience} iters; mean |d_rho| = {change:.2e})"
                     )
                     break
-            prev_comp = comp_val
+            prev_objective = objective_val
 
         if not result.message:
             result.message = f"Maximum iterations ({p.max_iter}) reached"
@@ -902,6 +932,7 @@ class TopologyOptVoxelSolver:
         result.compliance_history = comp_hist
         result.change_history   = change_hist
         result.stress_history   = stress_hist
+        result.objective_history = objective_hist
         return result
 
     # ── BC assembly ───────────────────────────────────────────────────────

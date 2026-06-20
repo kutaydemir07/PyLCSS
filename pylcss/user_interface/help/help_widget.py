@@ -44,7 +44,7 @@ class HelpWidget(QtWidgets.QWidget):
         self._add_solution_space_help()
         self._add_optimization_help()
         self._add_sensitivity_help()
-        self._add_voice_assistant_help()
+        self._add_assistant_help()
         self._add_about_tab()
 
     def _create_browser(self, html_content: str) -> QtWidgets.QTextBrowser:
@@ -336,8 +336,8 @@ class HelpWidget(QtWidgets.QWidget):
         browser = self._create_browser(help_text)
         self.help_tabs.addTab(browser, qta.icon('fa5s.chart-bar'), "Sensitivity")
 
-    def _add_voice_assistant_help(self) -> None:
-        """Add help for the AI assistant and speech input panel."""
+    def _add_assistant_help(self) -> None:
+        """Add help for the AI assistant panel."""
         help_text = """
         <h2>AI Assistant</h2>
 
@@ -352,8 +352,6 @@ class HelpWidget(QtWidgets.QWidget):
         <ol>
         <li><b>Open Assistant:</b> Click the robot button in the top-right corner.</li>
         <li><b>Text Input:</b> Type a request and press Enter or Send.</li>
-        <li><b>Voice Input:</b> Toggle Voice to stream microphone audio through the new RealtimeSTT pipeline (Silero VAD + Faster-Whisper). Partial transcripts appear live; the full utterance is dispatched as a natural-language request when you finish speaking.</li>
-        <li><b>First Voice Run:</b> Whisper weights (~500 MB) download once into the user cache.</li>
         </ol>
 
         <h3>LLM Providers</h3>
@@ -362,13 +360,7 @@ class HelpWidget(QtWidgets.QWidget):
         <li><b>OpenAI:</b> GPT-4.x / GPT-5 family.</li>
         <li><b>Anthropic:</b> Claude Haiku, Sonnet, Opus 4.x.</li>
         <li><b>Google:</b> Gemini 2.5 Pro / Flash.</li>
-        <li><b>Local (recommended for privacy):</b> Any OpenAI-compatible server — <b>LM Studio</b>, <b>Ollama</b>, <b>vLLM</b>. Set the base URL to e.g. <code>http://localhost:1234/v1</code> and pick a model that supports tool calling (Qwen 2.5 7B+, Llama 3.1 8B+, Mistral Nemo, GPT-OSS 20B). All voice + LLM work runs offline.</li>
-        </ul>
-
-        <h3>Voice Stack</h3>
-        <ul>
-        <li><b>STT:</b> RealtimeSTT wrapping Silero VAD (production-grade ONNX, ~1 ms/chunk) + Faster-Whisper. Auto-detects CUDA / MPS / CPU and picks the right compute_type (float16 / int8). Streaming partial transcripts; engineering jargon (von Mises, CalculiX, CadQuery, …) is pre-seeded into Whisper's <code>initial_prompt</code> so domain terms transcribe correctly.</li>
-        <li><b>TTS:</b> RealtimeTTS with the local Kokoro-82M engine (~550× realtime on CPU, fully offline). Barge-in supported — start speaking and the assistant stops mid-sentence.</li>
+        <li><b>Local (recommended for privacy):</b> Any OpenAI-compatible server — <b>LM Studio</b>, <b>Ollama</b>, <b>vLLM</b>. Set the base URL to e.g. <code>http://localhost:1234/v1</code> and pick a model that supports tool calling (Qwen 2.5 7B+, Llama 3.1 8B+, Mistral Nemo, GPT-OSS 20B). All LLM work runs offline.</li>
         </ul>
 
         <h3>What the assistant can do</h3>

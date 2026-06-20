@@ -28,7 +28,7 @@ from pylcss.user_interface.help import HelpWidget
 # --- NEW IMPORT ---
 from pylcss.user_interface.cad import ProfessionalCadApp  # Import the widget
 
-# --- HANDS-FREE IMPORTS ---
+# --- AI ASSISTANT IMPORTS ---
 from pylcss.assistant_systems import AssistantManager, AssistantConfig
 
 # --- I/O & MATH IMPORTS ---
@@ -290,9 +290,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._setup_assistant_panel()
         self.assistant_manager.status_changed.connect(self._on_assistant_status)
         self.assistant_manager.error_occurred.connect(self._on_assistant_error)
-        self.assistant_manager.llm_request_received.connect(self._on_assistant_voice_request)
-        self.assistant_manager.llm_response_received.connect(self._on_assistant_llm_response)
-        self.assistant_manager.llm_error_occurred.connect(self._on_assistant_llm_error)
         self.assistant_manager.agentic_progress.connect(self._on_assistant_progress)
         self.assistant_manager.agentic_result_received.connect(self._on_assistant_agentic_result)
         self.assistant_manager.agentic_error_received.connect(self._on_assistant_error)
@@ -395,19 +392,6 @@ class MainWindow(QtWidgets.QMainWindow):
         input_row.addWidget(send_btn)
         panel_layout.addLayout(input_row)
 
-        voice_row = QtWidgets.QHBoxLayout()
-        self.assistant_voice_btn = QtWidgets.QPushButton("Voice")
-        self.assistant_voice_btn.setCheckable(True)
-        self.assistant_voice_btn.setIcon(qta.icon('fa5s.microphone'))
-        self.assistant_voice_btn.toggled.connect(self._toggle_assistant_voice)
-        voice_row.addWidget(self.assistant_voice_btn)
-
-        hint = QtWidgets.QLabel("Speech is sent to the assistant as natural language.")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: #8ea0ba; font-size: 11px;")
-        voice_row.addWidget(hint, 1)
-        panel_layout.addLayout(voice_row)
-
         self.content_layout.addWidget(self.assistant_panel)
         self.assistant_panel.hide()
         self.assistant_toggle_btn.raise_()
@@ -473,27 +457,6 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.assistant_manager.process_agentic_request(message)
 
-    def _toggle_assistant_voice(self, checked: bool) -> None:
-        if checked:
-            self.assistant_manager.config.voice_control.enabled = True
-            if (
-                getattr(self.assistant_manager, '_initialized', False)
-                and getattr(self.assistant_manager, '_voice_controller', None) is None
-            ):
-                self.assistant_manager._initialized = False
-            if self.assistant_manager.start():
-                self.assistant_voice_btn.setText("Voice On")
-                self.assistant_status_label.setText("Listening...")
-            else:
-                self.assistant_voice_btn.blockSignals(True)
-                self.assistant_voice_btn.setChecked(False)
-                self.assistant_voice_btn.blockSignals(False)
-                self.assistant_status_label.setText("Voice unavailable")
-        else:
-            self.assistant_manager.stop()
-            self.assistant_voice_btn.setText("Voice")
-            self.assistant_status_label.setText("Voice stopped")
-
     def _on_assistant_status(self, status: str) -> None:
         if hasattr(self, 'assistant_status_label'):
             self.assistant_status_label.setText(status)
@@ -501,32 +464,16 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_assistant_progress(self, message: str) -> None:
         self._on_assistant_status(message)
 
-    def _on_assistant_voice_request(self, text: str) -> None:
-        self._set_assistant_panel_visible(True)
-        self._append_assistant_message("You", text)
-
     def _on_assistant_agentic_result(self, result: dict, _original_text: str) -> None:
         message = result.get("message", "Completed.")
         self._append_assistant_message("Assistant", message, error=not result.get("success", False))
         self._on_assistant_status("Ready")
-
-    def _on_assistant_llm_response(self, completion) -> None:
-        self._append_assistant_message("Assistant", getattr(completion, 'content', completion))
-        self._on_assistant_status("Ready")
-
-    def _on_assistant_llm_error(self, error: Exception) -> None:
-        self._on_assistant_error(str(error))
 
     def _on_assistant_error(self, message: str) -> None:
         self._append_assistant_message("Assistant", message, error=True)
         if hasattr(self, 'assistant_status_label'):
             self.assistant_status_label.setText("Error")
 
-    def _toggle_voice_control(self, checked: bool) -> None:
-        """Backward-compatible voice toggle routed through the side panel."""
-        if hasattr(self, 'assistant_voice_btn'):
-            self.assistant_voice_btn.setChecked(checked)
-            
     def _open_llm_chat(self) -> None:
         """Backward-compatible chat entry point routed through the side panel."""
         if hasattr(self, 'assistant_panel') and not self.assistant_panel.isVisible():

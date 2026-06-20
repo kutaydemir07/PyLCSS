@@ -2,7 +2,7 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 """
-LLM Settings Widget for Voice Control Popup.
+LLM Settings Widget.
 
 Provides a collapsible settings panel for configuring LLM providers,
 API keys (encrypted), model selection, and generation parameters.
@@ -47,8 +47,8 @@ class ConnectionWorker(QThread):
 
 class LLMSettingsWidget(QWidget):
     """
-    LLM Settings panel for the voice control popup.
-    
+    LLM Settings panel for the AI assistant.
+
     Features:
     - Provider dropdown (OpenAI, Claude, Gemini, LM-Studio)
     - API key input with encryption

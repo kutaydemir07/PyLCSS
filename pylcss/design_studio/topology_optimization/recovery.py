@@ -927,9 +927,9 @@ def _apply_passive_density_regions(
         cell = span / np.maximum(np.asarray(field.shape, dtype=float), 1.0)
         spacing = cell
 
-    x_phys = mins[0] + 0.5 * cell[0] + np.arange(nx, dtype=float) * spacing[0]
-    y_phys = mins[1] + 0.5 * cell[1] + np.arange(ny, dtype=float) * spacing[1]
-    z_phys = mins[2] + 0.5 * cell[2] + np.arange(nz, dtype=float) * spacing[2]
+    x_phys = mins[0] + 0.5 * spacing[0] + np.arange(nx, dtype=float) * spacing[0]
+    y_phys = mins[1] + 0.5 * spacing[1] + np.arange(ny, dtype=float) * spacing[1]
+    z_phys = mins[2] + 0.5 * spacing[2] + np.arange(nz, dtype=float) * spacing[2]
 
     # Create coordinate grid in physical space
     X, Y, Z = np.meshgrid(x_phys, y_phys, z_phys, indexing='ij')
@@ -999,9 +999,9 @@ def _apply_passive_cylinder_sdf(
         cell = span / shape_unpadded
         spacing = cell
 
-    x_phys = mins[0] + 0.5 * cell[0] + (np.arange(nx, dtype=float) - float(pad)) * spacing[0]
-    y_phys = mins[1] + 0.5 * cell[1] + (np.arange(ny, dtype=float) - float(pad)) * spacing[1]
-    z_phys = mins[2] + 0.5 * cell[2] + (np.arange(nz, dtype=float) - float(pad)) * spacing[2]
+    x_phys = mins[0] + 0.5 * spacing[0] + (np.arange(nx, dtype=float) - float(pad)) * spacing[0]
+    y_phys = mins[1] + 0.5 * spacing[1] + (np.arange(ny, dtype=float) - float(pad)) * spacing[1]
+    z_phys = mins[2] + 0.5 * spacing[2] + (np.arange(nz, dtype=float) - float(pad)) * spacing[2]
 
     # Create coordinate grid in physical space
     X, Y, Z = np.meshgrid(x_phys, y_phys, z_phys, indexing='ij')
@@ -1058,7 +1058,7 @@ def _resample_source_mask(
         import scipy.ndimage as ndi
 
         zoom = tuple(float(t) / float(s) for t, s in zip(target_shape, source.shape))
-        resized = ndi.zoom(source.astype(float), zoom=zoom, order=0, mode='nearest')
+        resized = ndi.zoom(source.astype(float), zoom=zoom, order=0, mode='nearest', grid_mode=True)
         out = resized >= 0.5
         if out.shape != tuple(target_shape):
             cropped = np.zeros(target_shape, dtype=bool)
@@ -1126,7 +1126,13 @@ def _recover_voxel_shape(
             zoom_factors[largest] = max(1.0, zoom_factors[largest] - 1.0)
 
         if np.any(zoom_factors > 1.0):
-            field = ndi.zoom(grid, zoom=tuple(float(v) for v in zoom_factors), order=3, mode='nearest')
+            field = ndi.zoom(
+                grid,
+                zoom=tuple(float(v) for v in zoom_factors),
+                order=3,
+                mode='nearest',
+                grid_mode=True,
+            )
         else:
             field = grid.copy()
 
@@ -1224,7 +1230,7 @@ def _recover_voxel_shape(
         if len(verts) == 0 or len(faces) == 0:
             return None
 
-        surface_origin = origin + 0.5 * cell - float(pad) * spacing
+        surface_origin = origin + 0.5 * spacing - float(pad) * spacing
         verts = verts + surface_origin
         active_shapes = ()
         if passive_shapes_present:
@@ -1258,6 +1264,11 @@ def _recover_voxel_shape(
                 shapes,
                 tolerance=float(np.max(spacing)) * 3.0,
             )
+        if bounds is not None:
+            bound_min = np.asarray(bounds[0], dtype=float)[:3]
+            bound_max = np.asarray(bounds[1], dtype=float)[:3]
+            verts = np.clip(verts, bound_min, bound_max)
+
 
         # Print-ready: trimesh pipeline (hole-fill, Humphrey, optional decimate).
         if print_ready:
@@ -1283,6 +1294,10 @@ def _recover_voxel_shape(
                         improved['vertices'],
                         shapes,
                         tolerance=float(np.max(spacing)) * 3.0,
+                    )
+                if bounds is not None:
+                    improved['vertices'] = np.clip(
+                        improved['vertices'], bound_min, bound_max
                     )
                 return improved
 

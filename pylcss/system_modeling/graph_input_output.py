@@ -117,9 +117,12 @@ def load_graph_from_file(widget, path):
             
             # This fixes an issue where loaded graphs might have single-connection outputs
             # Also sync port names with var_name property
-            from pylcss.user_interface.system_modeling.system_node_types import InputNode, OutputNode
+            from pylcss.user_interface.system_modeling.system_node_types import (
+                InputNode, OutputNode, apply_system_node_style,
+            )
             
             for node in graph.all_nodes():
+                apply_system_node_style(node)
                 for port in node.output_ports():
                     port.model.multi_connection = True
                 for port in node.input_ports():
@@ -167,6 +170,7 @@ def load_graph_from_file(widget, path):
                                     new_port.model.multi_connection = False # Ensure property persists
                                     for cp in connections:
                                         new_port.connect_to(cp)
+                apply_system_node_style(node)
 
         # Select first system if any were loaded
         if widget.system_manager.systems:
@@ -177,8 +181,6 @@ def load_graph_from_file(widget, path):
             QtWidgets.QMessageBox.critical(widget, "Error", f"Failed to load: {e}")
         else:
             logger.exception("Error loading graph")
-
-
 
 
 

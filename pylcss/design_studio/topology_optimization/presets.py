@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Tuple
 
-INDUSTRIAL_WORKFLOW_MODES = ('Guided',)
+INDUSTRIAL_WORKFLOW_MODES = ('Guided', 'Expert')
 INDUSTRIAL_DESIGN_GOALS = (
     'Lightweight Stiffness',
     'Minimum Mass Under Stress',
@@ -91,6 +91,7 @@ def industrial_topopt_defaults(
         settings.update(
             optimizer='MMA',
             stress_constraint=True,
+            yield_stress=250.0,
             max_iter=max(int(settings['max_iter']), 120),
             tol=min(float(settings['tol']), 0.005),
         )

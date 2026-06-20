@@ -8,7 +8,8 @@ files.  Reimplementing that format would be brittle; instead we rely on the
 ingest the resulting ``.vtk`` files via meshio (already a PyLCSS dependency).
 
 The animation frames are turned into the dict shape consumed by the crash
-viewer (``frames`` with ``displacement``, ``stress_vm``, ``time``).
+viewer, including displacement, stress, plastic strain, erosion/failure,
+velocity, energy, topology, and physical time.
 """
 
 from __future__ import annotations
@@ -25,6 +26,80 @@ from pylcss.solver_backends.common import resolve_executable
 
 
 _ANIM_FILE_RE = re.compile(r"A(\d{3,4})$", re.IGNORECASE)
+_VTK_TIME_RE = re.compile(
+    r"(?mi)^TIME\s+1\s+1\s+\w+\s*\r?\n\s*([-+0-9.eE]+)"
+)
+
+
+class RadiossAnimationMesh:
+    """Small, pickle-safe mesh adapter used by crash playback.
+
+    Existing user decks can contain mixed shells, solids, rigid-wall quads,
+    and beams.  A scikit-fem mesh cannot represent that mixture, so retain the
+    meshio cell blocks for the viewer while exposing ``p``/``t`` for legacy
+    code and result export.
+    """
+
+    def __init__(self, points, cell_blocks):
+        pts = np.asarray(points, dtype=float)
+        if pts.ndim != 2 or pts.shape[1] < 3:
+            raise ValueError(f"Animation points must be (N, 3), got {pts.shape!r}.")
+        self.p = np.ascontiguousarray(pts[:, :3].T)
+        self.cell_blocks = []
+        for cell_type, data in cell_blocks:
+            conn = np.asarray(data, dtype=int)
+            if conn.ndim == 2 and conn.size:
+                self.cell_blocks.append((str(cell_type), np.ascontiguousarray(conn)))
+
+        # Compatibility view for exporters and older viewer paths.  Prefer the
+        # deformable solid/shell topology over rigid-wall or line cells.
+        priority = (
+            "tetra", "tetra10", "hexahedron", "wedge", "pyramid",
+            "triangle", "quad", "line", "vertex",
+        )
+        primary_type = None
+        primary_blocks = []
+        for candidate in priority:
+            blocks = [data for kind, data in self.cell_blocks if kind == candidate]
+            if blocks:
+                primary_type = candidate
+                primary_blocks = blocks
+                break
+        self.cell_type = primary_type or "unknown"
+        if primary_blocks:
+            primary = np.concatenate(primary_blocks, axis=0)
+            self.t = np.ascontiguousarray(primary.T)
+            offsets = []
+            offset = 0
+            for kind, data in self.cell_blocks:
+                if kind == primary_type:
+                    offsets.extend(range(offset, offset + data.shape[0]))
+                offset += data.shape[0]
+            self.primary_cell_indices = np.asarray(offsets, dtype=int)
+        else:
+            self.t = np.empty((0, 0), dtype=int)
+            self.primary_cell_indices = np.empty(0, dtype=int)
+
+    @classmethod
+    def from_meshio(cls, mesh):
+        blocks = [(block.type, block.data) for block in (mesh.cells or [])]
+        return cls(mesh.points, blocks)
+
+
+def _read_vtk_time(path: Path) -> Optional[float]:
+    """Read the physical animation time written in VTK FIELD metadata."""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as stream:
+            header = stream.read(4096)
+    except OSError:
+        return None
+    match = _VTK_TIME_RE.search(header)
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
 
 
 def find_animation_files(work_dir: str | Path, job_name: str) -> List[Path]:
@@ -229,7 +304,7 @@ def _von_mises_from_tensor(arr: np.ndarray) -> Optional[np.ndarray]:
     )
 
 
-def _cell_vm_to_point_vm(mesh) -> Optional[np.ndarray]:
+def _legacy_cell_vm_to_point_vm(mesh) -> Optional[np.ndarray]:
     """Average cell stress tensors onto VTK points when nodal VM is absent."""
     cell_data = getattr(mesh, "cell_data_dict", {}) or {}
     if not cell_data:
@@ -292,12 +367,114 @@ def _cell_vm_to_point_vm(mesh) -> Optional[np.ndarray]:
     return vm_points
 
 
+def _extract_cell_scalar(mesh, name_matches, reducer: str = "max") -> Optional[np.ndarray]:
+    """Return one scalar per meshio cell across all matching result fields."""
+    blocks = list(getattr(mesh, "cells", []) or [])
+    cell_data = getattr(mesh, "cell_data", {}) or {}
+    if not blocks or not cell_data:
+        return None
+    block_sizes = [int(block.data.shape[0]) for block in blocks]
+    total = sum(block_sizes)
+    combined = None
+
+    for name, values_by_block in cell_data.items():
+        if not name_matches(str(name).lower()):
+            continue
+        candidate = np.zeros(total, dtype=float)
+        offset = 0
+        valid_field = False
+        for block_index, n_cells in enumerate(block_sizes):
+            values = values_by_block[block_index] if block_index < len(values_by_block) else None
+            if values is not None:
+                arr = np.asarray(values, dtype=float)
+                if arr.size:
+                    arr = arr.reshape(arr.shape[0], -1)[:, 0]
+                    n_copy = min(n_cells, arr.size)
+                    candidate[offset : offset + n_copy] = arr[:n_copy]
+                    valid_field = True
+            offset += n_cells
+        if not valid_field:
+            continue
+        if combined is None:
+            combined = candidate
+        elif reducer == "min":
+            combined = np.minimum(combined, candidate)
+        elif reducer != "first":
+            combined = np.maximum(combined, candidate)
+    return combined
+
+
+def _cell_scalar_to_points(mesh, values, reducer: str = "average") -> Optional[np.ndarray]:
+    """Project block-aligned cell scalars onto their incident VTK points."""
+    if values is None or mesh.points is None:
+        return None
+    n_points = int(mesh.points.shape[0])
+    values = np.asarray(values, dtype=float).reshape(-1)
+    if n_points <= 0 or values.size == 0:
+        return None
+
+    out = np.zeros(n_points, dtype=float)
+    counts = np.zeros(n_points, dtype=float)
+    offset = 0
+    for block in (mesh.cells or []):
+        conn = np.asarray(block.data, dtype=int)
+        n_cells = int(conn.shape[0]) if conn.ndim == 2 else 0
+        block_values = values[offset : offset + n_cells]
+        offset += n_cells
+        if n_cells == 0 or block_values.size != n_cells:
+            continue
+        flat_conn = conn.reshape(-1)
+        repeated = np.repeat(block_values, conn.shape[1])
+        valid = (flat_conn >= 0) & (flat_conn < n_points)
+        if reducer == "max":
+            np.maximum.at(out, flat_conn[valid], repeated[valid])
+        else:
+            np.add.at(out, flat_conn[valid], repeated[valid])
+            np.add.at(counts, flat_conn[valid], 1.0)
+    if reducer != "max":
+        valid = counts > 0
+        out[valid] /= counts[valid]
+    return out
+
+
+# Override the legacy solid-first implementation above. OpenRadioss writes
+# parallel 2D/3D arrays with zeros in the irrelevant field; combining both is
+# required for shell and mixed-element decks.
+def _cell_vm_to_point_vm(mesh) -> Optional[np.ndarray]:
+    vm_cell = _extract_cell_scalar(
+        mesh,
+        lambda name: "von" in name or "vonmis" in name,
+        reducer="max",
+    )
+    if vm_cell is not None:
+        return _cell_scalar_to_points(mesh, vm_cell, reducer="average")
+
+    for name, values_by_block in (getattr(mesh, "cell_data", {}) or {}).items():
+        if "stress" not in str(name).lower():
+            continue
+        tensors = []
+        for values in values_by_block:
+            vm = _von_mises_from_tensor(np.asarray(values, dtype=float))
+            if vm is not None:
+                tensors.append(vm)
+        if tensors:
+            return _cell_scalar_to_points(
+                mesh, np.concatenate(tensors), reducer="average"
+            )
+    return None
+
+
 def _vtk_point_data(mesh) -> Tuple[
     Optional[np.ndarray],     # disp (N, 3)
     Optional[np.ndarray],     # vm   (N,)
     Optional[np.ndarray],     # node_ids (N,) 1-based
     Optional[np.ndarray],     # velocity (N, 3)
     Optional[np.ndarray],     # cell internal energy density per element (N_elem,)
+    Optional[np.ndarray],     # equivalent plastic strain per point (N,)
+    Optional[np.ndarray],     # failed flag per point (N,)
+    Optional[np.ndarray],     # element ids (N_elem,) 1-based, 0 for generated cells
+    Optional[np.ndarray],     # equivalent plastic strain per cell (N_elem,)
+    Optional[np.ndarray],     # failed flag per cell (N_elem,)
 ]:
     """Extract displacement (N,3), Von Mises (N,), velocity (N,3), and cell
     internal energy density (N_elem,) from a meshio object.
@@ -353,7 +530,33 @@ def _vtk_point_data(mesh) -> Tuple[
     if vm is None:
         vm = _cell_vm_to_point_vm(mesh)
     ener_cell = _extract_cell_ener(mesh)
-    return disp, vm, node_ids, vel, ener_cell
+    eps_cell = _extract_cell_scalar(
+        mesh,
+        lambda name: "plastic" in name and "strain" in name,
+        reducer="max",
+    )
+    erosion_status = _extract_cell_scalar(
+        mesh,
+        lambda name: "erosion" in name and "status" in name,
+        reducer="min",
+    )
+    failed_cell = None
+    if erosion_status is not None:
+        # anim_to_vtk writes 1 for active elements and 0 for deleted elements.
+        failed_cell = (np.asarray(erosion_status) <= 0.5).astype(float)
+    eps_point = _cell_scalar_to_points(mesh, eps_cell, reducer="max")
+    failed_point = _cell_scalar_to_points(mesh, failed_cell, reducer="max")
+    element_ids = _extract_cell_scalar(
+        mesh,
+        lambda name: name in ("element_id", "elementid", "element ids", "element_ids"),
+        reducer="first",
+    )
+    if element_ids is not None:
+        element_ids = np.asarray(element_ids, dtype=int)
+    return (
+        disp, vm, node_ids, vel, ener_cell, eps_point, failed_point,
+        element_ids, eps_cell, failed_cell,
+    )
 
 
 def _extract_cell_ener(mesh) -> Optional[np.ndarray]:
@@ -363,6 +566,14 @@ def _extract_cell_ener(mesh) -> Optional[np.ndarray]:
     block is what we want.  Falls back to the first matching field if no
     explicit 3D tag is present.
     """
+    combined = _extract_cell_scalar(
+        mesh,
+        lambda name: "ener" in name or "internal" in name,
+        reducer="max",
+    )
+    if combined is not None:
+        return combined
+
     cell_data = getattr(mesh, "cell_data_dict", {}) or {}
     if not cell_data:
         return None
@@ -403,13 +614,14 @@ def read_animation_frames(
     job_name: str,
     converter: Optional[str] = None,
     timeout_s: float = 600.0,
+    end_time: Optional[float] = None,
 ) -> Tuple[List[Dict[str, object]], List[str]]:
     """Build a list of viewer-ready crash frames from OpenRadioss output.
 
     Returns
     -------
     frames : list of dict
-        ``{displacement, stress_vm, time}`` per frame, ordered by time.
+        Viewer-ready field dictionaries per frame, ordered by physical time.
     warnings : list of str
         Human-readable diagnostics suitable for the result dict's
         ``warnings`` array.
@@ -451,13 +663,28 @@ def read_animation_frames(
     n_anim = max(len(anim_files), 1)
     max_disp_seen = 0.0
     max_vm_seen = 0.0
+    viewer_mesh = None
     for vtk_idx, vtk_path in enumerate(vtk_paths):
         try:
             mesh = meshio.read(str(vtk_path))
         except Exception as exc:
             warnings.append(f"Failed to read {vtk_path.name}: {exc}")
             continue
-        disp, vm, node_ids, vel, ener_cell = _vtk_point_data(mesh)
+        if viewer_mesh is None:
+            try:
+                viewer_mesh = RadiossAnimationMesh.from_meshio(mesh)
+            except Exception as exc:
+                warnings.append(f"Failed to build playback mesh from {vtk_path.name}: {exc}")
+
+        (
+            disp, vm, node_ids, vel, ener_cell, eps_point, failed_point,
+            element_ids, eps_cell, failed_cell,
+        ) = _vtk_point_data(mesh)
+        vm_cell = _extract_cell_scalar(
+            mesh,
+            lambda name: "von" in name or "vonmis" in name,
+            reducer="max",
+        )
         n_points = int(mesh.points.shape[0]) if mesh.points is not None else 0
         if disp is None:
             disp = np.zeros((n_points, 3), dtype=float)
@@ -468,16 +695,39 @@ def read_animation_frames(
         flat_disp[0::3] = disp[:, 0]
         flat_disp[1::3] = disp[:, 1]
         flat_disp[2::3] = disp[:, 2]
+        physical_time = _read_vtk_time(vtk_path)
+        time_is_normalized = False
+        if physical_time is None:
+            fraction = float(vtk_idx + 1) / float(n_anim)
+            if end_time is not None:
+                physical_time = fraction * float(end_time)
+            else:
+                physical_time = fraction
+                time_is_normalized = True
+
         frames.append(
             {
+                "mesh": viewer_mesh,
                 "displacement": flat_disp,
                 "stress_vm": np.asarray(vm, dtype=float),
+                "stress_vm_cell": (np.asarray(vm_cell, dtype=float)
+                                   if vm_cell is not None else None),
                 "velocity": (np.asarray(vel, dtype=float) if vel is not None
-                             else np.zeros((n_points, 3), dtype=float)),
+                              else np.zeros((n_points, 3), dtype=float)),
                 "ener_cell": (np.asarray(ener_cell, dtype=float) if ener_cell is not None
-                              else None),
+                               else None),
                 "node_ids": node_ids,
-                "time": float(vtk_idx + 1) / float(n_anim),
+                "element_ids": element_ids,
+                "eps_p": (np.asarray(eps_point, dtype=float) if eps_point is not None
+                          else np.zeros(n_points, dtype=float)),
+                "failed": (np.asarray(failed_point, dtype=float) if failed_point is not None
+                           else np.zeros(n_points, dtype=float)),
+                "eps_p_cell": (np.asarray(eps_cell, dtype=float) if eps_cell is not None
+                               else None),
+                "failed_cell": (np.asarray(failed_cell, dtype=float) if failed_cell is not None
+                                else None),
+                "time": float(physical_time),
+                "time_is_normalized": time_is_normalized,
             }
         )
         max_disp_seen = max(max_disp_seen, float(np.max(np.abs(disp))) if disp.size else 0.0)

@@ -9,8 +9,10 @@
     "reject_connection_types": "{}"
   },
   "nodes": {
-    "0x001": {
+    "0x20426703b00": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
       "icon": null,
+      "name": "Aluminum Crush Rail",
       "color": [
         13,
         18,
@@ -33,16 +35,14 @@
       "selected": false,
       "visible": true,
       "width": 160,
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
-      "type_": "com.cad.code_part.CadQueryCodeNode",
-      "name": "Aluminum Crush Rail",
+      "height": 165.6,
       "pos": [
         -760.0,
         -150.0
       ],
-      "height": 220.0,
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
       "custom": {
         "code": "# Aluminum crush rail: open-front rectangular tube with a clamped rear flange.\n# X is the crush axis, +X is the impact/front lip, and -X is the fixed mount.\nrail = cq.Workplane('XY').box(length, width, height)\nrail = rail.faces('>X').shell(-wall)\n\nflange = (\n    cq.Workplane('XY')\n    .box(flange_t, flange_w, flange_h)\n    .translate((-0.5 * length - 0.5 * flange_t, 0.0, 0.0))\n)\nresult = rail.union(flange)\n\nfor x0 in (0.5 * length - 35.0, 0.5 * length - 62.0):\n    right_cut = (\n        cq.Workplane('XY')\n        .box(trigger_width, trigger_depth, height + 6.0)\n        .translate((x0, 0.5 * width - 0.5 * trigger_depth, 0.0))\n    )\n    left_cut = (\n        cq.Workplane('XY')\n        .box(trigger_width, trigger_depth, height + 6.0)\n        .translate((x0, -0.5 * width + 0.5 * trigger_depth, 0.0))\n    )\n    result = result.cut(right_cut)\n    result = result.cut(left_cut)\n",
         "parameters": "flange_h=76.0\ntrigger_width=8.0\ntrigger_depth=10.0",
@@ -60,8 +60,10 @@
         "param_6_value": 92.0
       }
     },
-    "0x002": {
+    "0x20426844f20": {
+      "type_": "com.cad.select_face.SelectFaceNode",
       "icon": null,
+      "name": "Rear Mounting Flange",
       "color": [
         13,
         18,
@@ -84,28 +86,35 @@
       "selected": false,
       "visible": true,
       "width": 160,
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
-      "type_": "com.cad.select_face.SelectFaceNode",
-      "name": "Rear Mounting Flange",
+      "height": 60,
       "pos": [
         -500.0,
         -320.0
       ],
-      "height": 119.4,
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
       "custom": {
         "selector_type": "Direction",
         "direction": "<X",
         "near_x": 0.0,
         "near_y": 0.0,
         "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
         "face_index": 0,
         "tag": "rear_mount"
       }
     },
-    "0x003": {
+    "0x20426846360": {
+      "type_": "com.cad.select_face.SelectFaceNode",
       "icon": null,
+      "name": "Front Impact Lip",
       "color": [
         13,
         18,
@@ -128,28 +137,35 @@
       "selected": false,
       "visible": true,
       "width": 160,
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
-      "type_": "com.cad.select_face.SelectFaceNode",
-      "name": "Front Impact Lip",
+      "height": 60,
       "pos": [
         -500.0,
         -150.0
       ],
-      "height": 119.4,
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
       "custom": {
         "selector_type": "Direction",
         "direction": ">X",
         "near_x": 0.0,
         "near_y": 0.0,
         "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
         "face_index": 0,
         "tag": "front_lip"
       }
     },
-    "0x004": {
+    "0x20426846510": {
+      "type_": "com.cad.sim.mesh.MeshNode",
       "icon": null,
+      "name": "Generate Mesh",
       "color": [
         13,
         18,
@@ -169,27 +185,29 @@
         180
       ],
       "disabled": false,
-      "selected": false,
+      "selected": true,
       "visible": true,
-      "width": 160,
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
-      "type_": "com.cad.sim.mesh.MeshNode",
-      "name": "Generate Mesh",
+      "width": 160.953125,
+      "height": 119.4,
       "pos": [
         -500.0,
         40.0
       ],
-      "height": 119.4,
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
       "custom": {
-        "mesh_type": "Tet",
+        "mesh_type": "Shell",
         "element_size": 8.0,
-        "refinement_size": 4.0
+        "refinement_size": 4.0,
+        "shell_thickness": 1.5,
+        "shell_nip": 5
       }
     },
-    "0x005": {
+    "0x20426847f20": {
+      "type_": "com.cad.sim.crash_material.CrashMaterialNode",
       "icon": null,
+      "name": "Al 5052-H32 Crush Material",
       "color": [
         13,
         18,
@@ -211,17 +229,15 @@
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 160,
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
-      "type_": "com.cad.sim.crash_material.CrashMaterialNode",
-      "name": "Al 5052-H32 Crush Material",
+      "width": 178.828125,
+      "height": 60,
       "pos": [
         -230.0,
         140.0
       ],
-      "height": 119.4,
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
       "custom": {
         "preset": "Aluminum 5052-H32 (Crush)",
         "youngs_modulus": 70300.0,
@@ -230,11 +246,14 @@
         "yield_strength": 193.0,
         "tangent_modulus": 500.0,
         "failure_strain": 0.14,
-        "enable_fracture": false
+        "enable_fracture": false,
+        "strain_rate_sensitive": true
       }
     },
-    "0x006": {
+    "0x20419d688c0": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
       "icon": null,
+      "name": "Clamped Rear Mount",
       "color": [
         13,
         18,
@@ -257,26 +276,29 @@
       "selected": false,
       "visible": true,
       "width": 160,
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
-      "type_": "com.cad.sim.constraint.ConstraintNode",
-      "name": "Clamped Rear Mount",
+      "height": 73.2,
       "pos": [
         -230.0,
         -300.0
       ],
-      "height": 73.2,
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
       "custom": {
         "constraint_type": "Fixed",
         "displacement_x": 0.0,
         "displacement_y": 0.0,
         "displacement_z": 0.0,
+        "displacement_x_enabled": true,
+        "displacement_y_enabled": true,
+        "displacement_z_enabled": true,
         "condition": ""
       }
     },
-    "0x007": {
+    "0x2042678ef30": {
+      "type_": "com.cad.sim.impact.ImpactConditionNode",
       "icon": null,
+      "name": "10 m/s Front-Lip Compression Impact (36 km/h)",
       "color": [
         13,
         18,
@@ -298,27 +320,29 @@
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 160,
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
-      "type_": "com.cad.sim.impact.ImpactConditionNode",
-      "name": "10 m/s Front-Lip Compression Impact (36 km/h)",
-        "pos": [
+      "width": 277.9375,
+      "height": 60,
+      "pos": [
         -230.0,
         -100.0
       ],
-      "height": 96.3,
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
       "custom": {
         "velocity_x": -10.0,
         "velocity_y": 0.0,
         "velocity_z": 0.0,
         "application_scope": "Impact Face",
-        "node_tolerance": 3.0
+        "node_tolerance": 3.0,
+        "wall_friction": -1.0,
+        "wall_gap_mm": 0.0
       }
     },
-    "0x008": {
+    "0x20426854b60": {
+      "type_": "com.cad.sim.crash_solver.CrashSolverNode",
       "icon": null,
+      "name": "OpenRadioss Axial Crush Solver",
       "color": [
         13,
         18,
@@ -340,30 +364,36 @@
       "disabled": false,
       "selected": false,
       "visible": true,
-      "width": 160,
-      "layout_direction": 0,
-      "port_deletion_allowed": false,
-      "subgraph_session": {},
-      "type_": "com.cad.sim.crash_solver.CrashSolverNode",
-      "name": "OpenRadioss Axial Crush Solver",
+      "width": 198.265625,
+      "height": 119.4,
       "pos": [
         130.0,
         -150.0
       ],
-      "height": 142.5,
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
       "custom": {
+        "openradioss_starter_path": "",
+        "openradioss_engine_path": "",
+        "external_work_dir": "",
+        "deck_only": false,
+        "external_timeout_s": 1800.0,
         "end_time": 6.0,
-        "time_steps": 45000,
-        "damping_alpha": 1.0,
-        "visualization": "Von Mises Stress",
         "n_frames": 80,
+        "visualization": "Von Mises Stress",
         "disp_scale": 1.0,
+        "solver_backend": "OpenRadioss",
+        "run_external_solver": true,
+        "time_steps": 45000,
+        "enable_mass_scaling": true,
+        "damping_alpha": 1.0,
+        "damping_beta": 0.0,
         "enable_corotation": true,
         "enable_contact": false,
         "contact_stiffness": 0.1,
         "contact_thickness": 0.2,
         "contact_update_interval": 5,
-        "enable_mass_scaling": true,
         "mass_scaling_threshold": 0.03,
         "impactor_mass_kg": 50.0
       }
@@ -372,111 +402,111 @@
   "connections": [
     {
       "out": [
-        "0x001",
+        "0x20426703b00",
         "shape"
       ],
       "in": [
-        "0x002",
+        "0x20426844f20",
         "shape"
       ]
     },
     {
       "out": [
-        "0x001",
+        "0x20426703b00",
         "shape"
       ],
       "in": [
-        "0x003",
+        "0x20426846360",
         "shape"
       ]
     },
     {
       "out": [
-        "0x001",
+        "0x20426703b00",
         "shape"
       ],
       "in": [
-        "0x004",
+        "0x20426846510",
         "shape"
       ]
     },
     {
       "out": [
-        "0x003",
+        "0x20426844f20",
         "workplane"
       ],
       "in": [
-        "0x004",
-        "refinement_faces"
-      ]
-    },
-    {
-      "out": [
-        "0x002",
-        "workplane"
-      ],
-      "in": [
-        "0x006",
+        "0x20419d688c0",
         "target_face"
       ]
     },
     {
       "out": [
-        "0x004",
-        "mesh"
-      ],
-      "in": [
-        "0x006",
-        "mesh"
-      ]
-    },
-    {
-      "out": [
-        "0x006",
-        "constraints"
-      ],
-      "in": [
-        "0x008",
-        "constraints"
-      ]
-    },
-    {
-      "out": [
-        "0x003",
+        "0x20426846360",
         "workplane"
       ],
       "in": [
-        "0x007",
+        "0x20426846510",
+        "refinement_faces"
+      ]
+    },
+    {
+      "out": [
+        "0x20426846360",
+        "workplane"
+      ],
+      "in": [
+        "0x2042678ef30",
         "impact_face"
       ]
     },
     {
       "out": [
-        "0x004",
+        "0x20426846510",
         "mesh"
       ],
       "in": [
-        "0x008",
+        "0x20419d688c0",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x005",
+        "0x20426846510",
+        "mesh"
+      ],
+      "in": [
+        "0x20426854b60",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x20426847f20",
         "crash_material"
       ],
       "in": [
-        "0x008",
+        "0x20426854b60",
         "crash_material"
       ]
     },
     {
       "out": [
-        "0x007",
+        "0x20419d688c0",
+        "constraints"
+      ],
+      "in": [
+        "0x20426854b60",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "0x2042678ef30",
         "impact"
       ],
       "in": [
-        "0x008",
+        "0x20426854b60",
         "impact"
       ]
     }

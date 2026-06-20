@@ -37,13 +37,91 @@ def _flatten(values: Any) -> List[Any]:
     return [values]
 
 
+def _surface_mesh_arrays(mesh: Any) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """Return row-major vertices/triangles from imported or CAD geometry."""
+    if mesh is None:
+        return None
+    if isinstance(mesh, dict):
+        for key in ('mesh', 'recovered_shape', 'shape', 'cad'):
+            nested = mesh.get(key)
+            if nested is not None and nested is not mesh:
+                arrays = _surface_mesh_arrays(nested)
+                if arrays is not None:
+                    return arrays
+        vertices = mesh.get('vertices')
+        faces = mesh.get('faces')
+        if vertices is not None and faces is not None:
+            verts = np.asarray(vertices, dtype=float)
+            tris = np.asarray(faces, dtype=int)
+            if verts.ndim == 2 and verts.shape[1] >= 3 and tris.ndim == 2 and tris.shape[1] >= 3:
+                return verts[:, :3], tris[:, :3]
+
+    if hasattr(mesh, 'vertices') and hasattr(mesh, 'faces'):
+        raw_vertices = getattr(mesh, 'vertices')
+        raw_faces = getattr(mesh, 'faces')
+        if not callable(raw_vertices) and not callable(raw_faces):
+            verts = np.asarray(raw_vertices, dtype=float)
+            tris = np.asarray(raw_faces, dtype=int)
+            if verts.ndim == 2 and verts.shape[1] >= 3 and tris.ndim == 2 and tris.shape[1] >= 3:
+                return verts[:, :3], tris[:, :3]
+
+    shape = mesh
+    if hasattr(shape, 'val'):
+        try:
+            shape = shape.val()
+        except Exception:
+            pass
+    if hasattr(shape, 'tessellate'):
+        try:
+            vertices, faces = shape.tessellate(0.5)
+            verts = np.asarray([
+                (float(v.x), float(v.y), float(v.z)) if hasattr(v, 'x') else tuple(v)[:3]
+                for v in vertices
+            ], dtype=float)
+            tris = np.asarray(faces, dtype=int)
+            if verts.ndim == 2 and verts.shape[1] >= 3 and tris.ndim == 2 and tris.shape[1] >= 3:
+                return verts[:, :3], tris[:, :3]
+        except Exception:
+            return None
+    return None
+
+
 def _mesh_bounds(mesh: Any) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-    if mesh is None or not hasattr(mesh, 'p'):
+    """Bounds for tetra meshes, imported triangle meshes, or CAD solids."""
+    if mesh is None:
         return None
-    pts = np.asarray(mesh.p, dtype=float)
-    if pts.ndim != 2 or pts.shape[0] < 3 or pts.shape[1] == 0:
+    if isinstance(mesh, dict):
+        for key in ('mesh', 'recovered_shape', 'shape', 'cad'):
+            nested = mesh.get(key)
+            if nested is not None and nested is not mesh:
+                bounds = _mesh_bounds(nested)
+                if bounds is not None:
+                    return bounds
+    if hasattr(mesh, 'p'):
+        pts = np.asarray(mesh.p, dtype=float)
+        if pts.ndim == 2 and pts.shape[0] >= 3 and pts.shape[1] > 0:
+            return pts[:3].min(axis=1), pts[:3].max(axis=1)
+
+    arrays = _surface_mesh_arrays(mesh)
+    if arrays is not None:
+        points = arrays[0]
+        if len(points):
+            return points.min(axis=0), points.max(axis=0)
+
+    shape = mesh
+    if hasattr(shape, 'val'):
+        try:
+            shape = shape.val()
+        except Exception:
+            pass
+    try:
+        bb = shape.BoundingBox()
+        return (
+            np.asarray([bb.xmin, bb.ymin, bb.zmin], dtype=float),
+            np.asarray([bb.xmax, bb.ymax, bb.zmax], dtype=float),
+        )
+    except Exception:
         return None
-    return pts[:3].min(axis=1), pts[:3].max(axis=1)
 
 
 def _bbox_tuple(bb: Any) -> Optional[Tuple[float, float, float, float, float, float]]:
@@ -849,7 +927,6 @@ def _numba_voxelize_tets(
         tet = tets[i]
         if tet[0] < 0 or tet[1] < 0 or tet[2] < 0 or tet[3] < 0: continue
         if tet[0] >= len(pts) or tet[1] >= len(pts) or tet[2] >= len(pts) or tet[3] >= len(pts): continue
-
         v0 = pts[tet[0]]
         v1 = pts[tet[1]]
         v2 = pts[tet[2]]
@@ -923,6 +1000,61 @@ def _numba_voxelize_tets(
                         sub = (lx * samples + ly) * samples + lz
                         active_samples[vx, vy, vz, sub] = True
 
+
+
+def _surface_design_domain_grid(
+    mesh: Any,
+    bounds: Tuple[np.ndarray, np.ndarray],
+    nelx: int,
+    nely: int,
+    nelz: int,
+) -> Optional[np.ndarray]:
+    """Voxelize a watertight imported/CAD triangle surface at cell centres."""
+    arrays = _surface_mesh_arrays(mesh)
+    if arrays is None:
+        return None
+    try:
+        import trimesh
+
+        vertices, faces = arrays
+        surface = trimesh.Trimesh(
+            vertices=np.asarray(vertices, dtype=float),
+            faces=np.asarray(faces, dtype=int),
+            process=True,
+            validate=True,
+        )
+        if surface.is_empty or len(surface.faces) < 4:
+            return None
+        if not surface.is_watertight:
+            try:
+                trimesh.repair.fill_holes(surface)
+                trimesh.repair.fix_normals(surface)
+            except Exception:
+                pass
+        if not surface.is_watertight:
+            logger.warning(
+                "TopologyOptVoxelNode: imported/CAD surface is not watertight; "
+                "it cannot define a reliable design volume."
+            )
+            return None
+
+        mins, maxs = bounds
+        mins = np.asarray(mins[:3], dtype=float)
+        maxs = np.asarray(maxs[:3], dtype=float)
+        dims = np.asarray([nelx, nely, nelz], dtype=int)
+        step = np.maximum((maxs - mins) / np.maximum(dims, 1), 1e-12)
+        axes = [mins[i] + (np.arange(int(dims[i])) + 0.5) * step[i] for i in range(3)]
+        xx, yy, zz = np.meshgrid(*axes, indexing='ij')
+        points = np.column_stack((xx.ravel(), yy.ravel(), zz.ravel()))
+        inside = np.zeros(len(points), dtype=bool)
+        for start in range(0, len(points), 20_000):
+            stop = min(start + 20_000, len(points))
+            inside[start:stop] = surface.contains(points[start:stop])
+        return inside.reshape((nelx, nely, nelz))
+    except Exception:
+        logger.exception("TopologyOptVoxelNode: failed to voxelize surface design domain")
+        return None
+
 def _mesh_design_domain_grid(
     mesh: Any,
     bounds: Optional[Tuple[np.ndarray, np.ndarray]],
@@ -935,17 +1067,19 @@ def _mesh_design_domain_grid(
     This keeps FreeCAD cutouts and holes as voids automatically instead of
     treating the whole bounding box as designable material.
     """
-    if mesh is None or bounds is None or not hasattr(mesh, 'p') or not hasattr(mesh, 't'):
+    if mesh is None or bounds is None:
         return None
+    if not hasattr(mesh, 'p') or not hasattr(mesh, 't'):
+        return _surface_design_domain_grid(mesh, bounds, nelx, nely, nelz)
     try:
         points = np.asarray(mesh.p, dtype=float)
         cells = np.asarray(mesh.t, dtype=int)
     except Exception:
-        return None
+        return _surface_design_domain_grid(mesh, bounds, nelx, nely, nelz)
     if points.ndim != 2 or points.shape[0] < 3 or points.shape[1] == 0:
         return None
     if cells.ndim != 2 or cells.shape[0] < 4 or cells.shape[1] == 0:
-        return None
+        return _surface_design_domain_grid(mesh, bounds, nelx, nely, nelz)
 
     nelx, nely, nelz = max(1, int(nelx)), max(1, int(nely)), max(1, int(nelz))
     mins, maxs = bounds
@@ -1092,7 +1226,7 @@ class TopologyOptVoxelNode(CadQueryNode):
         # PNorm exponent, and multi-LC aggregation are silent industrial
         # defaults inside the solver (q=0.5 Bruggi 2008, p=8.0 PNorm).
         self.create_property('stress_constraint', False, widget_type='bool')
-        self.create_property('yield_stress',      1.0,   widget_type='float')
+        self.create_property('yield_stress',      250.0, widget_type='float')
 
         # Legacy saved graphs may still carry this property. It is ignored:
         # graph-connected Constraint/Load nodes and explicit fields are the
@@ -1182,6 +1316,13 @@ class TopologyOptVoxelNode(CadQueryNode):
         for key, value in settings.items():
             self.set_property(key, value)
         return settings
+
+    def request_stop(self) -> None:
+        """Request a clean stop at the next optimizer iteration boundary."""
+        solver = getattr(self, '_active_solver', None)
+        if solver is not None:
+            solver.stop()
+
 
     def _run_embedded_validation(
         self,
@@ -1277,19 +1418,25 @@ class TopologyOptVoxelNode(CadQueryNode):
             return bc
 
         # ── legacy single-force mode ──────────────────────────────────────
-        mag  = float(self.get_property('force_magnitude') or 1.0)
-        fdx  = float(self.get_property('force_dir_x') or 0.0)
-        fdy  = float(self.get_property('force_dir_y') or -1.0)
-        fdz  = float(self.get_property('force_dir_z') or 0.0)
+        def _float_property(name: str, default: float) -> float:
+            value = self.get_property(name)
+            if value is None or value == '':
+                return float(default)
+            return float(value)
+
+        mag = _float_property('force_magnitude', 1.0)
+        fdx = _float_property('force_dir_x', 0.0)
+        fdy = _float_property('force_dir_y', -1.0)
+        fdz = _float_property('force_dir_z', 0.0)
 
         norm = (fdx ** 2 + fdy ** 2 + fdz ** 2) ** 0.5 or 1.0
         fdx, fdy, fdz = (fdx / norm) * mag, (fdy / norm) * mag, (fdz / norm) * mag
 
         ftype = self.get_property('force_type')
         if ftype == 'Point':
-            ix_f = float(self.get_property('force_ix_frac') or 1.0)
-            iy_f = float(self.get_property('force_iy_frac') or 0.5)
-            iz_f = float(self.get_property('force_iz_frac') or 0.5)
+            ix_f = _float_property('force_ix_frac', 1.0)
+            iy_f = _float_property('force_iy_frac', 0.5)
+            iz_f = _float_property('force_iz_frac', 0.5)
             bc.point_forces.append((ix_f, iy_f, iz_f, fdx, fdy, fdz))
         else:  # Distributed Face
             face = (self.get_property('force_face') or 'Right').lower()
@@ -1442,6 +1589,13 @@ class TopologyOptVoxelNode(CadQueryNode):
             )
             return None
 
+        if bounds is None:
+            self.set_error(
+                "Topology Opt could not read a 3-D design volume from the connected input. "
+                "Use a tetra mesh, a watertight STL/OBJ surface, or a CAD solid."
+            )
+            return None
+
         nelx = int(self.get_property('nelx') or 30)
         nely = int(self.get_property('nely') or 20)
         nelz = int(self.get_property('nelz') or 10)
@@ -1467,6 +1621,15 @@ class TopologyOptVoxelNode(CadQueryNode):
         if guided_active:
             rmin_effective = _guided_rmin(nelx, nely, nelz)
         design_domain = _mesh_design_domain_grid(mesh, bounds, nelx, nely, nelz)
+        if design_domain is None or not np.any(design_domain):
+            self.set_error(
+                "Topology Opt could not voxelize the connected design volume. "
+                "Repair non-watertight surfaces or generate a tetrahedral mesh first."
+            )
+            return None
+
+        design_goal = str(self.get_property('design_goal') or 'Lightweight Stiffness')
+        minimum_mass_goal = design_goal.strip().lower() == 'minimum mass under stress'
         unitx = unity = unitz = 1.0
         if bounds is not None:
             mins, maxs = bounds
@@ -1484,6 +1647,16 @@ class TopologyOptVoxelNode(CadQueryNode):
             pattern_axis   = (str(self.get_property('pattern_axis') or 'Y')).lower(),
         )
 
+        stress_enabled = bool(self.get_property('stress_constraint')) or minimum_mass_goal
+        optimizer = str(self.get_property('optimizer') or 'OC')
+        if stress_enabled:
+            optimizer = 'MMA'
+        yield_stress = float(self.get_property('yield_stress') or 0.0)
+        if yield_stress <= 0.0:
+            yield_stress = float(material.get('yield_strength') or 0.0)
+        if stress_enabled and yield_stress <= 0.0:
+            self.set_error("Stress-constrained TopOpt needs a positive allowable/yield stress in MPa.")
+            return None
         problem = TopologyOptVoxelProblem(
             nelx     = nelx,
             nely     = nely,
@@ -1497,15 +1670,16 @@ class TopologyOptVoxelNode(CadQueryNode):
             unitx    = unitx,
             unity    = unity,
             unitz    = unitz,
-            optimizer = self.get_property('optimizer') or 'OC',
+            optimizer = optimizer,
             max_iter = int(self.get_property('max_iter') or 80),
             tol      = float(self.get_property('tol')   or 0.01),
             patience = int(self.get_property('convergence_patience') or 5),
             bc       = bc,
             mc       = mc,
             design_domain = design_domain,
-            stress_constraint_enabled = bool(self.get_property('stress_constraint')),
-            yield_stress              = float(self.get_property('yield_stress') or 1.0),
+            objective_mode            = 'minimum_mass' if minimum_mass_goal else 'compliance',
+            stress_constraint_enabled = stress_enabled,
+            yield_stress              = yield_stress,
             # Numerical hyperparameters use the dataclass defaults (industrial
             # values: q=0.5 Bruggi qp-approach, p=8.0 PNorm aggregation,
             # Heaviside three-field SIMP on with β: 1 → 16 stepping every 30
@@ -1558,6 +1732,7 @@ class TopologyOptVoxelNode(CadQueryNode):
 
         solver = TopologyOptVoxelSolver(problem)
 
+        self._active_solver = solver
         def _cb(it: int, comp: float, change: float, density: np.ndarray) -> None:
             _emit_preview(density, max(0, it - 1), problem.max_iter)
 
@@ -1567,6 +1742,9 @@ class TopologyOptVoxelNode(CadQueryNode):
             logger.exception("TopologyOptVoxelNode: solver error")
             self.set_error(str(exc))
             return None
+        finally:
+            if getattr(self, '_active_solver', None) is solver:
+                self._active_solver = None
 
         logger.info("TopologyOptVoxelNode: %s", result.message)
         density = np.asarray(result.density, dtype=float)
@@ -1619,6 +1797,8 @@ class TopologyOptVoxelNode(CadQueryNode):
         material_density = float(material.get('rho', material.get('density', 0.0)))
         output: Dict[str, Any] = {
             'type': 'topopt_voxel',
+            'design_goal': design_goal,
+            'objective_mode': problem.objective_mode,
             'density': density,
             'design_domain': design_domain,
             'design_density': (
@@ -1654,6 +1834,7 @@ class TopologyOptVoxelNode(CadQueryNode):
             'converged': result.converged,
             'message': result.message,
             'compliance_history': result.compliance_history,
+            'objective_history': result.objective_history,
             'change_history': result.change_history,
             'stress_history': result.stress_history,
             'passive_regions': {
@@ -1683,7 +1864,8 @@ class TopologyOptVoxelNode(CadQueryNode):
                     output['validation'] = validation
                     study = validation.get('convergence_study') if isinstance(validation, dict) else None
                     output['validation_summary'] = {
-                        'max_stress': validation.get('max_stress_gauss'),
+                        'max_stress': validation.get(
+                            'peak_stress_nodal', validation.get('max_stress_gauss')),
                         'compliance': validation.get('compliance'),
                         'converged': (
                             study.get('converged')

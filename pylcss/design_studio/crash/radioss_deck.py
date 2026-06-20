@@ -46,9 +46,16 @@ class RunRadiossDeckNode(CadQueryNode):
         self.create_property("timeout_s", 7200.0, widget_type="float")
         self.create_property(
             "visualization", "Von Mises Stress", widget_type="combo",
-            items=["Von Mises Stress", "Displacement", "Plastic Strain"],
+            items=[
+                "Von Mises Stress", "Displacement", "Plastic Strain",
+                "Failed Elements",
+            ],
         )
         self.create_property("disp_scale", 1.0, widget_type="float")
+        # anim_to_vtk preserves the deck's native stress unit.  The normal
+        # PyLCSS/OpenRadioss convention is tonne-mm-ms, where native stress
+        # multiplied by 1e6 gives MPa.  Set this to 1 for MPa-native decks.
+        self.create_property("stress_scale_to_mpa", 1.0e6, widget_type="float")
 
     @staticmethod
     def _repo_root():
@@ -135,6 +142,9 @@ class RunRadiossDeckNode(CadQueryNode):
                 engine_deck_path=engine_path,
                 visualization_mode=self.get_property("visualization"),
                 disp_scale=float(self.get_property("disp_scale") or 1.0),
+                stress_scale_to_mpa=float(
+                    self.get_property("stress_scale_to_mpa") or 1.0
+                ),
             )
             warnings = result.get("warnings") or []
             if warnings:

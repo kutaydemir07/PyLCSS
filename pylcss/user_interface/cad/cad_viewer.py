@@ -160,31 +160,39 @@ class NavCubeWidget(QtWidgets.QWidget):
 
         p  = self._project()
         vd = self._rot[2]  # camera Z = direction from focal point toward camera
-        # corners (highest priority) — skip back-facing so the click hits the
-        # corner the user actually sees, not an occluded one with a lower index.
-        # A corner at unit-cube vertex V[vi] is visible iff V[vi] · vd > 0.
+        vis = self._V @ vd  # per-vertex visibility: > 0 means on the viewer side
+
+        # Corners (highest priority).  Only front-facing corners are eligible,
+        # and when several fall within the hit radius we keep the one NEAREST
+        # THE VIEWER (largest projected depth p[:,2]) so an occluded corner can
+        # never win.  Radius tightened to 6 px so the faces stay easy to click.
         best_corner = None
-        best_corner_d2 = 64.0  # 8-px hit radius squared
+        best_corner_depth = -1e30
         for i, (vi, _, _) in enumerate(self._CORNERS):
-            if float(np.dot(self._V[vi], vd)) <= 0:
+            if vis[vi] <= 1e-6:
                 continue
             d2 = (mx - p[vi, 0]) ** 2 + (my - p[vi, 1]) ** 2
-            if d2 < best_corner_d2:
-                best_corner_d2 = d2
+            if d2 < 36.0 and p[vi, 2] > best_corner_depth:
+                best_corner_depth = p[vi, 2]
                 best_corner = i
         if best_corner is not None:
             return ('corner', best_corner)
-        # edges — skip those whose both endpoints are on the far side
+
+        # Edges: only FULLY visible edges (both endpoints front-facing) are
+        # eligible — this drops the depth edges that run across a visible face
+        # toward the hidden back corner, which were the ones stealing clicks and
+        # navigating to the wrong side.  Ties broken by nearest-the-viewer depth.
         best_edge = None
-        best_edge_d2 = 36.0
+        best_edge_depth = -1e30
         for i, (v0, v1, _, _) in enumerate(self._EDGES):
-            if (float(np.dot(self._V[v0], vd)) <= 0
-                    and float(np.dot(self._V[v1], vd)) <= 0):
+            if vis[v0] <= 1e-6 or vis[v1] <= 1e-6:
                 continue
             d2 = self._seg_dist2(p[v0, 0], p[v0, 1], p[v1, 0], p[v1, 1], mx, my)
-            if d2 < best_edge_d2:
-                best_edge_d2 = d2
-                best_edge = i
+            if d2 < 25.0:
+                depth = 0.5 * (p[v0, 2] + p[v1, 2])
+                if depth > best_edge_depth:
+                    best_edge_depth = depth
+                    best_edge = i
         if best_edge is not None:
             return ('edge', best_edge)
         # faces (front-facing first)
@@ -242,14 +250,16 @@ class NavCubeWidget(QtWidgets.QWidget):
         painter.setBrush(QtGui.QColor(51, 51, 51))
         painter.drawRoundedRect(0, 0, self.SIZE, self.SIZE, 8, 8)
 
-        # Per-face base colors (front-face tone; back-face dims automatically)
+        # Per-face base colors — muted, desaturated "slate" tones that still
+        # carry a faint axis hue (Z cool-blue, Y teal-green, X terracotta) so
+        # the orientation reads without looking like primary-colour plastic.
         _BASE = [
-            QtGui.QColor( 50, 110, 200),  # TOP   – blue
-            QtGui.QColor( 35,  80, 150),  # BOT   – darker blue
-            QtGui.QColor( 45, 170,  90),  # FRONT – green
-            QtGui.QColor( 35, 130,  70),  # BACK  – darker green
-            QtGui.QColor(210,  90,  50),  # RIGHT – orange-red
-            QtGui.QColor(160,  70,  40),  # LEFT  – darker orange
+            QtGui.QColor( 96, 120, 150),  # TOP (+Z)   – cool slate blue
+            QtGui.QColor( 70,  90, 114),  # BOT (-Z)   – dim slate blue
+            QtGui.QColor( 92, 130, 112),  # FRONT (-Y) – muted teal
+            QtGui.QColor( 70, 102,  88),  # BACK (+Y)  – dim teal
+            QtGui.QColor(150, 112,  96),  # RIGHT (+X) – muted terracotta
+            QtGui.QColor(120,  88,  76),  # LEFT (-X)  – dim terracotta
         ]
 
         # Faces – back-to-front depth sort
@@ -291,23 +301,28 @@ class NavCubeWidget(QtWidgets.QWidget):
                 painter.drawText(QtCore.QRectF(cx_f - 18, cy_f - 8, 36, 16),
                                  QtCore.Qt.AlignCenter, label)
 
-        # Edges
+        # Edges — draw only FULLY VISIBLE edges (both endpoints on the viewer
+        # side) so the cube reads as a solid object, not a see-through
+        # wireframe.  The hovered edge gets a bright accent.
+        vis = self._V @ vd
         for i, (v0, v1, _, _) in enumerate(self._EDGES):
+            if vis[v0] <= 1e-6 or vis[v1] <= 1e-6:
+                continue
             is_hov = self._hovered == ('edge', i)
             painter.setPen(QtGui.QPen(
-                QtGui.QColor(140, 200, 255) if is_hov else QtGui.QColor(90, 120, 165),
-                3.5 if is_hov else 1.2
+                QtGui.QColor(150, 205, 255) if is_hov else QtGui.QColor(40, 46, 56),
+                3.0 if is_hov else 1.0
             ))
             painter.drawLine(QtCore.QPointF(p[v0, 0], p[v0, 1]),
                              QtCore.QPointF(p[v1, 0], p[v1, 1]))
 
-        # Corners
-        painter.setPen(QtCore.Qt.NoPen)
-        for i, (vi, _, _) in enumerate(self._CORNERS):
-            is_hov = self._hovered == ('corner', i)
-            r = 5.5 if is_hov else 3.5
-            painter.setBrush(QtGui.QColor(105, 190, 255) if is_hov else QtGui.QColor(68, 108, 162))
-            painter.drawEllipse(QtCore.QPointF(p[vi, 0], p[vi, 1]), r, r)
+        # Corners — only the hovered corner is drawn, as a subtle accent dot.
+        # Permanent dots on every corner were what made the cube look fake.
+        if self._hovered is not None and self._hovered[0] == 'corner':
+            vi = self._CORNERS[self._hovered[1]][0]
+            painter.setPen(QtCore.Qt.NoPen)
+            painter.setBrush(QtGui.QColor(150, 205, 255))
+            painter.drawEllipse(QtCore.QPointF(p[vi, 0], p[vi, 1]), 5.0, 5.0)
 
         # Roll Buttons (2D overlays in the top corners)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
@@ -360,16 +375,9 @@ class CQ3DViewer(QtWidgets.QWidget):
 
         self._btn_pick_faces = None
 
-        btn_grid = QtWidgets.QPushButton("Grid")
-        btn_grid.setCheckable(True)
-        btn_grid.setChecked(False)
-        btn_grid.setStyleSheet(
-            "QPushButton { background: transparent; color: #ccc; font-weight: bold; border-radius: 3px; padding: 4px 10px; }"
-            "QPushButton:hover { background: rgba(80, 80, 80, 200); color: white; }"
-            "QPushButton:checked { background: rgba(74, 158, 255, 100); color: #4a9eff; border: 1px solid #4a9eff; }"
-        )
-        btn_grid.clicked.connect(self._toggle_grid)
-        vtb_layout.addWidget(btn_grid)
+        # NOTE: the "Grid" reference-grid toggle was removed from the toolbar —
+        # it confused more than it helped.  _toggle_grid / _build_grid_actors
+        # remain available for programmatic use but are no longer surfaced.
 
         btn_edges = QtWidgets.QPushButton("Edges")
         btn_edges.setCheckable(True)
@@ -458,10 +466,14 @@ class CQ3DViewer(QtWidgets.QWidget):
         # Scalar Bar (Legend)
         self.scalar_bar = vtk.vtkScalarBarActor()
         self.scalar_bar.SetOrientationToVertical()
-        self.scalar_bar.SetWidth(0.1)
-        self.scalar_bar.SetHeight(0.8)
-        self.scalar_bar.SetPosition(0.85, 0.1)
+        self.scalar_bar.SetWidth(0.08)
+        self.scalar_bar.SetHeight(0.6)
+        # Keep the bar off the right edge: the title is centred over the bar, so
+        # a far-right position (0.9) pushed "Von Mises Stress (MPa)" past the
+        # viewport edge and clipped it.  Centre ~0.8 leaves room for the title.
+        self.scalar_bar.SetPosition(0.76, 0.2)
         self.scalar_bar.VisibilityOff()
+        self._style_scalar_bar()
         self.renderer.AddActor(self.scalar_bar)
 
         self.vtkWidget.GetRenderWindow().AddRenderer(self.renderer)
@@ -539,6 +551,9 @@ class CQ3DViewer(QtWidgets.QWidget):
         self._crash_scalar_range = (0.0, 1.0)  # global min/max for stable colourmap
         self._crash_timer       = QtCore.QTimer(self)
         self._crash_timer.timeout.connect(self._on_crash_timer)
+        # Rigid impact wall/barrier overlay (from the crash result's 'wall' meta).
+        self._crash_wall_actor  = None
+        self._crash_wall_info   = None
 
         # Crash panel (hidden until crash results arrive)
         self._crash_panel = self._build_crash_panel()
@@ -675,6 +690,17 @@ class CQ3DViewer(QtWidgets.QWidget):
         self._crash_base_data = crash_data
         self._crash_frame_idx = 0
         self._crash_playing   = False
+        # Rigid impact wall geometry (None for user-supplied decks).
+        if self._crash_wall_actor is not None:
+            self.renderer.RemoveActor(self._crash_wall_actor)
+            self._crash_wall_actor = None
+        self._crash_wall_info = crash_data.get('wall') if isinstance(crash_data, dict) else None
+        # Drop any setup-time BC overlay so it doesn't replay (frozen, undeformed)
+        # on top of every animation frame.
+        for actor in list(self._bc_overlay_actors):
+            self.renderer.RemoveActor(actor)
+        self._bc_overlay_actors = []
+        self._cached_bc_data = None
 
         # Compute global scalar range for stable colourmap across all frames
         viz_mode = crash_data.get('visualization_mode', 'Von Mises Stress')
@@ -729,6 +755,10 @@ class CQ3DViewer(QtWidgets.QWidget):
         self._position_nav_cube()
         self._crash_frames      = []
         self._crash_base_data   = None
+        if self._crash_wall_actor is not None:
+            self.renderer.RemoveActor(self._crash_wall_actor)
+            self._crash_wall_actor = None
+        self._crash_wall_info = None
 
     def _set_camera_for_crash(self, mesh, last_displacement, disp_scale=1.0):
         """
@@ -823,15 +853,134 @@ class CQ3DViewer(QtWidgets.QWidget):
         }
         self.render_simulation(view_data)
 
+        # Snap the rigid impact wall to this frame's deformed mesh (vis_disp is
+        # the same view-scaled displacement the mesh is drawn with).
+        self._update_crash_wall(vis_disp)
+
         # Update UI labels
         t_ms = float(frame.get('time', 0.0))
-        self._crash_time_lbl.setText(f"t = {t_ms:.3f} ms")
+        if frame.get('time_is_normalized', False):
+            self._crash_time_lbl.setText(f"t = {t_ms:.3f} norm")
+        else:
+            self._crash_time_lbl.setText(f"t = {t_ms:.3f} ms")
         self._crash_frame_lbl.setText(f"{idx + 1} / {len(self._crash_frames)}")
 
         # Keep slider in sync without triggering valueChanged recursion
         self._crash_slider.blockSignals(True)
         self._crash_slider.setValue(idx)
         self._crash_slider.blockSignals(False)
+
+    def _update_crash_wall(self, vis_disp) -> None:
+        """Draw / refresh the rigid impact wall (barrier) for the current frame.
+
+        OpenRadioss does not export the rigid wall's trajectory in the
+        animation files, so rather than *guessing* its position kinematically
+        (which drifts out of the imported mesh's coordinate frame and cuts
+        through the part), we **snap the wall to the deformed mesh itself**:
+        the wall plane is placed just outside the leading crush face — the
+        extreme of the deformed nodes along the impact direction.  Because this
+        is computed from the exact node positions the viewer draws (``mesh.p``
+        + view-scaled displacement), the wall can never penetrate the part and
+        automatically tracks the crush at any ``disp_scale``.
+
+        For a fixed barrier (moving body + fixed wall, ``v0 == 0``) the wall is
+        stationary, so we keep its original placement.
+        """
+        info = self._crash_wall_info
+        if not isinstance(info, dict):
+            if self._crash_wall_actor is not None:
+                self.renderer.RemoveActor(self._crash_wall_actor)
+                self._crash_wall_actor = None
+            return
+        try:
+            pt = np.asarray(info.get('pt', [0.0, 0.0, 0.0]), dtype=float)[:3]
+            normal = np.asarray(info.get('normal', [0.0, 0.0, 1.0]), dtype=float)[:3]
+            half = float(info.get('half_extent', 0.0) or 0.0)
+            v0 = float(info.get('v0_mm_per_ms', 0.0) or 0.0)
+        except Exception:
+            return
+        if half <= 0.0:
+            return
+
+        n = np.asarray(normal, dtype=float)
+        nn = float(np.linalg.norm(n))
+        n = n / nn if nn > 1e-9 else np.array([0.0, 0.0, 1.0])
+
+        center = None
+        mesh = self._crash_base_data.get('mesh') if isinstance(self._crash_base_data, dict) else None
+        if v0 > 0.0 and mesh is not None and hasattr(mesh, 'p'):
+            # Moving wall: snap to the leading face of the deformed mesh.
+            try:
+                base = np.asarray(mesh.p, dtype=float)
+                base = base.T if base.shape[0] in (2, 3) else base
+                base = base[:, :3]
+                d = np.asarray(vis_disp, dtype=float).reshape(-1, 3)
+                pts = base + d if d.shape[0] == base.shape[0] else base
+                proj = pts @ n
+                span = float(proj.max() - proj.min())
+                gap = max(span * 0.01, 1e-6)
+                wall_proj = float(proj.min()) - gap   # just outside the lowest node
+                centroid = pts.mean(axis=0)
+                center = centroid + n * (wall_proj - float(centroid @ n))
+            except Exception:
+                center = None
+        if center is None:
+            center = pt   # fixed barrier (or fallback): keep original placement
+
+        pd = self._make_wall_polydata(center, n, half)
+        if pd is None:
+            return
+        if self._crash_wall_actor is None:
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputData(pd)
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            prop = actor.GetProperty()
+            prop.SetColor(0.85, 0.55, 0.20)        # amber barrier
+            prop.SetOpacity(0.28)
+            prop.SetEdgeVisibility(1)
+            prop.SetEdgeColor(0.95, 0.70, 0.30)
+            prop.SetLineWidth(1.5)
+            try:
+                prop.LightingOff()
+            except Exception:
+                pass
+            actor.SetPickable(0)
+            self.renderer.AddActor(actor)
+            self._crash_wall_actor = actor
+        else:
+            self._crash_wall_actor.GetMapper().SetInputData(pd)
+            self._crash_wall_actor.GetMapper().Modified()
+
+    @staticmethod
+    def _make_wall_polydata(center, normal, half):
+        """Square (quad) polydata centred at *center*, perpendicular to *normal*."""
+        n = np.asarray(normal, dtype=float)
+        nn = float(np.linalg.norm(n))
+        if nn < 1e-9:
+            n = np.array([0.0, 0.0, 1.0]); nn = 1.0
+        n = n / nn
+        a = np.array([1.0, 0.0, 0.0]) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        u = np.cross(n, a); un = float(np.linalg.norm(u))
+        if un < 1e-9:
+            return None
+        u = u / un
+        v = np.cross(n, u)
+        c = np.asarray(center, dtype=float)
+        corners = [c + (-u - v) * half, c + (u - v) * half,
+                   c + (u + v) * half, c + (-u + v) * half]
+        pts = vtk.vtkPoints()
+        for corner in corners:
+            pts.InsertNextPoint(float(corner[0]), float(corner[1]), float(corner[2]))
+        quad = vtk.vtkQuad()
+        for i in range(4):
+            quad.GetPointIds().SetId(i, i)
+        cells = vtk.vtkCellArray()
+        cells.InsertNextCell(quad)
+        pd = vtk.vtkPolyData()
+        pd.SetPoints(pts)
+        pd.SetPolys(cells)
+        return pd
 
     def _on_crash_timer(self):
         """Timer callback: advance one frame."""
@@ -1275,6 +1424,12 @@ class CQ3DViewer(QtWidgets.QWidget):
         # Reset cached BC data so overlays don't auto-replay on wrong shapes
         self._cached_bc_data = None
 
+        # Remove the crash rigid-wall overlay
+        if getattr(self, '_crash_wall_actor', None) is not None:
+            self.renderer.RemoveActor(self._crash_wall_actor)
+            self._crash_wall_actor = None
+        self._crash_wall_info = None
+
         # Clear legacy single actor if present
         if self.current_actor:
             self.renderer.RemoveActor(self.current_actor)
@@ -1625,6 +1780,49 @@ class CQ3DViewer(QtWidgets.QWidget):
         if hasattr(self, '_nav_cube'):
             self._nav_cube.update_rotation(camera)
 
+    def _style_scalar_bar(self):
+        """Give the VTK colour legend a flat, modern look.
+
+        VTK's default scalar bar uses a bold *italic* drop-shadowed font that
+        looks dated (the serif-ish numbers).  This switches both the title and
+        the tick labels to a clean, non-italic, shadow-free sans-serif, slims
+        the colour strip, and tightens the number formatting.  Wrapped in
+        try/except per call so it degrades gracefully on older VTK builds.
+        """
+        bar = self.scalar_bar
+        for setter in (
+            lambda: bar.SetNumberOfLabels(6),
+            lambda: bar.SetLabelFormat("%.3g"),
+            lambda: bar.SetUnconstrainedFontSize(True),
+            lambda: bar.SetBarRatio(0.22),       # slim colour strip, room for labels
+            lambda: bar.SetTextPad(6),
+            lambda: bar.DrawFrameOff(),
+            lambda: bar.DrawBackgroundOff(),
+        ):
+            try:
+                setter()
+            except Exception:
+                pass
+
+        title_tp = bar.GetTitleTextProperty()
+        label_tp = bar.GetLabelTextProperty()
+        for tp in (title_tp, label_tp):
+            try:
+                tp.SetFontFamilyToArial()
+                tp.ItalicOff()
+                tp.ShadowOff()
+                tp.SetColor(0.90, 0.92, 0.96)
+            except Exception:
+                pass
+        try:
+            title_tp.BoldOn()
+            title_tp.SetFontSize(13)
+            label_tp.BoldOff()
+            label_tp.SetFontSize(11)
+            label_tp.SetColor(0.78, 0.82, 0.88)
+        except Exception:
+            pass
+
     def _update_scalar_bar(self, title, min_val, max_val, lut=None):
         """Update and show the scalar bar."""
         if not title:
@@ -1632,13 +1830,15 @@ class CQ3DViewer(QtWidgets.QWidget):
             return
 
         self.scalar_bar.SetTitle(title)
-        self.scalar_bar.SetNumberOfLabels(5)
 
         if lut:
             self.scalar_bar.SetLookupTable(lut)
         elif self.current_actor and self.current_actor.GetMapper():
             self.scalar_bar.SetLookupTable(self.current_actor.GetMapper().GetLookupTable())
 
+        # Re-assert the flat font/format styling — a freshly assigned lookup
+        # table can otherwise leave the actor on VTK's italic defaults.
+        self._style_scalar_bar()
         self.scalar_bar.VisibilityOn()
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -3041,6 +3241,14 @@ class CQ3DViewer(QtWidgets.QWidget):
             self.start_crash_playback(data)
             return
 
+        # Leaving crash playback: drop the rigid-wall overlay on any render that
+        # is not a crash animation frame (e.g. an FEA result or plain geometry).
+        if (getattr(self, '_crash_wall_actor', None) is not None
+                and not (isinstance(data, dict) and data.get('type') == 'crash_frame')):
+            self.renderer.RemoveActor(self._crash_wall_actor)
+            self._crash_wall_actor = None
+            self._crash_wall_info = None
+
         # 1. Clean up previous render
         if self.current_actor:
             self.renderer.RemoveActor(self.current_actor)
@@ -3194,7 +3402,6 @@ class CQ3DViewer(QtWidgets.QWidget):
         visualization_mode = 'Von Mises Stress'
         density_cutoff = 0.5
         locked_scalar_range = None   # (lo, hi) supplied by crash playback for stable colormap
-        max_stress_gauss    = 0.0    # P0 Gauss-point peak (populated by SolverNode)
         _def_scale          = 1.0    # visualisation deformation scale factor
 
         # Detect skfem Mesh
@@ -3215,8 +3422,6 @@ class CQ3DViewer(QtWidgets.QWidget):
                 density_cutoff = float(data['density_cutoff'])
             if '_scalar_range' in data:
                 locked_scalar_range = data['_scalar_range']
-            if 'max_stress_gauss' in data:
-                max_stress_gauss = float(data['max_stress_gauss'])
             if 'deformation_scale' in data:
                 raw_scale = data['deformation_scale']
                 try:
@@ -3249,12 +3454,19 @@ class CQ3DViewer(QtWidgets.QWidget):
 
         grid.SetPoints(points)
 
-        tets = mesh.t
+        base_tets = np.asarray(mesh.t, dtype=int)
+        is_shell_mesh = base_tets.shape[0] == 3
+        quadratic_tets = None
+        if not is_shell_mesh:
+            from pylcss.solver_backends.common import tet10_connectivity
+            quadratic_tets = tet10_connectivity(mesh)
+        tets = quadratic_tets if quadratic_tets is not None else base_tets
+        is_quadratic_tet = quadratic_tets is not None
         n_tets = tets.shape[1]
         # Detect shell (triangle) meshes — first dimension is 3 instead of 4/10.
         # The viewer otherwise emits vtkTetra cells, which would silently render
         # nothing for a surface mesh.
-        is_shell_mesh = tets.shape[0] == 3
+        cell_blocks = getattr(mesh, 'cell_blocks', None)
 
         # Add Density Data if available
         if density is not None:
@@ -3285,12 +3497,43 @@ class CQ3DViewer(QtWidgets.QWidget):
                 if visualization_mode == 'Displacement':
                     grid.GetPointData().SetActiveScalars("Displacement")
 
-        if is_shell_mesh:
+        if cell_blocks:
+            vtk_cell_types = {
+                'vertex': (vtk.vtkVertex, 1),
+                'line': (vtk.vtkLine, 2),
+                'triangle': (vtk.vtkTriangle, 3),
+                'quad': (vtk.vtkQuad, 4),
+                'tetra': (vtk.vtkTetra, 4),
+                'tetra10': (vtk.vtkQuadraticTetra, 10),
+                'hexahedron': (vtk.vtkHexahedron, 8),
+                'wedge': (vtk.vtkWedge, 6),
+                'pyramid': (vtk.vtkPyramid, 5),
+            }
+            for cell_type, connectivity in cell_blocks:
+                cell_spec = vtk_cell_types.get(str(cell_type))
+                if cell_spec is None:
+                    continue
+                cell_class, node_count = cell_spec
+                connectivity = np.asarray(connectivity, dtype=int)
+                if connectivity.ndim != 2 or connectivity.shape[1] < node_count:
+                    continue
+                for conn in connectivity:
+                    cell = cell_class()
+                    for j in range(node_count):
+                        cell.GetPointIds().SetId(j, int(conn[j]))
+                    grid.InsertNextCell(cell.GetCellType(), cell.GetPointIds())
+        elif is_shell_mesh:
             for i in range(n_tets):
                 tri = vtk.vtkTriangle()
                 for j in range(3):
                     tri.GetPointIds().SetId(j, int(tets[j, i]))
                 grid.InsertNextCell(tri.GetCellType(), tri.GetPointIds())
+        elif is_quadratic_tet:
+            for i in range(n_tets):
+                tet = vtk.vtkQuadraticTetra()
+                for j in range(10):
+                    tet.GetPointIds().SetId(j, int(tets[j, i]))
+                grid.InsertNextCell(tet.GetCellType(), tet.GetPointIds())
         else:
             for i in range(n_tets):
                 tet = vtk.vtkTetra()
@@ -3434,12 +3677,28 @@ class CQ3DViewer(QtWidgets.QWidget):
             actor.GetProperty().SetRepresentationToSurface()
             actor.GetProperty().EdgeVisibilityOn()
         elif stress is not None or displacement is not None:
+            # FEA / crash result contour — overlay the element edges so the
+            # mesh stays visible on top of the stress / displacement field
+            # instead of a smooth, mesh-less colored surface.
             actor.GetProperty().SetRepresentationToSurface()
-            actor.GetProperty().EdgeVisibilityOff()
+            actor.GetProperty().EdgeVisibilityOn()
+            actor.GetProperty().SetEdgeColor(0.15, 0.15, 0.17)
+            try:
+                actor.GetProperty().SetLineWidth(1.0)
+            except Exception:
+                pass
         else:
-            actor.GetProperty().SetColor(0.8, 0.4, 0.4)
+            # Bare mesh (no field data) — the "Generate Mesh" / "Remesh"
+            # preview.  Show element edges so it actually reads as a mesh
+            # instead of a smooth solid that looks identical to the CAD body.
+            actor.GetProperty().SetColor(0.72, 0.76, 0.78)
             actor.GetProperty().SetRepresentationToSurface()
-            actor.GetProperty().EdgeVisibilityOff()
+            actor.GetProperty().EdgeVisibilityOn()
+            actor.GetProperty().SetEdgeColor(0.16, 0.18, 0.21)
+            try:
+                actor.GetProperty().SetLineWidth(1.0)
+            except Exception:
+                pass
 
         self.renderer.AddActor(actor)
         self.current_actor = actor

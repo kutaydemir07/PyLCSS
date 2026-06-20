@@ -293,7 +293,12 @@ class GraphBuilder:
                     code_lines.append("    return None")
                 code_lines.append("")
             else:
-                user_code = block.get_widget('code_content').get_value()
+                code_widget = block.get_widget('code_content')
+                user_code = (
+                    code_widget.get_value()
+                    if code_widget is not None
+                    else (block.get_property('code_content') or '')
+                )
                 # Improved math replacement logic
                 # Map math functions that exist in numpy with same name
                 math_to_np_map = {

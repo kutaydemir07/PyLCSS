@@ -79,29 +79,38 @@ class MeshNode(CadQueryNode):
         refinement_size = float(refinement_size)
         
         if not shape:
+            self.set_error("Connect a CAD solid to the mesh node's shape input.")
             return None
 
         # Handle assemblies by converting to compound
         if hasattr(shape, 'toCompound'):
             try:
                 shape = shape.toCompound()
-            except Exception:
+            except Exception as exc:
+                self.set_error(f"Could not convert the assembly to a compound: {exc}")
                 return None
 
         # Optimized temporary file handling for performance
         # Try to use RAM disk if available (significant speedup for optimization loops)
-        temp_base = None
         try:
-            # Check for common RAM disk locations
-            ram_disk_paths = ['R:\\', 'Z:\\', '/tmp/', '/dev/shm/']
-            for path in ram_disk_paths:
-                if os.path.exists(path) and os.access(path, os.W_OK):
+            # os.access() can report writable for a Windows junction or sandbox
+            # path that still rejects file creation.  Verify candidates with a
+            # real create/delete probe before giving Netgen a directory.
+            temp_base = None
+            candidates = ['R:\\', 'Z:\\', '/tmp/', '/dev/shm/', tempfile.gettempdir()]
+            for path in candidates:
+                if not os.path.isdir(path):
+                    continue
+                try:
+                    with tempfile.NamedTemporaryFile(
+                            prefix='.pylcss_probe_', dir=path, delete=True):
+                        pass
                     temp_base = path
                     break
-            
-            # Fallback to system temp directory
+                except OSError:
+                    continue
             if temp_base is None:
-                temp_base = tempfile.gettempdir()
+                raise OSError("No writable temporary directory is available for Netgen.")
             
             # Initialise paths before try so the finally block can safely
             # reference them even if the NamedTemporaryFile call fails.
@@ -123,6 +132,7 @@ class MeshNode(CadQueryNode):
 
                 mesh_type = (self.get_property('mesh_type') or 'Tet').strip()
                 is_shell = mesh_type.lower() == 'shell'
+                wants_tet10 = mesh_type.lower() == 'tet10'
 
                 # 2. Load Geometry with Netgen and generate mesh (suppress verbose output)
                 with suppress_output():
@@ -193,13 +203,21 @@ class MeshNode(CadQueryNode):
                 else:
                     logger.debug("FEA Mesh: Loading into skfem...")
                     mesh = Mesh.load(msh_path)
+                    if wants_tet10:
+                        # MeshTet2 stores its six midside nodes in
+                        # dofs.element_dofs while keeping corner topology in t.
+                        # The CalculiX/VTK adapters expand that to true C3D10
+                        # connectivity when exporting or rendering.
+                        mesh = MeshTet2.from_mesh(mesh)
                     logger.debug(
-                        "FEA Mesh: Load complete. Nodes: %d, Tets: %d",
+                        "FEA Mesh: Load complete. Nodes: %d, Tets: %d, order=%s",
                         mesh.p.shape[1], mesh.t.shape[1],
+                        "quadratic C3D10" if wants_tet10 else "linear C3D4",
                     )
 
             except Exception as e:
                 logger.error("FEA Mesh: ERROR loading mesh: %s", e)
+                self.set_error(f"Mesh generation failed: {e}")
                 return None
                 
             finally:
@@ -214,7 +232,9 @@ class MeshNode(CadQueryNode):
                 except OSError:
                     pass  # Ignore cleanup errors
         
-        except Exception:
+        except Exception as exc:
+            logger.exception("FEA Mesh: unexpected meshing failure")
+            self.set_error(f"Mesh generation failed: {exc}")
             return None
         
         return mesh

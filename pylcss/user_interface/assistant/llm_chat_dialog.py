@@ -2,10 +2,9 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 """
-LLM Chat Dialog for Hands-Free Control.
+LLM Chat Dialog.
 
-Provides a modal dialog for interacting with the LLM assistant,
-similar to the existing hands-free voice control popup.
+Provides a modal dialog for interacting with the text AI assistant.
 """
 
 import logging
@@ -272,8 +271,8 @@ class ThinkingIndicator(QLabel):
 
 class LLMChatDialog(QDialog):
     """
-    Modal dialog for LLM-assisted hands-free control.
-    
+    Modal dialog for the LLM-assisted AI assistant.
+
     Features:
     - Chat interface with message history
     - Thinking indicator while waiting for LLM

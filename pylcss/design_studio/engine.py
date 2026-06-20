@@ -20,6 +20,9 @@ SIMULATION_NODE_IDENTIFIERS = {
     'com.cad.sim.crash_material',
     'com.cad.sim.impact',
     'com.cad.sim.crash_solver',
+    # Standalone decks can launch Starter + Engine without any graph inputs,
+    # so omitting this identifier makes project-open/auto-preview execute them.
+    'com.cad.sim.radioss_deck',
 }
 
 def _hash_value(value):
@@ -58,9 +61,18 @@ def _connected_upstream_nodes(node):
 # this carve-out, picking faces on an STL → Remesh → InteractiveSelectFace
 # pipeline never refreshes the picker's _last_result after the user clicks
 # Done, and the BC overlay shows the previous (or empty) selection.
+#
+# Mesh / Remesh are preview-safe so that selecting a Mesh node (or any node
+# while a Mesh node is present) computes and shows the mesh in the viewer
+# instead of falling back to the upstream CAD solid.  They remain "simulation
+# nodes" for every other purpose; the hash-based cache in execute_graph means
+# they only re-mesh when the shape or element size actually changes, so the
+# fast CAD preview is not re-meshed on unrelated edits.
 PREVIEW_SAFE_IDENTIFIERS = {
     'com.cad.select_face',
     'com.cad.select_face_interactive',
+    'com.cad.sim.mesh',
+    'com.cad.sim.remesh',
 }
 
 
@@ -79,8 +91,14 @@ def _filter_for_preview(nodes):
     Face-selector nodes are exempt from the downstream-of-simulation rule:
     they only read cached mesh patches and are essential for refreshing the
     picker's _last_result after the user picks faces on a remeshed surface.
+
+    Preview-safe simulation nodes (Mesh / Remesh) are also exempt from the
+    initial block so the mesh itself is generated and rendered during preview;
+    their heavy downstream consumers (Solver, Constraint, Load, …) stay blocked
+    because those are simulation nodes that are not preview-safe.
     """
-    blocked = {n for n in nodes if _is_simulation_node(n)}
+    blocked = {n for n in nodes
+               if _is_simulation_node(n) and not _is_preview_safe(n)}
     changed = True
     while changed:
         changed = False
@@ -183,11 +201,14 @@ def execute_graph(graph_or_nodes, skip_simulation=False, **kwargs):
         order = nodes_to_execute
 
     # 3. Execution with Deep Hash-Based Caching
+    cancel_callback = kwargs.pop('cancel_callback', None)
     results = {}
     executed_nodes = set()
     errors = []
 
     for n in order:
+        if callable(cancel_callback) and cancel_callback():
+            break
         # Collect current input values for hashing
         current_input_hash = ""
         if hasattr(n, 'input_ports'):
@@ -222,6 +243,13 @@ def execute_graph(graph_or_nodes, skip_simulation=False, **kwargs):
 
         # Execute the node
         try:
+            # Clear only stale errors *before* running.  Several nodes report
+            # validation/backend failures by calling set_error() and returning
+            # None instead of raising.  Clearing after run used to erase those
+            # fresh errors and made the GUI report "Computation complete".
+            if hasattr(n, 'clear_error'):
+                n.clear_error()
+
             # Check if run() accepts kwargs (e.g., progress_callback)
             import inspect
             sig = inspect.signature(n.run)
@@ -232,15 +260,27 @@ def execute_graph(graph_or_nodes, skip_simulation=False, **kwargs):
             else:
                 res = n.run()
 
+            node_has_error = False
+            if hasattr(n, 'has_error'):
+                try:
+                    node_has_error = bool(n.has_error())
+                except Exception:
+                    node_has_error = False
+            if node_has_error:
+                message = None
+                if hasattr(n, 'get_error'):
+                    try:
+                        message = n.get_error()
+                    except Exception:
+                        message = None
+                raise RuntimeError(message or "Node execution failed.")
+
             setattr(n, '_last_result', res)
             setattr(n, '_last_input_hash', current_input_hash)
             setattr(n, '_dirty', False)
             setattr(n, '_force_execute', False)
             executed_nodes.add(n)
 
-            if hasattr(n, 'clear_error'):
-                n.clear_error()
-                
             results[n] = res
         except Exception as e:
             setattr(n, '_last_result', None)

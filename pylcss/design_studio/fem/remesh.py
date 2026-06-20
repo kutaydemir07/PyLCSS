@@ -49,6 +49,7 @@ class RemeshNode(CadQueryNode):
         
         if topopt_result is None:
             logger.warning("RemeshNode: No TopOpt result provided")
+            self.set_error("Connect a recovered surface or imported STL/OBJ mesh to Remesh Surface.")
             return None
         
         # Extract recovered shape from the full TopOpt result, while also
@@ -69,6 +70,7 @@ class RemeshNode(CadQueryNode):
         
         if vertices is None or faces is None:
             logger.warning("RemeshNode: Invalid recovered_shape format")
+            self.set_error("The connected surface has no vertices or triangle faces.")
             return None
 
         raw_vertices = np.asarray(vertices, dtype=float)
@@ -196,6 +198,7 @@ class RemeshNode(CadQueryNode):
             
         except Exception as e:
             logger.error(f"RemeshNode: Meshing failed: {e}")
+            self.set_error(f"Remesh Surface failed: {e}")
         
         return None
 

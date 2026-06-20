@@ -360,11 +360,37 @@ def mesh_to_tet4(mesh: Any, warnings: List[str]) -> Tuple[np.ndarray, np.ndarray
     return points, cells
 
 
+def tet10_connectivity(mesh: Any) -> Optional[np.ndarray]:
+    """Return ``(10, N_elem)`` C3D10 connectivity when ``mesh`` is quadratic.
+
+    scikit-fem's :class:`MeshTet2` deliberately keeps the four corner nodes in
+    ``mesh.t`` and stores the six midside nodes in ``mesh.dofs.element_dofs``.
+    External solvers and VTK need the complete ten-node connectivity, so accept
+    both that native representation and duck-typed meshes which already expose
+    ten rows in ``mesh.t``.
+    """
+    if mesh is None or not hasattr(mesh, "t"):
+        return None
+
+    direct = np.asarray(mesh.t, dtype=int)
+    if direct.ndim == 2 and direct.shape[0] == 10:
+        return direct
+
+    try:
+        element_dofs = np.asarray(mesh.dofs.element_dofs, dtype=int)
+    except Exception:
+        return None
+    if element_dofs.ndim == 2 and element_dofs.shape[0] == 10:
+        return element_dofs
+    return None
+
+
 def mesh_to_tet10(mesh: Any, warnings: List[str]) -> Tuple[np.ndarray, np.ndarray]:
     """Return points and right-hand-oriented 10-node tetrahedra (C3D10).
 
-    The mesh must already carry a quadratic connectivity in ``mesh.t`` of shape
-    ``(10, N_elem)`` using CalculiX/Abaqus C3D10 node ordering:
+    The mesh must carry quadratic connectivity either directly in ``mesh.t`` or
+    through scikit-fem ``MeshTet2.dofs.element_dofs``.  Both use the
+    CalculiX/Abaqus C3D10 node ordering:
 
         corners 1-4, then midsides of edges
         (1-2), (2-3), (3-1), (1-4), (2-4), (3-4)
@@ -381,12 +407,13 @@ def mesh_to_tet10(mesh: Any, warnings: List[str]) -> Tuple[np.ndarray, np.ndarra
         raise SolverBackendError("C3D10 deck writer expected a mesh with .p and .t.")
 
     points = np.asarray(mesh.p, dtype=float).T            # (N_nodes, 3)
-    cells = np.asarray(mesh.t, dtype=int).T                # (N_elem, 10)
-    if cells.ndim != 2 or cells.shape[1] != 10:
+    connectivity = tet10_connectivity(mesh)
+    if connectivity is None:
         raise SolverBackendError(
-            f"C3D10 deck writer expected a (10, N_elem) connectivity, got "
-            f"{np.asarray(mesh.t).shape!r}."
+            "C3D10 deck writer expected ten-node connectivity in mesh.t or "
+            "mesh.dofs.element_dofs."
         )
+    cells = connectivity.T                                # (N_elem, 10)
     cells = cells.copy()
 
     # Signed volume from the four corner nodes only.

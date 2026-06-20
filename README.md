@@ -52,7 +52,7 @@ The core concept is the **Solution Space** approach for robust design: instead o
 - **Global Sensitivity Analysis** — 4 methods: Sobol, Morris, FAST, and Delta (DMIM)
 - **Surrogate Modelling** — 4 algorithms (MLP, Random Forest, Gradient Boosting, Gaussian Process / Kriging) with cross-validation, hyperparameter search, and feature importance
 - **System Modelling** — Graph-based functional architecture editor for mapping requirements to subsystems
-- **AI Assistant** — PydanticAI agent with 25 tools, multi-provider LLM support (OpenAI, Anthropic, Google, local), streaming speech-to-text (Faster-Whisper + Silero VAD), and offline TTS (Kokoro-82M)
+- **AI Assistant** — text-driven PydanticAI agent with 25 tools and multi-provider LLM support (OpenAI, Anthropic, Google, and OpenAI-compatible local servers like LM Studio / Ollama / vLLM)
 - **Black-Box Integration** — Wrap any external solver (ANSYS, MATLAB, LS-DYNA, HPC scripts) in a simple `evaluate(x)` function
 
 Detailed documentation on node types, workflows, and solver configuration is available in the **Help** widget inside the application.
@@ -81,7 +81,7 @@ python scripts/main.py
 
 Or on Windows: double-click `run_gui.bat`.
 
-External solvers (CalculiX, OpenRadioss, FreeCAD) are optional — PyLCSS opens cleanly without them and only the corresponding node types are disabled. They are governed by their own upstream licenses (CalculiX: GPL, OpenRadioss: AGPL-3.0, FreeCAD: LGPL-2.1+).
+External solvers (CalculiX, OpenRadioss, FreeCAD) are optional. PyLCSS opens cleanly without them; solver nodes remain available for deck-only preparation and show their detected runtime status in the component-library tooltip. Attempting a full solve without the required executable reports a node error. The external tools are governed by their own upstream licenses (CalculiX: GPL, OpenRadioss: AGPL-3.0, FreeCAD: LGPL-2.1+).
 
 ---
 

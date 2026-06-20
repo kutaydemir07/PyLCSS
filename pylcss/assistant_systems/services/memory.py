@@ -22,9 +22,9 @@ from typing import Dict, List, Optional, Any
 logger = logging.getLogger(__name__)
 
 # Directory for memory storage
-HANDS_FREE_DIR = Path(__file__).parent.parent
-MEMORY_FILE = HANDS_FREE_DIR / "config" / "llm_memory.json"
-ENCRYPTION_KEY_FILE = HANDS_FREE_DIR / "config" / ".llm_key"
+ASSISTANT_DIR = Path(__file__).parent.parent
+MEMORY_FILE = ASSISTANT_DIR / "config" / "llm_memory.json"
+ENCRYPTION_KEY_FILE = ASSISTANT_DIR / "config" / ".llm_key"
 
 
 class SecureKeyStorage:

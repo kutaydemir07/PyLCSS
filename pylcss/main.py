@@ -12,7 +12,26 @@ import os
 import sys
 import shutil
 import logging
+import faulthandler
 import numpy as np
+
+# Install a fault handler as early as possible.  A native (C/C++) crash -- e.g.
+# a VTK / OpenCASCADE / solver access violation -- cannot be caught as a Python
+# exception and otherwise just shows the Windows "Fehler in Anwendung" dialog
+# with no diagnosable trace.  faulthandler dumps the Python stack that led into
+# the native call to pylcss_crash.log (and stderr) when the process faults.
+try:
+    _crash_log_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "pylcss_crash.log"
+    )
+    _crash_log_file = open(_crash_log_path, "a", encoding="utf-8", buffering=1)
+    faulthandler.enable(file=_crash_log_file, all_threads=True)
+except Exception:
+    # Never let crash-logging setup itself prevent startup.
+    try:
+        faulthandler.enable()
+    except Exception:
+        pass
 
 # Suppress Qt DPI awareness warning on Windows
 # Must be done before any Qt imports

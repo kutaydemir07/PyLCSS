@@ -792,6 +792,7 @@ def run_openradioss_existing_deck(
     end_time: Optional[float] = None,
     visualization_mode: str = "Von Mises Stress",
     disp_scale: float = 1.0,
+    stress_scale_to_mpa: float = 1.0,
 ) -> dict:
     """Run an OpenRadioss / LS-DYNA-style deck the user already has on disk.
 
@@ -807,14 +808,21 @@ def run_openradioss_existing_deck(
 
     Notes
     -----
-    * If the user supplies a Radioss engine file directly (``.rad``), Starter
-      is skipped — Engine is run on that file as-is.
+    * ``deck_path`` is a model/Starter deck (``.k`` or ``*_0000.rad``).
+      Starter always runs to create the matching restart state.  An optional
+      ``engine_deck_path`` replaces its generated engine control file.
     * Materials, contacts, and section properties live inside the user's deck
       verbatim — we never rewrite them.
     """
     deck_path = Path(deck_path).resolve()
     if not deck_path.is_file():
         raise SolverBackendError(f"Deck file not found: {deck_path}")
+    if deck_path.suffix.lower() == ".rad" and deck_path.stem.endswith("_0001"):
+        raise SolverBackendError(
+            "deck_path points at an Engine control file (*_0001.rad). Select "
+            "the matching model/Starter deck (*_0000.rad) as deck_path and put "
+            "the *_0001.rad file in engine_path."
+        )
 
     warnings: List[str] = []
     work_dir = make_work_dir("pylcss_radioss_deck_", config.work_dir)
@@ -836,10 +844,11 @@ def run_openradioss_existing_deck(
 
     # If the user also pointed at a separate Radioss engine file, stage it.
     staged_engine: Optional[Path] = None
+    engine_src: Optional[Path] = None
     if engine_deck_path:
-        engine_src = Path(engine_deck_path).resolve()
-        if engine_src.is_file():
-            staged_engine = _stage(engine_src)
+        candidate = Path(engine_deck_path).resolve()
+        if candidate.is_file():
+            engine_src = candidate
 
     starter = resolve_executable(
         config.executable,
@@ -861,21 +870,16 @@ def run_openradioss_existing_deck(
     solver_log = ""
     status = "deck_staged"
 
-    # Starter must always run on the model deck — it produces the ``.rst``
-    # restart file that Engine reads to initialise the model state.  Having a
-    # pre-built ``_0001.rad`` (engine control file) does NOT mean Starter can
-    # be skipped: those two files describe different things (model vs. run
-    # parameters).  Only skip Starter when the user already has both the
-    # ``_0001.rad`` AND a matching ``_0000.rst`` file already in the work
-    # directory.
-    rst_candidate = work_dir / (staged_deck.stem + ".rst")
-    skip_starter = (
-        staged_engine is not None
-        and staged_deck.suffix.lower() == ".rad"
-        and rst_candidate.is_file()
-    )
+    # Starter must always run on the model deck: the Engine control file does
+    # not contain the model state held in Starter's matching restart output.
+    # A model deck must always pass through Starter so Engine receives a
+    # matching restart state. Stage an optional Engine control file only after
+    # Starter completes, otherwise Starter may overwrite it.
+    skip_starter = False
 
     if not config.run_solver:
+        if engine_src is not None:
+            staged_engine = _stage(engine_src)
         return {
             "type": "external_solver",
             "backend": "OpenRadioss",
@@ -932,25 +936,35 @@ def run_openradioss_existing_deck(
             )
         status = "starter_completed"
 
+    if engine_src is not None:
+        staged_engine = _stage(engine_src)
+
     # Locate the engine .rad file Starter generated.
     if staged_engine is None:
-        candidates = sorted(work_dir.glob("*_0001.rad"))
+        model_stem = staged_deck.stem
+        if model_stem.endswith("_0000"):
+            model_stem = model_stem[: -len("_0000")]
+        preferred = work_dir / f"{model_stem}_0001.rad"
+        candidates = (
+            [preferred] if preferred.is_file()
+            else sorted(
+                work_dir.glob("*_0001.rad"),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )
+        )
         if not candidates:
-            warnings.append(
+            raise SolverBackendError(
                 "Starter completed but no `_0001.rad` engine file was produced; "
                 "cannot continue to Engine run."
-            )
-            return _wrap_deck_result(
-                status, work_dir, staged_deck, None, starter, engine, solver_log, warnings,
-                visualization_mode, disp_scale,
             )
         staged_engine = candidates[0]
 
     if engine is None:
-        warnings.append("Engine executable not found; skipping dynamic solve.")
-        return _wrap_deck_result(
-            status, work_dir, staged_deck, staged_engine, starter, engine,
-            solver_log, warnings, visualization_mode, disp_scale,
+        raise SolverBackendError(
+            "OpenRadioss Engine executable not found. Run "
+            "scripts/install_solvers.py --only radioss or set "
+            "PYLCSS_OPENRADIOSS_ENGINE."
         )
 
     path_dirs, env_extra = _radioss_runtime_env(engine)
@@ -992,7 +1006,8 @@ def run_openradioss_existing_deck(
         job_name = stem
     converter = resolve_anim_to_vtk()
     raw_frames, anim_warnings = read_animation_frames(
-        work_dir, job_name, converter=converter, timeout_s=config.timeout_s
+        work_dir, job_name, converter=converter, timeout_s=config.timeout_s,
+        end_time=end_time,
     )
     warnings.extend(anim_warnings)
 
@@ -1002,8 +1017,9 @@ def run_openradioss_existing_deck(
             solver_log, warnings, visualization_mode, disp_scale,
         )
 
-    # The frames already carry node-count-matched arrays from
-    # ``read_animation_frames``; we just expose them in the viewer's contract.
+    # The first converted frame supplies a mixed-cell playback mesh; subsequent
+    # frames reuse it and carry only changing field arrays.
+    viewer_mesh = raw_frames[0].get("mesh")
     last = raw_frames[-1]
     flat_disp = np.asarray(last.get("displacement", []), dtype=float).reshape(-1)
     n_points = flat_disp.size // 3 if flat_disp.size else 0
@@ -1015,26 +1031,48 @@ def run_openradioss_existing_deck(
     stress_vm = np.asarray(last.get("stress_vm", []), dtype=float)
     peak_vm = float(stress_vm.max()) if stress_vm.size else 0.0
 
+    def _primary_cell_field(name):
+        raw = last.get(name)
+        if raw is None:
+            return None
+        raw = np.asarray(raw, dtype=float).reshape(-1)
+        indices = np.asarray(
+            getattr(viewer_mesh, "primary_cell_indices", []), dtype=int
+        ).reshape(-1)
+        if indices.size and int(np.max(indices)) < raw.size:
+            return raw[indices]
+        return raw
+
+    final_plastic = _primary_cell_field("eps_p_cell")
+    final_failed = _primary_cell_field("failed_cell")
+    element_stress = _primary_cell_field("stress_vm_cell")
+    if element_stress is not None and np.asarray(element_stress).size:
+        peak_vm = float(np.max(element_stress))
+
     return {
         "type": "crash",
         "backend": "OpenRadioss",
         "external_status": status,
-        # mesh is None here — we never built one in PyLCSS; the viewer uses
-        # the per-frame point data emitted by anim_to_vtk.
-        "mesh": None,
+        "mesh": viewer_mesh,
         "displacement": flat_disp,
         "stress": stress_vm,
+        "element_stress": element_stress,
         "visualization_mode": visualization_mode,
         "disp_scale": disp_scale,
         "frames": raw_frames,
         "peak_displacement": peak_disp,
         "peak_stress": peak_vm,
-        # User-supplied decks: we don't know the wall geometry (it lives
-        # inside their deck text) and we don't have a mesh/density to compute
-        # KE/IE from, so both are left out.  end_time defaults to 1.0 so the
-        # viewer's time label still produces useful normalized values.
+        "plastic_strain": final_plastic,
+        "failed_elements": final_failed,
+        "n_failed": int(np.count_nonzero(
+            np.asarray(final_failed if final_failed is not None else [], dtype=float) >= 0.5
+        )),
+        # User-supplied decks keep wall/contact definitions inside their input.
         "wall": None,
-        "end_time": float(end_time) if end_time is not None else 1.0,
+        "end_time": (
+            float(end_time) if end_time is not None
+            else float(last.get("time", 1.0))
+        ),
         "input_file": str(staged_deck),
         "engine_file": str(staged_engine),
         "work_dir": str(work_dir),
@@ -1081,6 +1119,7 @@ def _build_animation_frames_with_mesh(mesh: Any, frames: list) -> list:
     compute KE(t) and IE(t).
     """
     n_points = int(np.asarray(mesh.p).shape[1])
+    n_elements = int(np.asarray(mesh.t).shape[1])
     fixed: list = []
     for frame in frames:
         flat = np.asarray(frame.get("displacement", []), dtype=float).reshape(-1)
@@ -1123,9 +1162,27 @@ def _build_animation_frames_with_mesh(mesh: Any, frames: list) -> list:
             n_copy = min(vel_raw.shape[0], n_points)
             target_vel[:n_copy] = vel_raw[:n_copy]
 
-        ener_cell = frame.get("ener_cell")
-        if ener_cell is not None:
-            ener_cell = np.asarray(ener_cell, dtype=float).reshape(-1)
+        element_ids = np.asarray(frame.get("element_ids", []), dtype=int).reshape(-1)
+
+        def _source_cell_field(name):
+            raw = frame.get(name)
+            if raw is None:
+                return None
+            raw = np.asarray(raw, dtype=float).reshape(-1)
+            target = np.zeros(n_elements, dtype=float)
+            if element_ids.size == raw.size:
+                valid = (element_ids >= 1) & (element_ids <= n_elements)
+                target[element_ids[valid] - 1] = raw[valid]
+            else:
+                target[: min(raw.size, n_elements)] = raw[:n_elements]
+            return target
+
+        ener_cell = _source_cell_field("ener_cell")
+        stress_cell = _source_cell_field("stress_vm_cell")
+        if stress_cell is not None:
+            stress_cell = stress_cell * _TONNE_MM_MS2_TO_MPA
+        eps_cell = _source_cell_field("eps_p_cell")
+        failed_cell = _source_cell_field("failed_cell")
 
         eps_raw = np.asarray(frame.get("eps_p", []), dtype=float).reshape(-1)
         target_eps = np.zeros(n_points, dtype=float)
@@ -1147,11 +1204,15 @@ def _build_animation_frames_with_mesh(mesh: Any, frames: list) -> list:
             {
                 "displacement": target_disp,
                 "stress_vm": target_vm,
+                "stress_vm_cell": stress_cell,
                 "velocity": target_vel,
                 "ener_cell": ener_cell,
                 "eps_p": target_eps,
                 "failed": target_failed,
+                "eps_p_cell": eps_cell,
+                "failed_cell": failed_cell,
                 "time": float(frame.get("time", 0.0)),
+                "time_is_normalized": bool(frame.get("time_is_normalized", False)),
             }
         )
     return fixed
@@ -1180,7 +1241,7 @@ def _compute_time_history(
             points, conn = mesh_to_tet4(mesh, [])
             nodes_per_elem = 4
     except Exception:
-        return {"t_ms": [float(f.get("time", 0.0)) * float(end_time) for f in frames],
+        return {"t_ms": [float(f.get("time", 0.0)) for f in frames],
                 "ke_kj": [0.0] * len(frames),
                 "ie_kj": [0.0] * len(frames)}
 
@@ -1215,7 +1276,7 @@ def _compute_time_history(
     ke_kj: list = []
     ie_kj: list = []
     for frame in frames:
-        t_ms.append(float(frame.get("time", 0.0)) * float(end_time))
+        t_ms.append(float(frame.get("time", 0.0)))
 
         vel = frame.get("velocity")
         if vel is None or not isinstance(vel, np.ndarray) or vel.shape != (n_points, 3):
@@ -1330,7 +1391,7 @@ def run_openradioss_crash(
 
     if config.run_solver:
         if starter is None:
-            warnings.append(
+            raise SolverBackendError(
                 "OpenRadioss Starter executable not found. Set the node path, "
                 "add starter_* to PATH, define PYLCSS_OPENRADIOSS_STARTER, or "
                 "run scripts/install_solvers.py."
@@ -1371,9 +1432,9 @@ def run_openradioss_crash(
                 )
             status = "starter_completed"
             if engine is None:
-                warnings.append(
+                raise SolverBackendError(
                     "Starter completed but no Engine executable was found; "
-                    "skipping the dynamic solve."
+                    "set the node Engine path or reinstall OpenRadioss."
                 )
             else:
                 _write_engine_deck()
@@ -1409,7 +1470,8 @@ def run_openradioss_crash(
                 status = "engine_completed"
                 converter = resolve_anim_to_vtk()
                 raw_frames, anim_warnings = read_animation_frames(
-                    work_dir, job_name, converter=converter, timeout_s=config.timeout_s
+                    work_dir, job_name, converter=converter,
+                    timeout_s=config.timeout_s, end_time=end_time,
                 )
                 warnings.extend(anim_warnings)
                 frames = _build_animation_frames_with_mesh(mesh, raw_frames)
@@ -1436,8 +1498,26 @@ def run_openradioss_crash(
         displacement_flat = last["displacement"]
         stress_field = last["stress_vm"]
         peak_disp = float(np.max(np.linalg.norm(displacement_flat.reshape(n_points, 3), axis=1)))
-        peak_vm = float(np.max(stress_field)) if stress_field.size else 0.0
+        element_stress = last.get("stress_vm_cell")
+        stress_for_peak = (
+            np.asarray(element_stress, dtype=float)
+            if element_stress is not None else np.asarray(stress_field, dtype=float)
+        )
+        # Frame stress fields are already converted to MPa upstream in
+        # _build_animation_frames_with_mesh (× _TONNE_MM_MS2_TO_MPA); the
+        # parametric deck is written by PyLCSS in the known tonne-mm-ms unit
+        # system, so no extra stress_scale_to_mpa step is applied here. That
+        # rescale belongs only to run_openradioss_existing_deck, where the
+        # deck's native stress unit is user-supplied.
+        peak_vm = float(np.max(stress_for_peak)) if stress_for_peak.size else 0.0
         time_history = _compute_time_history(mesh, material, frames, end_time)
+        final_plastic = last.get("eps_p_cell")
+        final_failed = last.get("failed_cell")
+        n_failed = int(np.count_nonzero(
+            np.asarray(final_failed if final_failed is not None else [], dtype=float) >= 0.5
+        ))
+        ie_kj = time_history.get("ie_kj") or []
+        absorbed_energy_nmm = float(ie_kj[-1]) * 1.0e6 if ie_kj else 0.0
         return {
             "type": "crash",
             "backend": "OpenRadioss",
@@ -1445,11 +1525,16 @@ def run_openradioss_crash(
             "mesh": mesh,
             "displacement": displacement_flat,
             "stress": stress_field,
+            "element_stress": element_stress,
             "visualization_mode": visualization_mode,
             "disp_scale": disp_scale,
             "frames": frames,
             "peak_displacement": peak_disp,
             "peak_stress": peak_vm,
+            "plastic_strain": final_plastic,
+            "failed_elements": final_failed,
+            "n_failed": n_failed,
+            "absorbed_energy": absorbed_energy_nmm,
             "wall": wall_info,
             "end_time": float(end_time),
             "time_history": time_history,

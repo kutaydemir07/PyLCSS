@@ -4,7 +4,8 @@
 """
 Command Dispatcher Module.
 
-Maps voice commands to PyLCSS-specific actions and general system controls.
+Maps the AI assistant's tool actions to PyLCSS-specific operations and general
+system controls.  This is the action layer the PydanticAI agent's tools invoke.
 """
 
 import logging
@@ -47,8 +48,8 @@ logger = logging.getLogger(__name__)
 
 class CommandDispatcher:
     """
-    Dispatches voice commands to appropriate actions.
-    
+    Dispatches assistant tool actions to appropriate operations.
+
     Handles mouse actions, keyboard shortcuts, tab navigation,
     and PyLCSS-specific functionality.
     """
@@ -77,9 +78,6 @@ class CommandDispatcher:
         # Control callbacks
         self._on_pause: Optional[Callable[[], None]] = None
         self._on_resume: Optional[Callable[[], None]] = None
-        self._on_calibrate: Optional[Callable[[], None]] = None
-        self._on_start_dictation: Optional[Callable[[], None]] = None
-        self._on_stop_dictation: Optional[Callable[[], None]] = None
         
         # Action handlers by action type
         self._action_handlers: Dict[str, Callable[[Dict[str, Any]], None]] = {
@@ -106,24 +104,18 @@ class CommandDispatcher:
         self,
         on_pause: Optional[Callable[[], None]] = None,
         on_resume: Optional[Callable[[], None]] = None,
-        on_calibrate: Optional[Callable[[], None]] = None,
-        on_start_dictation: Optional[Callable[[], None]] = None,
-        on_stop_dictation: Optional[Callable[[], None]] = None,
     ) -> None:
         """Set callbacks for control commands."""
         self._on_pause = on_pause
         self._on_resume = on_resume
-        self._on_calibrate = on_calibrate
-        self._on_start_dictation = on_start_dictation
-        self._on_stop_dictation = on_stop_dictation
         
     def dispatch(self, command_name: str, command_data: Dict[str, Any]) -> bool:
         """
         Dispatch a command to the appropriate handler.
         
         Args:
-            command_name: The recognized command text
-            command_data: Command configuration from VOICE_COMMANDS
+            command_name: The action/command name
+            command_data: Command configuration dict for the action
             
         Returns:
             True if command was handled, False otherwise
@@ -334,10 +326,6 @@ class CommandDispatcher:
             "train_surrogate_node": self._train_surrogate_node, # NEW
 
             
-            # LLM Assistant
-            "open_llm_assistant": self._open_llm_assistant,
-            "close_llm_assistant": self._close_llm_assistant,
-
             # Granular Control
             "connect_nodes": self._connect_nodes,
             "set_property": self._set_property,
@@ -382,11 +370,11 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_run'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_run, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Running optimization")
+            logger.info("Assistant: Running optimization")
         elif hasattr(widget, 'start_optimization'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget, "start_optimization", Qt.QueuedConnection)
-            logger.info("Voice command: Starting optimization")
+            logger.info("Assistant: Starting optimization")
                 
     def _stop_optimization(self) -> None:
         """Stop optimization."""
@@ -396,7 +384,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_stop'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_stop, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Stopping optimization")
+            logger.info("Assistant: Stopping optimization")
         elif hasattr(widget, 'stop_optimization'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget, "stop_optimization", Qt.QueuedConnection)
@@ -409,7 +397,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_compute_feasible'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_compute_feasible, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Computing solution space")
+            logger.info("Assistant: Computing solution space")
         elif hasattr(widget, 'run_computation'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget, "run_computation", Qt.QueuedConnection)
@@ -422,7 +410,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_train'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_train, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Training surrogate model")
+            logger.info("Assistant: Training surrogate model")
         elif hasattr(widget, 'start_training'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget, "start_training", Qt.QueuedConnection)
@@ -435,7 +423,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_analyze'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_analyze, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Running sensitivity analysis")
+            logger.info("Assistant: Running sensitivity analysis")
         elif hasattr(widget, 'run_analysis'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget, "run_analysis", Qt.QueuedConnection)
@@ -976,7 +964,7 @@ class CommandDispatcher:
             if hasattr(widget, 'system_manager') and hasattr(widget.system_manager, 'add_system'):
                 from PySide6.QtCore import QMetaObject, Qt
                 QMetaObject.invokeMethod(widget.system_manager, "add_system", Qt.QueuedConnection)
-                logger.info("Voice command: Adding new system")
+                logger.info("Assistant: Adding new system")
     
     def _add_modeling_node(self, command: str) -> None:
         """Add a node in the modeling environment."""
@@ -1000,7 +988,7 @@ class CommandDispatcher:
         if method_name and hasattr(widget, method_name):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget, method_name, Qt.QueuedConnection)
-            logger.info(f"Voice command: {command.replace('_', ' ')}")
+            logger.info(f"Assistant: {command.replace('_', ' ')}")
         else:
             logger.warning(f"Method {method_name} not found on modeling widget")
     
@@ -1014,7 +1002,7 @@ class CommandDispatcher:
 
         if hasattr(widget, 'validate_graph'):
             QMetaObject.invokeMethod(widget, "validate_graph", conn_type)
-            logger.info("Voice command: Validating graph")
+            logger.info("Assistant: Validating graph")
     
     def _add_cad_node(self, command: str) -> None:
         """Add a node in the Design Studio environment."""
@@ -1049,7 +1037,7 @@ class CommandDispatcher:
             if hasattr(widget, '_spawn_node'):
                 try:
                     widget._spawn_node(node_type, label)
-                    logger.info(f"Voice command: Added CAD node {label}")
+                    logger.info(f"Assistant: Added CAD node {label}")
                 except Exception as e:
                     logger.error(f"Failed to create CAD node: {e}")
             else:
@@ -1104,19 +1092,19 @@ class CommandDispatcher:
                         widget.viewer.render_sketch(geom)
                     else:
                         widget.viewer.render_shape(geom)
-                logger.info("Voice command: Executing CAD graph (sync)")
+                logger.info("Assistant: Executing CAD graph (sync)")
                 return "CAD executed"
 
             self._run_sync(_run_engine_and_render)
         else:
-            # ---- async path (UI button / voice shortcut) ---------------
+            # ---- async path (UI button / assistant shortcut) -----------
             from PySide6.QtCore import QMetaObject, Qt
             if hasattr(widget, 'execute_graph'):
                 QMetaObject.invokeMethod(widget, "execute_graph", Qt.QueuedConnection)
-                logger.info("Voice command: Executing CAD graph")
+                logger.info("Assistant: Executing CAD graph")
             elif hasattr(widget, 'btn_execute'):
                 QMetaObject.invokeMethod(widget.btn_execute, "click", Qt.QueuedConnection)
-                logger.info("Voice command: Running CAD")
+                logger.info("Assistant: Running CAD")
     
     def _cad_export(self, sync: bool = False) -> None:
         """Export the CAD model to STL."""
@@ -1128,7 +1116,7 @@ class CommandDispatcher:
 
         if hasattr(widget, 'btn_export'):
             QMetaObject.invokeMethod(widget.btn_export, "click", conn_type)
-            logger.info("Voice command: Exporting CAD")
+            logger.info("Assistant: Exporting CAD")
     
     # --- System Management Handlers ---
     
@@ -1140,7 +1128,7 @@ class CommandDispatcher:
         if hasattr(widget, 'system_manager') and hasattr(widget.system_manager, 'btn_remove_system'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.system_manager.btn_remove_system, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Removing system")
+            logger.info("Assistant: Removing system")
     
     def _rename_system(self) -> None:
         """Rename current system in modeling environment."""
@@ -1150,7 +1138,7 @@ class CommandDispatcher:
         if hasattr(widget, 'system_manager') and hasattr(widget.system_manager, 'btn_rename_system'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.system_manager.btn_rename_system, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Renaming system")
+            logger.info("Assistant: Renaming system")
     
     def _next_system(self) -> None:
         """Switch to next system."""
@@ -1163,7 +1151,7 @@ class CommandDispatcher:
             current = lst.currentRow()
             if current < lst.count() - 1:
                 lst.setCurrentRow(current + 1)
-            logger.info("Voice command: Next system")
+            logger.info("Assistant: Next system")
     
     def _previous_system(self) -> None:
         """Switch to previous system."""
@@ -1175,7 +1163,7 @@ class CommandDispatcher:
             current = lst.currentRow()
             if current > 0:
                 lst.setCurrentRow(current - 1)
-            logger.info("Voice command: Previous system")
+            logger.info("Assistant: Previous system")
     
     # --- Graph Operations Handlers ---
     
@@ -1187,7 +1175,7 @@ class CommandDispatcher:
         if hasattr(widget, 'auto_connect'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget, "auto_connect", Qt.QueuedConnection)
-            logger.info("Voice command: Auto-connecting nodes")
+            logger.info("Assistant: Auto-connecting nodes")
     
     def _clear_graph(self, sync: bool = False) -> None:
         """Clear all nodes from the graph."""
@@ -1198,7 +1186,7 @@ class CommandDispatcher:
         conn_type = Qt.BlockingQueuedConnection if sync else Qt.QueuedConnection
         if hasattr(widget, 'current_graph') and hasattr(widget.current_graph, 'clear_session'):
             QMetaObject.invokeMethod(widget.current_graph, "clear_session", conn_type)
-            logger.info("Voice command: Clearing graph")
+            logger.info("Assistant: Clearing graph")
     
     def _select_all_nodes(self) -> None:
         """Select all nodes in the graph."""
@@ -1209,7 +1197,7 @@ class CommandDispatcher:
             graph = widget.current_graph
             if hasattr(graph, 'select_all'):
                 graph.select_all()
-            logger.info("Voice command: Selecting all nodes")
+            logger.info("Assistant: Selecting all nodes")
     
     def _delete_selected(self) -> None:
         """Delete selected nodes in the graph."""
@@ -1219,7 +1207,7 @@ class CommandDispatcher:
         if hasattr(widget, 'current_graph') and hasattr(widget.current_graph, 'delete_selected'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.current_graph, "delete_selected", Qt.QueuedConnection)
-            logger.info("Voice command: Deleting selected nodes")
+            logger.info("Assistant: Deleting selected nodes")
     
     # --- Solution Space Handlers ---
     
@@ -1231,7 +1219,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_resample'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_resample, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Resampling")
+            logger.info("Assistant: Resampling")
     
     def _add_plot(self) -> None:
         """Add a new plot to the solution space."""
@@ -1241,7 +1229,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_add_plot'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_add_plot, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Adding plot")
+            logger.info("Assistant: Adding plot")
     
     def _clear_plots(self) -> None:
         """Clear all plots."""
@@ -1251,7 +1239,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_clear_plots'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_clear_plots, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Clearing plots")
+            logger.info("Assistant: Clearing plots")
     
     def _save_plots(self) -> None:
         """Save all plots."""
@@ -1261,7 +1249,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_save_all'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_save_all, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Saving plots")
+            logger.info("Assistant: Saving plots")
     
     def _configure_colors(self) -> None:
         """Open color configuration dialog."""
@@ -1271,7 +1259,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_colors'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_colors, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Configuring colors")
+            logger.info("Assistant: Configuring colors")
     
     def _view_code(self) -> None:
         """View the generated code."""
@@ -1281,7 +1269,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_view_code'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_view_code, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Viewing code")
+            logger.info("Assistant: Viewing code")
     
     def _compute_family(self) -> None:
         """Compute product family solution space."""
@@ -1291,7 +1279,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_compute_family'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_compute_family, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Computing product family")
+            logger.info("Assistant: Computing product family")
     
     def _add_variant(self) -> None:
         """Add a product variant."""
@@ -1301,7 +1289,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_add_variant'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_add_variant, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Adding variant")
+            logger.info("Assistant: Adding variant")
     
     def _remove_variant(self) -> None:
         """Remove a product variant."""
@@ -1311,7 +1299,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_remove_variant'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_remove_variant, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Removing variant")
+            logger.info("Assistant: Removing variant")
     
     def _edit_variant(self) -> None:
         """Edit variant requirements."""
@@ -1321,7 +1309,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_edit_variant'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_edit_variant, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Editing variant")
+            logger.info("Assistant: Editing variant")
     
     def _compute_adg(self) -> None:
         """Generate Attribute Dependency Graph."""
@@ -1331,7 +1319,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_compute_adg'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_compute_adg, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Computing ADG")
+            logger.info("Assistant: Computing ADG")
     
     # --- Surrogate Training Handlers ---
     
@@ -1343,7 +1331,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_refresh'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_refresh, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Refreshing nodes")
+            logger.info("Assistant: Refreshing nodes")
     
     def _generate_training_data(self) -> None:
         """Generate training data for surrogate model."""
@@ -1353,7 +1341,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_generate'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_generate, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Generating training data")
+            logger.info("Assistant: Generating training data")
     
     def _browse_data_file(self) -> None:
         """Browse for data file."""
@@ -1363,7 +1351,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_browse'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_browse, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Browsing for data file")
+            logger.info("Assistant: Browsing for data file")
     
     def _save_surrogate(self) -> None:
         """Save and attach surrogate model to node."""
@@ -1373,7 +1361,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_save'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_save, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Saving surrogate model")
+            logger.info("Assistant: Saving surrogate model")
     
     def _stop_training(self) -> None:
         """Stop surrogate model training."""
@@ -1383,7 +1371,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_stop'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_stop, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Stopping training")
+            logger.info("Assistant: Stopping training")
     
     def _adaptive_training(self) -> None:
         """Start adaptive/active learning training."""
@@ -1393,7 +1381,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_adaptive'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_adaptive, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Starting adaptive training")
+            logger.info("Assistant: Starting adaptive training")
     
     # --- Optimization Handlers ---
     
@@ -1405,7 +1393,7 @@ class CommandDispatcher:
         if hasattr(widget, 'settings_widget') and hasattr(widget.settings_widget, 'btn_settings'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.settings_widget.btn_settings, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Opening optimization settings")
+            logger.info("Assistant: Opening optimization settings")
     
     # --- Sensitivity Handlers ---
     
@@ -1417,7 +1405,7 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_refresh_outputs'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_refresh_outputs, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Refreshing outputs")
+            logger.info("Assistant: Refreshing outputs")
     
     def _export_sensitivity(self) -> None:
         """Export sensitivity analysis results."""
@@ -1427,109 +1415,18 @@ class CommandDispatcher:
         if hasattr(widget, 'btn_export'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_export, "click", Qt.QueuedConnection)
-            logger.info("Voice command: Exporting sensitivity results")
+            logger.info("Assistant: Exporting sensitivity results")
     
-    # --- LLM Assistant Handlers ---
-    
-    def _open_llm_assistant(self) -> None:
-        """Open the LLM assistant dialog (thread-safe via custom event)."""
-        logger.info("LLM Assistant: _open_llm_assistant called")
-        if not self.main_window:
-            logger.warning("Main window not available for LLM assistant")
-            return
-        
-        # Post a custom event to the main window to create/show the dialog
-        from PySide6.QtCore import QEvent, QCoreApplication
-        from PySide6.QtWidgets import QApplication
-        
-        # Use a lambda with QApplication.instance().postEvent is not possible
-        # Instead, create a callable wrapper class
-        class ShowLLMDialogEvent(QEvent):
-            EVENT_TYPE = QEvent.Type(QEvent.registerEventType())
-            def __init__(self, dispatcher):
-                super().__init__(ShowLLMDialogEvent.EVENT_TYPE)
-                self.dispatcher = dispatcher
-        
-        # Install event filter on main window if not already done
-        if not hasattr(self.main_window, '_llm_event_filter_installed'):
-            original_event = self.main_window.event
-            dispatcher = self  # Capture reference
-            
-            def patched_event(event):
-                if isinstance(event, ShowLLMDialogEvent):
-                    dispatcher._do_create_llm_dialog()
-                    return True
-                return original_event(event)
-            
-            self.main_window.event = patched_event
-            self.main_window._llm_event_filter_installed = True
-            logger.info("LLM Assistant: Event filter installed")
-        
-        # Post the event
-        QCoreApplication.postEvent(self.main_window, ShowLLMDialogEvent(self))
-        logger.info("LLM Assistant: Event posted to main thread")
-    
-    def _do_create_llm_dialog(self) -> None:
-        """Actually create and show the LLM dialog (runs on main thread via event)."""
-        logger.info("LLM Assistant: _do_create_llm_dialog executing on main thread")
-        if not self.main_window:
-            return
-            
-        # Check if dialog already exists
-        if hasattr(self.main_window, '_llm_dialog') and self.main_window._llm_dialog:
-            logger.info("LLM Assistant: Showing existing dialog")
-            self.main_window._llm_dialog.show()
-            self.main_window._llm_dialog.raise_()
-            self.main_window._llm_dialog.activateWindow()
-            return
-            
-        try:
-            logger.info("LLM Assistant: Creating new dialog...")
-            from pylcss.hands_free.ui.llm_chat_dialog import LLMChatDialog
-            from pylcss.hands_free.config import HandsFreeConfig
-            
-            # Create dialog with command dispatcher reference
-            dialog = LLMChatDialog(command_dispatcher=self, parent=self.main_window)
-            logger.info("LLM Assistant: Dialog created successfully")
-            
-            # Load token from config if available
-            config = HandsFreeConfig.load()
-            if config.llm_control.access_token:
-                dialog.set_token(config.llm_control.access_token)
-                
-            # Store reference on main window
-            self.main_window._llm_dialog = dialog
-            
-            # Show dialog
-            dialog.show()
-            logger.info("LLM Assistant: Dialog shown!")
-            
-        except ImportError as e:
-            logger.error(f"LLM Assistant: Failed to import dialog: {e}")
-        except Exception as e:
-            import traceback
-            logger.error(f"LLM Assistant: Failed to open: {e}\n{traceback.format_exc()}")
-    
-    def _close_llm_assistant(self) -> None:
-        """Close the LLM assistant dialog."""
-        if self.main_window and hasattr(self.main_window, '_llm_dialog'):
-            if self.main_window._llm_dialog:
-                self.main_window._llm_dialog.close()
-                logger.info("Voice command: Closed LLM assistant")
-        
     # --- Control Handlers ---
-    
+
     def _handle_control(self, data: Dict[str, Any]) -> None:
         """Handle control commands (pause, resume, etc.)."""
         command = data.get("command", "")
-        
+
         callbacks = {
             "pause_tracking": self._on_pause,
             "resume_tracking": self._on_resume,
-            "calibrate": self._on_calibrate,
             "center_cursor": lambda: self.mouse.center_cursor(),
-            "start_dictation": self._on_start_dictation,
-            "stop_dictation": self._on_stop_dictation,
         }
         
         callback = callbacks.get(command)
@@ -1573,35 +1470,24 @@ class CommandDispatcher:
             return
 
         try:
-            from pylcss.hands_free.tools.registry import ToolRegistry
+            from pylcss.assistant_systems.tools.registry import ToolRegistry
             tool = ToolRegistry.get_tool(tool_name)
-            
+
             if not tool:
                 logger.error(f"Tool not found: {tool_name}")
                 return
-                
+
             logger.info(f"Executing tool: {tool_name} with params: {params}")
-            
-            # Execute tool
-            # Tools currently run synchronously on the calling thread (which is MainThread for GUI safety usually)
+
+            # Tools run synchronously on the calling thread (MainThread for GUI safety).
             result = tool.run(**params)
-            
             logger.info(f"Tool execution result: {result}")
-            
+
         except Exception as e:
             logger.error(f"Failed to execute tool {tool_name}: {e}")
             import traceback
             traceback.print_exc()
 
-        else:
-            # Use keyboard shortcuts as fallback
-            if command == "minimize":
-                self.mouse.hotkey('win', 'down')
-            elif command == "maximize":
-                self.mouse.hotkey('win', 'up')
-            elif command == "close":
-                self.mouse.hotkey('alt', 'f4')
-    
     # --- New Granular Control Handlers ---
 
     def _connect_nodes(self, data: Dict[str, Any], sync: bool = False) -> None:
