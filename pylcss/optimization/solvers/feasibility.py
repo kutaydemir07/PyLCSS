@@ -33,6 +33,9 @@ class FeasibilityProblem:
         self.include_objectives = include_objectives
         self.objective_indices = objective_indices if objective_indices is not None else []
         self.objective_weights = objective_weights if objective_weights is not None else []
+        # Per-objective reference magnitude (fixed lazily on first use) so the
+        # constrained anchor search sees a well-scaled, O(1) objective.
+        self._obj_ref_scale = None
 
     def denormalize(self, x_norm):
         """Convert normalized design variables to physical space."""
@@ -119,6 +122,32 @@ class FeasibilityProblem:
                 obj_sum += weight * y[idx]
 
         return np.where(np.isnan(obj_sum) | np.isinf(obj_sum), 1e10, obj_sum)
+
+    def compute_design_objective(self, x_norm):
+        """Weighted, scale-normalized design objective ONLY (no violation term).
+
+        This is the objective for the constrained anchor search (SLSQP/Nevergrad),
+        where the requirement constraints are supplied separately. Each objective
+        is divided by a fixed reference magnitude so the problem is well-conditioned
+        and weights are comparable across objectives of different scales — unlike
+        the old path, which added the raw objective onto normalized violations and
+        let a large objective (e.g. a GP cost ~17) swamp feasibility.
+        """
+        y, _ = self.evaluate(x_norm)
+        batched = y.ndim == 2
+        if not (self.include_objectives and self.objective_indices):
+            return np.zeros(y.shape[1]) if batched else 0.0
+
+        if self._obj_ref_scale is None:
+            self._obj_ref_scale = {}
+            for idx in self.objective_indices:
+                ref = float(np.mean(np.abs(np.atleast_1d(y[idx]))))
+                self._obj_ref_scale[idx] = ref if ref > 1e-12 else 1.0
+
+        total = np.zeros(y.shape[1]) if batched else 0.0
+        for idx, weight in zip(self.objective_indices, self.objective_weights):
+            total = total + weight * (y[idx] / self._obj_ref_scale[idx])
+        return np.where(np.isnan(total) | np.isinf(total), 1e10, total)
 
     def compute_constraints_normalized(self, x_norm):
         """Normalized constraints where values >= 0 indicate satisfaction."""

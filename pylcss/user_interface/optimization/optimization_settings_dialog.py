@@ -2,7 +2,7 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 from PySide6 import QtWidgets, QtCore, QtGui
-from ...config import optimization_config
+from ...config import optimization_config, SOLVER_DESCRIPTIONS
 
 class OptimizationSettingsDialog(QtWidgets.QDialog):
     """
@@ -23,6 +23,16 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
     def init_ui(self):
         layout = QtWidgets.QVBoxLayout(self)
         
+        # Header naming the active algorithm so the settings have context.
+        info = SOLVER_DESCRIPTIONS.get(self.current_method, {})
+        header = QtWidgets.QLabel(
+            f"<b style='font-size:11pt;'>{info.get('name', self.current_method)}</b>"
+            f"<br><span style='color:#566573;'>{info.get('description', '')}</span>"
+        )
+        header.setWordWrap(True)
+        header.setStyleSheet("padding: 4px 4px 10px 4px;")
+        layout.addWidget(header)
+
         # Scroll Area for settings
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -47,7 +57,13 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
         self.form_layout.addRow("Scaling:", self.chk_scaling)
         
         self.edit_obj_scale = self._add_input("Objective Scale:", "1.0")
-        self.edit_maxfun = self._add_input("Max Func Evals:", "15000")
+
+        self.edit_con_margin = self._add_input("Constraint Safety Margin:", "0.001")
+        self.edit_con_margin.setToolTip(
+            "Relative back-off applied to every constraint so the solver returns a "
+            "design that strictly satisfies it — never even slightly over. "
+            "0 disables it; 0.001 keeps results ~0.1% inside the feasible region."
+        )
 
         # --- Differential Evolution (DE) ---
         self.grp_de_label = QtWidgets.QLabel("<b>Differential Evolution</b>")
@@ -59,9 +75,10 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
         # Mutation Range (Min - Max)
         self.edit_mut_min = QtWidgets.QLineEdit("0.5")
         self.edit_mut_max = QtWidgets.QLineEdit("1.0")
+        self.lbl_mut_dash = QtWidgets.QLabel("-")
         h_mut = QtWidgets.QHBoxLayout()
         h_mut.addWidget(self.edit_mut_min)
-        h_mut.addWidget(QtWidgets.QLabel("-"))
+        h_mut.addWidget(self.lbl_mut_dash)
         h_mut.addWidget(self.edit_mut_max)
         self.lbl_mutation = QtWidgets.QLabel("Mutation Range:")
         self.form_layout.addRow(self.lbl_mutation, h_mut)
@@ -72,8 +89,9 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
         self.combo_de_strat.addItems(['best1bin', 'rand1exp', 'randtobest1bin', 'currenttobest1bin'])
         self.form_layout.addRow("Strategy:", self.combo_de_strat)
         
-        self.de_widgets = [self.grp_de_label, self.edit_popsize, self.lbl_mutation, 
-                           self.edit_mut_min, self.edit_mut_max, self.edit_recomb, self.combo_de_strat]
+        self.de_widgets = [self.grp_de_label, self.edit_popsize, self.lbl_mutation,
+                           self.edit_mut_min, self.lbl_mut_dash, self.edit_mut_max,
+                           self.edit_recomb, self.combo_de_strat]
 
         # --- Nevergrad ---
         self.grp_ng_label = QtWidgets.QLabel("<b>Nevergrad</b>")
@@ -132,39 +150,34 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
         return edit
 
     def update_visibility(self, method):
-        # Hide everything specific first
+        # Hide every solver-specific block first.
         self._set_visible(self.de_widgets, False)
         self._set_visible(self.ng_widgets, False)
         self._set_visible(self.nsga_widgets, False)
         self._set_visible(self.ms_widgets, False)
-        
-        # Defaults for common
-        common_visible = True
-        self.form_layout.labelForField(self.edit_tol).setVisible(True)
-        self.edit_tol.setVisible(True)
-        self.form_layout.labelForField(self.edit_maxfun).setVisible(True)
-        self.edit_maxfun.setVisible(True)
+
+        scipy_methods = ('SLSQP', 'COBYLA', 'trust-constr')
+
+        # General fields are shown only for the solvers that actually
+        # consume them, so the dialog never lists a parameter that does
+        # nothing for the selected algorithm.
+        uses_maxiter = method != 'NSGA-II'  # NSGA-II uses Generations instead
+        uses_tol = method in scipy_methods or method in ('Differential Evolution', 'Multi-Start')
+        uses_atol = method == 'Differential Evolution'
+
+        self._set_visible([self.edit_maxiter], uses_maxiter)
+        self._set_visible([self.edit_tol], uses_tol)
+        self._set_visible([self.edit_atol], uses_atol)
+        # Scaling and objective scale apply to every solver.
+        self._set_visible([self.chk_scaling], True)
+        self._set_visible([self.edit_obj_scale], True)
 
         if method == 'Differential Evolution':
             self._set_visible(self.de_widgets, True)
-            self.form_layout.labelForField(self.edit_tol).setVisible(False)
-            self.edit_tol.setVisible(False)
-            self.form_layout.labelForField(self.edit_maxfun).setVisible(False)
-            self.edit_maxfun.setVisible(False)
-            
         elif method == 'Nevergrad':
             self._set_visible(self.ng_widgets, True)
-            self.form_layout.labelForField(self.edit_tol).setVisible(False)
-            self.edit_tol.setVisible(False)
-
         elif method == 'NSGA-II':
             self._set_visible(self.nsga_widgets, True)
-            # NSGA-II uses generations, not maxiter/tol in the same way
-            self.form_layout.labelForField(self.edit_tol).setVisible(False)
-            self.edit_tol.setVisible(False)
-            self.form_layout.labelForField(self.edit_maxfun).setVisible(False)
-            self.edit_maxfun.setVisible(False)
-
         elif method == 'Multi-Start':
             self._set_visible(self.ms_widgets, True)
 
@@ -184,7 +197,7 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
         self.edit_atol.setText(str(s.get('atol', 1e-8)))
         self.chk_scaling.setChecked(s.get('scaling', True))
         self.edit_obj_scale.setText(str(s.get('objective_scale', 1.0)))
-        self.edit_maxfun.setText(str(s.get('maxfun', 15000)))
+        self.edit_con_margin.setText(str(s.get('constraint_margin', 0.001)))
         
         self.edit_popsize.setText(str(s.get('popsize', 15)))
         
@@ -225,7 +238,7 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
             'atol': to_f(self.edit_atol.text(), 1e-8),
             'scaling': self.chk_scaling.isChecked(),
             'objective_scale': to_f(self.edit_obj_scale.text(), 1.0),
-            'maxfun': to_i(self.edit_maxfun.text(), 15000),
+            'constraint_margin': to_f(self.edit_con_margin.text(), 0.001),
             'popsize': to_i(self.edit_popsize.text(), 15),
             'mutation': (to_f(self.edit_mut_min.text(), 0.5), to_f(self.edit_mut_max.text(), 1.0)),
             'recombination': to_f(self.edit_recomb.text(), 0.7),

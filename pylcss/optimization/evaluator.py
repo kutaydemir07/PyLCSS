@@ -15,7 +15,8 @@ class ModelEvaluator:
                  parameters: Optional[Dict[str, Any]] = None,
                  scaling: bool = True,
                  penalty_weight: float = 1e6,
-                 objective_scale: float = 1.0):
+                 objective_scale: float = 1.0,
+                 constraint_margin: float = 0.0):
         self.model = system_model
         self.vars = variables
         self.objs = objectives
@@ -25,7 +26,11 @@ class ModelEvaluator:
         self.scaling = scaling
         self.penalty_weight = penalty_weight
         self.objective_scale = objective_scale
-        
+        # Relative safety back-off: solvers are constrained to a slightly tighter
+        # band so the returned design satisfies the *original* constraints with
+        # margin (never even slightly over). 0 disables it.
+        self.constraint_margin = float(constraint_margin)
+
         # Caching
         self._cache = {}
         self._cache_size = 5000
@@ -35,6 +40,33 @@ class ModelEvaluator:
         self._upper = np.array([v.max_val for v in variables])
         self._ranges = self._upper - self._lower
         self._ranges[self._ranges == 0] = 1.0
+
+        # Per-constraint scale used to report a *relative* (scale-invariant)
+        # constraint violation. Prefer the admissible band width, then the
+        # magnitude of the active bound, finally 1.0. This makes `max_violation`
+        # and the penalty independent of the unit system, so feasibility
+        # tolerances behave the same whether a quantity is ~1e-3 or ~1e8.
+        self._con_scales = np.array(
+            [self._constraint_scale(c) for c in self.cons], dtype=float
+        ) if self.cons else np.array([], dtype=float)
+
+        # Tightened ("solve") bounds: what the solvers are actually constrained to.
+        # evaluate() still reports feasibility against the ORIGINAL bounds, so the
+        # returned point ends up strictly inside the true feasible region.
+        self._solve_lower = np.array([c.min_val for c in self.cons], dtype=float) if self.cons else np.array([])
+        self._solve_upper = np.array([c.max_val for c in self.cons], dtype=float) if self.cons else np.array([])
+        if self.cons and self.constraint_margin > 0:
+            back = self.constraint_margin * self._con_scales
+            lo, hi = self._solve_lower.copy(), self._solve_upper.copy()
+            fl, fh = np.isfinite(lo), np.isfinite(hi)
+            lo[fl] += back[fl]
+            hi[fh] -= back[fh]
+            # Never invert a finite band; collapse it to its midpoint instead.
+            inverted = fl & fh & (lo > hi)
+            mid = 0.5 * (self._solve_lower + self._solve_upper)
+            lo[inverted] = mid[inverted]
+            hi[inverted] = mid[inverted]
+            self._solve_lower, self._solve_upper = lo, hi
 
     def to_normalized(self, x_phys: np.ndarray) -> np.ndarray:
         """Convert physical variables to normalized [0,1] space."""
@@ -47,6 +79,38 @@ class ModelEvaluator:
         if not self.scaling:
             return x_norm
         return x_norm * self._ranges + self._lower
+
+    @staticmethod
+    def _constraint_scale(con: Constraint) -> float:
+        """Characteristic scale of a constraint, for relative violation reporting."""
+        lo, hi = con.min_val, con.max_val
+        if np.isfinite(lo) and np.isfinite(hi):
+            width = abs(hi - lo)
+            if width > 1e-12:
+                return width
+        mags = [abs(b) for b in (lo, hi) if np.isfinite(b) and abs(b) > 1e-12]
+        return min(mags) if mags else 1.0
+
+    def constraint_solve_bounds(self, i: int) -> Tuple[float, float]:
+        """Tightened (lower, upper) bounds for building a solver's constraints."""
+        return float(self._solve_lower[i]), float(self._solve_upper[i])
+
+    def solve_violation(self, raw_res: Dict) -> float:
+        """Max relative violation against the tightened (solve) bounds."""
+        if not self.cons:
+            return 0.0
+        worst = 0.0
+        for i, con in enumerate(self.cons):
+            val = raw_res.get(con.name, 0.0)
+            lo, hi = self._solve_lower[i], self._solve_upper[i]
+            v = 0.0
+            if val < lo:
+                v = lo - val
+            elif val > hi:
+                v = val - hi
+            if v > 0:
+                worst = max(worst, v / self._con_scales[i])
+        return worst
 
     def evaluate(self, x_input: np.ndarray) -> Tuple[float, Dict, float]:
         """Returns (total_cost, results_dict, max_violation)"""
@@ -86,17 +150,18 @@ class ModelEvaluator:
             sign = 1.0 if obj.minimize else -1.0
             total_cost += sign * obj.weight * (val / self.objective_scale)
 
-        # Constraints
-        for con in self.cons:
+        # Constraints (violation reported relative to each constraint's scale)
+        for i, con in enumerate(self.cons):
             val = raw_res.get(con.name, 0.0)
-            violation = 0.0
-            if val < con.min_val: violation = con.min_val - val
-            elif val > con.max_val: violation = val - con.max_val
-            
-            if violation > 0:
-                max_violation = max(max_violation, violation)
-                # Apply penalty weight to constraint violations
-                penalty_sum += self.penalty_weight * violation
+            raw_violation = 0.0
+            if val < con.min_val: raw_violation = con.min_val - val
+            elif val > con.max_val: raw_violation = val - con.max_val
+
+            if raw_violation > 0:
+                rel_violation = raw_violation / self._con_scales[i]
+                max_violation = max(max_violation, rel_violation)
+                # Apply penalty weight to the normalized constraint violation
+                penalty_sum += self.penalty_weight * rel_violation
 
         # 5. Final Cost (Penalized)
         final_cost = total_cost + penalty_sum

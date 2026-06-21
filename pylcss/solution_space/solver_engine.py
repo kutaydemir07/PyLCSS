@@ -355,7 +355,7 @@ class SolutionSpaceSolver:
         bounds = self._solver_bounds()
         x_start = np.clip(np.asarray(x_start, dtype=float), self.l_norm, self.u_norm)
         x = run_goal_attainment_slsqp(
-            feas_prob.compute_objective,
+            feas_prob.compute_design_objective,
             feas_prob.compute_constraints_normalized,
             x_start,
             bounds,
@@ -371,7 +371,7 @@ class SolutionSpaceSolver:
         bounds = self._solver_bounds()
         constraints = [{"type": "ineq", "fun": feas_prob.compute_constraints_finite_only}]
         result = solve_with_nevergrad(
-            feas_prob.compute_objective,
+            feas_prob.compute_design_objective,
             np.asarray(x_start, dtype=float),
             bounds,
             maxiter=5000,

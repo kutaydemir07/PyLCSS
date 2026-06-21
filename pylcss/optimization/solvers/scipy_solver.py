@@ -89,33 +89,33 @@ class ScipySolver(BaseSolver):
         if evaluator.cons and supports_constraints:
             
             if method == 'COBYLA':
-                # COBYLA expects separate constraint functions, not vectorized
-                for con in evaluator.cons:
+                # COBYLA expects separate constraint functions. Use the tightened
+                # (safety back-off) bounds so the result stays strictly inside the
+                # true feasible region.
+                for i, con in enumerate(evaluator.cons):
+                    lo, hi = evaluator.constraint_solve_bounds(i)
                     def make_con_fun(con_name):
                         return lambda x: evaluator.evaluate(x)[1].get(con_name, 0.0)
                     con_fun = make_con_fun(con.name)
-                    
-                    if con.min_val != float('-inf'):
-                        cons.append({'type': 'ineq', 'fun': lambda x, f=con_fun, m=con.min_val: f(x) - m})
-                    if con.max_val != float('inf'):
-                        cons.append({'type': 'ineq', 'fun': lambda x, f=con_fun, m=con.max_val: m - f(x)})
+
+                    if np.isfinite(lo):
+                        cons.append({'type': 'ineq', 'fun': lambda x, f=con_fun, m=lo: f(x) - m})
+                    if np.isfinite(hi):
+                        cons.append({'type': 'ineq', 'fun': lambda x, f=con_fun, m=hi: m - f(x)})
             else:
                 def vectorized_cons(x):
-                    # This calls evaluate() once, hitting the cache
+                    # One evaluate() per call (cached). Residuals use the tightened
+                    # (safety back-off) bounds for guaranteed feasibility.
                     _, raw, _ = evaluator.evaluate(x)
-                    
+
                     residuals = []
-                    for con in evaluator.cons:
+                    for i, con in enumerate(evaluator.cons):
+                        lo, hi = evaluator.constraint_solve_bounds(i)
                         val = raw.get(con.name, 0.0)
-                        
-                        # Inequality: val >= min  =>  val - min >= 0
-                        if con.min_val != float('-inf'):
-                            residuals.append(val - con.min_val)
-                        
-                        # Inequality: val <= max  =>  max - val >= 0
-                        if con.max_val != float('inf'):
-                            residuals.append(con.max_val - val)
-                            
+                        if np.isfinite(lo):
+                            residuals.append(val - lo)
+                        if np.isfinite(hi):
+                            residuals.append(hi - val)
                     return np.array(residuals)
 
                 # Register as a single vectorized constraint

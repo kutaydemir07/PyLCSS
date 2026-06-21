@@ -21,6 +21,14 @@ from .optimization_settings_dialog import OptimizationSettingsDialog  # New impo
 
 logger = logging.getLogger(__name__)
 
+# A constraint is treated as satisfied only if it is within this *relative*
+# tolerance of its bound — i.e. essentially exact (floating-point round-off only).
+# The constraint safety back-off (Advanced Settings) is what keeps real solutions
+# comfortably inside the feasible region; this threshold just absorbs numerical
+# noise, so anything genuinely over its bound reads VIOLATED, never OK. Used
+# consistently by the status banner and the per-constraint OK/VIOLATED marks.
+FEASIBILITY_TOL = 1e-6
+
 # --- Helper Functions ---
 
 def get_plot_color(index: int, total_lines: int) -> str:
@@ -68,16 +76,18 @@ class SolverSettingsWidget(QtWidgets.QWidget):
         self.combo_method.addItems(list(SOLVER_DESCRIPTIONS.keys()))
         self.combo_method.currentTextChanged.connect(self.on_method_changed)
         
-        btn_info = QtWidgets.QPushButton("?")
-        btn_info.setFixedWidth(25)
-        btn_info.setToolTip("Show details about the selected algorithm")
-        btn_info.clicked.connect(self.show_algorithm_info)
-        
+        self.btn_info = QtWidgets.QPushButton("?")
+        self.btn_info.setFixedWidth(25)
+        self.btn_info.clicked.connect(self.show_algorithm_info)
+        # The algorithm explanation lives on this button: hover for the one-liner,
+        # click for full details. Keeps the left panel compact.
+        self._refresh_info_tooltip(self.combo_method.currentText())
+
         h_algo = QtWidgets.QHBoxLayout()
         h_algo.addWidget(self.combo_method)
-        h_algo.addWidget(btn_info)
+        h_algo.addWidget(self.btn_info)
         form_layout.addRow("Algorithm:", h_algo)
-        
+
         # 3. Settings Button (The pop-up trigger)
         self.btn_settings = QtWidgets.QPushButton("Advanced Settings")
         self.btn_settings.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_FileDialogDetailedView))
@@ -88,7 +98,15 @@ class SolverSettingsWidget(QtWidgets.QWidget):
         layout.addStretch()
 
     def on_method_changed(self, method_name):
+        self._refresh_info_tooltip(method_name)
         self.method_changed.emit(method_name)
+
+    def _refresh_info_tooltip(self, method_name):
+        info = SOLVER_DESCRIPTIONS.get(method_name, {})
+        desc = info.get('description')
+        when = info.get('when_to_use', '')
+        tip = f"{desc}\n\n{when}".strip() if desc else "Show details about the selected algorithm"
+        self.btn_info.setToolTip(tip)
 
     def open_settings_dialog(self):
         """Opens the pop-up dialog."""
@@ -111,6 +129,7 @@ class SolverSettingsWidget(QtWidgets.QWidget):
             'atol': 1e-8,
             'scaling': True,
             'objective_scale': 1.0,
+            'constraint_margin': 1e-3,
             'maxfun': 15000,
             'popsize': 15,
             'mutation': (0.5, 1.0),
@@ -140,6 +159,7 @@ class SolverSettingsWidget(QtWidgets.QWidget):
             <h3>{info.get('name', method)}</h3>
             <p><b>Description:</b> {info.get('description', '-')}</p>
             <p><b>Best For:</b> {info.get('best_for', '-')}</p>
+            <p><b>When to use:</b> {info.get('when_to_use', '-')}</p>
             <hr>
             <ul>
                 <li><b>Speed:</b> {info.get('speed', '-')}</li>
@@ -183,7 +203,10 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
         self.plot_objs = self._create_plot("Individual Objectives", "Value", combo=True, callback=self.update_objs_plot, legend=True)
         self.addTab(self.plot_objs['widget'], "Objectives")
         
-        # 5. Problem Formulation (Text)
+        # 5. Results (final solution summary)
+        self._init_results_tab()
+
+        # 6. Problem Formulation (Text)
         self.problem_text = QtWidgets.QTextBrowser()
         self.problem_text.setOpenExternalLinks(False)
         self.problem_text.setStyleSheet("background-color: white; font-size: 11pt; padding: 10px;")
@@ -239,6 +262,7 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
         self._populate_combos()
         self._update_formulation_text()
         self.clear_plots()
+        self.reset_results()
 
     def _populate_combos(self):
         if not self.problem: return
@@ -273,6 +297,128 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
             # --- FIX ENDS HERE ---
             
         self.dv_items = {}; self.cons_items = {}; self.objs_items = {}
+
+    # ---- Results tab (final solution) ----
+
+    def _init_results_tab(self):
+        self.results_tab = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(self.results_tab)
+        self.lbl_result_status = QtWidgets.QLabel()
+        self.lbl_result_status.setWordWrap(True)
+        self._set_result_status("Not run yet.", "#7f8c8d")
+        lay.addWidget(self.lbl_result_status)
+
+        self.results_table = QtWidgets.QTableWidget(0, 3)
+        self.results_table.setHorizontalHeaderLabels(["Quantity", "Value", "Detail"])
+        self.results_table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        self.results_table.verticalHeader().setVisible(False)
+        self.results_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        lay.addWidget(self.results_table)
+        self.addTab(self.results_tab, "Results")
+
+    def _set_result_status(self, text, color):
+        self.lbl_result_status.setText(text)
+        self.lbl_result_status.setStyleSheet(
+            f"padding:8px; border-radius:4px; background:{color}; "
+            f"color:white; font-weight:bold;"
+        )
+
+    def reset_results(self):
+        self._render_results_table(None, None, {})
+        self._set_result_status("Not run yet.", "#7f8c8d")
+
+    def mark_running(self):
+        self._set_result_status("Optimizing…", "#2980b9")
+
+    def update_results_live(self, data):
+        self._render_results_table(data.get('x'), data.get('cost'), data.get('raw', {}))
+
+    def set_results_final(self, result, status_text, color):
+        raw = {**(result.objectives or {}), **(result.constraints or {})}
+        self._render_results_table(result.x, result.cost, raw)
+        self._set_result_status(status_text, color)
+
+    def _constraint_detail(self, con, value):
+        lo = con.get('min_val', con.get('min', con.get('req_min', float('-inf'))))
+        hi = con.get('max_val', con.get('max', con.get('req_max', float('inf'))))
+        try: lo = float(lo)
+        except (TypeError, ValueError): lo = float('-inf')
+        try: hi = float(hi)
+        except (TypeError, ValueError): hi = float('inf')
+        has_lo, has_hi = np.isfinite(lo), np.isfinite(hi)
+        if has_lo and has_hi:
+            bound = f"[{lo:.4g}, {hi:.4g}]"
+        elif has_lo:
+            bound = f">= {lo:.4g}"
+        elif has_hi:
+            bound = f"<= {hi:.4g}"
+        else:
+            bound = "free"
+        if value is None:
+            return bound
+        v = float(value)
+
+        # Judge feasibility on a *relative* tolerance (matching solver precision),
+        # so an active constraint resting on its bound (~1e-5) reads OK instead of
+        # being flagged for numerical noise. Mirrors the evaluator's violation scale.
+        if has_lo and has_hi and abs(hi - lo) > 1e-12:
+            scale = abs(hi - lo)
+        else:
+            mags = [abs(b) for b in (lo, hi) if np.isfinite(b) and abs(b) > 1e-12]
+            scale = min(mags) if mags else 1.0
+        tol = max(FEASIBILITY_TOL * scale, 1e-9)
+        violation = max(
+            (lo - v) if has_lo else 0.0,
+            (v - hi) if has_hi else 0.0,
+            0.0,
+        )
+        ok = violation <= tol
+        return f"{bound}   {'OK' if ok else 'VIOLATED'}"
+
+    def _render_results_table(self, x, cost, raw):
+        if not self.problem:
+            return
+        raw = raw or {}
+        rows = []  # (quantity, value, detail, is_header, violated)
+
+        rows.append(("Design variables", "", "", True, False))
+        for i, dv in enumerate(self.problem.design_variables):
+            val = "-" if (x is None or i >= len(x)) else f"{float(x[i]):.4g}"
+            unit = dv.get('unit') if dv.get('unit') not in (None, '-') else ""
+            rows.append((dv['name'], val, unit, False, False))
+
+        if self.objectives:
+            rows.append(("Objectives", "", "", True, False))
+            for obj in self.objectives:
+                v = raw.get(obj['name'])
+                val = "-" if v is None else f"{float(v):.4g}"
+                goal = "minimize" if obj.get('minimize', True) else "maximize"
+                rows.append((obj['name'], val, goal, False, False))
+
+        if self.constraints:
+            rows.append(("Constraints", "", "", True, False))
+            for con in self.constraints:
+                v = raw.get(con['name'])
+                val = "-" if v is None else f"{float(v):.4g}"
+                detail = self._constraint_detail(con, v)
+                rows.append((con['name'], val, detail, False, detail.endswith("VIOLATED")))
+
+        rows.append(("Summary", "", "", True, False))
+        rows.append(("Total cost", "-" if cost is None else f"{float(cost):.4g}", "", False, False))
+
+        self.results_table.setRowCount(len(rows))
+        for r, (q, v, d, is_header, violated) in enumerate(rows):
+            qi = QtWidgets.QTableWidgetItem(q)
+            vi = QtWidgets.QTableWidgetItem(v)
+            di = QtWidgets.QTableWidgetItem(d)
+            if is_header:
+                font = qi.font(); font.setBold(True); qi.setFont(font)
+                qi.setForeground(QtGui.QColor("#2471a3"))
+            if violated:
+                di.setForeground(QtGui.QColor("#e74c3c"))
+            self.results_table.setItem(r, 0, qi)
+            self.results_table.setItem(r, 1, vi)
+            self.results_table.setItem(r, 2, di)
 
     def update_data(self, data):
         """
@@ -317,6 +463,7 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
         self.update_dv_plot()
         self.update_cons_plot()
         self.update_objs_plot()
+        self.update_results_live(data)
 
     def _update_simple_curve(self, plot, x, y, color):
         # Check if curve exists AND is still in the plot's item list
@@ -375,108 +522,136 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
                 plot.removeItem(item_store[name])
                 del item_store[name]
 
+    @staticmethod
+    def _safe_float(val, default):
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _format_value(val):
+        try:
+            return f"{float(val):.4g}"
+        except (TypeError, ValueError):
+            return str(val)
+
     def _update_formulation_text(self):
-        if not self.problem: return
-        
-        # Build mathematical optimization problem formulation
-        html = "<div style='color: black; font-family: \"Cambria Math\", \"Times New Roman\", serif; font-size: 12pt; padding: 20px;'>"
-        html += f"<h2 style='color: black; text-align: center; margin-bottom: 30px;'>{self.problem.name}</h2>"
-        
-        # Objective Function
-        html += "<div style='margin-bottom: 25px;'>"
+        if not self.problem:
+            return
+
+        accent = "#1f3a5f"      # title
+        keyword_col = "#2471a3"  # min / s.t. / over / where
+        muted = "#7f8c8d"        # units
+        rule = "#d5dbdb"         # divider
+
+        # HTML entities (numeric => universally supported by Qt rich text)
+        LE, GE, DOT, MINUS = "&#8804;", "&#8805;", "&#183;", "&#8722;"
+        ISIN, REALS, NBSP = "&#8712;", "&#8477;", "&#160;"
+
+        # --- Objective expression ---
         if len(self.objectives) == 1:
             obj = self.objectives[0]
-            obj_type = "minimize" if obj.get('minimize', True) else "maximize"
-            html += f"<div style='margin-bottom: 10px;'><b>{obj_type}</b></div>"
-            html += f"<div style='margin-left: 40px; font-style: italic;'>f(x) = {obj['name']}</div>"
-        else:
-            html += "<div style='margin-bottom: 10px;'><b>minimize</b></div>"
-            html += "<div style='margin-left: 40px; font-style: italic;'>f(x) = "
-            obj_terms = []
+            keyword = "minimize" if obj.get('minimize', True) else "maximize"
+            obj_expr = f"f(<i>x</i>) = {obj['name']}"
+        elif self.objectives:
+            keyword = "minimize"
+            terms = []
             for i, obj in enumerate(self.objectives):
-                sign = "" if obj.get('minimize', True) else "−"
-                weight = obj.get('weight', 1.0)
-                weight_str = f"{weight:.4g}·"
-                # Add + for terms after the first (unless negative sign already present)
-                prefix = " + " if i > 0 and sign != "−" else (" " if i > 0 else "")
-                obj_terms.append(f"{prefix}{sign}{weight_str}{obj['name']}")
-            html += "".join(obj_terms)
-            html += "</div>"
-        html += "</div>"
-        
-        # Subject to (Constraints)
-        html += "<div style='margin-bottom: 25px;'>"
-        html += "<div style='margin-bottom: 10px;'><b>subject to:</b></div>"
-        
-        if self.constraints:
-            for con in self.constraints:
-                min_val = con.get('min_val', con.get('min', con.get('req_min', float('-inf'))))
-                max_val = con.get('max_val', con.get('max', con.get('req_max', float('inf'))))
-                
-                html += "<div style='margin-left: 40px; margin-bottom: 5px;'>"
-                
-                # Format constraint based on bounds
-                has_min = min_val not in ['-inf', float('-inf'), None] and min_val != float('-inf')
-                has_max = max_val not in ['inf', float('inf'), None] and max_val != float('inf')
-                
-                if has_min and has_max:
-                    if abs(float(min_val) - float(max_val)) < 1e-10:
-                        # Equality constraint
-                        html += f"{con['name']} = {float(min_val):.4g}"
-                    else:
-                        # Range constraint
-                        html += f"{float(min_val):.4g} ≤ {con['name']} ≤ {float(max_val):.4g}"
-                elif has_min:
-                    # Lower bound only
-                    html += f"{con['name']} ≥ {float(min_val):.4g}"
-                elif has_max:
-                    # Upper bound only
-                    html += f"{con['name']} ≤ {float(max_val):.4g}"
+                w = obj.get('weight', 1.0)
+                negative = not obj.get('minimize', True)  # maximize => subtract
+                term = f"{abs(w):.4g}{DOT}{obj['name']}"
+                if i == 0:
+                    terms.append((MINUS if negative else "") + term)
                 else:
-                    # No bounds (unconstrained)
-                    html += f"{con['name']} ∈ ℝ"
-                
-                html += "</div>"
-        
-        # Variable Bounds
-        html += "<div style='margin-top: 15px;'>"
-        for dv in self.problem.design_variables:
-            min_val = dv.get('min', float('-inf'))
-            max_val = dv.get('max', float('inf'))
-            
-            html += "<div style='margin-left: 40px; margin-bottom: 5px;'>"
-            
-            has_min = min_val != float('-inf') and np.isfinite(min_val)
-            has_max = max_val != float('inf') and np.isfinite(max_val)
-            
+                    terms.append((f" {MINUS} " if negative else " + ") + term)
+            obj_expr = "f(<i>x</i>) = " + "".join(terms)
+        else:
+            keyword = "minimize"
+            obj_expr = "&#8212;"
+
+        # --- Constraint rows ---
+        con_rows = []
+        for con in self.constraints:
+            lo = self._safe_float(con.get('min_val', con.get('min', con.get('req_min', float('-inf')))), float('-inf'))
+            hi = self._safe_float(con.get('max_val', con.get('max', con.get('req_max', float('inf')))), float('inf'))
+            name = con['name']
+            has_min, has_max = np.isfinite(lo), np.isfinite(hi)
             if has_min and has_max:
-                html += f"{float(min_val):.4g} ≤ {dv['name']} ≤ {float(max_val):.4g}"
+                if abs(lo - hi) < 1e-10:
+                    con_rows.append(f"{name} = {lo:.4g}")
+                else:
+                    con_rows.append(f"{lo:.4g} {LE} {name} {LE} {hi:.4g}")
             elif has_min:
-                html += f"{dv['name']} ≥ {float(min_val):.4g}"
+                con_rows.append(f"{name} {GE} {lo:.4g}")
             elif has_max:
-                html += f"{dv['name']} ≤ {float(max_val):.4g}"
+                con_rows.append(f"{name} {LE} {hi:.4g}")
             else:
-                html += f"{dv['name']} ∈ ℝ"
-            
-            if dv.get('unit') and dv['unit'] != '-':
-                html += f" &nbsp;&nbsp;<span style='color: #666; font-size: 10pt;'>[{dv['unit']}]</span>"
-            
-            html += "</div>"
-        html += "</div>"
-        html += "</div>"
-        
-        # Parameters (if any)
-        if self.problem.parameters:
-            html += "<div style='margin-top: 25px; border-top: 1px solid #ccc; padding-top: 15px;'>"
-            html += "<div style='margin-bottom: 10px;'><b>where:</b></div>"
-            for param in self.problem.parameters:
-                html += f"<div style='margin-left: 40px; margin-bottom: 5px;'>{param['name']} = {param.get('value', '-'):.4g}"
-                if param.get('unit') and param['unit'] != '-':
-                    html += f" &nbsp;<span style='color: #666; font-size: 10pt;'>[{param['unit']}]</span>"
-                html += "</div>"
-            html += "</div>"
-        
-        html += "</div>"
+                con_rows.append(f"{name} {ISIN} {REALS}")
+
+        # --- Bound rows ---
+        bound_rows = []
+        for dv in self.problem.design_variables:
+            lo = self._safe_float(dv.get('min', float('-inf')), float('-inf'))
+            hi = self._safe_float(dv.get('max', float('inf')), float('inf'))
+            name = dv['name']
+            has_min, has_max = np.isfinite(lo), np.isfinite(hi)
+            if has_min and has_max:
+                s = f"{lo:.4g} {LE} {name} {LE} {hi:.4g}"
+            elif has_min:
+                s = f"{name} {GE} {lo:.4g}"
+            elif has_max:
+                s = f"{name} {LE} {hi:.4g}"
+            else:
+                s = f"{name} {ISIN} {REALS}"
+            unit = dv.get('unit')
+            if unit and unit != '-':
+                s += f" {NBSP}<span style='color:{muted}; font-size:10pt;'>[{unit}]</span>"
+            bound_rows.append(s)
+
+        # --- Parameter rows ---
+        param_rows = []
+        for p in self.problem.parameters:
+            s = f"{p['name']} = {self._format_value(p.get('value', '-'))}"
+            unit = p.get('unit')
+            if unit and unit != '-':
+                s += f" {NBSP}<span style='color:{muted}; font-size:10pt;'>[{unit}]</span>"
+            param_rows.append(s)
+
+        # --- Assemble aligned table (keyword column + expression column) ---
+        def kw(label):
+            return (f"<td style='vertical-align:top; text-align:right; "
+                    f"padding:4px 18px 4px 0; color:{keyword_col}; "
+                    f"font-style:italic;'>{label}</td>")
+
+        def expr(content):
+            return f"<td style='vertical-align:top; padding:4px 0; color:#1c1c1c;'>{content}</td>"
+
+        rows = [f"<tr>{kw(keyword)}{expr(obj_expr)}</tr>"]
+
+        var_names = ", ".join(dv['name'] for dv in self.problem.design_variables)
+        if var_names:
+            rows.append(f"<tr>{kw('over')}{expr(f'<i>x</i> = ({var_names})')}</tr>")
+
+        for i, c in enumerate(con_rows):
+            rows.append(f"<tr>{kw('subject to' if i == 0 else '')}{expr(c)}</tr>")
+
+        for i, b in enumerate(bound_rows):
+            rows.append(f"<tr>{kw('bounds' if i == 0 else '')}{expr(b)}</tr>")
+
+        for i, pr in enumerate(param_rows):
+            rows.append(f"<tr>{kw('where' if i == 0 else '')}{expr(pr)}</tr>")
+
+        html = (
+            f"<div style=\"font-family:'Cambria Math','Times New Roman',serif; "
+            f"color:#1c1c1c; padding:24px 30px;\">"
+            f"<div style='font-size:15pt; font-weight:bold; color:{accent}; "
+            f"border-bottom:2px solid {rule}; padding-bottom:8px; margin-bottom:20px;'>"
+            f"{self.problem.name}</div>"
+            f"<table cellspacing='0' cellpadding='0' style='font-size:13pt;'>"
+            f"{''.join(rows)}</table>"
+            f"</div>"
+        )
         self.problem_text.setHtml(html)
 
 
@@ -551,13 +726,6 @@ class OptimizationWidget(QtWidgets.QWidget):
         exec_layout.addWidget(self.lbl_status)
         left_layout.addWidget(grp_exec)
 
-        # 4. Results Table (Small summary)
-        self.table_results = QtWidgets.QTableWidget(0, 2)
-        self.table_results.setHorizontalHeaderLabels(["Variable", "Value"])
-        self.table_results.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
-        self.table_results.verticalHeader().setVisible(False)
-        left_layout.addWidget(self.table_results)
-
         # Add Left Panel to Splitter
         self.splitter.addWidget(left_widget)
 
@@ -618,7 +786,6 @@ class OptimizationWidget(QtWidgets.QWidget):
         
         # Populate UI components
         self._populate_objectives_table()
-        self._init_results_table()  # Initialize results table structure
         self.plots_widget.set_problem(problem, self.objectives, self.constraints)
         self.lbl_status.setText(f"Loaded: {problem.name}")
 
@@ -631,20 +798,6 @@ class OptimizationWidget(QtWidgets.QWidget):
             self.table_objectives.setItem(i, 1, QtWidgets.QTableWidgetItem(type_str))
             self.table_objectives.setItem(i, 2, QtWidgets.QTableWidgetItem(str(obj.get('weight', 1.0))))
         self.table_objectives.blockSignals(False)
-
-    def _init_results_table(self):
-        """Pre-allocates rows for the results table to avoid flicker."""
-        if not self.problem: return
-        
-        num_vars = len(self.problem.design_variables)
-        self.table_results.setRowCount(1 + num_vars) # Cost + Variables
-        
-        self.table_results.setItem(0, 0, QtWidgets.QTableWidgetItem("Total Cost"))
-        self.table_results.setItem(0, 1, QtWidgets.QTableWidgetItem("-"))
-        
-        for i, dv in enumerate(self.problem.design_variables):
-            self.table_results.setItem(i + 1, 0, QtWidgets.QTableWidgetItem(dv['name']))
-            self.table_results.setItem(i + 1, 1, QtWidgets.QTableWidgetItem("-"))
 
     def on_objective_weight_changed(self, item):
         if item.column() != 2: return
@@ -680,8 +833,7 @@ class OptimizationWidget(QtWidgets.QWidget):
         self.progress_bar.setRange(0, 0) # Indeterminate
         self.lbl_status.setText("Optimizing...")
         
-        # Reset Results Table items
-        self._init_results_table()
+        self.plots_widget.mark_running()
 
         # Setup Data
         x0 = []
@@ -719,23 +871,9 @@ class OptimizationWidget(QtWidgets.QWidget):
         # Worker
         self.worker = OptimizationWorker(self.problem.system_model, setup_data, solver_settings)
         self.worker.progress.connect(self.plots_widget.update_data)
-        self.worker.progress.connect(self._update_results_table)
         self.worker.finished.connect(self.on_finished)
         self.worker.error.connect(self.on_error)
         self.worker.start()
-
-    def _update_results_table(self, data):
-        x_vals = data['x']
-        cost = data['cost']
-
-        # Update Cost
-        item = self.table_results.item(0, 1)
-        if item: item.setText(f"{cost:.4f}")
-        
-        # Update Variables
-        for i, val in enumerate(x_vals):
-            item = self.table_results.item(i + 1, 1)
-            if item: item.setText(f"{val:.4f}")
 
     def stop_optimization(self):
         if self.worker:
@@ -750,23 +888,25 @@ class OptimizationWidget(QtWidgets.QWidget):
         self.btn_run.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.progress_bar.setRange(0, 100); self.progress_bar.setValue(100)
-        
-        is_feasible = result.max_violation < 1e-4
+
+        is_feasible = result.max_violation < FEASIBILITY_TOL
         if result.success:
-            msg = "Converged"
+            msg, color = "Converged", "#27ae60"
         elif is_feasible:
-            msg = "Done (Max Iter / Tol)" # Friendly success
+            msg, color = "Done (Max Iter / Tol)", "#27ae60"
         else:
-            msg = "Failed"
-            
-        if result.max_violation > 1e-3: msg += " (Constraints Violated)"
-        
+            msg, color = "Failed", "#e74c3c"
+
+        if result.max_violation > FEASIBILITY_TOL:
+            msg += " (Constraints Violated)"
+            color = "#e74c3c"
+
         self.lbl_status.setText(f"{msg}: {result.message}")
-        
-        # Ensure the final result is written to table/model
+
+        # Write the final solution into the Results tab and back to the model.
         if result.x is not None:
-             self._update_results_table({'x': result.x, 'cost': result.cost})
-             for i, val in enumerate(result.x):
+            self.plots_widget.set_results_final(result, f"{msg}: {result.message}", color)
+            for i, val in enumerate(result.x):
                 self.problem.design_variables[i]['value'] = float(val)
 
     def on_error(self, msg):
@@ -866,65 +1006,10 @@ class OptimizationWidget(QtWidgets.QWidget):
             if idx >= 0:
                 self.settings_widget.combo_method.setCurrentIndex(idx)
         
-        if 'maxiter' in settings:
-            self.settings_widget.spin_maxiter.setValue(int(settings['maxiter']))
-        
-        if 'scaling' in settings:
-            self.settings_widget.chk_scaling.setChecked(bool(settings['scaling']))
-        
-        if 'objective_scale' in settings:
-            self.settings_widget.spin_obj_scale.setValue(float(settings['objective_scale']))
-        
-        if 'tol' in settings:
-            self.settings_widget.spin_tol.setValue(float(settings['tol']))
-        
-        if 'atol' in settings:
-            self.settings_widget.spin_atol.setValue(float(settings['atol']))
-        
-        if 'maxfun' in settings:
-            self.settings_widget.spin_maxfun.setValue(int(settings['maxfun']))
-        
-        if 'popsize' in settings:
-            self.settings_widget.spin_popsize.setValue(int(settings['popsize']))
-        
-        if 'mutation' in settings and isinstance(settings['mutation'], (list, tuple)) and len(settings['mutation']) == 2:
-            self.settings_widget.spin_mut_min.setValue(float(settings['mutation'][0]))
-            self.settings_widget.spin_mut_max.setValue(float(settings['mutation'][1]))
-        
-        if 'recombination' in settings:
-            self.settings_widget.spin_recomb.setValue(float(settings['recombination']))
-        
-        if 'strategy' in settings:
-            idx = self.settings_widget.combo_de_strat.findText(settings['strategy'])
-            if idx >= 0:
-                self.settings_widget.combo_de_strat.setCurrentIndex(idx)
-        
-        if 'optimizer_name' in settings:
-            idx = self.settings_widget.combo_ng_opt.findText(settings['optimizer_name'])
-            if idx >= 0:
-                self.settings_widget.combo_ng_opt.setCurrentIndex(idx)
-        
-        if 'num_workers' in settings:
-            self.settings_widget.spin_ng_workers.setValue(int(settings['num_workers']))
-        
-        # NSGA-II settings
-        if 'nsga_popsize' in settings:
-            self.settings_widget.spin_nsga_pop.setValue(int(settings['nsga_popsize']))
-        if 'nsga_generations' in settings:
-            self.settings_widget.spin_nsga_gen.setValue(int(settings['nsga_generations']))
-        if 'nsga_crossover_prob' in settings:
-            self.settings_widget.spin_nsga_cx.setValue(float(settings['nsga_crossover_prob']))
-        if 'nsga_mutation_prob' in settings and settings['nsga_mutation_prob'] is not None:
-            self.settings_widget.spin_nsga_mut.setValue(float(settings['nsga_mutation_prob']))
-        if 'nsga_eta_c' in settings:
-            self.settings_widget.spin_nsga_eta_c.setValue(float(settings['nsga_eta_c']))
-        if 'nsga_eta_m' in settings:
-            self.settings_widget.spin_nsga_eta_m.setValue(float(settings['nsga_eta_m']))
-        
-        # Multi-Start settings
-        if 'ms_n_starts' in settings:
-            self.settings_widget.spin_ms_starts.setValue(int(settings['ms_n_starts']))
-        if 'ms_local_solver' in settings:
-            idx = self.settings_widget.combo_ms_solver.findText(settings['ms_local_solver'])
-            if idx >= 0:
-                self.settings_widget.combo_ms_solver.setCurrentIndex(idx)
+        # Advanced parameters live in SolverSettingsWidget.settings (edited via
+        # the pop-up dialog), not as individual widgets, so merge them there.
+        stored = self.settings_widget.settings
+        for key, value in settings.items():
+            if key == 'method':
+                continue
+            stored[key] = value

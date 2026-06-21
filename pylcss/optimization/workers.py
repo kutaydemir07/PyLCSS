@@ -60,7 +60,8 @@ class OptimizationWorker(QtCore.QThread):
                 parameters=parameters,
                 scaling=self.settings.get('scaling', True),
                 penalty_weight=self.settings.get('penalty_weight', 1e6),
-                objective_scale=self.settings.get('objective_scale', 1.0) # <--- Pass it here
+                objective_scale=self.settings.get('objective_scale', 1.0),
+                constraint_margin=self.settings.get('constraint_margin', 0.0)
             )
 
             # 2. Get Solver Strategy

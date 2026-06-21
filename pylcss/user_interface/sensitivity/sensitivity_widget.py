@@ -11,7 +11,7 @@ Provides a GUI for performing global sensitivity analysis using multiple methods
 - Delta Moment-Independent Measure
 
 Features: method selection, S2 interaction heatmap, multi-output batch,
-importance ranking, convergence plots.
+and an importance-ranked data table.
 """
 
 import warnings
@@ -32,9 +32,21 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
     Widget for performing global sensitivity analysis.
 
     Supports Sobol, Morris, FAST, and Delta methods with interactive
-    visualizations including bar charts, interaction heatmaps, and
-    importance ranking tables.
+    visualizations including bar charts, interaction heatmaps, and an
+    importance-ranked data table.
     """
+
+    METHOD_INFO = {
+        'Sobol': "Variance-based. Splits output variance into each variable's "
+                 "first-order (S1), total (ST) and pairwise (S2) contributions. "
+                 "The rigorous default; most expensive.",
+        'Morris': "Elementary-effects screening. Cheaply ranks variables and "
+                  "flags negligible ones. Run this first to prune before Sobol.",
+        'FAST': "Fourier-based, first-order only (no interactions). Cheaper than "
+                "Sobol but largely superseded by Sobol's S1.",
+        'Delta': "Moment-independent. Captures effects on the whole output "
+                 "distribution, not just its variance. Good for skewed outputs.",
+    }
 
     def __init__(self, optimization_widget=None):
         super().__init__()
@@ -85,13 +97,21 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         )
         self.combo_method.currentTextChanged.connect(self._on_method_changed)
         l_method.addRow("Method:", self.combo_method)
+
+        self.lbl_method_desc = QtWidgets.QLabel()
+        self.lbl_method_desc.setWordWrap(True)
+        self.lbl_method_desc.setStyleSheet("color:#566573; font-size:9pt; padding:4px 2px;")
+        l_method.addRow("", self.lbl_method_desc)
+
         config_layout.addWidget(grp_method)
 
         # 2. Select Outputs
         grp_output = QtWidgets.QGroupBox("Output Variables")
         l_output = QtWidgets.QVBoxLayout(grp_output)
         self.combo_outputs = QtWidgets.QComboBox()
-        self.combo_outputs.setToolTip("Select the output variable to analyze.")
+        self.combo_outputs.setToolTip("Select the output variable to analyze. After a "
+                                      "batch run, switch outputs here to view each result.")
+        self.combo_outputs.currentIndexChanged.connect(self._on_output_selected)
         self.btn_refresh_outputs = QtWidgets.QPushButton(qta.icon('fa5s.sync'), " Refresh Outputs")
         self.btn_refresh_outputs.clicked.connect(self.refresh_outputs)
         l_output.addWidget(self.combo_outputs)
@@ -111,8 +131,13 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         self.spin_samples.setRange(64, 16384)
         self.spin_samples.setValue(1024)
         self.spin_samples.setSingleStep(256)
-        self.spin_samples.setToolTip("Sample size (power of 2 for Sobol/FAST).")
+        self.spin_samples.setToolTip(
+            "Base sample size N. The actual number of model runs depends on the "
+            "method and the number of variables (see the estimate below). For "
+            "Sobol, N is rounded to a power of 2."
+        )
         l_config.addRow("Sample Size:", self.spin_samples)
+        self.lbl_samples = l_config.labelForField(self.spin_samples)
 
         self.spin_trajectories = QtWidgets.QSpinBox()
         self.spin_trajectories.setRange(4, 200)
@@ -121,10 +146,14 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         l_config.addRow("Trajectories:", self.spin_trajectories)
         self.lbl_trajectories = l_config.labelForField(self.spin_trajectories)
 
-        note = QtWidgets.QLabel("Sample size auto-adjusted to nearest power of 2.")
-        note.setStyleSheet("font-size: 10px; color: #666; font-style: italic;")
-        note.setWordWrap(True)
-        l_config.addRow("", note)
+        self.lbl_eval_estimate = QtWidgets.QLabel()
+        self.lbl_eval_estimate.setStyleSheet("font-size: 10px; color: #566573; font-style: italic;")
+        self.lbl_eval_estimate.setWordWrap(True)
+        l_config.addRow("", self.lbl_eval_estimate)
+
+        # Keep the evaluation estimate live as the user tweaks settings.
+        self.spin_samples.valueChanged.connect(lambda *_: self._update_estimate())
+        self.spin_trajectories.valueChanged.connect(lambda *_: self._update_estimate())
 
         config_layout.addWidget(grp_config)
 
@@ -140,17 +169,6 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         config_layout.addWidget(self.btn_export)
 
         config_layout.addStretch()
-
-        # 5. Importance Ranking Table
-        grp_rank = QtWidgets.QGroupBox("Importance Ranking")
-        l_rank = QtWidgets.QVBoxLayout(grp_rank)
-        self.rank_table = QtWidgets.QTableWidget()
-        self.rank_table.setColumnCount(4)
-        self.rank_table.setHorizontalHeaderLabels(["Rank", "Variable", "ST Index", "Category"])
-        self.rank_table.horizontalHeader().setStretchLastSection(True)
-        self.rank_table.setMaximumHeight(200)
-        l_rank.addWidget(self.rank_table)
-        config_layout.addWidget(grp_rank)
 
         layout.addWidget(config_panel)
 
@@ -212,12 +230,46 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         is_morris = (method == 'Morris')
         self.spin_trajectories.setVisible(is_morris)
         self.lbl_trajectories.setVisible(is_morris)
+        # Sample size drives Sobol/FAST/Delta; Morris is driven by trajectories.
+        self.spin_samples.setVisible(not is_morris)
+        self.lbl_samples.setVisible(not is_morris)
+
+        self.lbl_method_desc.setText(self.METHOD_INFO.get(method, ""))
+        self._update_estimate()
+
+        # Only show the plot tabs that apply to the selected method (the others
+        # would just render blank): S2 heatmap is Sobol-only, scatter is Morris-only.
+        self.tab_viz.setTabVisible(1, method == 'Sobol')   # S2 Interactions
+        self.tab_viz.setTabVisible(2, is_morris)           # Morris Scatter
 
         # Auto-switch to the relevant visualization tab
         if is_morris:
             self.tab_viz.setCurrentIndex(2)  # Morris scatter
         else:
             self.tab_viz.setCurrentIndex(0)  # Bar chart
+
+    def _update_estimate(self):
+        """Show the estimated number of model evaluations for the current setup."""
+        method = self.combo_method.currentText()
+        ow = self.optimization_widget
+        n_vars = len(ow.problem.design_variables) if (ow and ow.problem) else 0
+        if n_vars == 0:
+            self.lbl_eval_estimate.setText("Load a problem to estimate model runs.")
+            return
+
+        N = self.spin_samples.value()
+        T = self.spin_trajectories.value()
+        if method == 'Sobol':
+            evals, detail = N * (2 * n_vars + 2), f"N={N} x (2x{n_vars}+2)"
+        elif method == 'FAST':
+            evals, detail = N * n_vars, f"N={N} x {n_vars} vars"
+        elif method == 'Delta':
+            evals, detail = N, f"N={N}"
+        elif method == 'Morris':
+            evals, detail = (n_vars + 1) * T, f"({n_vars}+1) x {T} trajectories"
+        else:
+            evals, detail = N, f"N={N}"
+        self.lbl_eval_estimate.setText(f"~ {evals:,} model evaluations  ({detail})")
 
     # ====================================================================
     # Refresh Outputs
@@ -231,6 +283,9 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         problem = self.optimization_widget.problem
         for qoi in problem.quantities_of_interest:
             self.combo_outputs.addItem(f"{qoi['name']} ({qoi['unit']})", qoi['name'])
+
+        # Variable count is now known — refresh the evaluation estimate.
+        self._update_estimate()
 
         if self.combo_outputs.count() == 0 and problem.system_model:
             self.btn_refresh_outputs.setEnabled(False)
@@ -275,8 +330,9 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         n_samples = self.spin_samples.value()
         n_trajectories = self.spin_trajectories.value()
 
-        # Power-of-2 adjustment for Sobol/FAST
-        if method in ('Sobol', 'FAST'):
+        # Power-of-2 adjustment for Sobol only (Saltelli sequence). FAST has no
+        # such requirement, and snapping it down can break its minimum count.
+        if method == 'Sobol':
             adjusted = self._adjust_to_power_of_two(n_samples)
             if adjusted != n_samples:
                 self.spin_samples.setValue(adjusted)
@@ -287,6 +343,7 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         self.btn_analyze.setEnabled(False)
         self.btn_export.setEnabled(False)
         self.progress.setValue(0)
+        self.batch_results = {}  # cleared until this run completes
 
         self.worker = SensitivityWorker(
             problem, output_name, n_samples, method,
@@ -308,22 +365,57 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
             self.lbl_status.setText("Error occurred.")
             return
 
+        n_failed = results.get('n_failed', 0) if isinstance(results, dict) else 0
+
         if isinstance(results, dict) and 'batch_results' in results:
-            # Batch mode
+            # Batch mode: keep every output's result and let the user browse them
+            # via the output dropdown (they were all computed from one sample set).
             self.batch_results = results['batch_results']
+            self.combo_outputs.blockSignals(True)
+            self.combo_outputs.clear()
+            for name in self.batch_results:
+                self.combo_outputs.addItem(name, name)
+            self.combo_outputs.setCurrentIndex(0)
+            self.combo_outputs.blockSignals(False)
+
             first_key = next(iter(self.batch_results))
             self.current_results = self.batch_results[first_key]
-            self.lbl_status.setText(f"Batch analysis complete for {len(self.batch_results)} outputs.")
+            status = (f"Batch analysis complete for {len(self.batch_results)} outputs "
+                      f"— pick an output above to view it.")
         else:
+            self.batch_results = {}
             self.current_results = results
-            self.lbl_status.setText("Analysis complete.")
+            status = "Analysis complete."
+
+        if n_failed:
+            status += (f"  Warning: {n_failed} sample(s) failed to evaluate and were "
+                       f"mean-imputed — indices may be less reliable.")
+        self.lbl_status.setText(status)
 
         self.btn_export.setEnabled(True)
+        self._refresh_views()
+
+    def _refresh_views(self):
+        """Redraw all visualisations from self.current_results."""
         self.update_plot()
         self.update_table()
         self.update_heatmap()
         self.update_morris_scatter()
-        self.update_ranking()
+
+    def _on_output_selected(self, idx):
+        """In batch mode, switch the displayed result to the chosen output."""
+        if not self.batch_results or idx < 0:
+            return
+        name = self.combo_outputs.itemData(idx) or self.combo_outputs.currentText()
+        res = self.batch_results.get(name)
+        if res is None:
+            return
+        if isinstance(res, dict) and 'error' in res:
+            self.lbl_status.setText(f"{name}: analysis failed — {res['error']}")
+            return
+        self.current_results = res
+        self.lbl_status.setText(f"Showing sensitivity for output: {name}")
+        self._refresh_views()
 
     # ====================================================================
     # Visualizations
@@ -464,130 +556,81 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         self.morris_widget.setTitle('Morris Scatter: μ* vs σ\n(Above diagonal = non-linear / interactions)')
 
     def update_table(self):
-        """Update the numerical results table."""
+        """Numeric results table: every index, sorted by importance, with a
+        colour-coded category. This view replaces the old separate ranking table."""
         if not self.current_results:
             return
 
         method = self.current_results.get('method', 'Sobol')
-        variables = self.current_results.get('variable_names', [])
-
-        if method in ('Sobol', 'FAST'):
-            first_order = np.array(self.current_results.get('first_order', []))
-            total_order = np.array(self.current_results.get('total_order', []))
-            confidence = self.current_results.get('confidence_total', np.zeros(len(variables)))
-
-            self.results_table.setColumnCount(4)
-            self.results_table.setHorizontalHeaderLabels(["Variable", "First Order", "Total Order", "Confidence"])
-            self.results_table.setRowCount(len(variables))
-            for i, var in enumerate(variables):
-                self.results_table.setItem(i, 0, QtWidgets.QTableWidgetItem(var))
-                self.results_table.setItem(i, 1, QtWidgets.QTableWidgetItem(f"{first_order[i]:.4f}"))
-                self.results_table.setItem(i, 2, QtWidgets.QTableWidgetItem(f"{total_order[i]:.4f}"))
-                self.results_table.setItem(i, 3, QtWidgets.QTableWidgetItem(f"{float(confidence[i]):.4f}"))
-
-        elif method == 'Morris':
-            mu_star = self.current_results.get('mu_star', [])
-            sigma = self.current_results.get('sigma', [])
-            self.results_table.setColumnCount(4)
-            self.results_table.setHorizontalHeaderLabels(["Variable", "μ*", "σ", "Important?"])
-            self.results_table.setRowCount(len(variables))
-            imp = self.current_results.get('important_variables', [])
-            for i, var in enumerate(variables):
-                self.results_table.setItem(i, 0, QtWidgets.QTableWidgetItem(var))
-                self.results_table.setItem(i, 1, QtWidgets.QTableWidgetItem(f"{mu_star[i]:.4f}"))
-                self.results_table.setItem(i, 2, QtWidgets.QTableWidgetItem(f"{sigma[i]:.4f}"))
-                self.results_table.setItem(i, 3, QtWidgets.QTableWidgetItem("Yes" if var in imp else "No"))
-
-        elif method == 'Delta':
-            delta = self.current_results.get('delta', [])
-            delta_conf = self.current_results.get('delta_conf', [])
-            self.results_table.setColumnCount(4)
-            self.results_table.setHorizontalHeaderLabels(["Variable", "Delta", "S1", "Delta Conf"])
-            self.results_table.setRowCount(len(variables))
-            s1 = self.current_results.get('S1', [])
-            for i, var in enumerate(variables):
-                self.results_table.setItem(i, 0, QtWidgets.QTableWidgetItem(var))
-                self.results_table.setItem(i, 1, QtWidgets.QTableWidgetItem(f"{delta[i]:.4f}"))
-                self.results_table.setItem(i, 2, QtWidgets.QTableWidgetItem(f"{s1[i]:.4f}"))
-                self.results_table.setItem(i, 3, QtWidgets.QTableWidgetItem(f"{delta_conf[i]:.4f}"))
-
-        self.results_table.resizeColumnsToContents()
-
-    def update_ranking(self):
-        """Update the importance ranking table — supports all 4 methods."""
-        if not self.current_results:
+        variables = list(self.current_results.get('variable_names', []))
+        n = len(variables)
+        if n == 0:
+            self.results_table.setRowCount(0)
             return
 
-        method = self.current_results.get('method', 'Sobol')
-
-        # Sobol / FAST: use SensitivityAnalyzer.rank_variables (based on ST)
-        if method in ('Sobol', 'FAST'):
-            ranked = SensitivityAnalyzer.rank_variables(self.current_results)
-            self.rank_table.setHorizontalHeaderLabels(["Rank", "Variable", "ST Index", "Category"])
-        elif method == 'Morris':
-            # Morris: rank by mu_star (absolute mean of elementary effects)
-            variables = self.current_results.get('variables', [])
-            mu_star = self.current_results.get('mu_star', [])
-            if not variables or not len(mu_star):
-                self.rank_table.setRowCount(0)
-                return
-            pairs = sorted(zip(variables, mu_star), key=lambda x: abs(x[1]), reverse=True)
-            max_val = max(abs(v) for _, v in pairs) if pairs else 1.0
-            ranked = []
-            for rank, (name, val) in enumerate(pairs, 1):
-                ratio = abs(val) / max_val if max_val > 0 else 0
-                if ratio > 0.5:
-                    cat = 'Critical'
-                elif ratio > 0.2:
-                    cat = 'Important'
-                elif ratio > 0.05:
-                    cat = 'Minor'
-                else:
-                    cat = 'Negligible'
-                ranked.append({'rank': rank, 'name': name, 'index': val, 'category': cat})
-            self.rank_table.setHorizontalHeaderLabels(["Rank", "Variable", "μ*", "Category"])
-        elif method == 'Delta':
-            variables = self.current_results.get('variables', [])
-            delta = self.current_results.get('delta', [])
-            if not variables or not len(delta):
-                self.rank_table.setRowCount(0)
-                return
-            pairs = sorted(zip(variables, delta), key=lambda x: abs(x[1]), reverse=True)
-            max_val = max(abs(v) for _, v in pairs) if pairs else 1.0
-            ranked = []
-            for rank, (name, val) in enumerate(pairs, 1):
-                ratio = abs(val) / max_val if max_val > 0 else 0
-                if ratio > 0.5:
-                    cat = 'Critical'
-                elif ratio > 0.2:
-                    cat = 'Important'
-                elif ratio > 0.05:
-                    cat = 'Minor'
-                else:
-                    cat = 'Negligible'
-                ranked.append({'rank': rank, 'name': name, 'index': val, 'category': cat})
-            self.rank_table.setHorizontalHeaderLabels(["Rank", "Variable", "δ Index", "Category"])
-        else:
-            self.rank_table.setRowCount(0)
-            return
-
-        self.rank_table.setRowCount(len(ranked))
         category_colors = {
-            'Critical': '#E74C3C',
-            'Important': '#F39C12',
-            'Minor': '#3498DB',
-            'Negligible': '#95A5A6'
+            'Critical': '#E74C3C', 'Important': '#F39C12',
+            'Minor': '#3498DB', 'Negligible': '#95A5A6',
         }
-        for i, item in enumerate(ranked):
-            self.rank_table.setItem(i, 0, QtWidgets.QTableWidgetItem(str(item['rank'])))
-            self.rank_table.setItem(i, 1, QtWidgets.QTableWidgetItem(item['name']))
-            self.rank_table.setItem(i, 2, QtWidgets.QTableWidgetItem(f"{item['index']:.4f}"))
-            cat_item = QtWidgets.QTableWidgetItem(item['category'])
-            color = category_colors.get(item['category'], '#FFF')
-            cat_item.setForeground(QtGui.QColor(color))
-            cat_item.setFont(QtGui.QFont("", -1, QtGui.QFont.Bold))
-            self.rank_table.setItem(i, 3, cat_item)
-        self.rank_table.resizeColumnsToContents()
+
+        def cat_absolute(val):
+            # Normalized indices (Sobol ST, FAST) are already in [0, 1].
+            if val > 0.2: return 'Critical'
+            if val > 0.05: return 'Important'
+            if val > 0.01: return 'Minor'
+            return 'Negligible'
+
+        def cat_relative(val, max_val):
+            # Unbounded/relative indices (Morris mu*, Delta) judged vs. the max.
+            ratio = abs(val) / max_val if max_val > 0 else 0.0
+            if ratio > 0.5: return 'Critical'
+            if ratio > 0.2: return 'Important'
+            if ratio > 0.05: return 'Minor'
+            return 'Negligible'
+
+        if method in ('Sobol', 'FAST'):
+            s1 = np.asarray(self.current_results.get('first_order', np.zeros(n)), float)
+            st = np.asarray(self.current_results.get('total_order', np.zeros(n)), float)
+            conf = np.asarray(self.current_results.get('confidence_total', np.zeros(n)), float)
+            order = np.argsort(-st)
+            headers = ["Variable", "First Order (S1)", "Total Order (ST)", "Confidence", "Category"]
+            rows = [(variables[i], f"{s1[i]:.4f}", f"{st[i]:.4f}",
+                     f"{float(conf[i]):.4f}", cat_absolute(float(st[i]))) for i in order]
+
+        elif method == 'Morris':
+            mu_star = np.asarray(self.current_results.get('mu_star', np.zeros(n)), float)
+            sigma = np.asarray(self.current_results.get('sigma', np.zeros(n)), float)
+            mx = float(np.max(mu_star)) if mu_star.size else 0.0
+            order = np.argsort(-mu_star)
+            headers = ["Variable", "μ*", "σ", "Category"]
+            rows = [(variables[i], f"{mu_star[i]:.4f}", f"{sigma[i]:.4f}",
+                     cat_relative(float(mu_star[i]), mx)) for i in order]
+
+        elif method == 'Delta':
+            delta = np.asarray(self.current_results.get('delta', np.zeros(n)), float)
+            s1 = np.asarray(self.current_results.get('S1', np.zeros(n)), float)
+            dconf = np.asarray(self.current_results.get('delta_conf', np.zeros(n)), float)
+            mx = float(np.max(np.abs(delta))) if delta.size else 0.0
+            order = np.argsort(-delta)
+            headers = ["Variable", "Delta", "S1", "Delta Conf", "Category"]
+            rows = [(variables[i], f"{delta[i]:.4f}", f"{s1[i]:.4f}",
+                     f"{dconf[i]:.4f}", cat_relative(float(delta[i]), mx)) for i in order]
+        else:
+            self.results_table.setRowCount(0)
+            return
+
+        self.results_table.setColumnCount(len(headers))
+        self.results_table.setHorizontalHeaderLabels(headers)
+        self.results_table.setRowCount(len(rows))
+        cat_col = len(headers) - 1
+        for r, row in enumerate(rows):
+            for c, val in enumerate(row):
+                item = QtWidgets.QTableWidgetItem(val)
+                if c == cat_col:
+                    item.setForeground(QtGui.QColor(category_colors.get(val, '#FFFFFF')))
+                    fnt = item.font(); fnt.setBold(True); item.setFont(fnt)
+                self.results_table.setItem(r, c, item)
+        self.results_table.resizeColumnsToContents()
 
     # ====================================================================
     # Export
@@ -788,30 +831,58 @@ class SensitivityWorker(QtCore.QThread):
 
             self.progress_sig.emit(30, "Evaluating system model...")
 
-            # Evaluate all samples
+            # Evaluate all samples.
+            # ModelEvaluator.evaluate() returns an EMPTY dict (it does not raise)
+            # when the user model fails, so every output array must stay exactly
+            # len(X) long and row-aligned with X — SALib relies on that ordering.
+            # Failed/missing evaluations are stored as NaN and imputed afterwards
+            # so the structured sample matrix is never broken.
             n_total = len(X)
-            all_outputs = {}  # output_name -> list of values
+
+            # Discover the output names from the first samples that succeed.
+            output_keys = []
+            for probe in X[:min(n_total, 50)]:
+                _, probe_res, _ = self.evaluator.evaluate(np.asarray(probe, dtype=float))
+                if probe_res:
+                    output_keys = list(probe_res.keys())
+                    break
+            if not output_keys:
+                raise RuntimeError(
+                    "The system model returned no outputs for any sample. Check that "
+                    "it evaluates successfully across the full variable range."
+                )
+
+            all_outputs = {k: np.full(n_total, np.nan) for k in output_keys}
+            failed_rows = np.zeros(n_total, dtype=bool)
 
             for i, x_sample in enumerate(X):
-                try:
-                    _, result, _ = self.evaluator.evaluate(np.array(x_sample))
-                    for key, val in result.items():
-                        if key not in all_outputs:
-                            all_outputs[key] = []
-                        all_outputs[key].append(float(val))
-                except Exception:
-                    for key in all_outputs:
-                        all_outputs[key].append(0.0)
+                _, result, _ = self.evaluator.evaluate(np.asarray(x_sample, dtype=float))
+                if not result:
+                    failed_rows[i] = True
+                else:
+                    for key in output_keys:
+                        try:
+                            all_outputs[key][i] = float(result[key])
+                        except (KeyError, TypeError, ValueError):
+                            pass  # leave NaN; imputed below
 
                 if i % max(1, n_total // 20) == 0:
                     pct = 30 + int(50 * (i / n_total))
                     self.progress_sig.emit(pct, f"Evaluating samples... ({i}/{n_total})")
 
+            # Impute failed/NaN evaluations with each output's mean so X and Y stay
+            # the same length and aligned (a hard requirement for SALib).
+            for arr in all_outputs.values():
+                mask = ~np.isfinite(arr)
+                if mask.any():
+                    arr[mask] = np.nanmean(arr[~mask]) if (~mask).any() else 0.0
+
+            n_failed = int(failed_rows.sum())
             self.progress_sig.emit(80, "Analyzing sensitivity...")
 
             if self.batch:
                 # Batch: analyze all outputs
-                Y_dict = {k: np.array(v) for k, v in all_outputs.items()}
+                Y_dict = {k: np.asarray(v, dtype=float) for k, v in all_outputs.items()}
                 if self.method == 'Morris':
                     batch_results = {}
                     for out_name, Y_arr in Y_dict.items():
@@ -820,10 +891,10 @@ class SensitivityWorker(QtCore.QThread):
                 else:
                     batch_results = self.analyzer.batch_analyze(X, Y_dict, problem_def, self.method)
                 self.progress_sig.emit(100, "Batch analysis complete.")
-                self.done_sig.emit({'batch_results': batch_results}, None)
+                self.done_sig.emit({'batch_results': batch_results, 'n_failed': n_failed}, None)
             else:
                 # Single output
-                Y = np.array(all_outputs.get(self.output_name, [0.0] * n_total))
+                Y = np.asarray(all_outputs.get(self.output_name, np.zeros(n_total)), dtype=float)
                 if self.method == 'Sobol':
                     results = self.analyzer.analyze_sensitivity(X, Y, problem_def)
                 elif self.method == 'Morris':
@@ -835,6 +906,8 @@ class SensitivityWorker(QtCore.QThread):
                 else:
                     results = self.analyzer.analyze_sensitivity(X, Y, problem_def)
 
+                if isinstance(results, dict):
+                    results['n_failed'] = n_failed
                 self.progress_sig.emit(100, "Analysis complete.")
                 self.done_sig.emit(results, None)
 

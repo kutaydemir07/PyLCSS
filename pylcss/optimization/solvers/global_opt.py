@@ -38,15 +38,16 @@ class GlobalSolver(BaseSolver):
         # Prepare Constraints
         real_constraints = []
         if evaluator.cons:
-            for cons in evaluator.cons:
+            for i, cons in enumerate(evaluator.cons):
+                lo, hi = evaluator.constraint_solve_bounds(i)
                 def make_fun(name):
                     return lambda x: evaluator.evaluate(x)[1].get(name, 0.0)
                 fun = make_fun(cons.name)
-                
-                if cons.min_val is not None and np.isfinite(cons.min_val):
-                    real_constraints.append({'type': 'ineq', 'fun': lambda x, f=fun, m=cons.min_val: f(x) - m})
-                if cons.max_val is not None and np.isfinite(cons.max_val):
-                    real_constraints.append({'type': 'ineq', 'fun': lambda x, f=fun, m=cons.max_val: m - f(x)})
+
+                if np.isfinite(lo):
+                    real_constraints.append({'type': 'ineq', 'fun': lambda x, f=fun, m=lo: f(x) - m})
+                if np.isfinite(hi):
+                    real_constraints.append({'type': 'ineq', 'fun': lambda x, f=fun, m=hi: m - f(x)})
 
         # Callbacks & Wrappers
         best_plot_val = float('inf')

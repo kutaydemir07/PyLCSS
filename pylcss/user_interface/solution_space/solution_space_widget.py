@@ -377,7 +377,7 @@ class PlotWidget(QtWidgets.QWidget):
         self.lbl_title.setStyleSheet("font-weight: bold;")
         
         self.btn_remove = QtWidgets.QPushButton("X")
-        self.btn_remove.setFixedSize(24, 24)
+        self.btn_remove.setFixedSize(18, 18)
         self.btn_remove.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
         
         ctrl_layout.addWidget(self.lbl_title)
@@ -403,56 +403,26 @@ class PlotWidget(QtWidgets.QWidget):
         # Add Zoom/Save buttons to control layout
         self.btn_zoom = QtWidgets.QPushButton("Zoom")
         self.btn_zoom.setCheckable(True)
+        self.btn_zoom.setToolTip("Toggle zoom/pan on this plot")
         self.btn_zoom.clicked.connect(self.toggle_zoom)
-        self.btn_zoom.setMinimumWidth(60)
-        self.btn_zoom.setMaximumWidth(80)
-        # Apply dark theme styling explicitly
-        self.btn_zoom.setStyleSheet("""
-            QPushButton {
-                background-color: #5865F2;
-                color: white;
-                border: none;
-                padding: 4px 8px;
-                border-radius: 4px;
-                font-weight: bold;
-                min-width: 60px;
-                text-align: center;
-            }
-            QPushButton:hover {
-                background-color: #4752c4;
-            }
-            QPushButton:pressed {
-                background-color: #383a40;
-            }
-            QPushButton:checked {
-                background-color: #383a40;
-                color: #b5bac1;
-            }
-        """)
+        self.btn_zoom.setFixedHeight(18)
+        self.btn_zoom.setStyleSheet(
+            "QPushButton { background-color:#5865F2; color:white; border:none;"
+            " padding:0 5px; border-radius:3px; font-size:10px; min-width:0; }"
+            " QPushButton:hover { background-color:#4752c4; }"
+            " QPushButton:pressed, QPushButton:checked { background-color:#383a40; }"
+        )
 
         self.btn_save = QtWidgets.QPushButton("Save")
+        self.btn_save.setToolTip("Save this plot as an image")
         self.btn_save.clicked.connect(self.save_plot)
-        self.btn_save.setMinimumWidth(60)
-        self.btn_save.setMaximumWidth(80)
-        # Apply dark theme styling explicitly
-        self.btn_save.setStyleSheet("""
-            QPushButton {
-                background-color: #5865F2;
-                color: white;
-                border: none;
-                padding: 4px 8px;
-                border-radius: 4px;
-                font-weight: bold;
-                min-width: 60px;
-                text-align: center;
-            }
-            QPushButton:hover {
-                background-color: #4752c4;
-            }
-            QPushButton:pressed {
-                background-color: #383a40;
-            }
-        """)
+        self.btn_save.setFixedHeight(18)
+        self.btn_save.setStyleSheet(
+            "QPushButton { background-color:#5865F2; color:white; border:none;"
+            " padding:0 5px; border-radius:3px; font-size:10px; min-width:0; }"
+            " QPushButton:hover { background-color:#4752c4; }"
+            " QPushButton:pressed { background-color:#383a40; }"
+        )
         
         ctrl_layout.insertWidget(2, self.btn_zoom)
         ctrl_layout.insertWidget(3, self.btn_save)
@@ -1398,6 +1368,10 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
 
     def trigger_debounced_resample(self):
         """Trigger resampling after a short delay to prevent freezing during rapid updates."""
+        # Don't auto-resample from box/ROI changes until the user has sampled once
+        # explicitly — otherwise merely loading/forwarding a model samples on render.
+        if not self._has_sampled:
+            return
         self.resample_timer.start()
 
     def _safe_get_float(self, item, default=0.0):
@@ -1460,6 +1434,10 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         self.candidate_worker = None
         self.resampling = False
         self.pending_restart = False
+        # Box-drag live resampling only kicks in AFTER the user has explicitly
+        # sampled once (Resample/Compute). This stops a just-forwarded model —
+        # whose ROI emits a region-change on first render — from auto-sampling.
+        self._has_sampled = False
         self.qoi_colors = {}
         self.optimal_point = None
         
@@ -1599,10 +1577,13 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         row2.addWidget(self.solver_combo, stretch=1)
         
         self.sample_size_spin = QtWidgets.QSpinBox()
-        self.sample_size_spin.setRange(100, 100000)
+        self.sample_size_spin.setRange(10, 100000)
         self.sample_size_spin.setValue(3000)
         self.sample_size_spin.setPrefix("N=")
-        self.sample_size_spin.setToolTip("Sample Size")
+        self.sample_size_spin.setToolTip(
+            "Points to sample per Resample/Compute — one model evaluation each. "
+            "Start small (e.g. 10–100) for a quick probe before a large run."
+        )
         row2.addWidget(self.sample_size_spin)
         actions_layout.addLayout(row2)
         
@@ -1753,6 +1734,14 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         sol_ctrl_layout.addWidget(self.btn_clear_plots)
         sol_ctrl_layout.addWidget(self.btn_save_all)
         sol_ctrl_layout.addWidget(self.btn_colors)
+        self.plot_columns = 2
+        self.spin_plot_cols = QtWidgets.QSpinBox()
+        self.spin_plot_cols.setRange(1, 4)
+        self.spin_plot_cols.setValue(self.plot_columns)
+        self.spin_plot_cols.setPrefix("Cols: ")
+        self.spin_plot_cols.setToolTip("Number of columns in the plot grid")
+        self.spin_plot_cols.valueChanged.connect(self._on_plot_columns_changed)
+        sol_ctrl_layout.addWidget(self.spin_plot_cols)
         sol_ctrl_layout.addStretch()
         solution_layout.addLayout(sol_ctrl_layout)
         # Title
@@ -2225,15 +2214,17 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         
         # Auto-create default plot if none exists
         if not self.plot_widgets and len(self.inputs) >= 2:
-            self.add_plot(self.inputs[0], self.inputs[1])
+            self.add_plot(self.inputs[0], self.inputs[1], do_resample=False)
         elif not self.plot_widgets and len(self.inputs) == 1:
              if self.outputs:
-                 self.add_plot(self.inputs[0], self.outputs[0])
+                 self.add_plot(self.inputs[0], self.outputs[0], do_resample=False)
              else:
-                 self.add_plot(self.inputs[0], self.inputs[0])
+                 self.add_plot(self.inputs[0], self.inputs[0], do_resample=False)
 
-        # Auto-resample
-        self.resample_box(silent=True)
+        # Sampling is explicit (it can be expensive — one model evaluation per
+        # sample), so it does not fire automatically on load. Enable Resample so
+        # the user can trigger it (or a cheap small-N probe) when ready.
+        self.btn_resample.setEnabled(True)
 
     def load_model_from_system_model(self, system_model):
         """
@@ -2393,15 +2384,17 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         
         # Auto-create default plot if none exists
         if not self.plot_widgets and len(self.inputs) >= 2:
-            self.add_plot(self.inputs[0], self.inputs[1])
+            self.add_plot(self.inputs[0], self.inputs[1], do_resample=False)
         elif not self.plot_widgets and len(self.inputs) == 1:
              if self.outputs:
-                 self.add_plot(self.inputs[0], self.outputs[0])
+                 self.add_plot(self.inputs[0], self.outputs[0], do_resample=False)
              else:
-                 self.add_plot(self.inputs[0], self.inputs[0])
+                 self.add_plot(self.inputs[0], self.inputs[0], do_resample=False)
 
-        # Auto-resample
-        self.resample_box(silent=True)
+        # Sampling is explicit (it can be expensive — one model evaluation per
+        # sample), so it does not fire automatically on load. Enable Resample so
+        # the user can trigger it (or a cheap small-N probe) when ready.
+        self.btn_resample.setEnabled(True)
 
     def load_models(self, models):
         """
@@ -2541,6 +2534,9 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
             self.clear_all_plots()
             # Clear cached samples to avoid QoI count mismatches
             self.last_samples = None
+            # A freshly loaded/forwarded model must not auto-sample until the user
+            # explicitly clicks Resample or Compute.
+            self._has_sampled = False
 
             # Handle both SystemModel instances and legacy dicts
             if hasattr(m, 'name'):  # SystemModel instance
@@ -2583,13 +2579,66 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         layout.addWidget(text_edit)
         dialog.exec_()
 
+    def _refresh_design_space(self):
+        """Re-read the design-space bounds (cols 2/3) and re-range the plots.
+
+        Columns 2/3 define the sampling domain and the plot axis ranges (via
+        self.dsl/self.dsu in PlotWidget.get_bounds), so editing them must update
+        the plots — otherwise the design space appears to do nothing.
+        """
+        dsl, dsu = [], []
+        for i in range(self.dv_table.rowCount()):
+            dsl.append(self._safe_get_float(self.dv_table.item(i, 2), -1e9))
+            dsu.append(self._safe_get_float(self.dv_table.item(i, 3), 1e9))
+        self.dsl = np.array(dsl)
+        self.dsu = np.array(dsu)
+        # Keep the problem's design variables in sync with the table.
+        if self.problem:
+            for i, dv in enumerate(self.problem.design_variables):
+                if i < len(dsl):
+                    dv['min'] = dsl[i]
+                    dv['max'] = dsu[i]
+        # The plot axes also span the feasible box, so an old (larger) box keeps
+        # the axes from shrinking. Clamp the box into the new design space and
+        # mirror it in the box columns (4/5).
+        if self.dv_par_box is not None:
+            self.dv_par_box_mutex.lock()
+            try:
+                n = min(len(self.dv_par_box), len(dsl))
+                for i in range(n):
+                    lo = min(max(self.dv_par_box[i, 0], dsl[i]), dsu[i])
+                    hi = min(max(self.dv_par_box[i, 1], dsl[i]), dsu[i])
+                    if lo > hi:
+                        lo, hi = dsl[i], dsu[i]
+                    self.dv_par_box[i, 0] = lo
+                    self.dv_par_box[i, 1] = hi
+                box_copy = self.dv_par_box.copy()
+            finally:
+                self.dv_par_box_mutex.unlock()
+            self.dv_table.blockSignals(True)
+            for i in range(min(self.dv_table.rowCount(), len(box_copy))):
+                self.dv_table.setItem(i, 4, QtWidgets.QTableWidgetItem(f"{box_copy[i, 0]:.4g}"))
+                self.dv_table.setItem(i, 5, QtWidgets.QTableWidgetItem(f"{box_copy[i, 1]:.4g}"))
+            self.dv_table.blockSignals(False)
+        self.update_all_plots()
+
     def on_dv_table_changed(self, item):
         if self.dv_par_box is None:
             return
-            
+
         row = item.row()
         col = item.column()
-        
+
+        # Columns 2 (design-space min) and 3 (design-space max) set the sampling
+        # domain and the plot axis ranges — re-range the plots so the edit shows.
+        if col == 2 or col == 3:
+            try:
+                float(item.text())
+            except (TypeError, ValueError):
+                return
+            self._refresh_design_space()
+            return
+
         # Columns 4 (Min Sol) and 5 (Max Sol) are editable box bounds
         if col == 4 or col == 5:
             try:
@@ -2716,6 +2765,8 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         # 1. Prepare Problem Object (if not already set)
         if not self.problem:
             return
+        # Compute is an explicit user action — allow its post-compute sample.
+        self._has_sampled = True
 
         # 2. Gather Parameters for compute_solution_space
         try:
@@ -2806,7 +2857,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                     self.dv_table.setItem(i, 4, QtWidgets.QTableWidgetItem(f"{box[i, 0]:.4f}"))
                     self.dv_table.setItem(i, 5, QtWidgets.QTableWidgetItem(f"{box[i, 1]:.4f}"))
             self.dv_table.blockSignals(False)
-        
+
         if samples is None and hasattr(self.solver_worker.solver, 'latest_results'):
             samples = self.solver_worker.solver.latest_results
         
@@ -2843,6 +2894,11 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         self.status_msg.close()
 
     def resample_box(self, silent=False):
+        # Auto/silent resamples (box drag, first render, add-plot, table writes)
+        # are suppressed until the user has sampled once explicitly (Resample
+        # button or Compute), so a freshly forwarded model never samples on arrival.
+        if silent and not self._has_sampled:
+            return
         if self.resampling:
             self.pending_restart = True
             return
@@ -2867,7 +2923,10 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         if not has_box:
             self.resampling = False
             return
-            
+
+        # An explicit sample is now happening — from here on, box drags may live-update.
+        self._has_sampled = True
+
         # Wait for any existing resample thread to finish
         if self.resample_thread and self.resample_thread.isRunning():
             return
@@ -3059,8 +3118,8 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
             if not widgets:
                 return
 
-            cols = 2
-            rows = (len(widgets) + 1) // 2
+            cols = max(1, getattr(self, 'plot_columns', 2))
+            rows = (len(widgets) + cols - 1) // cols
             
             # Calculate areas
             legend_height_est = height * 0.15
@@ -3261,7 +3320,16 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                 widget.btn_save.show()
                 widget.lbl_title.show()
 
-    def add_plot(self, x_name=None, y_name=None):
+    def _on_plot_columns_changed(self, value):
+        self.plot_columns = max(1, int(value))
+        # Re-place existing plots into the new column count.
+        while self.plots_layout.count():
+            self.plots_layout.takeAt(0)
+        for i, widget in enumerate(self.plot_widgets):
+            self.plots_layout.addWidget(widget, i // self.plot_columns, i % self.plot_columns)
+        self.plots_container.update()
+
+    def add_plot(self, x_name=None, y_name=None, do_resample=True):
         if x_name is None or not isinstance(x_name, str):
             x_name = self.combo_add_x.currentText()
         if y_name is None or not isinstance(y_name, str):
@@ -3280,12 +3348,13 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         plot_widget.btn_remove.clicked.connect(lambda: self.remove_plot(plot_widget))
         plot_widget.plot()
         count = len(self.plot_widgets)
-        row = count // 2
-        col = count % 2
+        row = count // self.plot_columns
+        col = count % self.plot_columns
         self.plots_layout.addWidget(plot_widget, row, col)
         self.plot_widgets.append(plot_widget)
         self.plots_container.update()
-        self.resample_box(silent=True)
+        if do_resample:
+            self.resample_box(silent=True)
         
     def remove_plot(self, plot_widget):
         if plot_widget in self.plot_widgets:
@@ -3296,8 +3365,8 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                 item = self.plots_layout.takeAt(0)
             
             for i, widget in enumerate(self.plot_widgets):
-                row = i // 2
-                col = i % 2
+                row = i // self.plot_columns
+                col = i % self.plot_columns
                 self.plots_layout.addWidget(widget, row, col)
             
             self.plots_container.update()
@@ -4099,6 +4168,8 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                      has_objectives = any(qoi.get('minimize', False) or qoi.get('maximize', False) 
                                         for qoi in self.problem.quantities_of_interest)
                      self.btn_compute_family.setEnabled(True)
+                     # Restoring a saved project: show its samples.
+                     self._has_sampled = True
                      self.resample_box(silent=True)
                      
             except Exception as e:

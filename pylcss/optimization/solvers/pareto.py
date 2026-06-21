@@ -37,7 +37,7 @@ class ParetoSolver(BaseSolver):
         Otherwise falls back to weighted-sum approach.
         """
         method = self.settings.get("pareto_method", "nsga2")
-        n_objectives = len(evaluator.objectives)
+        n_objectives = len(evaluator.objs)
 
         if n_objectives <= 1 or method == "weighted_sum":
             return self._solve_weighted_sum(evaluator, x0, callback)
@@ -50,15 +50,34 @@ class ParetoSolver(BaseSolver):
         
         Reference: Deb et al. (2002)
         """
-        pop_size = self.settings.get("population_size", 100)
-        n_gen = self.settings.get("max_generations", 200)
-        crossover_prob = self.settings.get("crossover_prob", 0.9)
-        mutation_prob = self.settings.get("mutation_prob", 0.1)
-        eta_c = self.settings.get("eta_crossover", 20)  # SBX distribution index
-        eta_m = self.settings.get("eta_mutation", 20)  # polynomial mutation index
+        pop_size = int(self.settings.get("nsga_popsize", 100))
+        n_gen = int(self.settings.get("nsga_generations", 200))
+        crossover_prob = float(self.settings.get("nsga_crossover_prob", 0.9))
+        eta_c = float(self.settings.get("nsga_eta_c", 20.0))  # SBX distribution index
+        eta_m = float(self.settings.get("nsga_eta_m", 20.0))  # polynomial mutation index
 
-        n_vars = len(evaluator.variables)
-        n_obj = len(evaluator.objectives)
+        n_vars = len(evaluator.vars)
+        n_obj = len(evaluator.objs)
+
+        # Mutation probability defaults to the standard 1/n_vars heuristic.
+        mutation_prob = self.settings.get("nsga_mutation_prob", None)
+        mutation_prob = float(mutation_prob) if mutation_prob else 1.0 / max(1, n_vars)
+
+        # SBX crossover, polynomial mutation and the LHS seeding all operate on a
+        # normalized unit hypercube, so NSGA-II needs finite box bounds and must
+        # run with scaling enabled regardless of the global scaling preference.
+        lowers = np.array([v.min_val for v in evaluator.vars], dtype=float)
+        uppers = np.array([v.max_val for v in evaluator.vars], dtype=float)
+        if not (np.all(np.isfinite(lowers)) and np.all(np.isfinite(uppers))):
+            return OptimizationResult(
+                x=np.asarray(x0, dtype=float), cost=float("inf"),
+                objectives={}, constraints={}, max_violation=float("inf"),
+                message="NSGA-II requires finite lower and upper bounds on every variable.",
+                success=False,
+            )
+
+        original_scaling = evaluator.scaling
+        evaluator.scaling = True
 
         # Initialize population
         population = self._initialize_population(evaluator, x0, pop_size, n_vars)
@@ -69,7 +88,7 @@ class ParetoSolver(BaseSolver):
         for i in range(pop_size):
             cost, results, viol = evaluator.evaluate(population[i])
             pop_objectives[i] = self._extract_objectives(results, evaluator)
-            pop_violations[i] = viol
+            pop_violations[i] = evaluator.solve_violation(results)
 
         best_front = []
         start_time = time.time()
@@ -90,7 +109,7 @@ class ParetoSolver(BaseSolver):
             for i in range(pop_size):
                 cost, results, viol = evaluator.evaluate(offspring[i])
                 off_objectives[i] = self._extract_objectives(results, evaluator)
-                off_violations[i] = viol
+                off_violations[i] = evaluator.solve_violation(results)
 
             # Combined population
             combined_pop = np.vstack([population, offspring])
@@ -110,41 +129,38 @@ class ParetoSolver(BaseSolver):
             best_front = [(combined_pop[i], combined_obj[i]) for i in front_0
                          if combined_viol[i] <= 1e-6]
 
-            # Callback
+            # Callback. The worker's callback expects positional args
+            # (x_normalized, cost, raw_results, violation), so mirror that.
             if callback and gen % 5 == 0:
                 best_idx = front_0[0] if front_0 else 0
-                callback({
-                    "iteration": gen,
-                    "x": combined_pop[best_idx],
-                    "cost": float(np.min(combined_obj[front_0, 0])) if front_0 else 0,
-                    "max_violation": float(np.min(combined_viol)),
-                    "pareto_front_size": len(best_front),
-                    "results": {},
-                })
+                bx = combined_pop[best_idx]
+                _, braw, bviol = evaluator.evaluate(bx)
+                callback(bx, self._weighted_objective(braw, evaluator), braw, bviol)
 
-        # Build result from best feasible solution
+        # Build result from best feasible solution (or least-infeasible fallback)
         if best_front:
-            best_x, best_obj = best_front[0]
-            cost, results, viol = evaluator.evaluate(best_x)
-            x_phys = evaluator.to_physical(best_x)
+            best_x, _ = best_front[0]
         else:
-            # Fallback to best feasible point
             feasible = pop_violations < 1e-6
             if np.any(feasible):
-                best_idx = np.argmin(pop_objectives[feasible, 0])
                 feas_indices = np.where(feasible)[0]
-                best_x = population[feas_indices[best_idx]]
+                best_local = np.argmin(pop_objectives[feasible, 0])
+                best_x = population[feas_indices[best_local]]
             else:
-                best_idx = np.argmin(pop_violations)
-                best_x = population[best_idx]
-            cost, results, viol = evaluator.evaluate(best_x)
-            x_phys = evaluator.to_physical(best_x)
+                best_x = population[np.argmin(pop_violations)]
+
+        cost, results, viol = evaluator.evaluate(best_x)
+        x_phys = evaluator.to_physical(best_x)
+        evaluator.scaling = original_scaling
+
+        objectives = {obj.name: results.get(obj.name, 0.0) for obj in evaluator.objs}
+        constraints = {con.name: results.get(con.name, 0.0) for con in evaluator.cons}
 
         return OptimizationResult(
             x=x_phys,
-            cost=cost,
-            objectives=results,
-            constraints=results,
+            cost=self._weighted_objective(results, evaluator),
+            objectives=objectives,
+            constraints=constraints,
             max_violation=viol,
             message=f"NSGA-II completed ({len(best_front)} Pareto solutions)",
             success=viol <= 1e-6,
@@ -165,10 +181,20 @@ class ParetoSolver(BaseSolver):
 
         return np.clip(population, 0, 1)
 
+    @staticmethod
+    def _weighted_objective(raw, evaluator):
+        """Signed, weighted sum of the raw objective values (display/cost scalar)."""
+        total = 0.0
+        for obj in evaluator.objs:
+            val = raw.get(obj.name, 0.0)
+            sign = 1.0 if obj.minimize else -1.0
+            total += sign * obj.weight * val
+        return total
+
     def _extract_objectives(self, results, evaluator):
         """Extract objective values from evaluation results."""
         obj_values = []
-        for obj in evaluator.objectives:
+        for obj in evaluator.objs:
             val = results.get(obj.name, 0.0)
             if isinstance(val, (list, np.ndarray)):
                 val = float(np.mean(val))
@@ -332,7 +358,7 @@ class ParetoSolver(BaseSolver):
     def _solve_weighted_sum(self, evaluator, x0, callback=None):
         """Multi-start weighted-sum scalarization for Pareto approximation."""
         n_points = self.settings.get("pareto_points", 11)
-        n_obj = len(evaluator.objectives)
+        n_obj = len(evaluator.objs)
 
         if n_obj < 2:
             n_points = 1
@@ -349,6 +375,9 @@ class ParetoSolver(BaseSolver):
                 break
 
             settings = dict(self.settings)
+            # ScipySolver feeds settings["method"] straight to scipy.optimize;
+            # it must be a real method name, not "NSGA-II".
+            settings["method"] = settings.get("ms_local_solver", "SLSQP")
             settings["objective_weights"] = weights.tolist()
             solver = ScipySolver(settings)
 
@@ -395,28 +424,42 @@ class MultiStartSolver(BaseSolver):
     """
 
     def solve(self, evaluator, x0, callback=None):
-        n_starts = self.settings.get("n_starts", 10)
-        n_vars = len(evaluator.variables)
-        method = self.settings.get("method", "SLSQP")
+        n_starts = int(self.settings.get("ms_n_starts", 10))
+        n_vars = len(evaluator.vars)
+        local_method = self.settings.get("ms_local_solver", "SLSQP")
 
         from pylcss.optimization.solvers.factory import get_solver
         from scipy.stats.qmc import LatinHypercube
 
-        # Generate starting points via LHS
-        sampler = LatinHypercube(d=n_vars, seed=42)
-        starts = sampler.random(n=n_starts - 1)
-        # Add user's x0
-        x0_norm = evaluator.to_normalized(x0)
-        all_starts = np.vstack([x0_norm.reshape(1, -1), starts])
+        # Local runs need a real scipy method name, not "Multi-Start", or
+        # get_solver() would recurse straight back into this solver.
+        sub_settings = dict(self.settings)
+        sub_settings["method"] = local_method
+
+        # Build starting points directly in PHYSICAL space so this works
+        # regardless of the scaling preference. x0 is always the first start.
+        lowers = np.array([v.min_val for v in evaluator.vars], dtype=float)
+        uppers = np.array([v.max_val for v in evaluator.vars], dtype=float)
+        finite = np.isfinite(lowers) & np.isfinite(uppers)
+
+        x0 = np.asarray(x0, dtype=float)
+        starts = [x0]
+        if n_starts > 1:
+            unit = LatinHypercube(d=n_vars, seed=42).random(n=n_starts - 1)
+            for row in unit:
+                pt = x0.copy()
+                pt[finite] = lowers[finite] + row[finite] * (uppers[finite] - lowers[finite])
+                # Unbounded variables jitter around x0 so the starts still differ.
+                pt[~finite] = x0[~finite] + (row[~finite] - 0.5)
+                starts.append(pt)
 
         best_result = None
-        for i, start in enumerate(all_starts):
+        for i, x_start in enumerate(starts):
             if self.stop_requested:
                 break
 
-            x_start = evaluator.to_physical(start)
             try:
-                sub_solver = get_solver(method, self.settings)
+                sub_solver = get_solver(local_method, sub_settings)
                 result = sub_solver.solve(evaluator, x_start, callback=callback)
                 if best_result is None or (
                     result.max_violation <= 1e-6
