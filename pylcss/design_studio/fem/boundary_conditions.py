@@ -92,6 +92,9 @@ class ConstraintNode(CadQueryNode):
         self.create_property('condition', '', widget_type='text')
 
     def run(self):
+        from pylcss.solver_backends.common import as_bool
+
+        self.clear_error()
         mesh = self.get_input_value('mesh', None)
         target_wp = self.get_input_value('target_face', None)
         constraint_type = self.get_property('constraint_type')
@@ -105,15 +108,22 @@ class ConstraintNode(CadQueryNode):
             return None
 
         # Get displacement values
-        disp_x = float(self.get_property('displacement_x'))
-        disp_y = float(self.get_property('displacement_y'))
-        disp_z = float(self.get_property('displacement_z'))
+        try:
+            disp_x = float(self.get_property('displacement_x'))
+            disp_y = float(self.get_property('displacement_y'))
+            disp_z = float(self.get_property('displacement_z'))
+        except (TypeError, ValueError):
+            self.set_error("Prescribed displacement values must be numeric.")
+            return None
+        if not np.all(np.isfinite([disp_x, disp_y, disp_z])):
+            self.set_error("Prescribed displacement values must be finite.")
+            return None
 
         # Map constraint type to DOF constraints
         disp_enabled = [
-            bool(self.get_property('displacement_x_enabled')),
-            bool(self.get_property('displacement_y_enabled')),
-            bool(self.get_property('displacement_z_enabled')),
+            as_bool(self.get_property('displacement_x_enabled')),
+            as_bool(self.get_property('displacement_y_enabled')),
+            as_bool(self.get_property('displacement_z_enabled')),
         ]
         prescribed_dofs = [idx for idx, enabled in enumerate(disp_enabled) if enabled]
         if constraint_type == 'Displacement' and not prescribed_dofs:
@@ -200,7 +210,6 @@ class ConstraintNode(CadQueryNode):
             }
 
         except Exception as e:
-            print(f"DEBUG ConstraintNode ({self.NODE_NAME}): ERROR during run: {e}")
             self.set_error(f"Constraint setup failed: {e}")
             return None
 
@@ -235,16 +244,17 @@ class LoadNode(CadQueryNode):
         self.create_property('force_x', 0.0, widget_type='float')
         self.create_property('force_y', 0.0, widget_type='float')
         self.create_property('force_z', 0.0, widget_type='float')
+        # Hidden compatibility fields. Moment loads were never implemented.
         self.create_property('moment_x', 0.0, widget_type='float')
         self.create_property('moment_y', 0.0, widget_type='float')
         self.create_property('moment_z', 0.0, widget_type='float')
-
         # Gravity parameters
         self.create_property('gravity_accel', 9810.0, widget_type='float')
         self.create_property('gravity_direction', '-Y', widget_type='combo',
                              items=['-Y', '-Z', '-X', '+Y', '+Z', '+X'])
 
     def run(self):
+        self.clear_error()
         mesh = self.get_input_value('mesh', None)
         target_wp = self.get_input_value('target_face', None)  # Not used for Gravity
 
@@ -262,9 +272,13 @@ class LoadNode(CadQueryNode):
 
         # ── Gravity body force: no face needed — acts on the whole body ──────────
         if load_type == 'Gravity':
+            accel = float(self.get_property('gravity_accel'))
+            if not np.isfinite(accel) or accel <= 0.0:
+                self.set_error("Gravity acceleration must be a finite value greater than zero.")
+                return None
             return {
                 'type':      'gravity',
-                'accel':     float(self.get_property('gravity_accel')),
+                'accel':     accel,
                 'direction': self.get_property('gravity_direction'),
                 # Pre-solve viz: gravity uses a global body-force icon, no face
                 'viz': {'load_type': 'Gravity', 'direction': self.get_property('gravity_direction')},
@@ -275,6 +289,15 @@ class LoadNode(CadQueryNode):
         # inside SolverNode.  LoadNode routes the face geometry and pressure value;
         # SolverNode assembles the proper Neumann BC via FacetBasis.
 
+        try:
+            force_vec = np.asarray([fx, fy, fz], dtype=float)
+        except (TypeError, ValueError):
+            self.set_error("Force components must be numeric.")
+            return None
+        if not np.all(np.isfinite(force_vec)) or float(np.linalg.norm(force_vec)) <= 1e-12:
+            self.set_error("Force must contain a finite, non-zero component.")
+            return None
+
         # ── Force (default) ────────────────────────────────────────────────────
         # If no face input provided, use fallback string condition
         if target_wp is None:
@@ -284,7 +307,7 @@ class LoadNode(CadQueryNode):
             return {
                 'type': 'force',
                 'condition': fallback_condition,
-                'vector': [float(fx), float(fy), float(fz)],
+                'vector': force_vec.tolist(),
                 'viz': None,
             }
 
@@ -296,7 +319,7 @@ class LoadNode(CadQueryNode):
                 self.set_error("No faces found in target face input")
                 return None
 
-            force_vec = [float(fx), float(fy), float(fz)]
+            force_vec = force_vec.tolist()
             force_mag = float(np.linalg.norm(force_vec))
 
             # Build per-face bbox for pre-solve force arrow overlay
@@ -347,6 +370,7 @@ class PressureLoadNode(CadQueryNode):
         self.create_property('direction', 'Inward', widget_type='combo', items=['Inward', 'Outward'])
 
     def run(self):
+        self.clear_error()
         mesh = self.get_input_value('mesh', None)
         target_wp = self.get_input_value('target_face', None)
         pressure = self.get_input_value('pressure', 'pressure')
@@ -356,6 +380,14 @@ class PressureLoadNode(CadQueryNode):
             return None
         if target_wp is None:
             self.set_error("Connect a selected target face to the pressure-load node.")
+            return None
+        try:
+            pressure = float(pressure)
+        except (TypeError, ValueError):
+            self.set_error("Pressure magnitude must be numeric.")
+            return None
+        if not np.isfinite(pressure) or pressure <= 0.0:
+            self.set_error("Pressure magnitude must be a finite value greater than zero.")
             return None
 
         try:
@@ -376,7 +408,7 @@ class PressureLoadNode(CadQueryNode):
                 'type': 'pressure',
                 'geometries': face_objs,   # all selected faces (may be multiple)
                 'geometry': face_objs[0],  # kept for backward compatibility
-                'pressure': float(pressure) * sign,
+                'pressure': pressure * sign,
                 'viz': {
                     'load_type': 'Pressure',
                     'bbox': _selection_bbox(face_objs[0]),
@@ -387,5 +419,3 @@ class PressureLoadNode(CadQueryNode):
         except Exception as e:
             self.set_error(f"Pressure load setup failed: {e}")
             return None
-
-

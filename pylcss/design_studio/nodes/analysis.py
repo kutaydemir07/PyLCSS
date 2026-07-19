@@ -1,7 +1,8 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-import cadquery as cq
+import math
+
 from pylcss.design_studio.core.base_node import CadQueryNode
 
 class MassPropertiesNode(CadQueryNode):
@@ -17,12 +18,17 @@ class MassPropertiesNode(CadQueryNode):
         self.create_property('density', 7.85e-9, widget_type='float')  # Steel tonne/mm^3
 
     def run(self):
+        self.clear_error()
         shape = self.get_input_shape('shape')
             
         if shape is None:
+            self.set_error("Connect a CAD shape to Mass Properties.")
             return None
         
-        density = self.get_property('density')
+        density = float(self.get_property('density'))
+        if not math.isfinite(density) or density <= 0.0:
+            self.set_error("Density must be finite and greater than zero.")
+            return None
         
         try:
             # Handle Workplane vs value
@@ -40,7 +46,7 @@ class MassPropertiesNode(CadQueryNode):
             try:
                 com = solid.Center()
                 center = (com.x, com.y, com.z)
-            except:
+            except Exception:
                 bb = solid.BoundingBox()
                 center = (bb.center.x, bb.center.y, bb.center.z)
             
@@ -68,8 +74,10 @@ class BoundingBoxNode(CadQueryNode):
         self.add_output('dimensions', color=(255, 200, 100))
 
     def run(self):
+        self.clear_error()
         shape = self.get_input_shape('shape')
         if shape is None:
+            self.set_error("Connect a CAD shape to Bounding Box.")
             return None
         
         try:

@@ -27,6 +27,7 @@ FreeCADCmd invocation (~1-2 s on a small model).
 from __future__ import annotations
 
 import logging
+import math
 import os
 import subprocess
 import tempfile
@@ -73,18 +74,24 @@ for obj in list(doc.Objects):
         # ``sheet.set("<cell>", "<expr>")`` requires knowing the cell
         # address; we look that up by scanning until ``getAlias`` matches.
         cell = None
-        for column in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-            for row in range(1, 200):
-                addr = "{{}}{{}}".format(column, row)
-                try:
-                    cur_alias = obj.getAlias(addr)
-                except Exception:
-                    cur_alias = None
-                if cur_alias == alias:
-                    cell = addr
+        try:
+            cell = obj.getCellFromAlias(alias)
+        except Exception:
+            cell = None
+        if not cell:
+            # Compatibility fallback for older FreeCAD Spreadsheet builds.
+            for column in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                for row in range(1, 500):
+                    addr = "{{}}{{}}".format(column, row)
+                    try:
+                        cur_alias = obj.getAlias(addr)
+                    except Exception:
+                        cur_alias = None
+                    if cur_alias == alias:
+                        cell = addr
+                        break
+                if cell is not None:
                     break
-            if cell is not None:
-                break
         if cell is None:
             continue
         try:
@@ -126,8 +133,8 @@ def write_parameters_to_fcstd(
     """Push ``params`` into the spreadsheet of ``fcstd_path`` + save.
 
     Returns True on a clean run (rc=0).  Logs at WARNING when FreeCADCmd
-    is missing or the headless run fails; callers should treat False as
-    "geometry not updated -- fall back to the last saved BREP".
+    is missing or the headless run fails.  Callers must not use stale geometry
+    after False because it no longer represents the requested parameters.
     """
     if not params:
         return True
@@ -142,6 +149,14 @@ def write_parameters_to_fcstd(
             "Run scripts/install_solvers.py --only freecad.",
             fcstd_path.name,
         )
+        return False
+
+    # FreeCADCmd loads Init.py (not the GUI-only InitGui.py). Ensure the Mod is
+    # installed here as well as in the GUI launcher so headless optimization
+    # always refreshes the sibling BREP and sidecar.
+    from pylcss.design_studio.freecad_bridge.mod_installer import install_pylcss_mod
+    if not install_pylcss_mod():
+        logger.warning("PyLCSS FreeCAD auto-export Mod could not be installed.")
         return False
 
     script = _SCRIPT.format(
@@ -215,7 +230,9 @@ def collect_param_values_from_node(node, max_slots: int = 8) -> Dict[str, float]
         if raw is None or raw == "":
             continue
         try:
-            out[name] = float(raw)
+            value = float(raw)
         except (TypeError, ValueError):
             continue
+        if math.isfinite(value):
+            out[name] = value
     return out

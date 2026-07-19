@@ -116,7 +116,13 @@ class CadQueryCodeNode(CadQueryNode):
             if not _PARAM_NAME_RE.match(name):
                 raise ValueError(f"Invalid parameter name: {name!r}.")
             fallback = self.get_property(f"param_{idx}_value")
-            params[name] = resolve_numeric_input(self.get_input(f"param_{idx}"), fallback)
+            value = resolve_numeric_input(self.get_input(f"param_{idx}"), fallback)
+            if value is None:
+                raise ValueError(f"Connected parameter {name!r} did not produce a number.")
+            value = float(value)
+            if not math.isfinite(value):
+                raise ValueError(f"Parameter {name!r} must be finite.")
+            params[name] = value
 
         params.update(_parse_parameter_text(str(self.get_property("parameters") or "")))
         return params

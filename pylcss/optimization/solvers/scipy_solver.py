@@ -1,10 +1,8 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-from scipy.optimize import minimize, NonlinearConstraint
+from scipy.optimize import minimize
 import numpy as np
-import warnings
-import time
 from .base import BaseSolver
 from ..core import OptimizationResult
 
@@ -14,14 +12,13 @@ class ScipySolver(BaseSolver):
         method = self.settings.get('method', 'SLSQP')
         maxiter = int(self.settings.get('maxiter', 1000))
         tol = float(self.settings.get('tol', 1e-6))
-        atol = float(self.settings.get('atol', 1e-8))
+        float(self.settings.get('atol', 1e-8))
         
         # Constrained methods list
         constrained_methods = ['SLSQP', 'COBYLA', 'trust-constr']
         supports_constraints = method in constrained_methods
         
         # Safe cap constant
-        MAX_COST = 1e15
 
         # Track best solution
         best_cost = float('inf')

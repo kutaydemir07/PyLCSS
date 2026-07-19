@@ -30,7 +30,6 @@ from pylcss.design_studio.core.base_node import (
     CadQueryNode, is_numeric, is_shape,
     resolve_numeric_input, resolve_shape_input,
 )
-from pylcss.design_studio.core.registry import NODE_REGISTRY, register_node
 
 # Geometry — code-first.
 from pylcss.design_studio.nodes.code_part import CadQueryCodeNode
@@ -71,7 +70,7 @@ from pylcss.design_studio.nodes.advanced import (
 
 __all__ = [
     # Core
-    "CadQueryNode", "NODE_REGISTRY", "register_node",
+    "CadQueryNode",
     "is_numeric", "is_shape", "resolve_numeric_input", "resolve_shape_input",
 
     # Code-first geometry

@@ -10,11 +10,11 @@ named selections / FEM loads, saves, and the saved geometry round-trips
 back into the PyLCSS node graph through a sibling ``.brep`` + sidecar
 ``.fcmeta.json``.
 
-POC scope
----------
+Integration scope
+-----------------
 - `run()` returns the consolidated ``cadquery.Shape`` read from the BREP, so
   downstream PyLCSS nodes (assemblies, FEA mesh / constraint / load, export)
-  see a normal CadQuery shape.  Returns ``None`` (with a clear log) when the
+  see a normal CadQuery shape.  Returns ``None`` (with a node error) when the
   user hasn't saved in FreeCAD yet.
 - `open_in_freecad()` launches the subprocess on the node-owned .FCStd.  UI
   code (cad_widget context menu / double-click) wires the user gesture to
@@ -24,10 +24,9 @@ Parameters surface
 ------------------
 The FreeCAD startup macro reads any Spreadsheet aliases in the document and
 writes them into the sidecar.  When this node sees those, it auto-creates
-matching `param_<i>_name` / `param_<i>_value` properties so the existing
-optimizer + sensitivity layers can drive them exactly like they drive
-CadQueryCodeNode params.  Out-of-scope for the POC: pushing PyLCSS-side
-parameter changes back into FreeCAD (one-way for now).
+matching `param_<i>_name` / `param_<i>_value` properties.  PyLCSS-side changes
+are pushed through FreeCADCmd, while changes saved from the FreeCAD GUI are
+pulled back without overwriting them with stale graph values.
 """
 
 from __future__ import annotations
@@ -98,6 +97,16 @@ class FreeCadPartNode(CadQueryNode):
             short_id = raw_id.replace("0x", "").lstrip("0")[-8:] or "x"
             name = f"{safe_display}_{short_id}.FCStd"
             self.set_property("fcstd_filename", name)
+        else:
+            # Saved graph data is untrusted input.  Keep the file node-owned:
+            # no absolute paths or ``..`` segments may escape data_freecad.
+            stem = Path(str(name)).stem
+            safe_stem = "".join(c if c.isalnum() or c in "-_" else "_" for c in stem)
+            safe_stem = safe_stem.strip("_") or "FreeCAD_Part"
+            safe_name = f"{safe_stem}.FCStd"
+            if str(name) != safe_name:
+                name = safe_name
+                self.set_property("fcstd_filename", name)
         return freecad_data_dir() / name
 
     def open_in_freecad(self, parent_qobject: Optional[Any] = None) -> bool:
@@ -134,8 +143,8 @@ class FreeCadPartNode(CadQueryNode):
         Spreadsheet first, recompute + save -- the Mod observer then
         emits a fresh BREP + sidecar we re-read here.
 
-        Returns ``None`` (without raising) when the user hasn't saved a
-        geometry yet, matching the rest of PyLCSS's lazy-graph semantics.
+        Returns ``None`` with an actionable node error when no saved geometry
+        is available or when a parameter update cannot be materialised.
         """
         from pylcss.design_studio.freecad_bridge.brep_reader import read_brep_from_fcstd
         from pylcss.design_studio.freecad_bridge.param_writer import (
@@ -144,38 +153,73 @@ class FreeCadPartNode(CadQueryNode):
 
         target = self.fcstd_path()
 
-        # Push optimizer-driven parameter changes back into FreeCAD before
-        # we read.  We only push when:
-        #   - the .FCStd already exists (no point pushing into a blank file)
-        #   - the user has populated at least one named slot
-        #   - the current slot values differ from what we last applied
-        if target.is_file():
-            current = collect_param_values_from_node(self, max_slots=self.MAX_PARAMS)
-            last = getattr(self, "_last_applied_params", None)
-            if current and current != last:
-                ok = write_parameters_to_fcstd(target, current)
-                if ok:
-                    self._last_applied_params = dict(current)
-                else:
-                    logger.info(
-                        "FreeCadPartNode(%s): param push failed; using last saved BREP.",
-                        self.name(),
-                    )
-
         imported = read_brep_from_fcstd(target)
         if imported is None or imported.shape is None:
-            logger.debug(
-                "FreeCadPartNode(%s): no BREP yet at %s -- open in FreeCAD + save.",
-                self.name(), target.name,
+            self.set_error(
+                f"No exported FreeCAD geometry is available for {target.name}. "
+                "Open this node in FreeCAD, create a body, and save the document."
             )
             return None
 
+        disk = collect_param_values_from_mapping(imported.parameters)
+        current = collect_param_values_from_node(self, max_slots=self.MAX_PARAMS)
+        if current and hasattr(imported, "sidecar") and not imported.sidecar:
+            self.set_error(
+                "FreeCAD parameter metadata is missing; refusing to apply node values "
+                "to unverifiable spreadsheet aliases. Open FreeCAD and save again."
+            )
+            return None
+        last = getattr(self, "_last_applied_params", None)
+        forced = bool(getattr(self, "_parameter_override_pending", False))
+
+        # First read establishes FreeCAD as the source of truth.  Runtime/API
+        # overrides explicitly mark themselves pending and are the exception.
+        if last is None and not forced:
+            if disk:
+                self._sync_parameter_properties(disk)
+                current = dict(disk)
+            last = dict(current)
+
+        local_changed = current != last
+        disk_changed = disk != last
+        if local_changed and disk_changed and current != disk and not forced:
+            self.set_error(
+                "FreeCAD parameters changed both in PyLCSS and on disk. "
+                "Run once after reloading the FreeCAD save, then reapply the PyLCSS edit."
+            )
+            return None
+
+        if current and (forced or local_changed):
+            if not write_parameters_to_fcstd(target, current):
+                self.set_error(
+                    "FreeCAD parameter update failed; stale geometry was not used. "
+                    "Check FreeCADCmd and the spreadsheet aliases."
+                )
+                return None
+            imported = read_brep_from_fcstd(target)
+            if imported is None or imported.shape is None:
+                self.set_error("FreeCAD saved the parameters but did not export a readable BREP.")
+                return None
+            written = collect_param_values_from_mapping(imported.parameters)
+            mismatched = [
+                key for key, value in current.items()
+                if key not in written or abs(written[key] - value) > 1e-9 * max(1.0, abs(value))
+            ]
+            if mismatched:
+                self.set_error(
+                    "FreeCAD did not confirm updated spreadsheet aliases: "
+                    + ", ".join(mismatched)
+                )
+                return None
+            disk = written
+        elif disk_changed and current == last:
+            # The FreeCAD GUI was edited since our previous graph execution.
+            self._sync_parameter_properties(disk)
+
         self._last_imported = imported
-        # Only seed properties from the .FCStd when nothing has been
-        # pushed yet -- otherwise the optimizer's pending value would be
-        # silently overwritten by the disk version on every execute.
-        if not getattr(self, "_last_applied_params", None):
-            self._sync_parameter_properties(imported.parameters)
+        self._last_applied_params = dict(disk or current)
+        self._parameter_override_pending = False
+        self.clear_error()
         return imported.shape
 
     # ------------------------------------------------------------------
@@ -186,9 +230,8 @@ class FreeCadPartNode(CadQueryNode):
         property slots so PyLCSS's existing parametric machinery can edit
         them through the normal property panel.
 
-        Only fills empty slots; never silently overwrites a value the user
-        already set.  Out-of-scope for the POC: pushing updated values back
-        into the FreeCAD spreadsheet.
+        Existing slots are updated as well: this method is only called after
+        conflict resolution has established that the FreeCAD save should win.
         """
         for slot, (name, value) in enumerate(fc_params.items(), start=1):
             if slot > self.MAX_PARAMS:
@@ -202,5 +245,22 @@ class FreeCadPartNode(CadQueryNode):
                     self.set_property(name_prop, name)
                 if not self.has_property(val_prop):
                     self.create_property(val_prop, float(value), widget_type="float")
+                else:
+                    self.set_property(val_prop, float(value))
             except Exception:
                 logger.debug("Param slot %d sync failed", slot, exc_info=True)
+
+
+def collect_param_values_from_mapping(values: dict) -> dict[str, float]:
+    """Normalize finite sidecar parameters for comparison and verification."""
+    import math
+
+    result: dict[str, float] = {}
+    for name, raw in dict(values or {}).items():
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if str(name).strip() and math.isfinite(value):
+            result[str(name).strip()] = value
+    return result

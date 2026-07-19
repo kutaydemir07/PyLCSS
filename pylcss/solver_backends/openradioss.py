@@ -922,6 +922,7 @@ def run_openradioss_existing_deck(
             extra_path_dirs=path_dirs,
             extra_env=env_extra,
             stdout_file=work_dir / "_pylcss_starter.log",
+            cancel_callback=config.cancel_callback,
         )
         print(f"OpenRadioss Starter: completed in {_time.time() - _t0:.1f}s "
               f"(exit={proc.returncode}).")
@@ -982,6 +983,7 @@ def run_openradioss_existing_deck(
         extra_path_dirs=path_dirs,
         extra_env=env_extra,
         stdout_file=work_dir / "_pylcss_engine.log",
+        cancel_callback=config.cancel_callback,
     )
     print(f"OpenRadioss Engine: completed in {_time.time() - _t0:.1f}s "
           f"(exit={proc_eng.returncode}).")
@@ -1416,6 +1418,7 @@ def run_openradioss_crash(
                 # which overflows Windows' 4 KB pipe buffer and deadlocks
                 # the subprocess on long runs.
                 stdout_file=work_dir / "_pylcss_starter.log",
+                cancel_callback=config.cancel_callback,
             )
             print(f"OpenRadioss Starter: completed in {_time.time() - _t0:.1f}s "
                   f"(exit={proc.returncode}).")
@@ -1453,6 +1456,7 @@ def run_openradioss_crash(
                     extra_path_dirs=path_dirs,
                     extra_env=env_extra,
                     stdout_file=work_dir / "_pylcss_engine.log",
+                    cancel_callback=config.cancel_callback,
                 )
                 print(f"OpenRadioss Engine: completed in {_time.time() - _t0:.1f}s "
                       f"(exit={proc_eng.returncode}).")

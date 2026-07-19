@@ -38,7 +38,7 @@ PydanticAgentRunner (next file) wires this adapter into a real
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Type
 
 from pydantic import BaseModel, Field, ValidationError, create_model
 

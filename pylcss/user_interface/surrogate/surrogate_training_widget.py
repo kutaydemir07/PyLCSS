@@ -14,7 +14,7 @@ import joblib
 import pyqtgraph as pg
 import qtawesome as qta
 from pylcss.surrogate_modeling.training_engine import SurrogateTrainer, SKLEARN_AVAILABLE, TORCH_AVAILABLE
-from pylcss.surrogate_modeling.validation import CrossValidator, HyperparameterOptimizer, FeatureImportanceAnalyzer, ModelComparator
+from pylcss.surrogate_modeling.validation import CrossValidator, FeatureImportanceAnalyzer, ModelComparator
 from pylcss.system_modeling.model_builder import GraphBuilder
 import os
 import time
@@ -918,11 +918,11 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         idx = self.combo_nodes.currentIndex()
         if idx < 0:
             raise RuntimeError("No target node selected.")
-        target_node = self.combo_nodes.itemData(idx)
+        self.combo_nodes.itemData(idx)
         graph = self.modeling_widget.current_graph
         nodes = graph.all_nodes()
         input_nodes = [n for n in nodes if n.type_.startswith('com.pfd.input')]
-        output_nodes = [n for n in nodes if n.type_.startswith('com.pfd.output')]
+        [n for n in nodes if n.type_.startswith('com.pfd.output')]
 
         # For geometric surrogates we need (parameter_name -> bounds) pairs
         # that match the CAD graph's exposed inputs -- these are the global
@@ -966,7 +966,6 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, "Error", "No node selected.")
             return
             
-        import os
         target_node = self.combo_nodes.itemData(idx)
         config = self.get_config()
         config['debug_mode'] = True
@@ -1833,7 +1832,7 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
             self.spin_batch_size.setValue(data.get('pytorch_batch', 32))
             self.txt_hidden_layers.setText(data.get('pytorch_layers', '64, 64'))
             
-        except Exception as e:
+        except Exception:
             logger.exception("Failed to load surrogate settings")
 
 # Worker Thread class to bridge GUI and Engine
@@ -2060,7 +2059,7 @@ class AdaptiveTrainingWorker(QtCore.QThread):
 
                 results.append(result)
 
-            except Exception as e:
+            except Exception:
                 # If evaluation fails, use a fallback (could be improved)
                 if len(self.spy_outputs) == 1:
                     results.append(0.0)

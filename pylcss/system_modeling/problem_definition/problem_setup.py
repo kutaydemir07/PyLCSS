@@ -3,7 +3,7 @@
 
 import numpy as np
 import scipy.io
-from typing import List, Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Union
 import logging
 
 logger = logging.getLogger(__name__)
@@ -214,7 +214,7 @@ class XRayProblem:
             qty = self.ureg.Quantity(value, from_unit)
             converted = qty.to(to_unit)
             return converted.magnitude
-        except Exception as e:
+        except Exception:
             logger.warning("Unit conversion failed; returning original value", exc_info=True)
             return value
 
@@ -245,5 +245,5 @@ class XRayProblem:
         try:
             scipy.io.savemat(filename, data)
             logger.info("Exported XRay data to %s", filename)
-        except Exception as e:
+        except Exception:
             logger.exception("Failed to export .mat file: %s", filename)

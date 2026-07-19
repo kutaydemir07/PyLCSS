@@ -45,6 +45,9 @@ class RemeshNode(CadQueryNode):
 
     def run(self):
         """Convert recovered shape to volumetric mesh."""
+        from pylcss.solver_backends.common import as_bool
+
+        self.clear_error()
         topopt_result = self.get_input_value('topopt_result', None)
         
         if topopt_result is None:
@@ -82,7 +85,14 @@ class RemeshNode(CadQueryNode):
         
         logger.info(f"RemeshNode: Processing surface with {len(vertices)} vertices, {len(faces)} faces")
         
-        element_size = self.get_property('element_size')
+        try:
+            element_size = float(self.get_property('element_size'))
+        except (TypeError, ValueError):
+            self.set_error("Remesh element size must be numeric.")
+            return None
+        if not np.isfinite(element_size) or element_size <= 0.0:
+            self.set_error("Remesh element size must be finite and greater than zero.")
+            return None
         quality = self.get_property('mesh_quality')
         
         # Adjust element size based on quality setting
@@ -157,7 +167,7 @@ class RemeshNode(CadQueryNode):
                     'source': 'stl_surface',
                 }
 
-            if bool(self.get_property('allow_voxel_fallback')):
+            if as_bool(self.get_property('allow_voxel_fallback')):
                 mesh = self._remesh_via_voxel_fill(vertices, faces, effective_size)
                 if mesh is not None:
                     logger.info(
@@ -214,13 +224,15 @@ class RemeshNode(CadQueryNode):
             if len(verts) < 4 or len(tris) < 4:
                 return None
 
+            from pylcss.solver_backends.common import as_bool
+
             surface = trimesh.Trimesh(
                 vertices=verts[:, :3],
                 faces=tris[:, :3],
-                process=bool(self.get_property('repair_surface')),
+                process=as_bool(self.get_property('repair_surface')),
             )
             self._cleanup_surface(surface)
-            if bool(self.get_property('close_holes')):
+            if as_bool(self.get_property('close_holes')):
                 try:
                     trimesh.repair.fill_holes(surface)
                 except Exception:
@@ -266,7 +278,7 @@ class RemeshNode(CadQueryNode):
                         if simplified is None or len(simplified.faces) < 4:
                             continue
                         self._cleanup_surface(simplified)
-                        if bool(self.get_property('close_holes')):
+                        if as_bool(self.get_property('close_holes')):
                             try:
                                 trimesh.repair.fill_holes(simplified)
                             except Exception:
@@ -338,13 +350,15 @@ class RemeshNode(CadQueryNode):
             import trimesh
             from skfem import MeshTet
 
+            from pylcss.solver_backends.common import as_bool
+
             surface = trimesh.Trimesh(
                 vertices=np.asarray(vertices, dtype=float)[:, :3],
                 faces=np.asarray(faces, dtype=int)[:, :3],
                 process=True,
             )
             self._cleanup_surface(surface)
-            if bool(self.get_property('close_holes')):
+            if as_bool(self.get_property('close_holes')):
                 try:
                     trimesh.repair.fill_holes(surface)
                 except Exception:
@@ -461,13 +475,15 @@ class RemeshNode(CadQueryNode):
             if len(verts) < 4 or len(tris) < 4:
                 return None, None
 
+            from pylcss.solver_backends.common import as_bool
+
             surface = trimesh.Trimesh(
                 vertices=verts[:, :3],
                 faces=tris[:, :3],
-                process=bool(self.get_property('repair_surface')),
+                process=as_bool(self.get_property('repair_surface')),
             )
             self._cleanup_surface(surface)
-            if bool(self.get_property('close_holes')):
+            if as_bool(self.get_property('close_holes')):
                 try:
                     trimesh.repair.fill_holes(surface)
                 except Exception:
@@ -660,9 +676,6 @@ class RemeshNode(CadQueryNode):
         try:
             import cadquery as cq
             from OCP.BRepBuilderAPI import BRepBuilderAPI_Sewing, BRepBuilderAPI_MakeSolid
-            from OCP.BRep import BRep_Builder
-            from OCP.TopoDS import TopoDS_Shell, TopoDS_Compound, TopoDS_Solid
-            from OCP.BRepMesh import BRepMesh_IncrementalMesh
             from OCP.gp import gp_Pnt
             from OCP.BRepBuilderAPI import BRepBuilderAPI_MakePolygon, BRepBuilderAPI_MakeFace
             from OCP.ShapeFix import ShapeFix_Solid, ShapeFix_Shell

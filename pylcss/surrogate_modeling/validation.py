@@ -14,13 +14,13 @@ Provides:
 
 import logging
 import numpy as np
-from typing import Dict, List, Any, Optional, Tuple, Callable
+from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
 try:
-    from sklearn.model_selection import KFold, LeaveOneOut, cross_val_score
+    from sklearn.model_selection import KFold
     from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
     from sklearn.inspection import permutation_importance
     SKLEARN_AVAILABLE = True
@@ -72,12 +72,6 @@ class CVResult:
 
 
 @dataclass
-class HPOResult:
-    """Hyperparameter optimization result."""
-    best_params: Dict[str, Any]
-    best_score: float
-    all_results: List[Dict[str, Any]] = field(default_factory=list)
-    n_trials: int = 0
 
 
 # ============================================================================
@@ -189,158 +183,6 @@ class CrossValidator:
 # Hyperparameter Optimization
 # ============================================================================
 
-class HyperparameterOptimizer:
-    """
-    Grid search and random search for surrogate model hyperparameters.
-    """
-
-    # Default search spaces per model type
-    SEARCH_SPACES = {
-        'MLP Regressor': {
-            'hidden_layer_sizes': [(64,), (128,), (64, 32), (128, 64), (256, 128, 64)],
-            'alpha': [1e-5, 1e-4, 1e-3, 1e-2],
-            'learning_rate_init': [1e-4, 1e-3, 1e-2],
-            'max_iter': [500, 1000, 2000]
-        },
-        'Random Forest': {
-            'n_estimators': [50, 100, 200, 500],
-            'max_depth': [None, 10, 20, 50],
-            'min_samples_split': [2, 5, 10],
-            'min_samples_leaf': [1, 2, 4]
-        },
-        'Gradient Boosting': {
-            'n_estimators': [100, 200, 500],
-            'max_depth': [3, 5, 7, 10],
-            'learning_rate': [0.01, 0.05, 0.1, 0.2],
-            'subsample': [0.8, 0.9, 1.0]
-        },
-        'Gaussian Process': {
-            'alpha': [1e-10, 1e-8, 1e-6, 1e-4],
-            'n_restarts_optimizer': [0, 5, 10, 20]
-        }
-    }
-
-    def __init__(self):
-        if not SKLEARN_AVAILABLE:
-            raise ImportError("scikit-learn required for HPO.")
-
-    def grid_search(self, model_factory_fn: Callable[[Dict], Any],
-                    X: np.ndarray, y: np.ndarray,
-                    param_grid: Dict[str, List],
-                    n_folds: int = 5,
-                    callback: Optional[Callable[[int, str], None]] = None) -> HPOResult:
-        """
-        Exhaustive grid search with K-fold CV.
-
-        Args:
-            model_factory_fn: Callable(params_dict) -> unfitted model.
-            X, y: Training data.
-            param_grid: Dict of param_name -> list of values.
-            n_folds: CV folds.
-            callback: Progress callback.
-
-        Returns:
-            HPOResult with best params and all trial results.
-        """
-        from itertools import product
-
-        param_names = list(param_grid.keys())
-        param_values = list(param_grid.values())
-        all_combos = list(product(*param_values))
-        n_total = len(all_combos)
-
-        best_score = -np.inf
-        best_params = {}
-        all_results = []
-
-        cv = CrossValidator()
-
-        for idx, combo in enumerate(all_combos):
-            if callback:
-                callback(int(100 * idx / n_total), f"Grid Search {idx + 1}/{n_total}")
-
-            params = dict(zip(param_names, combo))
-
-            try:
-                def factory():
-                    return model_factory_fn(params)
-
-                cv_result = cv.kfold_cv(factory, X, y, n_folds=n_folds, model_type="HPO")
-                score = cv_result.r2_mean
-
-                all_results.append({
-                    'params': params,
-                    'r2_mean': score,
-                    'r2_std': cv_result.r2_std,
-                    'rmse_mean': cv_result.rmse_mean
-                })
-
-                if score > best_score:
-                    best_score = score
-                    best_params = params.copy()
-
-            except Exception as e:
-                logger.warning("Grid search trial failed: %s", e)
-                all_results.append({'params': params, 'error': str(e)})
-
-        return HPOResult(
-            best_params=best_params,
-            best_score=float(best_score),
-            all_results=all_results,
-            n_trials=n_total
-        )
-
-    def random_search(self, model_factory_fn: Callable[[Dict], Any],
-                      X: np.ndarray, y: np.ndarray,
-                      param_grid: Dict[str, List],
-                      n_trials: int = 20,
-                      n_folds: int = 5,
-                      callback: Optional[Callable[[int, str], None]] = None) -> HPOResult:
-        """
-        Random search: sample param_grid randomly for n_trials.
-        """
-        rng = np.random.RandomState(42)
-        param_names = list(param_grid.keys())
-
-        best_score = -np.inf
-        best_params = {}
-        all_results = []
-
-        cv = CrossValidator()
-
-        for trial in range(n_trials):
-            if callback:
-                callback(int(100 * trial / n_trials), f"Random Search {trial + 1}/{n_trials}")
-
-            params = {name: rng.choice(values) for name, values in param_grid.items()}
-
-            try:
-                def factory(p=params):
-                    return model_factory_fn(p)
-
-                cv_result = cv.kfold_cv(factory, X, y, n_folds=n_folds, model_type="HPO")
-                score = cv_result.r2_mean
-
-                all_results.append({
-                    'params': {k: (v.item() if hasattr(v, 'item') else v) for k, v in params.items()},
-                    'r2_mean': score,
-                    'r2_std': cv_result.r2_std,
-                    'rmse_mean': cv_result.rmse_mean
-                })
-
-                if score > best_score:
-                    best_score = score
-                    best_params = {k: (v.item() if hasattr(v, 'item') else v) for k, v in params.items()}
-
-            except Exception as e:
-                logger.warning("Random search trial failed: %s", e)
-
-        return HPOResult(
-            best_params=best_params,
-            best_score=float(best_score),
-            all_results=all_results,
-            n_trials=n_trials
-        )
 
 
 # ============================================================================

@@ -8,13 +8,11 @@ import tempfile
 import importlib.util
 import os
 import json
-from typing import List, Dict, Any, Optional
 
 from PySide6 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
 
 from ...system_modeling.problem_definition.problem_setup import XRayProblem
-from ..common.text_utils import format_html
 from ...optimization.workers import OptimizationWorker
 from ...config import optimization_config, SOLVER_DESCRIPTIONS, TEMP_MODELS_DIR
 from .optimization_settings_dialog import OptimizationSettingsDialog  # New import

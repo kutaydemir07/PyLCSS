@@ -7,142 +7,14 @@ Supports: CSV, JSON, HDF5, MAT (MATLAB), Excel, Pickle
 
 import json
 import logging
-import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
-class DataImporter:
-    """Import data from various formats."""
-
-    @staticmethod
-    def from_csv(
-        filepath: str,
-        delimiter: str = ",",
-        header: bool = True,
-        skip_rows: int = 0,
-    ) -> Dict:
-        """
-        Import CSV file.
-        
-        Returns dict with 'data' (2D array), 'columns' (list), 'n_rows', 'n_cols'.
-        """
-        import pandas as pd
-
-        df = pd.read_csv(
-            filepath,
-            delimiter=delimiter,
-            header=0 if header else None,
-            skiprows=skip_rows,
-        )
-        columns = list(df.columns)
-        data = df.values
-
-        logger.info(f"Imported CSV: {data.shape[0]} rows x {data.shape[1]} cols from {filepath}")
-        return {
-            "data": data,
-            "columns": columns,
-            "n_rows": data.shape[0],
-            "n_cols": data.shape[1],
-            "dtypes": {col: str(df[col].dtype) for col in columns},
-        }
-
-    @staticmethod
-    def from_json(filepath: str) -> Dict:
-        """Import JSON file."""
-        with open(filepath, "r") as f:
-            data = json.load(f)
-        logger.info(f"Imported JSON: {filepath}")
-        return data
-
-    @staticmethod
-    def from_hdf5(filepath: str, dataset: Optional[str] = None) -> Dict:
-        """
-        Import from HDF5 file.
-        
-        If dataset is None, returns all datasets as a dict.
-        """
-        try:
-            import h5py
-        except ImportError:
-            raise ImportError("h5py required for HDF5 import")
-
-        result = {}
-        with h5py.File(filepath, "r") as f:
-            if dataset:
-                result["data"] = np.array(f[dataset])
-                result["attrs"] = dict(f[dataset].attrs)
-            else:
-                def _read_group(group, prefix=""):
-                    for key in group:
-                        path = f"{prefix}/{key}" if prefix else key
-                        if isinstance(group[key], h5py.Dataset):
-                            result[path] = {
-                                "data": np.array(group[key]),
-                                "attrs": dict(group[key].attrs),
-                            }
-                        elif isinstance(group[key], h5py.Group):
-                            _read_group(group[key], path)
-
-                _read_group(f)
-                result["_file_attrs"] = dict(f.attrs)
-
-        logger.info(f"Imported HDF5: {filepath}")
-        return result
-
-    @staticmethod
-    def from_mat(filepath: str) -> Dict:
-        """Import MATLAB .mat file."""
-        try:
-            from scipy.io import loadmat
-            data = loadmat(filepath, squeeze_me=True)
-            # Remove MATLAB metadata keys
-            data = {k: v for k, v in data.items() if not k.startswith("__")}
-            logger.info(f"Imported MAT: {filepath}")
-            return data
-        except ImportError:
-            raise ImportError("scipy required for MAT import")
-
-    @staticmethod
-    def from_excel(
-        filepath: str,
-        sheet_name: Optional[str] = None,
-    ) -> Dict:
-        """Import Excel file (.xlsx, .xls)."""
-        try:
-            import pandas as pd
-            if sheet_name:
-                df = pd.read_excel(filepath, sheet_name=sheet_name)
-                return {
-                    "data": df.values,
-                    "columns": list(df.columns),
-                    "n_rows": len(df),
-                }
-            else:
-                dfs = pd.read_excel(filepath, sheet_name=None)
-                result = {}
-                for name, df in dfs.items():
-                    result[name] = {
-                        "data": df.values,
-                        "columns": list(df.columns),
-                        "n_rows": len(df),
-                    }
-                logger.info(f"Imported Excel: {list(result.keys())} sheets from {filepath}")
-                return result
-        except ImportError:
-            raise ImportError("pandas + openpyxl required for Excel import")
-
-    @staticmethod
-    def from_pickle(filepath: str) -> Any:
-        """Import from pickle (for surrogate models, etc.)."""
-        import joblib
-        data = joblib.load(filepath)
-        logger.info(f"Imported pickle: {filepath}")
-        return data
 
 
 class DataExporter:

@@ -1,11 +1,26 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-import cadquery as cq
+from numbers import Real
+
 from NodeGraphQt import BaseNode
 
 def is_numeric(val):
-    return isinstance(val, (int, float))
+    return isinstance(val, Real) and not isinstance(val, bool)
+
+
+def _connected_result(node):
+    """Return a connected node's result without repeating a completed run.
+
+    A legitimate node result can be ``None`` (for example a failed or
+    side-effect-only node).  Testing the value rather than the attribute made
+    input resolution call ``node.run()`` a second time, outside the graph
+    engine's ordering, cancellation, and error handling.  Only nodes that have
+    never been visited by the engine retain the small lazy-execution fallback.
+    """
+    if hasattr(node, '_last_result'):
+        return node._last_result
+    return node.run()
 
 def is_shape(val):
     """Rudimentary duck-typing to detect CadQuery shapes/workplanes/assemblies."""
@@ -42,15 +57,16 @@ def resolve_numeric_input(port, fallback):
             node = port.connected_ports()[0].node()
             
             # Use cached result if available (from engine execution)
-            res = getattr(node, '_last_result', None)
-            if res is None:
-                res = node.run()
+            res = _connected_result(node)
                 
             if is_numeric(res):
                 return res
-            # Also handle if it returns a dict with a value? No, keep simple.
+            # A connected-but-invalid value must not silently fall back to a
+            # property; that would make the visible graph disagree with the
+            # value used for geometry or physics.
+            return None
         except Exception:
-            pass
+            return None
     return fallback
 
 def resolve_shape_input(port):
@@ -61,9 +77,7 @@ def resolve_shape_input(port):
             node = connected_port.node()
             
             # Use cached result if available
-            res = getattr(node, '_last_result', None)
-            if res is None:
-                res = node.run()
+            res = _connected_result(node)
             res = _value_for_connected_output(connected_port, res)
             
             if is_shape(res):
@@ -74,8 +88,7 @@ def resolve_shape_input(port):
             else:
                 # ... (rest of error handling)
                 pass
-        except Exception as e:
-            # ...
+        except Exception:
             pass
     return None
 
@@ -85,9 +98,7 @@ def resolve_any_input(port):
         try:
             connected_port = port.connected_ports()[0]
             node = connected_port.node()
-            res = getattr(node, '_last_result', None)
-            if res is None:
-                res = node.run()
+            res = _connected_result(node)
             return _value_for_connected_output(connected_port, res)
         except Exception:
             pass
@@ -100,9 +111,7 @@ def resolve_all_inputs(port):
         for cp in port.connected_ports():
             try:
                 node = cp.node()
-                res = getattr(node, '_last_result', None)
-                if res is None:
-                    res = node.run()
+                res = _connected_result(node)
                 res = _value_for_connected_output(cp, res)
                 if res is not None:
                     results.append(res)
@@ -134,7 +143,7 @@ class CadQueryNode(BaseNode):
             try:
                 self.set_property('error_state', True)
                 self.set_property('error_message', self._error_message)
-            except:
+            except Exception:
                 pass
 
     def clear_error(self):
@@ -146,7 +155,7 @@ class CadQueryNode(BaseNode):
             try:
                 self.set_property('error_state', False)
                 self.set_property('error_message', '')
-            except:
+            except Exception:
                 pass
 
     def get_error(self):
@@ -167,16 +176,7 @@ class CadQueryNode(BaseNode):
         
         # Check if it's a generic input (like a dict from simulation nodes)
         if port and port.connected_ports():
-            val = resolve_any_input(port)
-            if val is not None:
-                # If we expected a number but got a dict, maybe we need to extract something?
-                # For now, assume if it's not numeric, we return it as is (duck typing)
-                if is_numeric(val):
-                    return val
-                # If prop_name is provided, maybe we are looking for a specific key in a dict?
-                # But this method is usually for "Value" inputs.
-                # Let's just return val.
-                return val
+            return resolve_any_input(port)
         
         fallback = self.get_property(prop_name) if prop_name else None
         return fallback

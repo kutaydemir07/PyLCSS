@@ -10,9 +10,13 @@ in the existing crash viewer.  No PyLCSS preprocessing, no parametric geometry.
 
 from __future__ import annotations
 
+import logging
+import math
 from pathlib import Path
 
 from pylcss.design_studio.core.base_node import CadQueryNode
+
+logger = logging.getLogger(__name__)
 
 
 class RunRadiossDeckNode(CadQueryNode):
@@ -68,13 +72,14 @@ class RunRadiossDeckNode(CadQueryNode):
         return Path(__file__).resolve().parents[3]
 
     @classmethod
-    def _resolve_deck_path(cls, value):
+    def _resolve_deck_path(cls, value, project_dir=None):
         """Accept absolute paths AND repo-relative paths like ``data/benchmarks/x.k``.
 
         Resolution order:
             1. Path as written (if it exists).
-            2. ``<repo_root>/<path>``.
-            3. ``<cwd>/<path>``.
+            2. ``<project_dir>/<path>`` when the node belongs to a saved project.
+            3. ``<repo_root>/<path>``.
+            4. ``<cwd>/<path>``.
         Returns the first hit or ``None``.
         """
         from pathlib import Path
@@ -83,6 +88,10 @@ class RunRadiossDeckNode(CadQueryNode):
         p = Path(value)
         if p.is_file():
             return str(p.resolve())
+        if project_dir:
+            project = Path(project_dir) / value
+            if project.is_file():
+                return str(project.resolve())
         repo = cls._repo_root() / value
         if repo.is_file():
             return str(repo.resolve())
@@ -91,8 +100,8 @@ class RunRadiossDeckNode(CadQueryNode):
             return str(cwd.resolve())
         return None
 
-    def run(self):
-        print("Run Radioss Deck: node executed.")
+    def run(self, cancel_callback=None):
+        self.clear_error()
         from pylcss.solver_backends import (
             ExternalRunConfig,
             SolverBackendError,
@@ -101,7 +110,7 @@ class RunRadiossDeckNode(CadQueryNode):
         from pylcss.solver_backends.common import as_bool
 
         raw = (self.get_property("deck_path") or "").strip()
-        deck_path = self._resolve_deck_path(raw)
+        deck_path = self._resolve_deck_path(raw, getattr(self, "_project_dir", None))
         if not deck_path:
             msg = (
                 f"Run Radioss Deck: no valid `deck_path` set "
@@ -109,30 +118,65 @@ class RunRadiossDeckNode(CadQueryNode):
                 "Point this property at an OpenRadioss `.rad` or LS-DYNA `.k` "
                 "input deck, or use one of the bundled decks under data/benchmarks/."
             )
-            print(msg)
             self.set_error(msg)
             return None
-        print(f"Run Radioss Deck: resolved deck_path -> {deck_path}")
+        logger.info("Run Radioss Deck: resolved %s", deck_path)
 
         raw_engine = (self.get_property("engine_path") or "").strip()
-        engine_path = self._resolve_deck_path(raw_engine) if raw_engine else None
+        engine_path = (
+            self._resolve_deck_path(raw_engine, getattr(self, "_project_dir", None))
+            if raw_engine else None
+        )
         if raw_engine and not engine_path:
-            print(f"Run Radioss Deck: engine_path '{raw_engine}' could not be resolved; ignoring.")
+            self.set_error(f"Engine deck path could not be resolved: {raw_engine}")
+            return None
 
         deck_only = as_bool(self.get_property("deck_only"))
         run_flag = not deck_only
 
+        try:
+            timeout_s = float(self.get_property("timeout_s") or 0.0)
+            disp_scale = float(self.get_property("disp_scale") or 0.0)
+            stress_scale = float(self.get_property("stress_scale_to_mpa") or 0.0)
+        except (TypeError, ValueError):
+            self.set_error("Deck timeout and display scales must be numeric.")
+            return None
+        if not math.isfinite(timeout_s) or timeout_s <= 0.0:
+            self.set_error("Deck solver timeout must be finite and greater than zero.")
+            return None
+        if not math.isfinite(disp_scale) or disp_scale <= 0.0:
+            self.set_error("Deck displacement scale must be finite and greater than zero.")
+            return None
+        if not math.isfinite(stress_scale) or stress_scale <= 0.0:
+            self.set_error("Deck stress conversion scale must be finite and greater than zero.")
+            return None
+
+        work_dir = str(self.get_property("work_dir") or "").strip() or None
+        starter_path = str(self.get_property("starter_path") or "").strip() or None
+        engine_executable = str(
+            self.get_property("engine_executable_path") or ""
+        ).strip() or None
+        project_dir = getattr(self, "_project_dir", None)
+        if project_dir:
+            if work_dir and not Path(work_dir).is_absolute():
+                work_dir = str(Path(project_dir) / work_dir)
+            if starter_path and not Path(starter_path).is_absolute():
+                starter_path = str(Path(project_dir) / starter_path)
+            if engine_executable and not Path(engine_executable).is_absolute():
+                engine_executable = str(Path(project_dir) / engine_executable)
+
         config = ExternalRunConfig(
-            executable=(self.get_property("starter_path") or None),
-            secondary_executable=(self.get_property("engine_executable_path") or None),
-            work_dir=(self.get_property("work_dir") or None),
+            executable=starter_path,
+            secondary_executable=engine_executable,
+            work_dir=work_dir,
             run_solver=run_flag,
-            timeout_s=float(self.get_property("timeout_s") or 7200.0),
+            timeout_s=timeout_s,
             job_name=Path(deck_path).stem,
+            cancel_callback=cancel_callback,
         )
-        print(
-            f"Run Radioss Deck: deck={deck_path!r}, engine={engine_path!r}, "
-            f"run_solver={run_flag}, timeout_s={config.timeout_s}"
+        logger.info(
+            "Run Radioss Deck: deck=%r, engine=%r, run_solver=%s, timeout=%s",
+            deck_path, engine_path, run_flag, config.timeout_s,
         )
 
         try:
@@ -141,27 +185,23 @@ class RunRadiossDeckNode(CadQueryNode):
                 config=config,
                 engine_deck_path=engine_path,
                 visualization_mode=self.get_property("visualization"),
-                disp_scale=float(self.get_property("disp_scale") or 1.0),
-                stress_scale_to_mpa=float(
-                    self.get_property("stress_scale_to_mpa") or 1.0
-                ),
+                disp_scale=disp_scale,
+                stress_scale_to_mpa=stress_scale,
             )
             warnings = result.get("warnings") or []
             if warnings:
-                print("Run Radioss Deck warnings:\n  " + "\n  ".join(warnings))
-            print(
-                f"Run Radioss Deck: status={result.get('external_status')}, "
-                f"type={result.get('type')}, "
-                f"work_dir={result.get('work_dir')}, frames={len(result.get('frames', []) or [])}"
+                logger.warning("Run Radioss Deck warnings: %s", "; ".join(warnings))
+            logger.info(
+                "Run Radioss Deck: status=%s, type=%s, work_dir=%s, frames=%s",
+                result.get('external_status'), result.get('type'), result.get('work_dir'),
+                len(result.get('frames', []) or []),
             )
             return result
         except SolverBackendError as exc:
-            print(f"Run Radioss Deck: backend error:\n{exc}")
+            logger.warning("Run Radioss Deck backend error: %s", exc)
             self.set_error(str(exc))
             return None
         except Exception as exc:
-            import traceback
-            print(f"Run Radioss Deck: crashed {type(exc).__name__}: {exc}")
-            traceback.print_exc()
+            logger.exception("Run Radioss Deck crashed")
             self.set_error(f"Run Radioss Deck crashed: {exc}")
             return None

@@ -66,6 +66,7 @@ class ImpactConditionNode(CadQueryNode):
         self.create_property('wall_gap_mm', 0.0, widget_type='float')
 
     def run(self):
+        self.clear_error()
         face_data = self.get_input_value('impact_face', None)
 
         face_list = []
@@ -87,19 +88,40 @@ class ImpactConditionNode(CadQueryNode):
             )
             return None
 
-        wall_friction = self.get_property('wall_friction')
-        wall_gap_mm = self.get_property('wall_gap_mm')
-        return {
-            'face_list':      face_list,
-            'velocity':       np.array([
+        try:
+            velocity = np.array([
                 float(self.get_property('velocity_x')),
                 float(self.get_property('velocity_y')),
                 float(self.get_property('velocity_z')),
-            ]),
+            ], dtype=float)
+            tolerance = float(self.get_property('node_tolerance'))
+            friction = float(self.get_property('wall_friction'))
+            gap = float(self.get_property('wall_gap_mm'))
+        except (TypeError, ValueError):
+            self.set_error("Impact velocity and wall settings must be numeric.")
+            return None
+        if not np.all(np.isfinite(velocity)) or float(np.linalg.norm(velocity)) <= 1e-12:
+            self.set_error("Impact velocity must contain a finite, non-zero component.")
+            return None
+        if not np.isfinite(tolerance) or tolerance <= 0.0:
+            self.set_error("Impact node tolerance must be greater than zero.")
+            return None
+        if not np.isfinite(friction):
+            self.set_error("Wall friction must be finite.")
+            return None
+        if friction < 0.0:
+            friction = -1.0
+        if not np.isfinite(gap):
+            self.set_error("Wall gap must be finite.")
+            return None
+
+        return {
+            'face_list':      face_list,
+            'velocity':       velocity,
             'application_scope': scope,
-            'node_tolerance': float(self.get_property('node_tolerance')),
-            'wall_friction': float(wall_friction if wall_friction is not None else -1.0),
-            'wall_gap_mm': float(wall_gap_mm if wall_gap_mm is not None else 0.0),
+            'node_tolerance': tolerance,
+            'wall_friction': friction,
+            'wall_gap_mm': gap,
         }
 
 

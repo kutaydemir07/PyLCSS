@@ -117,7 +117,7 @@ def resample_solution_space(
 
     if active_plots:
         num_dv = dim
-        num_qoi = len(reqL)
+        len(reqL)
         # Sequential processing for plot sampling
         for (idx1, idx2) in active_plots:
             if idx1 < num_dv and idx2 < num_dv:
@@ -310,7 +310,7 @@ def compute_product_family_solutions(problem, weight, dsl, dsu, l, u, reqU, reqL
 
     try:
         from joblib import Parallel, delayed
-        import dill
+        import dill  # noqa: F401 - ensure enhanced pickling support is importable
         
         # Use 'loky' backend for process-based parallelism (bypasses GIL)
         # This requires the problem object and system model to be picklable (dill handles this)
@@ -439,5 +439,4 @@ def calculate_variable_communality(variant_boxes, platform_box):
             )
     
     return communality
-
 

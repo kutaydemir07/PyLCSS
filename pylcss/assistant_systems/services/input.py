@@ -9,7 +9,7 @@ Provides system-level mouse and keyboard control for the AI assistant.
 
 import logging
 import time
-from typing import Tuple, Optional, List
+from typing import Tuple
 
 try:
     import pyautogui

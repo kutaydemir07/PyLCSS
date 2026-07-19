@@ -7,7 +7,6 @@ Implements NSGA-II, multi-start, and Pareto-based analysis.
 
 import logging
 import time
-from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -91,7 +90,7 @@ class ParetoSolver(BaseSolver):
             pop_violations[i] = evaluator.solve_violation(results)
 
         best_front = []
-        start_time = time.time()
+        time.time()
 
         for gen in range(n_gen):
             if self.stop_requested:

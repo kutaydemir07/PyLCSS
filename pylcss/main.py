@@ -68,7 +68,7 @@ setup_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Apply patches and import main window
-from pylcss.user_interface.common import qt_patches
+from pylcss.user_interface.common import qt_patches  # noqa: F401 - startup patches
 from pylcss.user_interface.main_application_window import MainWindow
 
 
@@ -104,7 +104,6 @@ def main() -> NoReturn:
     exit_code = app.exec()
     cleanup_temp_models()
     sys.exit(exit_code)
-
 
 
 

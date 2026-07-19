@@ -14,7 +14,6 @@ Features: method selection, S2 interaction heatmap, multi-output batch,
 and an importance-ranked data table.
 """
 
-import warnings
 import numpy as np
 from PySide6 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
@@ -543,7 +542,7 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
 
         # Add diagonal reference line (σ = μ*) for linearity check
         if len(mu_star) > 0:
-            max_val = max(np.max(mu_star), np.max(sigma)) * 1.1
+            max(np.max(mu_star), np.max(sigma)) * 1.1
             line = pg.InfiniteLine(angle=45, pen=pg.mkPen('#AAA', width=1, style=QtCore.Qt.DashLine))
             self.morris_widget.addItem(line)
 

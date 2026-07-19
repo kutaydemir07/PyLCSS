@@ -32,7 +32,7 @@ These modules don't talk to the CAD pipeline themselves; that wiring is in
 from __future__ import annotations
 
 import math
-from typing import List, Optional
+from typing import List
 
 try:
     import torch

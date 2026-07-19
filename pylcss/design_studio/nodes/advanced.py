@@ -9,37 +9,37 @@ Advanced CAD nodes for professional workflows:
     - SurfaceAreaNode: Compute surface area of a shape
 """
 
-import logging
-import math
+import ast
 import os
-from typing import Optional
 
 import numpy as np
 
 from pylcss.design_studio.core.base_node import (
     CadQueryNode,
     resolve_shape_input,
-    resolve_numeric_input,
     resolve_any_input,
 )
 
-logger = logging.getLogger(__name__)
 
-
-def _resolve_data_path(filepath: str) -> str:
+def _resolve_data_path(filepath: str, project_dir: str | None = None) -> str:
     """Return an existing absolute path for ``filepath`` or the original.
 
     Saved projects historically stored absolute paths (e.g. the shipped
     sample .cad files), which break the moment another machine clones
     the repo. New saves prefer repo-relative paths like
     ``data/cantilever.stl``. This resolver lets both work: tries the
-    path as given first (absolute and cwd-relative), then falls back to
-    joining it with the PyLCSS repo root (parent of the pylcss package).
+    path as given first (absolute and cwd-relative), then the directory that
+    owns the saved project, and finally the PyLCSS repo root (parent of the
+    pylcss package).
     """
     if not filepath:
         return filepath
     if os.path.isfile(filepath):
         return filepath
+    if project_dir:
+        candidate = os.path.join(project_dir, filepath)
+        if os.path.isfile(candidate):
+            return candidate
     try:
         from pylcss.config import BASE_DIR
         repo_root = os.path.dirname(BASE_DIR)
@@ -65,14 +65,15 @@ class ImportStepNode(CadQueryNode):
 
     def run(self, **kwargs):
         self.clear_error()
-        filepath = _resolve_data_path(self.get_property("filepath") or "")
+        filepath = _resolve_data_path(
+            self.get_property("filepath") or "", getattr(self, "_project_dir", None)
+        )
         if not filepath or not os.path.isfile(filepath):
             self.set_error("No valid file path")
             return None
         try:
             from pylcss.io_manager.cad_io import CADImporter
             result = CADImporter.import_file(filepath)
-            self._last_result = result
             return result
         except Exception as e:
             self.set_error(str(e))
@@ -97,14 +98,16 @@ class ImportStlNode(CadQueryNode):
         incoming = resolve_any_input(self.get_input("filepath_in"))
         if isinstance(incoming, dict):
             incoming = incoming.get("file") or incoming.get("path")
-        filepath = _resolve_data_path(str(incoming or self.get_property("filepath") or ""))
+        filepath = _resolve_data_path(
+            str(incoming or self.get_property("filepath") or ""),
+            getattr(self, "_project_dir", None),
+        )
         if not filepath or not os.path.isfile(filepath):
             self.set_error("No valid file path")
             return None
         try:
             from pylcss.io_manager.cad_io import CADImporter
             result = CADImporter.import_file(filepath)
-            self._last_result = result
             return result
         except Exception as e:
             self.set_error(str(e))
@@ -131,8 +134,6 @@ class MathExpressionNode(CadQueryNode):
     def run(self, **kwargs):
         self.clear_error()
         try:
-            import math as _math
-
             # Resolve inputs
             x_val = resolve_any_input(self.input(0))
             y_val = resolve_any_input(self.input(1))
@@ -140,12 +141,15 @@ class MathExpressionNode(CadQueryNode):
 
             expression = self.get_property("expression") or "0"
 
-            # Build a safe namespace for evaluation
+            # Only arithmetic and calls to the explicit function
+            # list are accepted.  Exposing numpy/math modules to eval allowed
+            # arbitrary attribute traversal from a project file.
             ns = {
-                "np": np, "math": _math,
                 "sin": np.sin, "cos": np.cos, "tan": np.tan,
                 "sqrt": np.sqrt, "log": np.log, "exp": np.exp,
-                "abs": np.abs, "pi": np.pi, "e": np.e,
+                "abs": np.abs, "min": np.minimum, "max": np.maximum,
+                "floor": np.floor, "ceil": np.ceil,
+                "pi": np.pi, "e": np.e,
             }
             if x_val is not None:
                 ns["x"] = float(x_val) if not isinstance(x_val, (list, np.ndarray)) else x_val
@@ -154,9 +158,13 @@ class MathExpressionNode(CadQueryNode):
             if z_val is not None:
                 ns["z"] = float(z_val) if not isinstance(z_val, (list, np.ndarray)) else z_val
 
-            result = eval(expression, {"__builtins__": {}}, ns)
+            tree = ast.parse(str(expression), mode="eval")
+            _validate_math_expression(tree, set(ns))
+            result = eval(compile(tree, "<math-expression>", "eval"), {"__builtins__": {}}, ns)
+            numeric = np.asarray(result, dtype=float)
+            if not np.all(np.isfinite(numeric)):
+                raise ValueError("Expression result must be finite.")
 
-            self._last_result = result
             return result
         except Exception as e:
             self.set_error(str(e))
@@ -202,7 +210,6 @@ class MeasureDistanceNode(CadQueryNode):
             dist_calc = BRepExtrema_DistShapeShape(occ_a, occ_b)
             if dist_calc.IsDone():
                 distance = dist_calc.Value()
-                self._last_result = distance
                 return distance
             else:
                 self.set_error("Distance calculation failed")
@@ -245,8 +252,28 @@ class SurfaceAreaNode(CadQueryNode):
             BRepGProp.SurfaceProperties_s(occ_shape, props)
             area = props.Mass()
 
-            self._last_result = area
             return area
         except Exception as e:
             self.set_error(str(e))
             return None
+
+
+_ALLOWED_MATH_AST = (
+    ast.Expression, ast.Constant, ast.Name, ast.Load, ast.BinOp, ast.UnaryOp,
+    ast.Call, ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod,
+    ast.Pow, ast.UAdd, ast.USub,
+)
+
+
+def _validate_math_expression(tree: ast.AST, allowed_names: set[str]) -> None:
+    """Reject attributes, indexing, comprehensions, and unknown identifiers."""
+    for node in ast.walk(tree):
+        if not isinstance(node, _ALLOWED_MATH_AST):
+            raise ValueError(f"Unsupported expression feature: {type(node).__name__}.")
+        if isinstance(node, ast.Name) and node.id not in allowed_names:
+            raise ValueError(f"Unknown or unconnected expression variable: {node.id}.")
+        if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name) or node.func.id not in allowed_names:
+                raise ValueError("Only the listed math functions may be called.")
+            if node.keywords:
+                raise ValueError("Keyword arguments are not supported in math expressions.")

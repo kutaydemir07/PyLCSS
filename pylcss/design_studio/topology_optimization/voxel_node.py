@@ -11,6 +11,7 @@ import numpy as np
 import numba
 
 from pylcss.design_studio.core.base_node import CadQueryNode
+from pylcss.solver_backends.common import as_bool
 from .boundary_conditions import (
     VoxelBC, LoadCase, ManufacturingConstraints,
     _parse_support, _parse_support_region_dofs, _parse_region_boxes,
@@ -197,16 +198,6 @@ def _fraction_box(
     return tuple(vals)  # type: ignore[return-value]
 
 
-def _fraction_center(
-    bbox: Tuple[float, float, float, float, float, float],
-    bounds: Tuple[np.ndarray, np.ndarray],
-) -> Tuple[float, float, float]:
-    mins, maxs = bounds
-    return (
-        _fraction(0.5 * (bbox[0] + bbox[1]), mins[0], maxs[0]),
-        _fraction(0.5 * (bbox[2] + bbox[3]), mins[1], maxs[1]),
-        _fraction(0.5 * (bbox[4] + bbox[5]), mins[2], maxs[2]),
-    )
 
 
 def _is_load_payload(entry: Any) -> bool:
@@ -1330,6 +1321,7 @@ class TopologyOptVoxelNode(CadQueryNode):
         material: Dict[str, Any],
         constraint_list: List[Any],
         load_list: List[Any],
+        cancel_callback=None,
     ) -> Optional[Dict[str, Any]]:
         """Run the validation stage as an internal TopOpt study action."""
         from .validation import run_topopt_validation
@@ -1347,6 +1339,7 @@ class TopologyOptVoxelNode(CadQueryNode):
             analysis_type='Linear',
             visualization='Von Mises Stress',
             deformation_scale='Auto',
+            cancel_callback=cancel_callback,
         )
 
     def _run_embedded_cad_reconstruction(
@@ -1389,10 +1382,15 @@ class TopologyOptVoxelNode(CadQueryNode):
                     y0, y1 = region.get('y', [0.0, 0.0])
                     z0, z1 = region.get('z', [0.0, 1.0])
                     dofs = _parse_support_region_dofs(region.get('dofs', ''))
+                    values = [float(x0), float(x1), float(y0), float(y1), float(z0), float(z1)]
+                    if not all(np.isfinite(v) and 0.0 <= v <= 1.0 for v in values):
+                        raise ValueError("support region coordinates must be fractions in [0, 1]")
+                    if not dofs:
+                        raise ValueError("each support region must constrain at least one DOF")
                     bc.fixed_boxes.append((
-                        float(x0), float(x1),
-                        float(y0), float(y1),
-                        float(z0), float(z1),
+                        *sorted(values[0:2]),
+                        *sorted(values[2:4]),
+                        *sorted(values[4:6]),
                         dofs,
                     ))
             except Exception as exc:
@@ -1429,7 +1427,12 @@ class TopologyOptVoxelNode(CadQueryNode):
         fdy = _float_property('force_dir_y', -1.0)
         fdz = _float_property('force_dir_z', 0.0)
 
-        norm = (fdx ** 2 + fdy ** 2 + fdz ** 2) ** 0.5 or 1.0
+        numeric_force = (mag, fdx, fdy, fdz)
+        if not all(np.isfinite(v) for v in numeric_force) or mag <= 0.0:
+            raise ValueError("force magnitude must be positive and all force values finite")
+        norm = (fdx ** 2 + fdy ** 2 + fdz ** 2) ** 0.5
+        if norm <= 1e-15:
+            raise ValueError("force direction must contain a non-zero component")
         fdx, fdy, fdz = (fdx / norm) * mag, (fdy / norm) * mag, (fdz / norm) * mag
 
         ftype = self.get_property('force_type')
@@ -1437,6 +1440,8 @@ class TopologyOptVoxelNode(CadQueryNode):
             ix_f = _float_property('force_ix_frac', 1.0)
             iy_f = _float_property('force_iy_frac', 0.5)
             iz_f = _float_property('force_iz_frac', 0.5)
+            if not all(np.isfinite(v) and 0.0 <= v <= 1.0 for v in (ix_f, iy_f, iz_f)):
+                raise ValueError("point-force coordinates must be fractions in [0, 1]")
             bc.point_forces.append((ix_f, iy_f, iz_f, fdx, fdy, fdz))
         else:  # Distributed Face
             face = (self.get_property('force_face') or 'Right').lower()
@@ -1538,7 +1543,8 @@ class TopologyOptVoxelNode(CadQueryNode):
 
     # ── Node run ───────────────────────────────────────────────────────────
 
-    def run(self, progress_callback=None) -> Optional[Dict[str, Any]]:
+    def run(self, progress_callback=None, cancel_callback=None) -> Optional[Dict[str, Any]]:
+        self.clear_error()
         mesh = self.get_input_value('mesh', None)
         bounds = _mesh_bounds(mesh)
         material = self.get_input_value('material', None)
@@ -1558,7 +1564,11 @@ class TopologyOptVoxelNode(CadQueryNode):
                 len(load_like_constraints),
             )
         load_list = _flatten(self.get_input_list('loads')) + load_like_constraints
-        bc = self._build_bc()
+        try:
+            bc = self._build_bc()
+        except (TypeError, ValueError) as exc:
+            self.set_error(f"Invalid TopOpt boundary-condition settings: {exc}")
+            return None
         if constraint_list:
             bc.fixed_left_face_dofs = []
             bc.fixed_right_face_dofs = []
@@ -1573,7 +1583,11 @@ class TopologyOptVoxelNode(CadQueryNode):
             bc.distributed_forces = []
             bc.load_cases = []  # graph-supplied loads override node-property load cases
         self._merge_graph_bcs(bc, mesh, constraint_list, load_list)
-        _add_bc_contact_regions(bc)
+        try:
+            _add_bc_contact_regions(bc)
+        except (TypeError, ValueError) as exc:
+            self.set_error(f"Invalid TopOpt support/load settings: {exc}")
+            return None
         if constraint_list and not _bc_has_support(bc):
             self.set_error(
                 "Connected constraints could not be mapped to voxel supports. "
@@ -1596,9 +1610,13 @@ class TopologyOptVoxelNode(CadQueryNode):
             )
             return None
 
-        nelx = int(self.get_property('nelx') or 30)
-        nely = int(self.get_property('nely') or 20)
-        nelz = int(self.get_property('nelz') or 10)
+        try:
+            nelx = int(self.get_property('nelx') or 30)
+            nely = int(self.get_property('nely') or 20)
+            nelz = int(self.get_property('nelz') or 10)
+        except (TypeError, ValueError):
+            self.set_error("Topology grid dimensions must be integers.")
+            return None
         guided_active = _use_automatic_guided_grid(
             self.get_property('workflow_mode'),
             self.get_property('quality_preset'),
@@ -1616,6 +1634,13 @@ class TopologyOptVoxelNode(CadQueryNode):
             )
             if guided_grid is not None:
                 nelx, nely, nelz = guided_grid
+
+        if min(nelx, nely, nelz) < 1 or nelx * nely * nelz > 500_000:
+            self.set_error(
+                "Topology grid dimensions must be positive and contain no more "
+                "than 500,000 voxels. Use Guided mode for automatic sizing."
+            )
+            return None
 
         rmin_effective = float(self.get_property('rmin') or 1.5)
         if guided_active:
@@ -1638,53 +1663,65 @@ class TopologyOptVoxelNode(CadQueryNode):
             unity = float(span[1] / max(nely, 1))
             unitz = float(span[2] / max(nelz, 1))
 
-        mc = ManufacturingConstraints(
-            symmetry            = (str(self.get_property('symmetry') or 'None')).lower(),
-            extrusion           = (str(self.get_property('extrusion') or 'None')).lower(),
-            overhang_build_axis = (str(self.get_property('overhang_build_axis') or 'None')).lower(),
-            max_member_size_voxels = float(self.get_property('max_member_size_voxels') or 0.0),
-            pattern_repeat = int(self.get_property('pattern_repeat') or 1),
-            pattern_axis   = (str(self.get_property('pattern_axis') or 'Y')).lower(),
-        )
+        try:
+            mc = ManufacturingConstraints(
+                symmetry            = (str(self.get_property('symmetry') or 'None')).lower(),
+                extrusion           = (str(self.get_property('extrusion') or 'None')).lower(),
+                overhang_build_axis = (str(self.get_property('overhang_build_axis') or 'None')).lower(),
+                max_member_size_voxels = float(self.get_property('max_member_size_voxels') or 0.0),
+                pattern_repeat = int(self.get_property('pattern_repeat') or 1),
+                pattern_axis   = (str(self.get_property('pattern_axis') or 'Y')).lower(),
+            )
+        except (TypeError, ValueError):
+            self.set_error("Topology manufacturing settings must be numeric where required.")
+            return None
 
-        stress_enabled = bool(self.get_property('stress_constraint')) or minimum_mass_goal
+        stress_enabled = as_bool(self.get_property('stress_constraint')) or minimum_mass_goal
         optimizer = str(self.get_property('optimizer') or 'OC')
         if stress_enabled:
             optimizer = 'MMA'
-        yield_stress = float(self.get_property('yield_stress') or 0.0)
-        if yield_stress <= 0.0:
-            yield_stress = float(material.get('yield_strength') or 0.0)
+        try:
+            yield_stress = float(self.get_property('yield_stress') or 0.0)
+            if yield_stress <= 0.0:
+                yield_stress = float(material.get('yield_strength') or 0.0)
+        except (TypeError, ValueError):
+            self.set_error("Topology allowable/yield stress must be numeric.")
+            return None
         if stress_enabled and yield_stress <= 0.0:
             self.set_error("Stress-constrained TopOpt needs a positive allowable/yield stress in MPa.")
             return None
-        problem = TopologyOptVoxelProblem(
-            nelx     = nelx,
-            nely     = nely,
-            nelz     = nelz,
-            E0       = float(material.get('E', self.get_property('E0') or 1.0)),
-            Emin     = float(self.get_property('Emin')  or 1e-9),
-            nu       = float(material.get('nu', self.get_property('nu') or 0.3)),
-            penal    = float(self.get_property('penal') or 3.0),
-            volfrac  = float(self.get_property('volfrac') or 0.5),
-            rmin     = rmin_effective,
-            unitx    = unitx,
-            unity    = unity,
-            unitz    = unitz,
-            optimizer = optimizer,
-            max_iter = int(self.get_property('max_iter') or 80),
-            tol      = float(self.get_property('tol')   or 0.01),
-            patience = int(self.get_property('convergence_patience') or 5),
-            bc       = bc,
-            mc       = mc,
-            design_domain = design_domain,
-            objective_mode            = 'minimum_mass' if minimum_mass_goal else 'compliance',
-            stress_constraint_enabled = stress_enabled,
-            yield_stress              = yield_stress,
+        try:
+            problem = TopologyOptVoxelProblem(
+                nelx     = nelx,
+                nely     = nely,
+                nelz     = nelz,
+                E0       = float(material.get('E', self.get_property('E0') or 1.0)),
+                Emin     = float(self.get_property('Emin')  or 1e-9),
+                nu       = float(material.get('nu', self.get_property('nu') or 0.3)),
+                penal    = float(self.get_property('penal') or 3.0),
+                volfrac  = float(self.get_property('volfrac') or 0.5),
+                rmin     = rmin_effective,
+                unitx    = unitx,
+                unity    = unity,
+                unitz    = unitz,
+                optimizer = optimizer,
+                max_iter = int(self.get_property('max_iter') or 80),
+                tol      = float(self.get_property('tol')   or 0.01),
+                patience = int(self.get_property('convergence_patience') or 5),
+                bc       = bc,
+                mc       = mc,
+                design_domain = design_domain,
+                objective_mode            = 'minimum_mass' if minimum_mass_goal else 'compliance',
+                stress_constraint_enabled = stress_enabled,
+                yield_stress              = yield_stress,
             # Numerical hyperparameters use the dataclass defaults (industrial
             # values: q=0.5 Bruggi qp-approach, p=8.0 PNorm aggregation,
             # Heaviside three-field SIMP on with β: 1 → 16 stepping every 30
             # iters, η=0.5).  These are NOT user knobs in industrial codes.
-        )
+            )
+        except (TypeError, ValueError) as exc:
+            self.set_error(f"Invalid TopOpt solver settings: {exc}")
+            return None
 
         def _preview_payload(density: np.ndarray, stage: Optional[str] = None) -> Dict[str, Any]:
             density_cutoff = _effective_density_cutoff(
@@ -1734,6 +1771,8 @@ class TopologyOptVoxelNode(CadQueryNode):
 
         self._active_solver = solver
         def _cb(it: int, comp: float, change: float, density: np.ndarray) -> None:
+            if callable(cancel_callback) and cancel_callback():
+                solver.stop()
             _emit_preview(density, max(0, it - 1), problem.max_iter)
 
         try:
@@ -1751,7 +1790,7 @@ class TopologyOptVoxelNode(CadQueryNode):
         density_cutoff = _effective_density_cutoff(
             self.get_property('density_cutoff') or 0.45
         )
-        print_ready = bool(self.get_property('print_ready_mesh'))
+        print_ready = as_bool(self.get_property('print_ready_mesh'))
         decimate    = float(self.get_property('mesh_decimate_ratio') or 1.0)
         # Key on the actual density bytes — not id(result.density), which Python's
         # allocator can reuse across runs and silently return a stale recovered
@@ -1855,10 +1894,11 @@ class TopologyOptVoxelNode(CadQueryNode):
                 "volume cannot reach the requested fraction unless passive "
                 "solid regions are reduced."
             )
-        if bool(self.get_property('validate_after_optimize')):
+        if as_bool(self.get_property('validate_after_optimize')):
             try:
                 validation = self._run_embedded_validation(
                     output, material, constraint_list, load_list,
+                    cancel_callback=cancel_callback,
                 )
                 if validation is not None:
                     output['validation'] = validation
@@ -1878,7 +1918,7 @@ class TopologyOptVoxelNode(CadQueryNode):
                 output['validation_error'] = str(exc)
                 warnings_out.append(msg)
 
-        if bool(self.get_property('generate_cad_after_optimize')):
+        if as_bool(self.get_property('generate_cad_after_optimize')):
             try:
                 cad_shape = self._run_embedded_cad_reconstruction(output)
                 output['cad_shape'] = cad_shape

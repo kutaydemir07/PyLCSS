@@ -8,6 +8,8 @@ risks (volumetric locking, stress under-smoothing, sign mistakes in
 boundary-condition assembly).  CalculiX is the single supported backend.
 """
 import logging
+import math
+from pathlib import Path
 
 from pylcss.design_studio.core.base_node import CadQueryNode
 
@@ -61,14 +63,13 @@ class SolverNode(CadQueryNode):
                                     'Nonlinear (Geometric)',
                                     'Nonlinear (Plastic)'])
 
-        # Deprecated — kept so projects saved before the CalculiX-only cut load
-        # cleanly. The in-house scikit-fem path no longer exists; ``CalculiX`` is
-        # the only backend and is always used regardless of this property.
+        # Hidden compatibility properties: required so older .cad sessions
+        # deserialize. They are excluded from the inspector.
         self.create_property('solver_backend', 'CalculiX', widget_type='combo',
                              items=['CalculiX'])
         self.create_property('run_external_solver', True, widget_type='checkbox')
 
-    def run(self):
+    def run(self, cancel_callback=None):
         logger.debug("FEA Solver: routing to CalculiX backend.")
         from pylcss.solver_backends import (
             ExternalRunConfig,
@@ -111,9 +112,7 @@ class SolverNode(CadQueryNode):
             return None
 
         # Selecting the solver implicitly means "run it"; `deck_only` is the
-        # explicit opt-out for users who only want the input deck.  We still
-        # honour the legacy `run_external_solver` property on projects saved
-        # before this change.
+        # explicit opt-out for users who only want the input deck.
         deck_only = as_bool(self.get_property('deck_only'))
         legacy_run = self.get_property('run_external_solver')
         if legacy_run is not None and not as_bool(legacy_run):
@@ -122,12 +121,25 @@ class SolverNode(CadQueryNode):
         logger.debug("FEA Solver: deck_only=%s, run_solver=%s", deck_only, run_flag)
 
         try:
+            timeout_s = float(self.get_property('external_timeout_s') or 0.0)
+            if not math.isfinite(timeout_s) or timeout_s <= 0.0:
+                self.set_error("CalculiX timeout must be finite and greater than zero.")
+                return None
+            solver_path = str(self.get_property('external_solver_path') or '').strip() or None
+            work_dir = str(self.get_property('external_work_dir') or '').strip() or None
+            project_dir = getattr(self, '_project_dir', None)
+            if project_dir:
+                if solver_path and not Path(solver_path).is_absolute():
+                    solver_path = str(Path(project_dir) / solver_path)
+                if work_dir and not Path(work_dir).is_absolute():
+                    work_dir = str(Path(project_dir) / work_dir)
             config = ExternalRunConfig(
-                executable=(self.get_property('external_solver_path') or None),
-                work_dir=(self.get_property('external_work_dir') or None),
+                executable=solver_path,
+                work_dir=work_dir,
                 run_solver=run_flag,
-                timeout_s=float(self.get_property('external_timeout_s') or 3600.0),
+                timeout_s=timeout_s,
                 job_name='pylcss_calculix',
+                cancel_callback=cancel_callback,
             )
             result = run_calculix_static(
                 mesh=mesh,

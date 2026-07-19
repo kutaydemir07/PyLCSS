@@ -8,7 +8,7 @@ These are kept for compatibility with the solution_space module.
 
 import numpy as np
 from scipy.optimize import minimize, differential_evolution, NonlinearConstraint
-from typing import List, Dict, Optional, Callable, Tuple, Union, Any
+from typing import List, Dict, Optional, Callable, Tuple, Union
 import traceback
 import logging
 import warnings

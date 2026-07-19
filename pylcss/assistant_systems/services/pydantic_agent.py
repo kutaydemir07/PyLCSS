@@ -41,7 +41,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from pydantic_ai import Agent
 
-from pylcss.assistant_systems.tools.registry import Tool, ToolRegistry
+from pylcss.assistant_systems.tools.registry import ToolRegistry
 from pylcss.assistant_systems.tools.pydantic_adapter import wrap_legacy_tool
 
 logger = logging.getLogger(__name__)

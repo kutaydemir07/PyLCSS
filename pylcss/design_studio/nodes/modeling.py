@@ -6,10 +6,10 @@ Modeling Nodes - 3D Operations and Transformations.
 """
 
 import cadquery as cq
+import numpy as np
 from pylcss.design_studio.core.base_node import (
     CadQueryNode,
     resolve_any_input,
-    resolve_numeric_input,
     resolve_shape_input,
 )
 import math
@@ -102,6 +102,8 @@ def _selection_payload(workplane, faces, selector_type):
 _MESH_FACE_DIRECTIONS = ('<X', '>X', '<Y', '>Y', '<Z', '>Z')
 _MESH_COMPONENT_INDEX_BASE = 1000
 _MESH_COMPONENT_INDEX_STRIDE = 1000
+_MESH_FEATURE_INDEX_BASE = 100000
+_MESH_FEATURE_ANGLE_DEG = 35.0
 
 
 def _mesh_component_stored_index(direction_index, component_index):
@@ -235,16 +237,53 @@ def _mesh_tetrahedra(mesh_like):
                 arr = np.asarray(mesh_like.get(key), dtype=int)
                 if arr.ndim != 2:
                     continue
-                if arr.shape[0] >= 4:
+                if key == "t" and arr.shape[0] in (4, 10):
                     return arr[:4, :]
-                if arr.shape[1] >= 4:
+                if key != "t" and arr.shape[1] in (4, 10):
                     return arr[:, :4].T
+                if key != "t" and arr.shape[0] in (4, 10):
+                    return arr[:4, :]
         if hasattr(mesh_like, "t"):
             arr = np.asarray(mesh_like.t, dtype=int)
-            if arr.ndim == 2 and arr.shape[0] >= 4:
+            # scikit-fem and PyLCSS mesh wrappers store connectivity as
+            # (nodes_per_element, element_count). A 3 x N shell mesh must not
+            # be reinterpreted as N x 3 tetrahedra merely because N >= 4.
+            if arr.ndim == 2 and arr.shape[0] in (4, 10):
                 return arr[:4, :]
-            if arr.ndim == 2 and arr.shape[1] >= 4:
-                return arr[:, :4].T
+    except Exception:
+        return None
+    return None
+
+
+def _mesh_surface_triangles(mesh_like):
+    """Return explicit shell/surface connectivity as an ``(n, 3)`` array."""
+    try:
+        import numpy as np
+
+        if isinstance(mesh_like, dict):
+            if mesh_like.get("mesh") is not None:
+                return _mesh_surface_triangles(mesh_like.get("mesh"))
+            for key in ("faces", "triangles"):
+                value = mesh_like.get(key)
+                if value is None:
+                    continue
+                arr = np.asarray(value, dtype=int)
+                # Face dictionaries normally use row-major
+                # ``(face_count, nodes_per_face)`` connectivity.  Accept the
+                # transposed ``(3, face_count)`` form when unambiguous.
+                if arr.ndim == 2 and arr.shape[0] == 3 and arr.shape[1] != 3:
+                    return arr.T
+                if arr.ndim == 2 and arr.shape[1] >= 3:
+                    return arr[:, :3]
+            value = mesh_like.get("t")
+            if value is not None:
+                arr = np.asarray(value, dtype=int)
+                if arr.ndim == 2 and arr.shape[0] == 3:
+                    return arr.T
+        if hasattr(mesh_like, "t"):
+            arr = np.asarray(mesh_like.t, dtype=int)
+            if arr.ndim == 2 and arr.shape[0] == 3:
+                return arr.T
     except Exception:
         return None
     return None
@@ -257,26 +296,31 @@ def _mesh_boundary_face_data(mesh_like):
 
         p = _mesh_points(mesh_like)
         t = _mesh_tetrahedra(mesh_like)
-        if p is None or t is None or t.size == 0:
+        surface = _mesh_surface_triangles(mesh_like)
+        if p is None or (
+            (t is None or t.size == 0)
+            and (surface is None or surface.size == 0)
+        ):
             return None
 
         pts = p.T
         n_nodes = p.shape[1]
-        t = t[:, np.all((t >= 0) & (t < n_nodes), axis=0)]
-        if t.size == 0:
-            return None
-
-        face_patterns = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
-        face_counts = {}
-        face_nodes = {}
-        for elem in t.T:
-            for pattern in face_patterns:
-                face = tuple(int(elem[i]) for i in pattern)
-                key = tuple(sorted(face))
-                face_counts[key] = face_counts.get(key, 0) + 1
-                face_nodes[key] = face
-
-        boundary = [face_nodes[key] for key, count in face_counts.items() if count == 1]
+        if t is not None and t.size:
+            t = t[:, np.all((t >= 0) & (t < n_nodes), axis=0)]
+            face_patterns = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
+            face_counts = {}
+            face_nodes = {}
+            for elem in t.T:
+                for pattern in face_patterns:
+                    face = tuple(int(elem[i]) for i in pattern)
+                    key = tuple(sorted(face))
+                    face_counts[key] = face_counts.get(key, 0) + 1
+                    face_nodes[key] = face
+            boundary = [face_nodes[key] for key, count in face_counts.items() if count == 1]
+        else:
+            surface = np.asarray(surface, dtype=int)
+            valid_surface = np.all((surface >= 0) & (surface < n_nodes), axis=1)
+            boundary = surface[valid_surface].tolist()
         if not boundary:
             return None
 
@@ -295,7 +339,11 @@ def _mesh_boundary_face_data(mesh_like):
         areas2 = areas2[valid]
         normals = normals / areas2[:, None]
 
-        body_center = pts.mean(axis=0)
+        # Persisted virtual-face patch ids are created by the VTK viewer and
+        # resolved again here during graph execution. Use the same bounds
+        # centre in both places so non-uniform meshes do not flip a clicked
+        # patch to the opposite direction between picking and solving.
+        body_center = 0.5 * (pts.min(axis=0) + pts.max(axis=0))
         inward = np.einsum("ij,ij->i", normals, centers - body_center) < 0.0
         normals[inward] *= -1.0
 
@@ -318,10 +366,6 @@ def _mesh_boundary_face_data(mesh_like):
         return None
 
 
-def _mesh_direction_node_ids(mesh_like, selector):
-    """Select exterior nodes on the end face implied by a Direction selector."""
-    ids, _faces = _mesh_direction_selection(mesh_like, selector)
-    return ids
 
 
 def _mesh_direction_selection(mesh_like, selector):
@@ -452,6 +496,86 @@ def _surface_component_metrics(mesh_like, surface_faces):
     return total_area, center
 
 
+def _feature_surface_component_indices(
+    points, faces, normals, centers, areas,
+    feature_angle_deg=_MESH_FEATURE_ANGLE_DEG,
+):
+    """Split a triangulated surface into smooth, feature-bounded regions."""
+    points = np.asarray(points, dtype=float)
+    faces = np.asarray(faces, dtype=int)
+    normals = np.asarray(normals, dtype=float)
+    centers = np.asarray(centers, dtype=float)
+    areas = np.asarray(areas, dtype=float)
+    if (
+        points.ndim != 2 or points.shape[1] < 3
+        or faces.ndim != 2 or faces.shape[1] < 3
+        or len(faces) != len(normals)
+    ):
+        return []
+    faces = faces[:, :3]
+    span = float(np.max(np.ptp(points[:, :3], axis=0))) if len(points) else 1.0
+    weld_tol = max(1e-9, span * 1e-8)
+    quantized = np.rint(points[:, :3] / weld_tol).astype(np.int64)
+
+    # Coordinate-based keys also weld STL triangles that duplicate vertices.
+    edge_to_faces = {}
+    for face_idx, tri in enumerate(faces):
+        vertices = [tuple(int(v) for v in quantized[int(pid)]) for pid in tri]
+        for a, b in ((vertices[0], vertices[1]),
+                     (vertices[1], vertices[2]),
+                     (vertices[2], vertices[0])):
+            edge_to_faces.setdefault(tuple(sorted((a, b))), []).append(face_idx)
+
+    adjacency = [set() for _ in range(len(faces))]
+    min_dot = math.cos(math.radians(float(feature_angle_deg)))
+    for owners in edge_to_faces.values():
+        for i, owner in enumerate(owners):
+            for other in owners[i + 1:]:
+                if float(np.dot(normals[owner], normals[other])) >= min_dot:
+                    adjacency[owner].add(other)
+                    adjacency[other].add(owner)
+
+    components = []
+    visited = np.zeros(len(faces), dtype=bool)
+    for start in range(len(faces)):
+        if visited[start]:
+            continue
+        stack = [start]
+        visited[start] = True
+        current_component = []
+        while stack:
+            current = stack.pop()
+            current_component.append(current)
+            for nxt in adjacency[current]:
+                if not visited[nxt]:
+                    visited[nxt] = True
+                    stack.append(nxt)
+        component = np.asarray(current_component, dtype=int)
+        area = float(np.sum(areas[component]))
+        if area <= 1e-12:
+            continue
+        center = np.sum(centers[component] * areas[component, None], axis=0) / area
+        components.append((area, center, component))
+
+    components.sort(key=lambda item: (
+        -float(item[0]), float(item[1][0]), float(item[1][1]), float(item[1][2])
+    ))
+    return [component for _area, _center, component in components]
+
+
+def _mesh_feature_components(mesh_like):
+    """Return cylindrical, conical, planar, and freeform surface regions."""
+    data = _mesh_boundary_face_data(mesh_like)
+    points = _mesh_points(mesh_like)
+    if data is None or points is None:
+        return []
+    indices = _feature_surface_component_indices(
+        points.T, data["faces"], data["normals"],
+        data["centers"], data["areas"],
+    )
+    return [data["faces"][component] for component in indices]
+
+
 def _mesh_direction_components(mesh_like, selector):
     """Return connected patch components for one virtual mesh direction."""
     import numpy as np
@@ -482,7 +606,17 @@ def _mesh_component_selection(mesh_like, stored_index):
     """Resolve a stored connected-patch index to nodes and exterior triangles."""
     import numpy as np
 
-    local = int(stored_index) - _MESH_COMPONENT_INDEX_BASE
+    stored_index = int(stored_index)
+    if stored_index >= _MESH_FEATURE_INDEX_BASE:
+        component_index = stored_index - _MESH_FEATURE_INDEX_BASE
+        components = _mesh_feature_components(mesh_like)
+        if component_index < 0 or component_index >= len(components):
+            return "Feature", np.array([], dtype=int), None
+        surface_faces = np.asarray(components[component_index], dtype=int)
+        ids = np.unique(surface_faces.reshape(-1))
+        return "Feature", ids.astype(int), surface_faces
+
+    local = stored_index - _MESH_COMPONENT_INDEX_BASE
     if local < 0:
         return None, np.array([], dtype=int), None
     direction_index = local // _MESH_COMPONENT_INDEX_STRIDE
@@ -529,6 +663,7 @@ class SelectFaceNode(CadQueryNode):
         self.create_property('tag', 'top', widget_type='string')
 
     def run(self):
+        self.clear_error()
         raw_input = resolve_any_input(self.get_input('shape'))
         method = _canonical_selector_type(self.get_property('selector_type'))
 
@@ -553,14 +688,21 @@ class SelectFaceNode(CadQueryNode):
                         float(self.get_property('near_y') or 0.0),
                         float(self.get_property('near_z') or 0.0),
                     ])
-                    dist = np.linalg.norm(p.T - pt, axis=1)
-                    nearest = int(np.argmin(dist))
-                    band = max(tol, float(dist[nearest]) + 1e-9)
-                    ids = np.where(dist <= band)[0]
+                    boundary = _mesh_boundary_face_data(raw_input)
+                    if boundary is None:
+                        raise ValueError("The mesh has no resolvable exterior surface.")
+                    distances = np.linalg.norm(boundary["centers"] - pt, axis=1)
+                    nearest = int(np.argmin(distances))
+                    surface_faces = boundary["faces"][[nearest]]
+                    ids = np.unique(surface_faces.reshape(-1))
                     label = f"nearest {pt.tolist()}"
 
                 elif method == 'Index':
-                    idx = int(self.get_property('face_index') or 0) % len(_MESH_FACE_DIRECTIONS)
+                    idx = int(self.get_property('face_index') or 0)
+                    if not 0 <= idx < len(_MESH_FACE_DIRECTIONS):
+                        raise ValueError(
+                            f"Mesh face index {idx} is out of range; use 0..{len(_MESH_FACE_DIRECTIONS)-1}."
+                        )
                     selector = _MESH_FACE_DIRECTIONS[idx]
                     ids, surface_faces = _mesh_direction_selection(raw_input, selector)
                     label = selector
@@ -569,10 +711,11 @@ class SelectFaceNode(CadQueryNode):
                     best = None
                     for selector in _MESH_FACE_DIRECTIONS:
                         current, current_faces = _mesh_direction_selection(raw_input, selector)
-                        if best is None or len(current) > len(best[1]):
-                            best = (selector, current, current_faces)
+                        area = _surface_component_metrics(raw_input, current_faces)[0]
+                        if best is None or area > best[0]:
+                            best = (area, selector, current, current_faces)
                     if best is not None:
-                        label, ids, surface_faces = best
+                        _area, label, ids, surface_faces = best
 
                 elif method == 'Box':
                     min_pt = np.asarray([
@@ -587,20 +730,37 @@ class SelectFaceNode(CadQueryNode):
                     ])
                     lo = np.minimum(min_pt, max_pt)
                     hi = np.maximum(min_pt, max_pt)
-                    mask = np.all((p.T >= lo) & (p.T <= hi), axis=1)
-                    ids = np.where(mask)[0]
+                    boundary = _mesh_boundary_face_data(raw_input)
+                    if boundary is None:
+                        raise ValueError("The mesh has no resolvable exterior surface.")
+                    mask = np.all(
+                        (boundary["centers"] >= lo) & (boundary["centers"] <= hi),
+                        axis=1,
+                    )
+                    surface_faces = boundary["faces"][mask]
+                    ids = (
+                        np.unique(surface_faces.reshape(-1))
+                        if surface_faces.size else np.array([], dtype=int)
+                    )
                     label = "box"
 
                 elif method == 'Coordinate Range':
                     expr = str(self.get_property('range_expr') or '').strip()
                     from pylcss.solver_backends.common import nodes_matching_condition
+                    from types import SimpleNamespace
 
-                    class _MeshProxy:
-                        pass
-
-                    proxy = _MeshProxy()
-                    proxy.p = p
-                    ids = nodes_matching_condition(proxy, expr, label="Select Face mesh range")
+                    boundary = _mesh_boundary_face_data(raw_input)
+                    if boundary is None:
+                        raise ValueError("The mesh has no resolvable exterior surface.")
+                    proxy = SimpleNamespace(p=boundary["centers"].T)
+                    face_ids = nodes_matching_condition(
+                        proxy, expr, label="Select Face mesh range"
+                    )
+                    surface_faces = boundary["faces"][np.asarray(face_ids, dtype=int)]
+                    ids = (
+                        np.unique(surface_faces.reshape(-1))
+                        if surface_faces.size else np.array([], dtype=int)
+                    )
                     label = expr
 
                 payload = _mesh_selection_payload(
@@ -624,6 +784,7 @@ class SelectFaceNode(CadQueryNode):
         else:
             shape_input = resolve_shape_input(self.get_input('shape'))
         if not shape_input:
+            self.set_error("Connect a CAD shape or mesh to Select Face.")
             return None
 
         # Convert Assembly to Compound if needed
@@ -689,6 +850,7 @@ class SelectFaceNode(CadQueryNode):
                 all_faces = obj.faces().vals()
                 if not all_faces:
                     logger.debug("SelectFaceNode (%s): NO FACES FOUND AT ALL", self.NODE_NAME)
+                    self.set_error("The connected shape has no faces.")
                     return None
                 sorted_faces = sorted(all_faces, key=lambda f: f.Area(), reverse=True)
                 largest_face = sorted_faces[0]
@@ -701,13 +863,16 @@ class SelectFaceNode(CadQueryNode):
                 faces = face_selection.vals()
                 logger.debug("SelectFaceNode (%s): Tag %s found %d faces", self.NODE_NAME, tag_name, len(faces))
                 if not faces:
+                    self.set_error(f"No faces found with tag {tag_name!r}.")
                     return None
                 return _selection_payload(face_selection.workplane(), faces, method)
 
             elif method == 'Box':
                 # Custom Box Selector
-                min_pt = (self.get_property('box_min_x'), self.get_property('box_min_y'), self.get_property('box_min_z'))
-                max_pt = (self.get_property('box_max_x'), self.get_property('box_max_y'), self.get_property('box_max_z'))
+                a = np.asarray((self.get_property('box_min_x'), self.get_property('box_min_y'), self.get_property('box_min_z')), dtype=float)
+                b = np.asarray((self.get_property('box_max_x'), self.get_property('box_max_y'), self.get_property('box_max_z')), dtype=float)
+                min_pt = np.minimum(a, b)
+                max_pt = np.maximum(a, b)
 
                 # Check center of faces against box
                 def in_box(f):
@@ -720,6 +885,7 @@ class SelectFaceNode(CadQueryNode):
                 faces = [f for f in all_faces if in_box(f)]
                 logger.debug("SelectFaceNode (%s): Box found %d faces", self.NODE_NAME, len(faces))
                 if not faces:
+                    self.set_error("No face centers lie inside the specified box.")
                     return None
 
                 new_wp = obj.newObject(faces)
@@ -731,19 +897,16 @@ class SelectFaceNode(CadQueryNode):
                 all_faces = obj.faces().vals()
                 faces = []
 
-                # Try to use simpleeval if available
                 try:
                     from simpleeval import simple_eval
                 except ImportError:
-                    simple_eval = None
+                    self.set_error("Coordinate Range requires the simpleeval dependency.")
+                    return None
 
                 for f in all_faces:
                     c = f.Center()
                     try:
-                        if simple_eval:
-                            res = simple_eval(expr, names={'x': c.x, 'y': c.y, 'z': c.z})
-                        else:
-                            res = eval(expr, {"__builtins__": None}, {'x': c.x, 'y': c.y, 'z': c.z})
+                        res = simple_eval(expr, names={'x': c.x, 'y': c.y, 'z': c.z})
                         if res:
                             faces.append(f)
                     except Exception:
@@ -751,6 +914,7 @@ class SelectFaceNode(CadQueryNode):
 
                 logger.debug("SelectFaceNode (%s): Coordinate Range found %d faces", self.NODE_NAME, len(faces))
                 if not faces:
+                    self.set_error(f"No face centers matched coordinate expression {expr!r}.")
                     return None
 
                 new_wp = obj.newObject(faces)
@@ -804,7 +968,8 @@ class InteractiveSelectFaceNode(CadQueryNode):
     # ------------------------------------------------------------------
     # Node execution
     # ------------------------------------------------------------------
-    def run(self):
+    def run(self, preview=False):
+        self.clear_error()
         # Parse stored indices
         raw = self.get_property('picked_face_indices') or ''
         face_indices = []
@@ -814,6 +979,8 @@ class InteractiveSelectFaceNode(CadQueryNode):
                 face_indices.append(int(tok))
 
         if not face_indices:
+            if preview:
+                return None
             self.set_error('No faces picked yet — click "Pick Faces in 3D Viewer"')
             return None
 
@@ -863,6 +1030,7 @@ class InteractiveSelectFaceNode(CadQueryNode):
 
         shape_input = resolve_shape_input(self.get_input('shape'))
         if not shape_input:
+            self.set_error("Connect a CAD shape or mesh before using interactive face selection.")
             return None
 
         # Resolve shape

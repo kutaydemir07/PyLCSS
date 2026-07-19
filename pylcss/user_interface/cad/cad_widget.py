@@ -18,16 +18,12 @@ import tempfile
 import time
 import logging
 from datetime import datetime
-import vtk
-from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
-import cadquery as cq
 from .cad_viewer import CQ3DViewer
 from PySide6 import QtWidgets, QtCore, QtGui
 from PySide6.QtCore import QMimeData
 from PySide6.QtGui import QDrag
 from NodeGraphQt import NodeGraph
-from pylcss.design_studio.engine import execute_graph
-from pylcss.design_studio.node_library import NODE_CLASS_MAPPING, NODE_NAME_MAPPING
+from pylcss.design_studio.node_library import NODE_CLASS_MAPPING
 from pylcss.design_studio.topology_optimization.presets import (
     industrial_topopt_defaults,
     INDUSTRIAL_WORKFLOW_MODES,
@@ -42,9 +38,6 @@ try:
 except ImportError:
     simple_eval = None  # Fallback if not installed
 
-# Import all node types
-from pylcss.design_studio.nodes import NODE_REGISTRY, NumberNode, ExportStepNode, ExportStlNode
-from pylcss.design_studio.nodes.modeling import InteractiveSelectFaceNode
 
 # Reuse the Python-aware editor widget from the system-modeling tab so the
 # CAD code editor matches the look-and-feel users already know.
@@ -325,6 +318,7 @@ class CadCodeEditorDialog(QtWidgets.QDialog):
 class GraphExecutionWorker(QtCore.QThread):
     """Background worker to run the node graph without freezing the UI."""
     computation_finished = QtCore.Signal(object)  # Emits results dict
+    computation_cancelled = QtCore.Signal(object)  # Emits safe partial results
     computation_error = QtCore.Signal(str)
     optimization_step = QtCore.Signal(object, object, int, int) # mesh, densities, step, total
 
@@ -337,7 +331,10 @@ class GraphExecutionWorker(QtCore.QThread):
     def run(self):
         self._is_running = True
         try:
-            from pylcss.design_studio.engine import execute_graph
+            from pylcss.design_studio.engine import (
+                GraphExecutionCancelled,
+                execute_graph,
+            )
             
             # Callback for real-time updates
             def progress_cb(mesh, densities, step, total):
@@ -352,7 +349,12 @@ class GraphExecutionWorker(QtCore.QThread):
                 progress_callback=progress_cb
             )
 
-            self.computation_finished.emit(results)
+            if self._is_running:
+                self.computation_finished.emit(results)
+            else:
+                self.computation_cancelled.emit(results)
+        except GraphExecutionCancelled as exc:
+            self.computation_cancelled.emit(exc.results)
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -424,109 +426,6 @@ class TopOptStepExportWorker(QtCore.QThread):
                 return mins[:3], maxs[:3]
         return None
 
-    def _refresh_recovered_shape(self, payload):
-        if payload.get("density") is None:
-            return
-        import numpy as np
-        from pylcss.design_studio.topology_optimization.recovery import _recover_voxel_shape
-
-        passive = self.passive_regions or payload.get("passive_regions") or {}
-        recovered = _recover_voxel_shape(
-            np.asarray(payload["density"], dtype=float),
-            self._bounds_tuple(payload.get("bounds")),
-            self.density_cutoff,
-            print_ready=self.print_ready,
-            decimate_ratio=self.decimate_ratio,
-            solid_boxes=passive.get("solid_boxes", ()),
-            void_boxes=passive.get("void_boxes", ()),
-            solid_cylinders=passive.get("solid_cylinders", ()),
-            void_cylinders=passive.get("void_cylinders", ()),
-            extrusion_axis=self.extrusion_axis,
-            source_mask=payload.get("design_domain"),
-        )
-        if recovered is not None and len(recovered.get("faces", [])) > 0:
-            payload["recovered_shape"] = recovered
-
-    def _write_cad_step(self, payload, path):
-        import cadquery as cq
-
-        from pylcss.design_studio.topology_optimization.cad_reconstruction import (
-            reconstruct_topopt_cad,
-        )
-
-        shape = reconstruct_topopt_cad(
-            payload,
-            source_geometry="Recovered Shape",
-            sew_tolerance=1e-4,
-        )
-        cq.exporters.export(shape, str(path), exportType="STEP")
-
-    @staticmethod
-    def _write_faceted_step(recovered, path):
-        import numpy as np
-
-        vertices = np.asarray(recovered.get("vertices"), dtype=float)
-        faces = np.asarray(recovered.get("faces"), dtype=int)
-        if vertices.ndim != 2 or vertices.shape[1] < 3 or faces.ndim != 2 or faces.shape[1] < 3:
-            raise RuntimeError("Recovered shape does not contain triangle vertices/faces.")
-
-        max_faceted_faces = 5000
-        if len(faces) > max_faceted_faces:
-            raise RuntimeError(
-                f"Recovered mesh has {len(faces)} triangles; dense faceted STEP "
-                "export is disabled. Use STL/OBJ for mesh output or CAD STEP "
-                "reconstruction for an interactive B-rep."
-            )
-
-        from OCP.BRep import BRep_Builder
-        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
-        from OCP.gp import gp_Pnt
-        from OCP.STEPControl import STEPControl_StepModelType, STEPControl_Writer
-        from OCP.TopoDS import TopoDS_Compound
-
-        builder = BRep_Builder()
-        compound = TopoDS_Compound()
-        builder.MakeCompound(compound)
-
-        n_faces = 0
-        skipped = 0
-        for tri in faces:
-            try:
-                pts = vertices[np.asarray(tri[:3], dtype=int), :3]
-            except Exception:
-                skipped += 1
-                continue
-            if not np.all(np.isfinite(pts)):
-                skipped += 1
-                continue
-            area = 0.5 * np.linalg.norm(np.cross(pts[1] - pts[0], pts[2] - pts[0]))
-            if area <= 1e-12:
-                skipped += 1
-                continue
-
-            poly = BRepBuilderAPI_MakePolygon(
-                gp_Pnt(float(pts[0, 0]), float(pts[0, 1]), float(pts[0, 2])),
-                gp_Pnt(float(pts[1, 0]), float(pts[1, 1]), float(pts[1, 2])),
-                gp_Pnt(float(pts[2, 0]), float(pts[2, 1]), float(pts[2, 2])),
-                True,
-            )
-            if not poly.IsDone():
-                skipped += 1
-                continue
-            face_builder = BRepBuilderAPI_MakeFace(poly.Wire(), True)
-            if not face_builder.IsDone():
-                skipped += 1
-                continue
-            builder.Add(compound, face_builder.Face())
-            n_faces += 1
-
-        if n_faces < 1:
-            raise RuntimeError("Recovered shape did not contain any valid triangles.")
-
-        writer = STEPControl_Writer()
-        writer.Transfer(compound, STEPControl_StepModelType.STEPControl_AsIs)
-        writer.Write(str(path))
-        return n_faces, skipped
 
     def run(self):
         try:
@@ -659,6 +558,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         self.current_node = None
         self.property_widgets = {}
         self._updating_property = False  # guard against feedback loop
+        self._active_pick_connections = None
 
         # Title
         title = QtWidgets.QLabel("INSPECTOR")
@@ -731,6 +631,8 @@ class PropertiesPanel(QtWidgets.QWidget):
                 self._build_topopt_voxel_ui(node)
             elif node_class == 'CadQueryCodeNode':
                 self._build_code_part_ui(node)
+            elif node_class in ('MaterialNode', 'CrashMaterialNode'):
+                self._build_material_ui(node)
             elif node_class == 'InteractiveSelectFaceNode':
                 self._build_interactive_select_ui(node)
             elif node_class == 'SelectFaceNode':
@@ -861,6 +763,126 @@ class PropertiesPanel(QtWidgets.QWidget):
                 self, "Preview failed",
                 f"Code part couldn't be evaluated:\n\n{exc}"
             )
+
+    def _build_material_ui(self, node):
+        """Show the material values that the solver will actually consume.
+
+        Preset elastic/plastic fields are resolved from the databases in the
+        node ``run()`` methods.  Rendering the stale backing properties as
+        editable controls made it look as though those edits affected a named
+        preset when they were in fact ignored.  Preset-derived values are now
+        visible but locked; choosing Custom exposes the stored custom values.
+        """
+        is_crash = node.__class__.__name__ == 'CrashMaterialNode'
+        if is_crash:
+            from pylcss.design_studio.crash.materials import CRASH_MATERIAL_PRESETS
+            presets = CRASH_MATERIAL_PRESETS
+        else:
+            from pylcss.design_studio.fem._helpers import MATERIAL_DATABASE
+            presets = MATERIAL_DATABASE
+
+        preset = str(node.get_property('preset') or 'Custom')
+        preset_group = QtWidgets.QGroupBox("Material Definition")
+        preset_layout = QtWidgets.QFormLayout(preset_group)
+        preset_combo = QtWidgets.QComboBox()
+        preset_combo.addItems([str(name) for name in presets.keys()])
+        preset_combo.setCurrentText(preset if preset in presets else 'Custom')
+
+        def _change_preset(value):
+            self.update_property('preset', value)
+            QtCore.QTimer.singleShot(
+                0,
+                lambda n=node: self.display_node(n) if self.current_node is n else None,
+            )
+
+        preset_combo.currentTextChanged.connect(_change_preset)
+        preset_layout.addRow("Preset:", preset_combo)
+
+        locked = preset != 'Custom' and preset in presets
+        source_note = QtWidgets.QLabel(
+            "Preset values shown below are the exact solver inputs. Choose Custom "
+            "to edit them." if locked else
+            "Custom material values are editable and are passed directly to the solver."
+        )
+        source_note.setWordWrap(True)
+        source_note.setStyleSheet("color:#8f98a5; font-size:10px;")
+        preset_layout.addRow(source_note)
+
+        preset_values = presets.get(preset, {}) if locked else {}
+        field_specs = [
+            ('youngs_modulus', 'E', "Young's modulus (MPa)"),
+            ('poissons_ratio', 'nu', "Poisson's ratio"),
+            ('density', 'rho', "Density (t/mm^3)"),
+        ]
+        if is_crash:
+            field_specs.extend([
+                ('yield_strength', 'yield_strength', "Yield strength (MPa)"),
+                ('tangent_modulus', 'tangent_modulus', "Tangent modulus (MPa)"),
+                ('failure_strain', 'failure_strain', "Failure strain"),
+            ])
+
+        for prop_name, preset_key, label in field_specs:
+            value = preset_values.get(preset_key, node.get_property(prop_name))
+            editor = ExpressionEdit(value if value is not None else 0.0)
+            editor.setEnabled(not locked)
+            if locked:
+                editor.setToolTip(
+                    f"Resolved from the '{preset}' database entry. Choose Custom to edit."
+                )
+            else:
+                editor.value_changed.connect(
+                    lambda v, p=prop_name: self.update_property(p, v)
+                )
+            preset_layout.addRow(label + ":", editor)
+            self.property_widgets[prop_name] = editor
+
+        self.props_layout.addWidget(preset_group)
+
+        if is_crash:
+            behavior = QtWidgets.QGroupBox("Crash Material Behavior")
+            behavior_layout = QtWidgets.QFormLayout(behavior)
+            fracture = QtWidgets.QCheckBox("Delete failed elements")
+            fracture.setChecked(bool(node.get_property('enable_fracture')))
+            fracture.toggled.connect(
+                lambda checked: self.update_property('enable_fracture', bool(checked))
+            )
+            fracture.setToolTip(
+                "Delete elements after the equivalent plastic strain reaches the failure strain."
+            )
+            behavior_layout.addRow("Fracture:", fracture)
+
+            rate = QtWidgets.QCheckBox("Use preset strain-rate law")
+            rate.setChecked(bool(node.get_property('strain_rate_sensitive')))
+            rate.toggled.connect(
+                lambda checked: self.update_property('strain_rate_sensitive', bool(checked))
+            )
+            rate.setToolTip(
+                "Enable the preset Cowper-Symonds rate hardening. The internal constants "
+                "are tied to the selected material model."
+            )
+            behavior_layout.addRow("Rate effects:", rate)
+            self.props_layout.addWidget(behavior)
+        else:
+            plasticity = QtWidgets.QGroupBox("Optional Bilinear Plasticity")
+            plastic_layout = QtWidgets.QFormLayout(plasticity)
+            for prop_name, label in (
+                ('yield_strength', 'Yield strength (MPa)'),
+                ('tangent_modulus', 'Tangent modulus (MPa)'),
+            ):
+                editor = ExpressionEdit(node.get_property(prop_name) or 0.0)
+                editor.value_changed.connect(
+                    lambda v, p=prop_name: self.update_property(p, v)
+                )
+                plastic_layout.addRow(label + ":", editor)
+                self.property_widgets[prop_name] = editor
+            hint = QtWidgets.QLabel(
+                "Yield strength = 0 keeps the material purely elastic. These two "
+                "values intentionally override the selected elastic preset."
+            )
+            hint.setWordWrap(True)
+            hint.setStyleSheet("color:#8f98a5; font-size:10px;")
+            plastic_layout.addRow(hint)
+            self.props_layout.addWidget(plasticity)
             
     def _build_topopt_voxel_ui(self, node):
         """Compact inspector for the structured voxel topology optimizer."""
@@ -919,28 +941,6 @@ class PropertiesPanel(QtWidgets.QWidget):
             widget.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
             return widget
 
-        def _json_editor(prop, placeholder, min_height=72):
-            widget = QtWidgets.QPlainTextEdit(str(node.get_property(prop) or "[]"))
-            widget.setPlaceholderText(placeholder)
-            mono = QtGui.QFont("Consolas")
-            mono.setStyleHint(QtGui.QFont.Monospace)
-            widget.setFont(mono)
-            widget.setMinimumHeight(int(min_height))
-            widget.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
-            widget.focusOutEvent = (
-                lambda ev, w=widget, p=prop, _orig=widget.focusOutEvent:
-                    (self.update_property(p, w.toPlainText()), _orig(ev))[-1]
-            )
-            return widget
-
-        def _spin_row(widgets):
-            row = QtWidgets.QWidget()
-            layout = QtWidgets.QHBoxLayout(row)
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(4)
-            for widget in widgets:
-                layout.addWidget(widget, 1)
-            return row
 
         def _refresh_topopt_later():
             QtCore.QTimer.singleShot(
@@ -1084,38 +1084,6 @@ class PropertiesPanel(QtWidgets.QWidget):
 
             return [int(v) for v in dims[:3]]
 
-        def _apply_generalized_defaults(refresh=True):
-            nelx, nely, nelz = _generalized_grid()
-            stress_enabled = _get_bool("stress_constraint")
-            goal = str(node.get_property("design_goal") or "").lower()
-            stress_goal = "stress" in goal
-            optimizer = "MMA" if stress_enabled or stress_goal else "OC"
-            max_dim = max(nelx, nely, nelz)
-            rmin = round(max(1.2, min(5.0, max_dim * 0.030)), 2)
-
-            settings = {
-                "advanced_settings_visible": False,
-                "nelx": nelx,
-                "nely": nely,
-                "nelz": nelz,
-                "rmin": rmin,
-                "penal": 3.0,
-                "density_cutoff": 0.45,
-                "optimizer": optimizer,
-                "max_iter": 100,
-                "tol": 0.005,
-                "convergence_patience": 5,
-                "print_ready_mesh": False,
-                "mesh_decimate_ratio": 1.0,
-            }
-            for key, value in settings.items():
-                self.update_property(key, value)
-            if hasattr(self.window(), "statusBar") and self.window().statusBar():
-                self.window().statusBar().showMessage(
-                    "Applied generalized fine topology defaults"
-                )
-            if refresh:
-                _refresh_topopt_later()
 
         def _intent_combo(prop, items, default=None):
             widget = _combo(prop, items, default)
@@ -1373,72 +1341,9 @@ class PropertiesPanel(QtWidgets.QWidget):
 
         if _get_bool("advanced_settings_visible"):
             self.props_layout.addWidget(advanced_group)
-        setup_group = QtWidgets.QGroupBox("Setup & Load Cases")
-        setup_layout = QtWidgets.QFormLayout()
-        support_items = ["None", "Fix X", "Fix Y", "Fix Z", "Fix XY", "Fix YZ", "Fix XZ", "Fix XYZ"]
-        support_row = QtWidgets.QWidget()
-        support_grid = QtWidgets.QGridLayout(support_row)
-        support_grid.setContentsMargins(0, 0, 0, 0)
-        support_grid.setSpacing(4)
-        for idx, (label, prop) in enumerate((
-            ("Left", "left_support"),
-            ("Right", "right_support"),
-            ("Top", "top_support"),
-            ("Bottom", "bottom_support"),
-            ("Front", "front_support"),
-            ("Back", "back_support"),
-        )):
-            support_grid.addWidget(QtWidgets.QLabel(label), idx // 2, (idx % 2) * 2)
-            support_grid.addWidget(_combo(prop, support_items, "None"), idx // 2, (idx % 2) * 2 + 1)
-        setup_layout.addRow("Face Supports:", support_row)
-        setup_layout.addRow(
-            "Force Type:",
-            _combo("force_type", ["Point", "Distributed Face"], "Point"),
-        )
-        setup_layout.addRow(
-            "Force Face:",
-            _combo("force_face", ["Left", "Right", "Top", "Bottom", "Front", "Back"], "Right"),
-        )
-        setup_layout.addRow(
-            "Point X/Y/Z:",
-            _spin_row((
-                _double("force_ix_frac", 1.0, 0.0, 1.0, decimals=3, step=0.05),
-                _double("force_iy_frac", 0.5, 0.0, 1.0, decimals=3, step=0.05),
-                _double("force_iz_frac", 0.5, 0.0, 1.0, decimals=3, step=0.05),
-            )),
-        )
-        setup_layout.addRow(
-            "Force XYZ:",
-            _spin_row((
-                _double("force_dir_x", 0.0, -1.0, 1.0, decimals=3, step=0.1),
-                _double("force_dir_y", -1.0, -1.0, 1.0, decimals=3, step=0.1),
-                _double("force_dir_z", 0.0, -1.0, 1.0, decimals=3, step=0.1),
-            )),
-        )
-        setup_layout.addRow(
-            "Magnitude:",
-            _double("force_magnitude", 1.0, 0.0, 1_000_000.0, decimals=3, step=1.0),
-        )
-        setup_layout.addRow(
-            "Support Regions:",
-            _json_editor("support_regions", '[{"x":[0,0.05],"y":[0,1],"z":[0,1],"dofs":"Fix XYZ"}]'),
-        )
-        setup_layout.addRow(
-            "Solid Regions:",
-            _json_editor("solid_regions", '[{"type":"cylinder","axis":"z","center":[0.5,0.5],"radius":0.25,"z":[0,1]}]'),
-        )
-        setup_layout.addRow(
-            "Void Regions:",
-            _json_editor("void_regions", '[{"type":"cylinder","axis":"z","center":[0.5,0.5],"radius":0.2,"z":[0,1]}]'),
-        )
-        setup_group.setToolTip(
-            "Standalone defaults. In normal graph workflows, use "
-            "the topology block's constraints and loads input ports."
-        )
-        setup_group.setLayout(setup_layout)
         # Boundary conditions are supplied through the TopOpt input ports.
         # Keep the legacy property editors available in saved projects, but do
-        # not expose duplicate setup/load controls in the normal inspector.
+        # not construct duplicate setup/load controls in the normal inspector.
 
         post_group = QtWidgets.QGroupBox("Post-Processing")
         post_layout = QtWidgets.QFormLayout()
@@ -1664,30 +1569,6 @@ class PropertiesPanel(QtWidgets.QWidget):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Export Error", str(e))
 
-    def _export_topopt_obj(self, node):
-        """Export recovered shape as Wavefront OBJ."""
-        result = getattr(node, '_last_result', None)
-        if not isinstance(result, dict) or 'recovered_shape' not in result or result['recovered_shape'] is None:
-            QtWidgets.QMessageBox.warning(self, "No Shape",
-                "Run topology optimisation first — no recovered shape available.")
-            return
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Export OBJ", "", "OBJ Files (*.obj)")
-        if not path:
-            return
-        try:
-            verts = result['recovered_shape']['vertices']
-            faces = result['recovered_shape']['faces']
-            with open(path, 'w') as f:
-                f.write("# PyLCSS TopOpt recovered shape\n")
-                for v in verts:
-                    f.write(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}\n")
-                for face in faces:
-                    f.write(f"f {face[0]+1} {face[1]+1} {face[2]+1}\n")
-            if hasattr(self.window(), 'statusBar') and self.window().statusBar():
-                self.window().statusBar().showMessage(f"Exported {len(faces)} faces to {path}")
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Export Error", str(e))
 
     def _write_binary_stl(self, path, shape_data):
         """Write binary STL without numpy-stl dependency."""
@@ -2821,14 +2702,42 @@ class PropertiesPanel(QtWidgets.QWidget):
             )
             return
 
+        # A completed pick used to leave its cancellation closure connected.
+        # Repeated sessions therefore accumulated stale node references and a
+        # later Cancel invoked every old callback. Tear down any prior session
+        # before installing the new pair of signal handlers.
+        active = self._active_pick_connections
+        if active is not None:
+            old_viewer, old_done, old_cancel = active
+            for signal, handler in (
+                (old_viewer.face_picked, old_done),
+                (old_viewer.picking_cancelled, old_cancel),
+            ):
+                try:
+                    signal.disconnect(handler)
+                except Exception:
+                    pass
+            self._active_pick_connections = None
+
         viewer.enable_picking_mode(multi_select=True)
+
+        def _disconnect_session():
+            for signal, handler in (
+                (viewer.face_picked, _on_faces_picked),
+                (viewer.picking_cancelled, _on_cancelled),
+            ):
+                try:
+                    signal.disconnect(handler)
+                except Exception:
+                    pass
+            if self._active_pick_connections is not None:
+                active_viewer, active_done, _active_cancel = self._active_pick_connections
+                if active_viewer is viewer and active_done is _on_faces_picked:
+                    self._active_pick_connections = None
 
         # Wire done signal
         def _on_faces_picked(occ_faces):
-            try:
-                viewer.face_picked.disconnect(_on_faces_picked)
-            except Exception:
-                pass
+            _disconnect_session()
             # Map picked face objects → indices that the InteractiveSelectFace
             # node understands. Two flavours:
             #   * Mesh virtual-face dicts already carry their own 'stored_index'
@@ -2895,14 +2804,11 @@ class PropertiesPanel(QtWidgets.QWidget):
                 app._execute_graph(skip_simulation=True)
 
         def _on_cancelled():
-            try:
-                viewer.picking_cancelled.disconnect(_on_cancelled)
-                viewer.face_picked.disconnect(_on_faces_picked)
-            except Exception:
-                pass
+            _disconnect_session()
 
         viewer.face_picked.connect(_on_faces_picked)
         viewer.picking_cancelled.connect(_on_cancelled)
+        self._active_pick_connections = (viewer, _on_faces_picked, _on_cancelled)
 
     def _clear_face_selection(self, node):
         """Clear all picked faces from an InteractiveSelectFaceNode."""
@@ -2931,7 +2837,6 @@ class PropertiesPanel(QtWidgets.QWidget):
     def _build_fea_bc_ui(self, node):
         """Rich Properties Panel UI for ConstraintNode, LoadNode, PressureLoadNode."""
         node_class = node.__class__.__name__
-        props = node.model.properties
 
         if node_class == 'ConstraintNode':
             # Use get_property (NodeGraphQt API) so we always read the live value,
@@ -3467,6 +3372,318 @@ class ResultsPanel(QtWidgets.QWidget):
             self._add_warnings(list(warnings))
 
 
+class StudyWorkbenchPanel(QtWidgets.QWidget):
+    """Workflow-oriented setup surface for the three engineering study types.
+
+    The node graph remains the source of truth.  This panel only inspects the
+    connected upstream closure of the relevant solver node and presents a
+    compact engineering checklist.  Running and result export stay in the main
+    toolbar so the workbench does not duplicate global actions.
+    """
+
+    _GEOMETRY_CLASSES = {
+        'CadQueryCodeNode', 'FreeCadPartNode', 'ImportStepNode', 'ImportStlNode',
+        'AssemblyNode',
+    }
+    _STUDIES = {
+        'FEA': {
+            'terminal_classes': ('SolverNode',),
+        },
+        'Crash / Impact': {
+            'terminal_classes': ('CrashSolverNode', 'RunRadiossDeckNode'),
+        },
+        'Topology Opt': {
+            'terminal_classes': ('TopologyOptVoxelNode',),
+        },
+    }
+
+    def __init__(self, host):
+        super().__init__(host)
+        self.host = host
+        self._pages = {}
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(5, 5, 5, 5)
+        outer.setSpacing(4)
+
+        self.tabs = QtWidgets.QTabWidget()
+        for study_name in self._STUDIES:
+            page = QtWidgets.QWidget()
+            layout = QtWidgets.QVBoxLayout(page)
+            layout.setContentsMargins(7, 7, 7, 7)
+            layout.setSpacing(5)
+
+            status = QtWidgets.QLabel()
+            status.setWordWrap(True)
+            status.setStyleSheet(
+                "background:#20242a; border:1px solid #353b45; border-radius:5px; "
+                "padding:5px; font-weight:600;"
+            )
+            layout.addWidget(status)
+
+            checklist = QtWidgets.QListWidget()
+            checklist.setAlternatingRowColors(True)
+            checklist.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+            checklist.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+            checklist.setTextElideMode(QtCore.Qt.ElideRight)
+            checklist.setMinimumHeight(115)
+            layout.addWidget(checklist, 1)
+
+            compact_tab = {
+                'Crash / Impact': 'Crash',
+                'Topology Opt': 'TopOpt',
+            }.get(study_name, study_name)
+            self.tabs.addTab(page, compact_tab)
+            self._pages[study_name] = {
+                'status': status,
+                'checklist': checklist,
+            }
+        outer.addWidget(self.tabs)
+        self.refresh()
+
+    def _all_nodes(self):
+        try:
+            return list(self.host.graph.all_nodes())
+        except Exception:
+            return []
+
+    def _target_node(self, study_name):
+        terminal_classes = set(self._STUDIES[study_name]['terminal_classes'])
+        candidates = []
+        try:
+            candidates.extend(list(self.host.graph.selected_nodes()))
+        except Exception:
+            pass
+        current = getattr(getattr(self.host, 'properties', None), 'current_node', None)
+        if current is not None and current not in candidates:
+            candidates.append(current)
+        for node in reversed(self._all_nodes()):
+            if node not in candidates:
+                candidates.append(node)
+        return next(
+            (node for node in candidates if node.__class__.__name__ in terminal_classes),
+            None,
+        )
+
+    def _scope(self, study_name):
+        target = self._target_node(study_name)
+        if target is None:
+            return target, self._all_nodes()
+        try:
+            return target, list(self.host._upstream_closure(target))
+        except Exception:
+            return target, [target]
+
+    @staticmethod
+    def _class_names(nodes):
+        return {node.__class__.__name__ for node in nodes}
+
+    @staticmethod
+    def _has_connected_port(node, name):
+        if node is None:
+            return False
+        try:
+            port = node.get_input(name)
+            return bool(port and port.connected_ports())
+        except Exception:
+            return False
+
+    @classmethod
+    def _has_face_or_condition(cls, node, port_name='target_face'):
+        if cls._has_connected_port(node, port_name):
+            return True
+        try:
+            return bool(str(node.get_property('condition') or '').strip())
+        except Exception:
+            return False
+
+    def _solver_ready(self, study_name, target=None):
+        try:
+            from pylcss.solver_backends.common import as_bool
+            if target is not None and as_bool(target.get_property('deck_only')):
+                return True, "Deck-only mode (solver launch disabled)"
+        except Exception:
+            pass
+        if study_name == 'FEA':
+            ready, _detail = LibraryPanel._calculix_status()
+            return ready, "CalculiX backend" if ready else "CalculiX missing"
+        if study_name == 'Crash / Impact':
+            ready, _detail = LibraryPanel._openradioss_status()
+            return ready, "OpenRadioss backend" if ready else "OpenRadioss missing"
+        try:
+            import pymoto  # noqa: F401
+            return True, "pyMOTO backend"
+        except Exception:
+            return False, "pyMOTO missing"
+
+    def _checks(self, study_name, target, nodes):
+        classes = self._class_names(nodes)
+        checks = []
+
+        if study_name == 'Crash / Impact' and target is not None and target.__class__.__name__ == 'RunRadiossDeckNode':
+            raw_path = str(target.get_property('deck_path') or '').strip()
+            try:
+                deck_ok = bool(
+                    target._resolve_deck_path(
+                        raw_path, getattr(target, "_project_dir", None)
+                    )
+                )
+            except Exception:
+                deck_ok = False
+            checks.extend([
+                ("Prepared deck", deck_ok),
+                ("Radioss terminal", True),
+            ])
+        elif study_name == 'Crash / Impact':
+            impact = next((n for n in nodes if n.__class__.__name__ == 'ImpactConditionNode'), None)
+            scope = str(impact.get_property('application_scope') or '') if impact is not None else ''
+            normalized_scope = scope.lower().replace('_', ' ')
+            needs_support = not normalized_scope.startswith(('moving body', 'prescribed'))
+            needs_face = not normalized_scope.startswith('moving body')
+            checks.extend([
+                ("Crash terminal", target is not None),
+                ("Mesh", target is not None and self._has_connected_port(target, 'mesh')),
+                ("Material", target is not None and self._has_connected_port(target, 'crash_material')),
+                ("Impact", target is not None and self._has_connected_port(target, 'impact')),
+                ("Impact face", impact is not None and (
+                    self._has_connected_port(impact, 'impact_face') or not needs_face
+                )),
+                ("Support", not needs_support or (
+                    'ConstraintNode' in classes
+                    and target is not None
+                    and self._has_connected_port(target, 'constraints')
+                )),
+            ])
+        elif study_name == 'Topology Opt':
+            def _finite_float(name, default=0.0):
+                try:
+                    value = float(target.get_property(name) if target is not None else default)
+                    return value if value == value and abs(value) != float('inf') else default
+                except (TypeError, ValueError):
+                    return default
+
+            try:
+                dims = tuple(int(target.get_property(name)) for name in ('nelx', 'nely', 'nelz'))
+                grid_ready = min(dims) >= 1 and dims[0] * dims[1] * dims[2] <= 500_000
+            except (AttributeError, TypeError, ValueError):
+                grid_ready = False
+
+            support_props = (
+                'left_support', 'right_support', 'top_support',
+                'bottom_support', 'front_support', 'back_support',
+            )
+            property_support = target is not None and any(
+                str(target.get_property(name) or 'None').strip().lower() != 'none'
+                for name in support_props
+            )
+            property_support = property_support or (
+                target is not None
+                and str(target.get_property('support_regions') or '').strip() not in {'', '[]'}
+            )
+
+            fx = _finite_float('force_dir_x')
+            fy = _finite_float('force_dir_y')
+            fz = _finite_float('force_dir_z')
+            magnitude = _finite_float('force_magnitude')
+            property_load = target is not None and magnitude > 0.0 and any(
+                abs(v) > 1e-15 for v in (fx, fy, fz)
+            )
+            property_load = property_load or (
+                target is not None
+                and str(target.get_property('load_cases') or '').strip() not in {'', '[]'}
+            )
+
+            connected_constraints = [
+                n for n in nodes if n.__class__.__name__ == 'ConstraintNode'
+            ]
+            connected_loads = [
+                n for n in nodes
+                if n.__class__.__name__ in {'LoadNode', 'PressureLoadNode'}
+            ]
+            checks.extend([
+                ("TopOpt terminal", target is not None),
+                ("Design domain", target is not None and (
+                    self._has_connected_port(target, 'mesh') or grid_ready
+                )),
+                ("Material", target is not None and (
+                    self._has_connected_port(target, 'material')
+                    or (_finite_float('E0') > 0.0 and -1.0 < _finite_float('nu') < 0.5)
+                )),
+                ("Support", property_support or bool(connected_constraints)),
+                ("Load", property_load or bool(connected_loads)),
+            ])
+        else:
+            constraints = [n for n in nodes if n.__class__.__name__ == 'ConstraintNode']
+            loads = [n for n in nodes if n.__class__.__name__ in {'LoadNode', 'PressureLoadNode'}]
+            prescribed = any(
+                str(n.get_property('constraint_type') or '') == 'Displacement'
+                for n in constraints
+            )
+            constraint_ready = bool(constraints) and all(
+                self._has_connected_port(n, 'mesh') and self._has_face_or_condition(n)
+                for n in constraints
+            )
+            loads_ready = bool(loads) and all(
+                self._has_connected_port(load, 'mesh')
+                and (
+                    str(load.get_property('load_type') or 'Force') == 'Gravity'
+                    or self._has_face_or_condition(load)
+                )
+                for load in loads
+            )
+            terminal_label = "FEA terminal" if study_name == 'FEA' else "TopOpt terminal"
+            checks.extend([
+                (terminal_label, target is not None),
+                ("Mesh / design domain", target is not None and self._has_connected_port(target, 'mesh')),
+                ("Material", target is not None and self._has_connected_port(target, 'material')),
+                ("Support", constraint_ready and target is not None
+                 and self._has_connected_port(target, 'constraints')),
+                ("Load", (loads_ready and target is not None
+                 and self._has_connected_port(target, 'loads')) or prescribed),
+            ])
+
+        node_errors = [n for n in nodes if getattr(n, 'has_error', lambda: False)()]
+        checks.append(("No node errors", not node_errors))
+        backend_ok, backend_message = self._solver_ready(study_name, target)
+        checks.append((backend_message, backend_ok))
+        return checks
+
+    def refresh(self):
+        if not hasattr(self.host, 'graph'):
+            return
+        for study_name, widgets in self._pages.items():
+            target, scope = self._scope(study_name)
+            checks = self._checks(study_name, target, scope)
+            checklist = widgets['checklist']
+            checklist.clear()
+            missing = 0
+            for label, ok in checks:
+                item = QtWidgets.QListWidgetItem(("OK   " if ok else "MISS ") + label)
+                item.setForeground(QtGui.QColor("#72d38a" if ok else "#ffb35c"))
+                item.setToolTip(label)
+                checklist.addItem(item)
+                if not ok:
+                    missing += 1
+
+            target_name = "No terminal node"
+            if target is not None:
+                try:
+                    target_name = target.name() if callable(target.name) else str(target.name)
+                except Exception:
+                    target_name = target.__class__.__name__
+            if missing:
+                widgets['status'].setText(f"{target_name}  |  {missing} setup item(s) need attention")
+                widgets['status'].setStyleSheet(
+                    "background:#3a2b18; border:1px solid #735426; border-radius:5px; "
+                    "padding:5px; color:#ffd08a; font-weight:600;"
+                )
+            else:
+                widgets['status'].setText(f"{target_name}  |  Study is ready to run")
+                widgets['status'].setStyleSheet(
+                    "background:#173522; border:1px solid #2c6840; border-radius:5px; "
+                    "padding:5px; color:#8fe3a5; font-weight:600;"
+                )
+
+
 class LibraryPanel(QtWidgets.QWidget):
     """Component library with categorized nodes."""
 
@@ -3660,6 +3877,12 @@ class LibraryPanel(QtWidgets.QWidget):
                 ("Assembly", "com.cad.assembly", "Combine parts"),
                 ("Mass Properties", "com.cad.mass_properties", "Calculate mass/volume"),
                 ("Bounding Box", "com.cad.bounding_box", "Measure dimensions"),
+                ("Math Expression", "com.cad.math_expression",
+                 "Evaluate a scalar expression from up to three connected values (x, y, z)."),
+                ("Measure Distance", "com.cad.measure_distance",
+                 "Measure the minimum distance between two connected CAD shapes."),
+                ("Surface Area", "com.cad.surface_area",
+                 "Calculate the surface area of a connected CAD shape."),
             ],
             "IO & Parameters": [
                 ("Number", "com.cad.number",
@@ -3776,7 +3999,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         # Initialize Command Dispatcher for LLM actions (lazy import to avoid circular)
         from pylcss.assistant_systems.api.dispatcher import CommandDispatcher
         self.command_dispatcher = CommandDispatcher(main_window=self)
-        self.llm_chat_dialog = None
         
         # Connect graph signals
         self.graph.property_changed.connect(self._on_graph_property_changed)
@@ -3825,6 +4047,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         left_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         left_splitter.addWidget(self.library)
         left_splitter.setSizes([500])
+        left_splitter.setMinimumWidth(220)
         
         # CENTER AREA
         center_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
@@ -3842,6 +4065,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         self._graph_widget = graph_widget
         center_splitter.addWidget(graph_widget)
         center_splitter.setSizes([600, 400])
+        center_splitter.setMinimumWidth(500)
         
         # Setup context menu for the graph
         try:
@@ -3873,18 +4097,27 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             self.properties.property_changed.connect(self._on_property_changed)
         except Exception:
             pass
-        self.results = None
+        self.results = ResultsPanel()
+        self.studies = StudyWorkbenchPanel(self)
         self.timeline = TimelinePanel()
+
+        lower_tabs = QtWidgets.QTabWidget()
+        lower_tabs.setDocumentMode(True)
+        lower_tabs.addTab(self.studies, "Studies")
+        lower_tabs.addTab(self.results, "Results")
+        lower_tabs.addTab(self.timeline, "History")
+        self._engineering_tabs = lower_tabs
         right_splitter.addWidget(self.properties)
-        right_splitter.addWidget(self.timeline)
-        right_splitter.setSizes([520, 180])
+        right_splitter.addWidget(lower_tabs)
+        right_splitter.setSizes([480, 300])
+        right_splitter.setMinimumWidth(340)
         
         # Main splitter
         main_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         main_splitter.addWidget(left_splitter)
         main_splitter.addWidget(center_splitter)
         main_splitter.addWidget(right_splitter)
-        main_splitter.setSizes([200, 1000, 300])
+        main_splitter.setSizes([240, 960, 400])
         
         main_h_layout.addWidget(main_splitter)
         
@@ -4049,8 +4282,12 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                                ).setToolTip("Check the graph for disconnected nodes and obvious mistakes")
         self.toolbar.addAction(_icon("fa5s.clipboard-list"), "Report", self._generate_report
                                ).setToolTip("Generate a text summary of the current model")
-        self.toolbar.addAction(_icon("fa5s.file-export"), "Export Results", self._export_simulation_results
-                               ).setToolTip("Save FEA / TopOpt / Crash results to disk")
+        self.save_results_action = self.toolbar.addAction(
+            _icon("fa5s.file-export"), "Save Results", self._export_simulation_results
+        )
+        self.save_results_action.setToolTip(
+            "Save the already-computed FEA / TopOpt / Crash result as portable JSON or HDF5"
+        )
         self.toolbar.addSeparator()
 
         # ── View ────────────────────────────────────────────────────────
@@ -4062,8 +4299,11 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         spacer.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
         self.toolbar.addWidget(spacer)
         self.auto_update_cb = QtWidgets.QCheckBox("Auto-update")
-        self.auto_update_cb.setChecked(True)  # Default ON for CAD rendering
-        self.auto_update_cb.setToolTip("Re-execute the graph automatically when properties change (skips FEA/TopOpt)")
+        self.auto_update_cb.setChecked(False)
+        self.auto_update_cb.setToolTip(
+            "Optional CAD preview after edits/connections (off by default). "
+            "FEA, crash, and TopOpt still require Run."
+        )
         self.toolbar.addWidget(self.auto_update_cb)
     
     def _spawn_node(self, node_id, label, x=None, y=None):
@@ -4106,6 +4346,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
             self.timeline.add_event(f"Added {label} node")
             self.statusBar().showMessage(f"Created {label}")
+            studies = getattr(self, 'studies', None)
+            if studies is not None:
+                studies.refresh()
             return node
         except Exception as e:
             self.statusBar().showMessage(f"Error: {e}")
@@ -4368,50 +4611,13 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             except Exception:
                 pass
         else:
-            # No cached result yet — execute the shape pipeline automatically
-            # (skip_simulation=True means heavy FEA/TopOpt nodes are skipped,
-            # so this is fast and behaves the same as when any property changes).
-            if self._is_topopt_result_consumer(node):
-                self._last_rendered_node = node
-                self._last_rendered_geom_id = None
-                self.viewer.clear()
-                self.statusBar().showMessage(
-                    "Run Simulation to compute the upstream topology result first."
-                )
-                return
+            # Selection is observational. Adding/selecting an incomplete node
+            # must never execute the graph or raise setup errors.
             self._last_rendered_node = node
-            self._last_rendered_geom_id = None
-            self._execute_graph(skip_simulation=True)
+            self.statusBar().showMessage(
+                "Not run yet — connect inputs, then press Run."
+            )
 
-    def _get_upstream_shape(self, node):
-        """Walk input ports to find the first cached shape result upstream."""
-        _, result = self._find_upstream_renderable(
-            node,
-            preferred_ports=self._preferred_render_ports(node),
-        )
-        if result is not None and not self._is_simulation_render_result(result):
-            return result
-        return None
-        try:
-            for port in node.input_ports():
-                for conn_port in port.connected_ports():
-                    upstream = conn_port.node()
-                    upstream_result = getattr(upstream, '_last_result', None)
-                    if upstream_result is None:
-                        continue
-                    # Skip face-dicts — keep walking up
-                    if isinstance(upstream_result, dict) and 'faces' in upstream_result:
-                        shape = self._get_upstream_shape(upstream)
-                        if shape is not None:
-                            return shape
-                    # Return if it looks like a renderable shape
-                    if hasattr(upstream_result, 'tessellate') or hasattr(upstream_result, 'val'):
-                        return upstream_result
-                    if hasattr(upstream_result, 'toCompound'):
-                        return upstream_result
-        except Exception:
-            pass
-        return None
 
     # ──────────────────────────────────────────────────────────────────────────
     # BC OVERLAY HELPERS
@@ -4899,6 +5105,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             pass
         # Anything we forget here gets garbage-collected when the cad_widget
         # itself is torn down (the launcher's QProcess is parented to us).
+        studies = getattr(self, 'studies', None)
+        if studies is not None:
+            QtCore.QTimer.singleShot(0, studies.refresh)
 
 
     # Property names whose changes don't affect anything the inspector renders
@@ -4918,6 +5127,11 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         if getattr(self, '_suppress_graph_property_changed', False):
             return
 
+        if prop_name not in self._SILENT_PROP_NAMES:
+            studies = getattr(self, 'studies', None)
+            if studies is not None:
+                studies.refresh()
+
         # Update the properties panel if this node is selected.
         # Skip if the inspector itself triggered the change to avoid a reset loop.
         # Skip "silent" book-keeping props that the panel never displays —
@@ -4927,12 +5141,14 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 and not self.properties._updating_property):
             self.properties.display_node(node)
 
-        # SPECIAL CASE: Visualization mode changes should update display immediately
-        # without requiring full graph re-execution
-        if prop_name in ('visualization', 'deformation_scale', 'disp_scale'):
+        # Visualization/post-processing changes update the cached payload and
+        # viewer immediately; they never re-run an engineering solve.
+        if prop_name in (
+            'visualization', 'deformation_scale', 'disp_scale',
+            'density_cutoff', 'element_type',
+        ):
             cached_result = getattr(node, '_last_result', None)
             if cached_result is not None and isinstance(cached_result, dict):
-                # Update the visualization_mode in the cached result
                 if prop_name == 'visualization':
                     cached_result['visualization_mode'] = prop_value
                 elif prop_name == 'deformation_scale':
@@ -4945,10 +5161,16 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                             cached_result['deformation_scale'] = float(text.rstrip('x'))
                         except ValueError:
                             pass
-                else:
+                elif prop_name == 'disp_scale':
                     cached_result['disp_scale'] = float(prop_value)
-                
-                # Re-render with updated visualization mode
+                elif prop_name == 'density_cutoff':
+                    cached_result['density_cutoff'] = float(prop_value)
+                    if (
+                        cached_result.get('type') == 'topopt_voxel'
+                        and cached_result.get('density') is not None
+                    ):
+                        self._refresh_topopt_recovered_shape(node, cached_result)
+
                 try:
                     self.viewer.render_simulation(cached_result)
                     try:
@@ -4958,12 +5180,13 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 except Exception:
                     pass
                 
-                # Don't mark as dirty for visualization-only changes
-                setattr(node, '_dirty', False)
-                return
-            
+            setattr(node, '_dirty', False)
+            return
+
         # Auto-update if enabled (skip simulation nodes for performance)
-        if hasattr(self, 'auto_update_cb') and self.auto_update_cb.isChecked():
+        if (hasattr(self, 'auto_update_cb')
+                and self.auto_update_cb.isChecked()
+                and not self.properties._updating_property):
             self._execute_graph(skip_simulation=True)
             
     def _on_connection_changed(self, port_in, port_out):
@@ -4981,6 +5204,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             setattr(node, '_dirty', True)
             
         self.timeline.add_event("Connection changed")
+        studies = getattr(self, 'studies', None)
+        if studies is not None:
+            studies.refresh()
         # Auto-execute with skip_simulation for fast CAD preview
         if hasattr(self, 'auto_update_cb') and self.auto_update_cb.isChecked():
             self._execute_graph(skip_simulation=True)
@@ -5090,6 +5316,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
             except Exception:
                 pass
+            studies = getattr(self, 'studies', None)
+            if studies is not None:
+                studies.refresh()
         finally:
             self._prefer_topopt_after_run = False
             self.result_mutex.unlock()
@@ -5127,6 +5356,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         self.toolbar.setEnabled(True)
         self.statusBar().showMessage(f"Error: {error_msg}")
         self.timeline.add_event(f"Execution failed: {error_msg}")
+        studies = getattr(self, 'studies', None)
+        if studies is not None:
+            studies.refresh()
         try:
             sim_node = self._find_renderable_simulation_node()
             if sim_node is not None:
@@ -5141,15 +5373,29 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         except Exception:
             pass
         QtWidgets.QMessageBox.critical(self, "Computation Error", error_msg)
+
+    def _on_execution_cancelled(self, results):
+        """Restore the UI after a user-requested safe stop without an error dialog."""
+        self.worker = None
+        self.graph.widget.setEnabled(True)
+        self.toolbar.setEnabled(True)
+        self.statusBar().showMessage("Computation stopped")
+        self.timeline.add_event("Graph execution cancelled")
+        studies = getattr(self, 'studies', None)
+        if studies is not None:
+            studies.refresh()
+        # A topology solver can return a valid partial design at its safe stop
+        # point. Keep that cached result visible and exportable.
+        try:
+            sim_node = self._find_renderable_simulation_node()
+            if sim_node is not None:
+                result = getattr(sim_node, '_last_result', None)
+                if self._is_renderable_result(result):
+                    self._last_rendered_node = sim_node
+                    self._render_result_in_viewer(result)
+        except Exception:
+            pass
     
-    def _update_property(self, prop_name, value):
-        """Update node property."""
-        if self.properties.current_node:
-            try:
-                self.properties.current_node.set_property(prop_name, value)
-                self.timeline.add_event(f"Updated {prop_name} = {value}")
-            except Exception:
-                pass
     
     def _undo(self):
         """Undo last action."""
@@ -5221,7 +5467,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 self.timeline.add_event(f"Redid add node {getattr(node,'name','')}")
             elif typ == 'remove_nodes':
                 nodes = action.get('nodes', [])
-                positions = action.get('positions', {})
+                action.get('positions', {})
                 for n in nodes:
                     try:
                         self.graph.remove_node(n)
@@ -5296,7 +5542,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             if not self.graph.selected_nodes():
                 self.graph.center_on_nodes(self.graph.all_nodes())
             self.statusBar().showMessage("Fit to view")
-        except Exception as e:
+        except Exception:
             # Fallback - try basic centering
             try:
                 self.graph.center_selection()
@@ -5314,37 +5560,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                     self.viewer.iren.GetRenderWindow().Render()
             self.statusBar().showMessage("3D view reset")
             self.timeline.add_event("3D view reset to default")
-        except Exception as e:
+        except Exception:
             self.statusBar().showMessage("View reset")
-    
-    def _run_simulation(self):
-        """Run simulation by executing the graph and finding simulation nodes."""
-        self.statusBar().showMessage("Running simulation...")
-        self.timeline.add_event("Simulation started")
-        
-        # Find simulation-related nodes (Solver, TopOpt, etc.)
-        sim_nodes = []
-        for node in self.graph.all_nodes():
-            node_class = node.__class__.__name__
-            if node_class in [
-                'SolverNode', 'MeshNode', 'CrashSolverNode', 'RunRadiossDeckNode'
-            ]:
-                sim_nodes.append(node)
-        
-        if not sim_nodes:
-            QtWidgets.QMessageBox.information(
-                self, "No Simulation",
-                "No simulation nodes found in the graph.\n\n"
-                "Add FEA nodes (Material, Mesh, Constraint, Load, Solver), "
-                "a Crash Solver / Run Radioss Deck node, or a Topology "
-                "Optimization node to run a simulation."
-            )
-            self.statusBar().showMessage("No simulation nodes found")
-            return
-        
-        # Execute the graph which will run the simulation
-        self._execute_graph()
-        self.timeline.add_event(f"Simulation executed ({len(sim_nodes)} sim nodes)")
     
     def _generate_report(self):
         """Generate a report from the model with node information."""
@@ -5555,6 +5772,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             pass
         self.timeline.add_event("New project created")
         self.statusBar().showMessage("New project")
+        if getattr(self, 'studies', None) is not None:
+            self.studies.refresh()
     
     def _open_project(self):
         """Open a project file."""
@@ -5582,6 +5801,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
                 self.graph.clear_session()
                 self.graph.deserialize_session(session_data)
+                self.current_file = fname
+                self._set_project_context(fname)
 
                 self._last_rendered_node = None
                 try:
@@ -5595,9 +5816,10 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 except Exception:
                     pass
                 
-                self.current_file = fname
                 self.timeline.add_event(f"Opened project: {fname}")
                 self.statusBar().showMessage(f"Opened: {fname}")
+                if getattr(self, 'studies', None) is not None:
+                    self.studies.refresh()
                 
                 # Execute to restore view (but skip heavy simulation)
                 self._execute_graph(skip_simulation=True)
@@ -5607,6 +5829,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                     try:
                         self.graph.clear_session()
                         self.graph.deserialize_session(backup_session)
+                        self._set_project_context(previous_file)
                         self._fit_all()
                     except Exception:
                         pass
@@ -5618,6 +5841,14 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
     def _execution_is_active(self):
         return bool(self.worker and self.worker.isRunning())
 
+    def _set_project_context(self, project_file=None):
+        """Attach the saved-project directory used by relative-path nodes."""
+        project_dir = (
+            os.path.dirname(os.path.abspath(project_file)) if project_file else None
+        )
+        for node in self.graph.all_nodes():
+            node._project_dir = project_dir
+
     def _ensure_idle_for_io(self, action_name):
         if not self._execution_is_active():
             return True
@@ -5627,9 +5858,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.information(self, "Computation In Progress", message)
         return False
     
-    def _get_node_class(self, class_name):
-        """Get node class by name."""
-        return NODE_NAME_MAPPING.get(class_name)
 
     def _get_exportable_result_node(self):
         """Return the best candidate node with cached simulation results."""
@@ -5955,12 +6183,19 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
         return json_payload, hdf5_datasets, metadata
 
-    def _export_simulation_results(self):
-        """Export cached FEA/TopOpt/Crash results from the active node."""
+    def _export_simulation_results(self, node=None):
+        """Save cached FEA/TopOpt/Crash results without re-running a study.
+
+        ``node`` is optional; the main toolbar normally uses the active or last
+        terminal result. QAction may supply its checked-state boolean, which is
+        treated as no explicit node.
+        """
         if not self._ensure_idle_for_io("exporting simulation results"):
             return
 
-        node = self._get_exportable_result_node()
+        if isinstance(node, bool):
+            node = None
+        node = node or self._get_exportable_result_node()
         if node is None:
             QtWidgets.QMessageBox.information(
                 self,
@@ -6034,61 +6269,15 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 'visualization', 'deformation_scale', 'disp_scale', 'density_cutoff', 'element_type']
             
             if prop_name in visualization_only_props:
-                # Check if the node has cached results (_last_result)
-                cached_result = getattr(node, '_last_result', None)
-                if cached_result is not None:
-                    # Update the cached dictionary so the renderer knows what to draw
-                    if isinstance(cached_result, dict):
-                        if prop_name == 'visualization':
-                            cached_result['visualization_mode'] = new
-                        elif prop_name == 'deformation_scale':
-                            text = str(new).strip().lower()
-                            if text == 'auto':
-                                cached_result['deformation_scale'] = cached_result.get(
-                                    'auto_deformation_scale', 1.0)
-                            else:
-                                try:
-                                    cached_result['deformation_scale'] = float(text.rstrip('x'))
-                                except ValueError:
-                                    pass
-                        elif prop_name == 'disp_scale':
-                            cached_result['disp_scale'] = float(new)
-                        elif prop_name == 'density_cutoff':
-                            cached_result['density_cutoff'] = new
-                        if (
-                            cached_result.get('type') == 'topopt_voxel'
-                            and cached_result.get('density') is not None
-                            and (
-                                prop_name == 'density_cutoff'
-                                or cached_result.get('visualization_mode') == 'Recovered Shape'
-                            )
-                        ):
-                            self._refresh_topopt_recovered_shape(node, cached_result)
-
-                    # Just re-render with existing results instead of re-executing
-                    try:
-                        if isinstance(cached_result, dict) and ('mesh' in cached_result or 'displacement' in cached_result or 'recovered_shape' in cached_result):
-                            self.viewer.render_simulation(cached_result)
-                        elif hasattr(cached_result, 'p') and hasattr(cached_result, 't'):
-                            # Direct Mesh object from skfem
-                            self.viewer.render_simulation(cached_result)
-                        else:
-                            self.viewer.render_shape(cached_result)
-                        try:
-                            self._show_bc_for_node(node)
-                        except Exception:
-                            pass
-                        if hasattr(self.window(), 'statusBar') and self.window().statusBar():
-                            self.window().statusBar().showMessage(f"Updated {prop_name} display")
-                        return  # Skip full graph execution
-                    except Exception as e:
-                        print(f"Warning: Render failed during viz update for {prop_name}: {e}")
-                        
-                # Unconditionally return for visualization properties to prevent full recompute
+                # Cached-result updates and rendering are owned by the graph
+                # property handler for both inspector and on-canvas edits.
                 return
             # Auto-execute if enabled (for non-visualization properties)
             if hasattr(self, 'auto_update_cb') and self.auto_update_cb.isChecked():
-                self._execute_graph()
+                # Property edits are previews.  Never launch a long CalculiX,
+                # OpenRadioss, or TopOpt run implicitly; the explicit Run action
+                # owns expensive engineering computation.
+                self._execute_graph(skip_simulation=True)
                 
         except Exception:
             pass
@@ -6103,6 +6292,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             return
         
         try:
+            self._set_project_context(self.current_file)
             # Serialize graph using NodeGraphQt's built-in session manager
             project_data = self.graph.serialize_session()
 
@@ -6139,13 +6329,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             if not fname.endswith('.cad'):
                 fname += '.cad'
             self.current_file = fname
+            self._set_project_context(fname)
             self._save_project()
     
-    def _show_about(self):
-        """Show about dialog."""
-        QtWidgets.QMessageBox.information(
-            self, "About",
-        )
 
     @staticmethod
     def _port_has_connections(node, port_name):
@@ -6156,24 +6342,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             return False
 
     @staticmethod
-    def _topopt_has_property_support(node):
-        support_props = (
-            'left_support', 'right_support', 'top_support',
-            'bottom_support', 'front_support', 'back_support',
-        )
-        for prop in support_props:
-            value = str(node.get_property(prop) or '').strip().lower()
-            if value and value != 'none':
-                return True
-
-        text = str(node.get_property('support_regions') or '').strip()
-        if not text or text == '[]':
-            return False
-        try:
-            regions = json.loads(text)
-            return bool(regions)
-        except Exception:
-            return True
 
     def _topopt_preflight_error(self, node):
         if getattr(node, "__identifier__", "") != "com.cad.sim.topopt_voxel":
@@ -6440,6 +6608,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         self.worker = GraphExecutionWorker(all_nodes_snapshot, skip_simulation=skip_simulation, parent=self)
 
         self.worker.computation_finished.connect(self._on_execution_finished)
+        self.worker.computation_cancelled.connect(self._on_execution_cancelled)
         self.worker.computation_error.connect(self._on_execution_error)
         # Connect optimization step for real-time visualization
         self.worker.optimization_step.connect(self._on_optimization_step)

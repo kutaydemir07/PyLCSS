@@ -370,12 +370,6 @@ class DecouplingResolutionMixin:
 
     # Compatibility for the initial port, which treated decoupling as a third
     # phase instead of Stage 5 of the paper's MMSS algorithm.
-    def _phase3_extended_refinement(self, boxes, callback=None, stop_callback=None):
-        return self._compute_decoupled_form(
-            boxes,
-            callback=callback,
-            stop_callback=stop_callback,
-        )
 
     def _interval_rows_volume(self, interval_rows: List[List[tuple]]) -> float:
         """Relative volume of a Cartesian product of per-dimension interval rows."""

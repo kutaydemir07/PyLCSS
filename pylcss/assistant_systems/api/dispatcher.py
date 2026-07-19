@@ -15,7 +15,7 @@ from pylcss.assistant_systems.services.input import MouseController
 from pylcss.design_studio.node_library import NODE_CLASS_MAPPING
 from pylcss.system_modeling.node_registry import SYSTEM_NODE_CLASS_MAPPING
 
-from PySide6.QtCore import QObject, Signal, Slot, Qt, QMetaObject
+from PySide6.QtCore import QObject, Signal, Slot, Qt
 
 class MainThreadExecutor(QObject):
     """Helper to execute functions on the main thread safely."""
@@ -444,7 +444,7 @@ class CommandDispatcher:
         """Build/transfer model from modeling environment."""
         if self.main_window:
             # Use QMetaObject.invokeMethod to call on main thread
-            from PySide6.QtCore import QMetaObject, Qt, Q_ARG
+            from PySide6.QtCore import QMetaObject, Qt
             if hasattr(self.main_window, 'transfer_model'):
                 QMetaObject.invokeMethod(
                     self.main_window, 
@@ -1146,7 +1146,6 @@ class CommandDispatcher:
             return
         widget = self.main_window.modeling_widget
         if hasattr(widget, 'system_manager') and hasattr(widget.system_manager, 'system_list'):
-            from PySide6.QtCore import QMetaObject, Qt
             lst = widget.system_manager.system_list
             current = lst.currentRow()
             if current < lst.count() - 1:

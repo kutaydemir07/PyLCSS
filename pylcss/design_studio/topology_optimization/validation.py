@@ -276,6 +276,7 @@ def run_topopt_validation(
     analysis_type: str = 'Linear',
     visualization: str = 'Von Mises Stress',
     deformation_scale: str = 'Auto',
+    cancel_callback=None,
 ) -> Dict[str, Any]:
     """Validate a topology result internally without exposing a graph block."""
     from pylcss.solver_backends import (
@@ -299,15 +300,30 @@ def run_topopt_validation(
         raise RuntimeError("Topology validation requires " + ", ".join(missing) + ".")
 
     density, bounds, reported_cutoff = field
+    if not np.all(np.isfinite(density)):
+        raise ValueError("Topology validation density contains NaN or infinite values.")
+    if density.size > 500_000:
+        raise ValueError("Topology validation density exceeds the 500,000-voxel limit.")
     cutoff = float(validation_cutoff or 0.0)
     if cutoff <= 0.0:
         cutoff = reported_cutoff
+    if not np.isfinite(cutoff) or not 0.0 < cutoff <= 1.0:
+        raise ValueError("Topology validation cutoff must be in (0, 1].")
 
     order_label = str(element_order or '').upper()
+    if not any(token in order_label for token in ('C3D4', 'C3D10', 'LINEAR', 'QUADRAT')):
+        raise ValueError("Validation element order must be linear C3D4 or quadratic C3D10.")
     quadratic = ('C3D10' in order_label) or ('QUADRAT' in order_label)
     elem_label = 'C3D10' if quadratic else 'C3D4'
-    n_levels = max(1, int(convergence_levels or 1))
-    elem_budget = max(1, int(max_validation_elements or 500000))
+    n_levels = int(convergence_levels or 1)
+    elem_budget = int(max_validation_elements or 500000)
+    timeout_s = float(external_timeout_s or 3600.0)
+    if not 1 <= n_levels <= 5:
+        raise ValueError("Validation convergence levels must be between 1 and 5.")
+    if not 1 <= elem_budget <= 2_000_000:
+        raise ValueError("Validation element budget must be between 1 and 2,000,000.")
+    if not np.isfinite(timeout_s) or timeout_s <= 0.0:
+        raise ValueError("Validation solver timeout must be a positive finite value.")
     run_solver = as_bool(run_external_solver) and not as_bool(deck_only)
 
     def _solve_at(refine: int):
@@ -318,8 +334,9 @@ def run_topopt_validation(
             executable=(external_solver_path or None),
             work_dir=(external_work_dir or None),
             run_solver=run_solver,
-            timeout_s=float(external_timeout_s or 3600.0),
+            timeout_s=timeout_s,
             job_name=f"pylcss_topopt_validation_L{refine}",
+            cancel_callback=cancel_callback,
         )
         out = run_calculix_static(
             mesh,
@@ -412,9 +429,12 @@ def run_topopt_validation(
     scale_prop = str(deformation_scale or 'Auto').strip()
     if scale_prop.lower() != 'auto':
         try:
-            output['deformation_scale'] = float(scale_prop.lower().rstrip('x'))
-        except Exception:
-            pass
+            deformation_value = float(scale_prop.lower().rstrip('x'))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Deformation scale must be Auto or a positive number.") from exc
+        if not np.isfinite(deformation_value) or deformation_value <= 0.0:
+            raise ValueError("Deformation scale must be Auto or a positive number.")
+        output['deformation_scale'] = deformation_value
     output['source'] = 'topology_opt_validation'
     output['validation_cutoff'] = cutoff
     if isinstance(topo_payload, dict) and topo_payload.get('stress_pnorm') is not None:

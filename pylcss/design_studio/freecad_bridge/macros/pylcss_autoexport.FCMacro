@@ -5,10 +5,8 @@
 #
 # How FreeCAD picks this up
 # -------------------------
-# When PyLCSS launches FreeCAD via QProcess (see launcher.py) it passes the
-# absolute path to this file as the second argument.  FreeCAD treats a .py /
-# .FCMacro argument as a startup macro and executes it once the main window
-# is ready.
+# PyLCSS installs this file through Mod/PyLCSS/Init.py and InitGui.py so it is
+# active in both FreeCAD GUI saves and headless FreeCADCmd parameter updates.
 #
 # What the macro does
 # -------------------
@@ -94,11 +92,6 @@ def _spreadsheet_parameters(doc) -> Dict[str, float]:
     for obj in doc.Objects:
         if obj.TypeId != "Spreadsheet::Sheet":
             continue
-        try:
-            for alias, value in obj.PropertiesList:
-                pass  # placeholder; real per-cell alias walking is below
-        except Exception:
-            pass
         # Walk visible aliases (cells with a name assigned via 'Alias' field).
         try:
             for prop_name in obj.PropertiesList:
@@ -148,6 +141,22 @@ def _fem_analysis_summary(doc) -> List[Dict[str, Any]]:
                     entry[prop_name] = float(val.Value)
                 except Exception:
                     pass
+            elif prop_name in ("References", "Support") and isinstance(val, (list, tuple)):
+                references = []
+                for ref in val:
+                    if not isinstance(ref, (list, tuple)) or not ref:
+                        continue
+                    target = ref[0]
+                    subelements = ref[1] if len(ref) > 1 else []
+                    if isinstance(subelements, str):
+                        subelements = [subelements]
+                    references.append({
+                        "object": getattr(target, "Name", str(target)),
+                        "label": getattr(target, "Label", ""),
+                        "subelements": [str(name) for name in (subelements or [])],
+                    })
+                if references:
+                    entry["references"] = references
         out.append(entry)
     return out
 
@@ -205,6 +214,12 @@ class _PyLcssExportObserver:
             }
             with open(json_path, "w", encoding="utf-8") as fh:
                 json.dump(sidecar, fh, indent=2)
+            # Do not leave a previous solid's BREP beside an now-empty model.
+            try:
+                if os.path.isfile(brep_path):
+                    os.remove(brep_path)
+            except OSError:
+                pass
             return
 
         # Compound the shapes so a single .brep round-trips the whole assembly.

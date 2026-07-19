@@ -283,15 +283,6 @@ def _py_str(s: str) -> str:
     return repr(s)
 
 
-def _default_startup_macro() -> Optional[Path]:
-    """Return the absolute path to the bundled auto-export macro, or None
-    if it has been removed (degraded mode: FreeCAD opens without the BREP
-    + sidecar hook -- saves still work, PyLCSS just won't get notified)."""
-    here = Path(__file__).resolve().parent
-    candidate = here / "macros" / "pylcss_autoexport.FCMacro"
-    return candidate if candidate.is_file() else None
-
-
 def _qprocess_error_text(err: QProcess.ProcessError) -> str:
     """Translate a QProcess error enum into something a user can act on."""
     mapping = {

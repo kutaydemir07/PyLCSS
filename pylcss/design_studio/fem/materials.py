@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 """FEM material node — elastic material properties with preset database."""
+import math
+
 from pylcss.design_studio.core.base_node import CadQueryNode
 from pylcss.design_studio.fem._helpers import MATERIAL_DATABASE
 
@@ -35,6 +37,7 @@ class MaterialNode(CadQueryNode):
         self.create_property('tangent_modulus', 0.0, widget_type='float')   # MPa
 
     def run(self):
+        self.clear_error()
         # Check if using preset or custom
         preset = self.get_property('preset')
 
@@ -55,10 +58,37 @@ class MaterialNode(CadQueryNode):
         sigma_y = float(self.get_property('yield_strength')  or 0.0)
         Et      = float(self.get_property('tangent_modulus') or 0.0)
 
+        try:
+            E = float(E)
+            nu = float(nu)
+            rho = float(rho)
+        except (TypeError, ValueError):
+            self.set_error("Material properties must be numeric.")
+            return None
+        values = (E, nu, rho, sigma_y, Et)
+        if not all(math.isfinite(value) for value in values):
+            self.set_error("Material properties must be finite numbers.")
+            return None
+        if E <= 0.0:
+            self.set_error("Young's modulus must be greater than zero.")
+            return None
+        if not (-1.0 < nu < 0.5):
+            self.set_error("Poisson's ratio must be between -1 and 0.5 (exclusive).")
+            return None
+        if rho <= 0.0:
+            self.set_error("Density must be greater than zero.")
+            return None
+        if sigma_y < 0.0 or Et < 0.0:
+            self.set_error("Yield strength and tangent modulus cannot be negative.")
+            return None
+        if sigma_y > 0.0 and Et >= E:
+            self.set_error("Tangent modulus must be smaller than Young's modulus.")
+            return None
+
         out = {
-            'E':   float(E),
-            'nu':  float(nu),
-            'rho': float(rho),
+            'E': E,
+            'nu': nu,
+            'rho': rho,
         }
         if sigma_y > 0.0:
             out['yield_strength']  = sigma_y

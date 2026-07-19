@@ -75,6 +75,78 @@ class TopologyOptVoxelProblem:
     heaviside_beta_step_iters: int   = INDUSTRIAL_HEAVISIDE_BETA_STEP_ITERS
     heaviside_eta:             float = INDUSTRIAL_HEAVISIDE_ETA
 
+    def __post_init__(self) -> None:
+        """Reject physically invalid or memory-dangerous studies up front."""
+        self.nelx, self.nely, self.nelz = int(self.nelx), int(self.nely), int(self.nelz)
+        if min(self.nelx, self.nely, self.nelz) < 1:
+            raise ValueError("Topology grid dimensions must each be at least 1 voxel.")
+        n_voxels = self.nelx * self.nely * self.nelz
+        if n_voxels > 500_000:
+            raise ValueError(
+                f"Topology grid has {n_voxels:,} voxels; the supported limit is "
+                "500,000. Reduce expert grid dimensions or use Guided mode."
+            )
+
+        finite_fields = {
+            "E0": self.E0, "Emin": self.Emin, "nu": self.nu,
+            "penal": self.penal, "volfrac": self.volfrac, "rmin": self.rmin,
+            "unitx": self.unitx, "unity": self.unity, "unitz": self.unitz,
+            "tol": self.tol, "yield_stress": self.yield_stress,
+            "stress_penalty": self.stress_penalty,
+            "stress_pnorm_p": self.stress_pnorm_p,
+            "heaviside_beta_init": self.heaviside_beta_init,
+            "heaviside_beta_max": self.heaviside_beta_max,
+            "heaviside_eta": self.heaviside_eta,
+        }
+        for name, raw in finite_fields.items():
+            value = float(raw)
+            if not np.isfinite(value):
+                raise ValueError(f"Topology parameter {name} must be finite.")
+            setattr(self, name, value)
+        if self.E0 <= 0.0 or self.Emin <= 0.0 or self.Emin > self.E0:
+            raise ValueError("Topology stiffnesses require 0 < Emin <= E0.")
+        if not (-1.0 < self.nu < 0.5):
+            raise ValueError("Topology Poisson ratio must be between -1 and 0.5 (exclusive).")
+        if self.penal < 1.0:
+            raise ValueError("SIMP penalization must be at least 1.")
+        if not (0.0 < self.volfrac <= 1.0):
+            raise ValueError("Topology volume fraction must be in (0, 1].")
+        if self.rmin <= 0.0 or min(self.unitx, self.unity, self.unitz) <= 0.0:
+            raise ValueError("Filter radius and voxel dimensions must be greater than zero.")
+        self.max_iter = int(self.max_iter)
+        self.patience = int(self.patience)
+        if self.max_iter < 1 or self.patience < 1 or self.tol <= 0.0:
+            raise ValueError("Iterations, convergence patience, and tolerance must be positive.")
+        self.optimizer = str(self.optimizer).upper()
+        if self.optimizer not in {"OC", "MMA"}:
+            raise ValueError("Topology optimizer must be OC or MMA.")
+        self.objective_mode = str(self.objective_mode).strip().lower()
+        if self.objective_mode not in {"compliance", "minimum_mass"}:
+            raise ValueError("Topology objective must be compliance or minimum_mass.")
+        if self.stress_constraint_enabled and self.yield_stress <= 0.0:
+            raise ValueError("Stress-constrained TopOpt needs a positive allowable stress.")
+        if not (0.0 <= self.stress_penalty <= 1.0):
+            raise ValueError("Topology stress relaxation must be between 0 and 1.")
+        if self.stress_pnorm_p <= 1.0:
+            raise ValueError("Topology stress P-norm exponent must be greater than 1.")
+        self.heaviside_beta_step_iters = int(self.heaviside_beta_step_iters)
+        if (
+            self.heaviside_beta_init <= 0.0
+            or self.heaviside_beta_max < self.heaviside_beta_init
+            or self.heaviside_beta_step_iters < 1
+            or not 0.0 < self.heaviside_eta < 1.0
+        ):
+            raise ValueError(
+                "Heaviside projection requires positive beta, beta_max >= beta_init, "
+                "a positive continuation interval, and eta in (0, 1)."
+            )
+        if self.design_domain is not None:
+            domain = np.asarray(self.design_domain, dtype=bool)
+            expected = (self.nelx, self.nely, self.nelz)
+            if domain.shape != expected or not np.any(domain):
+                raise ValueError(f"Design-domain mask must be non-empty with shape {expected}.")
+            self.design_domain = domain
+
 
 # ---------------------------------------------------------------------------
 # OC update (Sigmund 2001 / pyMOTO 69-line)
@@ -524,7 +596,7 @@ class TopologyOptVoxelSolver:
             for name, weight, f_vec in load_cases
         ]
         active_mask, passive_density = self._assemble_passive_masks(domain, p.bc)
-        n_active      = int(np.sum(active_mask))
+        int(np.sum(active_mask))
 
         source_mask_flat = np.ones(domain.nel, dtype=bool)
         if p.design_domain is not None:
@@ -1216,4 +1288,3 @@ class TopologyOptVoxelSolver:
             passive_density[idx] = 1e-3
 
         return active_mask, passive_density
-

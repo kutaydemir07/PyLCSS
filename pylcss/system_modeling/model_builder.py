@@ -432,7 +432,7 @@ class GraphBuilder:
                                     val_var = f"({val_var} * {m})"
                                 else:
                                     val_var = f"({val_var} * {m} + {c})"
-                    except Exception as e:
+                    except Exception:
                         # Warn user instead of silent failure
                         logger.warning(
                             "Unit conversion failed between %s and %s",

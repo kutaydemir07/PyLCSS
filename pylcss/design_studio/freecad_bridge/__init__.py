@@ -38,7 +38,6 @@ from pylcss.design_studio.freecad_bridge.brep_reader import (
     FreeCadImportedShape,
     read_brep_from_fcstd,
 )
-from pylcss.design_studio.freecad_bridge.fem_translator import translate_fem_summary
 from pylcss.design_studio.freecad_bridge.param_writer import (
     collect_param_values_from_node,
     write_parameters_to_fcstd,
@@ -54,7 +53,6 @@ __all__ = [
     "FCStdWatcher",
     "FreeCadImportedShape",
     "read_brep_from_fcstd",
-    "translate_fem_summary",
     "collect_param_values_from_node",
     "write_parameters_to_fcstd",
 ]

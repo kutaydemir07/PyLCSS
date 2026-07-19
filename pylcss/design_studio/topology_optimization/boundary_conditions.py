@@ -5,6 +5,7 @@ topology optimiser, plus the parsers that build them from node properties."""
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple
 
@@ -32,6 +33,38 @@ class LoadCase:
     box_forces:         List[Tuple[float, float, float, float, float, float, float, float, float]] = field(default_factory=list)
     # Distributed face force: list of (face, fx_per, fy_per, fz_per)
     distributed_forces: List[Tuple[str, float, float, float]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.name = str(self.name or "Load case")
+        self.weight = float(self.weight)
+        if not math.isfinite(self.weight) or self.weight <= 0.0:
+            raise ValueError(f"Load case {self.name!r} weight must be finite and positive.")
+
+        has_nonzero_force = False
+        for point in self.point_forces:
+            if len(point) != 6 or not all(math.isfinite(float(v)) for v in point):
+                raise ValueError(f"Load case {self.name!r} has an invalid point force.")
+            if not all(0.0 <= float(v) <= 1.0 for v in point[:3]):
+                raise ValueError(f"Load case {self.name!r} point coordinates must be in [0, 1].")
+            has_nonzero_force |= any(abs(float(v)) > 1e-15 for v in point[3:])
+        for box in self.box_forces:
+            if len(box) != 9 or not all(math.isfinite(float(v)) for v in box):
+                raise ValueError(f"Load case {self.name!r} has an invalid box force.")
+            if not all(0.0 <= float(v) <= 1.0 for v in box[:6]):
+                raise ValueError(f"Load case {self.name!r} box coordinates must be in [0, 1].")
+            if any(float(box[i]) > float(box[i + 1]) for i in (0, 2, 4)):
+                raise ValueError(f"Load case {self.name!r} box intervals must be ordered.")
+            has_nonzero_force |= any(abs(float(v)) > 1e-15 for v in box[6:])
+        allowed_faces = {"left", "right", "top", "bottom", "front", "back"}
+        for face, fx, fy, fz in self.distributed_forces:
+            values = (fx, fy, fz)
+            if str(face).lower() not in allowed_faces or not all(
+                math.isfinite(float(v)) for v in values
+            ):
+                raise ValueError(f"Load case {self.name!r} has an invalid distributed force.")
+            has_nonzero_force |= any(abs(float(v)) > 1e-15 for v in values)
+        if not has_nonzero_force:
+            raise ValueError(f"Load case {self.name!r} must contain a non-zero force.")
 
 
 @dataclass
@@ -100,6 +133,29 @@ class ManufacturingConstraints:
     pattern_repeat: int = 1
     pattern_axis:   str = 'y'  # 'x' | 'y' | 'z'
 
+    def __post_init__(self) -> None:
+        self.symmetry = str(self.symmetry or "none").lower()
+        self.extrusion = str(self.extrusion or "none").lower()
+        self.overhang_build_axis = str(self.overhang_build_axis or "none").lower()
+        self.pattern_axis = str(self.pattern_axis or "y").lower()
+        if self.symmetry != "none" and not set(self.symmetry) <= {"x", "y", "z"}:
+            raise ValueError("Symmetry must be None or a combination of X, Y, and Z.")
+        if self.extrusion not in {"none", "x", "y", "z"}:
+            raise ValueError("Extrusion axis must be None, X, Y, or Z.")
+        if self.overhang_build_axis not in {
+            "none", "+x", "-x", "+y", "-y", "+z", "-z",
+        }:
+            raise ValueError("Overhang build axis is invalid.")
+        self.max_member_size_voxels = float(self.max_member_size_voxels)
+        self.max_member_threshold = float(self.max_member_threshold)
+        if not math.isfinite(self.max_member_size_voxels) or self.max_member_size_voxels < 0.0:
+            raise ValueError("Maximum member size must be finite and non-negative.")
+        if not math.isfinite(self.max_member_threshold) or not 0.0 < self.max_member_threshold <= 1.0:
+            raise ValueError("Maximum member threshold must be in (0, 1].")
+        self.pattern_repeat = int(self.pattern_repeat)
+        if self.pattern_repeat < 1 or self.pattern_axis not in {"x", "y", "z"}:
+            raise ValueError("Pattern repeat must be at least 1 with axis X, Y, or Z.")
+
 
 
 
@@ -143,10 +199,16 @@ def _parse_region_boxes(
         region_type = str(region.get('type') or region.get('shape') or '').strip().lower()
         if region_type in {'cylinder', 'cylindrical', 'circle', 'circular', 'hole'}:
             continue
-        x0, x1 = region.get('x', [0.0, 0.0])
-        y0, y1 = region.get('y', [0.0, 0.0])
-        z0, z1 = region.get('z', [0.0, 1.0])
-        boxes.append((float(x0), float(x1), float(y0), float(y1), float(z0), float(z1)))
+        try:
+            x0, x1 = sorted(float(v) for v in region.get('x', [0.0, 0.0]))
+            y0, y1 = sorted(float(v) for v in region.get('y', [0.0, 0.0]))
+            z0, z1 = sorted(float(v) for v in region.get('z', [0.0, 1.0]))
+        except Exception as exc:
+            raise ValueError(f"{field_name} contains an invalid box interval") from exc
+        values = (x0, x1, y0, y1, z0, z1)
+        if not all(math.isfinite(v) and 0.0 <= v <= 1.0 for v in values):
+            raise ValueError(f"{field_name} box coordinates must be finite fractions in [0, 1]")
+        boxes.append(values)
     return boxes
 
 
@@ -184,7 +246,7 @@ def _parse_region_cylinders(
 
         axis = str(region.get('axis') or 'z').strip().lower()
         if axis not in {'x', 'y', 'z'}:
-            axis = 'z'
+            raise ValueError(f"{field_name} cylinder axis must be X, Y, or Z")
 
         try:
             radius = float(region.get('radius', region.get('r', region.get('diameter', 0.0))))
@@ -192,8 +254,8 @@ def _parse_region_cylinders(
                 radius *= 0.5
         except Exception:
             radius = 0.0
-        if radius <= 0.0:
-            continue
+        if not math.isfinite(radius) or radius <= 0.0:
+            raise ValueError(f"{field_name} cylinder radius must be finite and positive")
 
         center = region.get('center', [0.5, 0.5])
         if not isinstance(center, (list, tuple)):
@@ -219,6 +281,11 @@ def _parse_region_cylinders(
             lo, hi = _interval('y')
 
         lo, hi = sorted((lo, hi))
+        values = (c0, c1, lo, hi)
+        if not all(math.isfinite(v) and 0.0 <= v <= 1.0 for v in values):
+            raise ValueError(
+                f"{field_name} cylinder center and axial range must be fractions in [0, 1]"
+            )
         cylinders.append((axis, c0, c1, lo, hi, radius))
     return cylinders
 

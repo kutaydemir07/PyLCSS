@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-from PySide6 import QtWidgets, QtCore, QtGui
+from PySide6 import QtWidgets, QtCore
 from ...config import optimization_config, SOLVER_DESCRIPTIONS
 
 class OptimizationSettingsDialog(QtWidgets.QDialog):

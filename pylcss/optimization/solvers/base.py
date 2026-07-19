@@ -2,7 +2,7 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 from abc import ABC, abstractmethod
-from typing import Callable, List
+from typing import Callable
 from ..core import OptimizationResult
 from ..evaluator import ModelEvaluator
 

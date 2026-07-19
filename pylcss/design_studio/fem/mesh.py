@@ -7,17 +7,56 @@ practice is shell elements on the mid-surface with an assigned thickness, not
 solid Tet4.  ``mesh_type='Shell'`` makes Netgen stop after the SURFACE meshing
 pass — the result is a triangle mesh whose nodes live in R^3 — and tags it
 with ``shell_thickness`` so the OpenRadioss writer emits ``*SECTION_SHELL``
-instead of ``*SECTION_SOLID``.
+instead of ``*SECTION_SOLID``. For a solid input this is its boundary surface,
+not an automatically extracted sheet-metal midsurface.
 """
 import os
 import tempfile
 import logging
 import numpy as np
-from skfem import *
+from skfem import Mesh, MeshTet2
 from pylcss.design_studio.core.base_node import CadQueryNode
 from pylcss.design_studio.fem._helpers import suppress_output, OCCGeometry
 
 logger = logging.getLogger(__name__)
+
+
+def _selected_cad_face_indices(shape, selection):
+    """Map selected CadQuery faces to zero-based face indices on ``shape``."""
+    if selection is None:
+        return []
+    if isinstance(selection, dict):
+        selected = list(selection.get('faces') or [])
+        if not selected and selection.get('face') is not None:
+            selected = [selection['face']]
+    elif hasattr(selection, 'vals'):
+        selected = list(selection.vals())
+    else:
+        selected = [selection]
+
+    base = shape.val() if hasattr(shape, 'val') else shape
+    try:
+        all_faces = list(base.Faces())
+    except Exception:
+        return []
+
+    indices = []
+    for chosen in selected:
+        if chosen is None or isinstance(chosen, dict):
+            continue
+        for index, candidate in enumerate(all_faces):
+            same = False
+            try:
+                same = bool(candidate.isSame(chosen))
+            except Exception:
+                try:
+                    same = bool(candidate.wrapped.IsSame(chosen.wrapped))
+                except Exception:
+                    same = False
+            if same:
+                indices.append(index)
+                break
+    return sorted(set(indices))
 
 
 class _ShellSurfaceMesh:
@@ -64,6 +103,7 @@ class MeshNode(CadQueryNode):
         self.create_property('shell_nip', 5, widget_type='int')
 
     def run(self):
+        self.clear_error()
         if OCCGeometry is None:
             self.set_error("Netgen-occ is not installed")
             return None
@@ -71,12 +111,26 @@ class MeshNode(CadQueryNode):
         shape = self.get_input_shape('shape')
         # Resolve element size input with fallback to property
         size = self.get_input_value('element_size', 'element_size')
-        size = float(size)
-        
+
         # NEW: Get refinement parameters
         refinement_faces = self.get_input_value('refinement_faces', None)
         refinement_size = self.get_input_value('refinement_size', 'refinement_size')
-        refinement_size = float(refinement_size)
+        try:
+            size = float(size)
+            refinement_size = float(refinement_size)
+        except (TypeError, ValueError):
+            self.set_error("Element and refinement sizes must be numeric.")
+            return None
+
+        if not np.isfinite(size) or size <= 0.0:
+            self.set_error("Element size must be a finite value greater than zero.")
+            return None
+        if not np.isfinite(refinement_size) or refinement_size <= 0.0:
+            self.set_error("Refinement size must be a finite value greater than zero.")
+            return None
+        if refinement_faces is not None and refinement_size >= size:
+            self.set_error("Local refinement size must be smaller than the global element size.")
+            return None
         
         if not shape:
             self.set_error("Connect a CAD solid to the mesh node's shape input.")
@@ -133,6 +187,15 @@ class MeshNode(CadQueryNode):
                 mesh_type = (self.get_property('mesh_type') or 'Tet').strip()
                 is_shell = mesh_type.lower() == 'shell'
                 wants_tet10 = mesh_type.lower() == 'tet10'
+                if mesh_type not in {'Tet', 'Tet10', 'Shell'}:
+                    raise ValueError(f"Unsupported mesh type {mesh_type!r}.")
+                if is_shell:
+                    thickness = float(self.get_property('shell_thickness') or 0.0)
+                    nip = int(self.get_property('shell_nip') or 0)
+                    if not np.isfinite(thickness) or thickness <= 0.0:
+                        raise ValueError("Shell thickness must be greater than zero.")
+                    if nip < 1:
+                        raise ValueError("Shell integration points must be at least 1.")
 
                 # 2. Load Geometry with Netgen and generate mesh (suppress verbose output)
                 with suppress_output():
@@ -140,29 +203,24 @@ class MeshNode(CadQueryNode):
 
                     # NEW: Apply local mesh refinement if specified
                     if refinement_faces is not None:
-                        try:
-                            # Handle SelectFaceNode dict format: {'workplane': ..., 'face': ..., 'faces': [...]}
-                            if isinstance(refinement_faces, dict):
-                                face_list = refinement_faces.get('faces', [])
-                                if not face_list and refinement_faces.get('face') is not None:
-                                    face_list = [refinement_faces['face']]
-                            elif hasattr(refinement_faces, 'vals'):
-                                face_list = refinement_faces.vals()
-                            else:
-                                face_list = [refinement_faces]
-
-                            for face in face_list:
-                                if hasattr(face, 'hashCode'):
-                                    # Set finer mesh size on specific faces
-                                    geo.SetFaceMaxH(face.hashCode(), refinement_size)
-                        except Exception:
-                            pass
+                        face_indices = _selected_cad_face_indices(shape, refinement_faces)
+                        if not face_indices:
+                            raise ValueError(
+                                "Local refinement is connected, but its selected CAD faces "
+                                "do not belong to the meshed shape."
+                            )
+                        for face_index in face_indices:
+                            # Netgen's OCC API uses zero-based imported face
+                            # indices; SetFaceMaxH/hashCode was never a valid API
+                            # and previously made this control a silent no-op.
+                            geo.SetFaceMeshsize(int(face_index), refinement_size)
 
                     # 3. Generate Mesh
                     if is_shell:
                         # Stop after the surface meshing pass: Netgen emits only
                         # triangle facets, no volume tets.  The resulting .msh
-                        # is the mid/outer-surface mesh that *ELEMENT_SHELL needs.
+                        # is the explicit input/boundary surface mesh that
+                        # *ELEMENT_SHELL needs; no midsurface offset is inferred.
                         import netgen.meshing as ngmeshing
                         ng_mesh = geo.GenerateMesh(
                             maxh=size,
@@ -188,10 +246,12 @@ class MeshNode(CadQueryNode):
                     if triangles is None or triangles.size == 0:
                         logger.error("FEA Mesh: Netgen produced no surface triangles; "
                                      "is the input a solid (use Tet) or a shell/face (use Shell)?")
+                        self.set_error(
+                            "Netgen produced no surface triangles. Use Shell for a valid "
+                            "face/shell or Tet for a closed solid."
+                        )
                         return None
                     points_3d = np.asarray(mio.points, dtype=float)
-                    thickness = float(self.get_property('shell_thickness') or 1.5)
-                    nip = max(1, int(self.get_property('shell_nip') or 5))
                     mesh = _ShellSurfaceMesh(
                         points_3d, triangles,
                         shell_thickness=thickness, shell_nip=nip,
@@ -203,6 +263,8 @@ class MeshNode(CadQueryNode):
                 else:
                     logger.debug("FEA Mesh: Loading into skfem...")
                     mesh = Mesh.load(msh_path)
+                    if np.asarray(mesh.t).ndim != 2 or np.asarray(mesh.t).shape[0] < 4:
+                        raise ValueError("Netgen did not produce a tetrahedral volume mesh.")
                     if wants_tet10:
                         # MeshTet2 stores its six midside nodes in
                         # dofs.element_dofs while keeping corner topology in t.
@@ -238,4 +300,3 @@ class MeshNode(CadQueryNode):
             return None
         
         return mesh
-

@@ -7,12 +7,14 @@ from __future__ import annotations
 import ast
 import json
 import os
+import signal
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -63,6 +65,7 @@ class ExternalRunConfig:
     run_solver: bool = False
     timeout_s: float = 3600.0
     job_name: str = "pylcss_case"
+    cancel_callback: Optional[Callable[[], bool]] = None
 
 
 def flatten_inputs(items: Iterable[Any]) -> List[Any]:
@@ -184,6 +187,7 @@ def run_process(
     extra_path_dirs: Sequence[str] = (),
     extra_env: Optional[dict] = None,
     stdout_file: Optional[Path] = None,
+    cancel_callback: Optional[Callable[[], bool]] = None,
 ) -> subprocess.CompletedProcess:
     """Run an external solver process and capture text output.
 
@@ -212,6 +216,60 @@ def run_process(
         if extra_env:
             for k, v in extra_env.items():
                 env[str(k)] = str(v)
+
+    def _cancel_requested() -> bool:
+        return bool(callable(cancel_callback) and cancel_callback())
+
+    def _terminate_tree(proc: subprocess.Popen) -> None:
+        """Stop the solver and children without leaving an orphan process."""
+        if proc.poll() is not None:
+            return
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5.0,
+                    check=False,
+                )
+            else:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except Exception:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        try:
+            proc.wait(timeout=5.0)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=2.0)
+            except Exception:
+                pass
+
+    def _popen_kwargs() -> dict:
+        if os.name == "nt":
+            return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        return {"start_new_session": True}
+
+    def _wait_for_file_process(proc: subprocess.Popen) -> int:
+        deadline = time.monotonic() + max(float(timeout_s), 0.0)
+        while proc.poll() is None:
+            if _cancel_requested():
+                _terminate_tree(proc)
+                raise SolverBackendError("Solver run cancelled by the user.")
+            if time.monotonic() >= deadline:
+                _terminate_tree(proc)
+                raise SolverBackendError(
+                    f"Solver exceeded the configured timeout of {timeout_s:g} seconds."
+                )
+            time.sleep(0.1)
+        return int(proc.returncode or 0)
+
+    if _cancel_requested():
+        raise SolverBackendError("Solver run cancelled by the user.")
 
     if stdout_file is not None:
         stdout_file = Path(stdout_file)
@@ -274,35 +332,53 @@ def run_process(
         watcher.start()
         try:
             with open(stdout_file, "w", encoding="utf-8", errors="replace") as fout:
-                proc = subprocess.run(
+                child = subprocess.Popen(
                     list(args),
                     cwd=str(cwd),
                     text=True,
                     stdout=fout,
                     stderr=subprocess.STDOUT,
-                    timeout=timeout_s,
-                    check=False,
                     env=env,
+                    **_popen_kwargs(),
                 )
+                returncode = _wait_for_file_process(child)
         finally:
             stop_event.set()
             watcher.join(timeout=2.0)
+        proc = subprocess.CompletedProcess(list(args), returncode)
         try:
             proc.stdout = stdout_file.read_text(encoding="utf-8", errors="replace")
         except Exception:
             proc.stdout = ""
         return proc
 
-    return subprocess.run(
+    child = subprocess.Popen(
         list(args),
         cwd=str(cwd),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        timeout=timeout_s,
-        check=False,
         env=env,
+        **_popen_kwargs(),
     )
+    deadline = time.monotonic() + max(float(timeout_s), 0.0)
+    while True:
+        if _cancel_requested():
+            _terminate_tree(child)
+            child.communicate()
+            raise SolverBackendError("Solver run cancelled by the user.")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            _terminate_tree(child)
+            child.communicate()
+            raise SolverBackendError(
+                f"Solver exceeded the configured timeout of {timeout_s:g} seconds."
+            )
+        try:
+            stdout, _ = child.communicate(timeout=min(0.2, remaining))
+            return subprocess.CompletedProcess(list(args), child.returncode, stdout=stdout)
+        except subprocess.TimeoutExpired:
+            continue
 
 
 def mesh_to_tet4(mesh: Any, warnings: List[str]) -> Tuple[np.ndarray, np.ndarray]:

@@ -38,45 +38,6 @@ GREEK_HTML_MAP: Dict[str, str] = {
 }
 
 
-def format_latex(text: str) -> str:
-    """
-    Convert variable names to LaTeX format for mathematical display.
-
-    Handles Greek letters and subscripts for proper mathematical notation
-    in plots and documentation. Used for rendering variable names in
-    plots and other LaTeX-compatible displays.
-
-    Args:
-        text: Variable name string to format
-
-    Returns:
-        str: LaTeX-formatted string with $ delimiters
-
-    Examples:
-        'alpha' -> '$\\alpha$'
-        'z_a' -> '$z_{a}$'
-        'sigma_1' -> '$\\sigma_{1}$'
-    """
-    if not text:
-        return text
-
-    # Check if the whole word is a greek letter
-    if text in GREEK_LETTERS:
-        return f"$\\{text}$"
-
-    # Handle subscripts (underscores)
-    if '_' in text:
-        parts = text.split('_')
-        base = parts[0]
-        sub = '_'.join(parts[1:])
-
-        # Check if base is greek
-        if base in GREEK_LETTERS:
-            base = f"\\{base}"
-
-        return f"${base}_{{{sub}}}$"
-
-    return text
 
 
 def format_html(text: str) -> str:
@@ -117,7 +78,6 @@ def format_html(text: str) -> str:
         return f"{base}<sub>{sub}</sub>"
 
     return text
-
 
 
 

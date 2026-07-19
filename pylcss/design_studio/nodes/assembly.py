@@ -21,13 +21,16 @@ class AssemblyNode(CadQueryNode):
         self.create_property('fuse_parts', False, widget_type='bool')
 
     def run(self):
-        fuse = self.get_property('fuse_parts')
-        asm_name = self.get_property('assembly_name')
+        self.clear_error()
+        from pylcss.solver_backends.common import as_bool
+
+        fuse = as_bool(self.get_property('fuse_parts'))
+        asm_name = str(self.get_property('assembly_name') or '').strip() or 'Assembly'
         
         parts = []
         for i in range(1, 5):
             val = self.get_input_value(f'part_{i}', None)
-            if val:
+            if val is not None:
                 # Extract raw shape if it's a Workplane or wrapper
                 if hasattr(val, 'val'):
                     parts.append(val.val())
@@ -38,6 +41,7 @@ class AssemblyNode(CadQueryNode):
                     parts.append(val)
 
         if not parts:
+            self.set_error("Connect at least one CAD part to the assembly.")
             return None
             
         if fuse:
@@ -54,7 +58,7 @@ class AssemblyNode(CadQueryNode):
                 return final_asm
             except Exception as e:
                 self.set_error(f"Fusion failed: {e}")
-                # Fallback to standard assembly
+                return None
         
         # Standard Assembly path
         asm = cq.Assembly(name=asm_name)

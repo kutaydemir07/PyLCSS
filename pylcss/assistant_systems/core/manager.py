@@ -13,7 +13,7 @@ text-to-speech stack was removed.)
 
 import logging
 import json
-from typing import Optional, Dict, Any, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Signal, Qt, Slot
 
@@ -27,7 +27,7 @@ from pylcss.assistant_systems.services.memory import LLMMemory, get_secure_stora
 
 # Agentic AI components -- PydanticAI native function-calling owns tool dispatch.
 try:
-    from pylcss.assistant_systems.tools.registry import create_pylcss_tools, ToolRegistry
+    from pylcss.assistant_systems.tools.registry import create_pylcss_tools
     from pylcss.assistant_systems.services.pydantic_agent import (
         PydanticAgentRunner, PydanticAgentResult,
     )

@@ -15,7 +15,6 @@ same lookup order (explicit > solver_paths.json > env var > PATH) applies.
 from __future__ import annotations
 
 import logging
-import os
 import platform
 from pathlib import Path
 from typing import Optional

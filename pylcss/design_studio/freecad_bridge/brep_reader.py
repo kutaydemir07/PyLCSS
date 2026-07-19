@@ -37,7 +37,6 @@ logger = logging.getLogger(__name__)
 # screen if FreeCAD isn't being used this session.
 def _occt_modules():
     """Return ``(BRepTools, TopoDS, Shape_factory)`` from CadQuery's OCP."""
-    from cadquery import Shape as _Shape  # type: ignore
     from cadquery.occ_impl.shapes import Shape as ShapeCls  # type: ignore
     # OCP wraps BRepTools as BRepTools_BRepTools_Read in some builds; use
     # cadquery's helper which papers over the variants.
@@ -110,6 +109,25 @@ def read_brep_from_fcstd(fcstd_path: Path | str) -> Optional[FreeCadImportedShap
                 brep_path=None, fcstd_path=fcstd_path,
             )
         return None
+
+    # Never present geometry older than the authoritative FreeCAD document.
+    # This happens when the save observer failed or FreeCAD was closed before
+    # the BREP export completed.
+    try:
+        if fcstd_path.is_file() and brep_path.stat().st_mtime_ns < fcstd_path.stat().st_mtime_ns:
+            logger.warning(
+                "BREP %s is older than %s; refusing stale geometry.",
+                brep_path.name,
+                fcstd_path.name,
+            )
+            return FreeCadImportedShape(
+                shape=None,
+                sidecar=sidecar,
+                brep_path=brep_path,
+                fcstd_path=fcstd_path,
+            )
+    except OSError:
+        pass
 
     try:
         BRepTools, TopoDS_Shape, BRep_Builder, ShapeCls = _occt_modules()

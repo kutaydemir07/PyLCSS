@@ -19,64 +19,6 @@ try:
 except ImportError:
     ureg = None
 
-class GraphValidator:
-    """
-    Validates the system graph for connectivity, loops, and variable naming conflicts.
-    """
-    def validate(self, nodes: list, edges: list) -> dict:
-        """
-        Runs all validation checks on the graph.
-        Returns a dict with 'errors' and 'warnings'.
-        """
-        errors = []
-        warnings = []
-
-        # --- Existing Validation Logic (Preserve this) ---
-        # For now, we'll keep the existing checks here or call them
-
-        # --- Check for Duplicate QoI Names (Single Graph Scope) ---
-        qoi_warnings = self._check_duplicate_qois(nodes)
-        warnings.extend(qoi_warnings)
-
-        return {
-            "errors": errors,
-            "warnings": warnings
-        }
-
-    def _check_duplicate_qois(self, nodes: list) -> list:
-        """
-        Scans all nodes for Quantities of Interest (QoI) and checks for duplicate names.
-        Returns a list of warning strings.
-        """
-        qoi_map = {}  # Key: QoI Name, Value: List of Node Names
-        warnings = []
-
-        for node in nodes:
-            # Check if node has 'qois' attribute (list of objects or dicts)
-            if hasattr(node, 'qois'):
-                for qoi in node.qois:
-                    # Handle both Object (qoi.name) and Dict (qoi['name']) styles safely
-                    qoi_name = None
-                    if hasattr(qoi, 'name'):
-                        qoi_name = qoi.name
-                    elif isinstance(qoi, dict):
-                        qoi_name = qoi.get('name')
-                    
-                    if qoi_name:
-                        if qoi_name not in qoi_map:
-                            qoi_map[qoi_name] = []
-                        qoi_map[qoi_name].append(node.name)
-
-        # Generate warnings for duplicates
-        for qoi_name, node_names in qoi_map.items():
-            if len(node_names) > 1:
-                # Remove duplicates from node_names list for cleaner message
-                unique_nodes = list(set(node_names))
-                msg = (f"Duplicate QoI Name Detected: '{qoi_name}' is defined in multiple systems "
-                       f"({', '.join(unique_nodes)}). This may cause overwriting in the solution space.")
-                warnings.append(msg)
-
-        return warnings
 
 def validate_graph(widget):
     """

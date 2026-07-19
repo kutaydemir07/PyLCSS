@@ -304,67 +304,6 @@ def _von_mises_from_tensor(arr: np.ndarray) -> Optional[np.ndarray]:
     )
 
 
-def _legacy_cell_vm_to_point_vm(mesh) -> Optional[np.ndarray]:
-    """Average cell stress tensors onto VTK points when nodal VM is absent."""
-    cell_data = getattr(mesh, "cell_data_dict", {}) or {}
-    if not cell_data:
-        return None
-
-    n_points = int(mesh.points.shape[0]) if mesh.points is not None else 0
-    if n_points <= 0:
-        return None
-    accum = np.zeros(n_points, dtype=float)
-    counts = np.zeros(n_points, dtype=float)
-    found = False
-
-    # Sort field names so 3D-element Von Mises comes before 2D-element Von Mises.
-    # OpenRadioss VTK files carry both "2DELEM_Von_Mises" and "3DELEM_Von_Mises";
-    # iterating dict order would pick the 2D field first (all-zero for solid meshes),
-    # set found=True, and break — leaving VM permanently zero.
-    def _vm_sort_key(n: str) -> int:
-        nl = n.lower()
-        if "3delem" in nl and "von" in nl:
-            return 0
-        if "von" in nl or "stress" in nl:
-            return 1
-        return 2
-
-    for name, by_type in sorted(cell_data.items(), key=lambda kv: _vm_sort_key(kv[0])):
-        name_l = str(name).lower()
-        if "stress" not in name_l and "von" not in name_l:
-            continue
-        for cell_type, values in by_type.items():
-            arr = np.asarray(values, dtype=float)
-            if "von" in name_l and arr.ndim >= 1:
-                vm = arr.reshape(arr.shape[0], -1)[:, 0]
-            else:
-                vm = _von_mises_from_tensor(arr)
-            if vm is None or vm.size == 0:
-                continue
-            blocks = [block.data for block in mesh.cells if block.type == cell_type]
-            if not blocks:
-                continue
-            offset = 0
-            for conn in blocks:
-                n_cells = int(conn.shape[0])
-                block_vm = vm[offset : offset + n_cells]
-                offset += n_cells
-                if block_vm.size != n_cells:
-                    continue
-                flat_conn = np.asarray(conn, dtype=int).reshape(-1)
-                repeated = np.repeat(block_vm, conn.shape[1])
-                np.add.at(accum, flat_conn, repeated)
-                np.add.at(counts, flat_conn, 1.0)
-                found = True
-        if found:
-            break
-
-    if not found:
-        return None
-    vm_points = np.zeros(n_points, dtype=float)
-    valid = counts > 0
-    vm_points[valid] = accum[valid] / counts[valid]
-    return vm_points
 
 
 def _extract_cell_scalar(mesh, name_matches, reducer: str = "max") -> Optional[np.ndarray]:

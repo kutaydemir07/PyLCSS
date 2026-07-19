@@ -14,16 +14,14 @@ from typing import Optional, List, Dict
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QPushButton,
     QLabel, QComboBox, QLineEdit, QSlider, QSpinBox, QCheckBox,
-    QFrame, QSizePolicy, QMessageBox, QTabWidget, QWidget, QTextEdit,
-    QScrollArea
+    QFrame, QMessageBox, QTabWidget, QWidget, QScrollArea
 )
 from PySide6.QtCore import Qt, Signal, Slot, QTimer
-from PySide6.QtGui import QFont
 
-from pylcss.assistant_systems.config import AssistantConfig, LLMControlConfig
+from pylcss.assistant_systems.config import AssistantConfig
 from pylcss.assistant_systems.services.llm import (
     LLMProvider, get_provider, get_available_providers,
-    PROVIDER_DISPLAY_NAMES, LLMProviderError, ModelInfo
+    PROVIDER_DISPLAY_NAMES, ModelInfo
 )
 from pylcss.assistant_systems.services.memory import get_secure_storage, LLMMemory
 
@@ -76,7 +74,7 @@ class LLMConfigDialog(QDialog):
         
         group = self.provider_configs[provider_name]
         key_input = group.findChild(QLineEdit, f"{provider_name}_key")
-        model_combo = group.findChild(QComboBox, f"{provider_name}_model")
+        group.findChild(QComboBox, f"{provider_name}_model")
         status_label = group.findChild(QLabel, f"{provider_name}_status")
         load_btn = group.findChild(QPushButton, f"{provider_name}_load")
         
@@ -184,7 +182,7 @@ class LLMConfigDialog(QDialog):
         self.active_provider_combo.setMinimumWidth(150)
         for provider_name in get_available_providers():
             display_name = PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name)
-            icon = self._get_provider_icon(provider_name)
+            self._get_provider_icon(provider_name)
             self.active_provider_combo.addItem(f"{display_name}", provider_name)
         self.active_provider_combo.currentIndexChanged.connect(self._on_active_provider_changed)
         active_layout.addWidget(self.active_provider_combo)
@@ -207,7 +205,7 @@ class LLMConfigDialog(QDialog):
     def _create_provider_config_group(self, provider_name: str) -> QGroupBox:
         """Create configuration group for a specific provider."""
         display_name = PROVIDER_DISPLAY_NAMES.get(provider_name, provider_name)
-        icon = self._get_provider_icon(provider_name)
+        self._get_provider_icon(provider_name)
         group = QGroupBox(f"{display_name}")
         
         layout = QGridLayout(group)

@@ -44,7 +44,7 @@ def get_compiled_code(widget):
         and returns a dictionary of outputs.
     """
     models = []
-    product_name = widget.system_manager.product_name.text()
+    widget.system_manager.product_name.text()
     
     # Track global names to prevent collisions between systems
     global_names = set()

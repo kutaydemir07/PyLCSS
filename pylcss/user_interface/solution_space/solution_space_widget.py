@@ -30,23 +30,15 @@ import numpy as np
 import pandas as pd
 from PySide6 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
-from pyqtgraph.Qt import QtCore as PGQtCore
-import dill as pickle  # Use dill for better serialization of dynamic functions
 import json
 import h5py
 import os
-import time
 import networkx as nx
-import tempfile
-import importlib.util
-from scipy.interpolate import NearestNDInterpolator
 import logging
 
 from ...system_modeling.problem_definition.problem_setup import XRayProblem
 from pylcss.solution_space.computation_engine import (
-    compute_solution_space,
     resample_multimodal_solution_spaces,
-    resample_solution_space,
 )
 from pylcss.solution_space.solver_engine import SolutionSpaceSolver
 from pylcss.solution_space.multimodal_models import (
@@ -54,7 +46,7 @@ from pylcss.solution_space.multimodal_models import (
     MMSSParameters,
     MultiModalResult,
 )
-from typing import List, Dict, Any, Optional, Tuple, Union
+from typing import List, Optional
 from pylcss.solution_space.solver_worker_thread import (
     MultiModalSolverWorker,
     ProductFamilyWorker,
@@ -63,7 +55,7 @@ from pylcss.solution_space.solver_worker_thread import (
 from pylcss.solution_space.resample_worker_thread import ResampleThread
 from pylcss.solution_space.interpolation_worker_thread import InterpolationThread
 
-from ..common.text_utils import format_latex, format_html
+from ..common.text_utils import format_html
 from ..common.qt_patches import NumericTableWidgetItem
 
 logger = logging.getLogger(__name__)
@@ -107,8 +99,8 @@ class ScalableText(pg.GraphicsObject):
         # Translate to node center, then offset to center the text
         # In Qt coordinates: Y increases downward, but we flip Y in scale
         # Center calculation: after scaling, text width = path_width * scale_factor
-        scaled_width = self.path_width * self.scale_factor
-        scaled_height = self.path_height * self.scale_factor
+        self.path_width * self.scale_factor
+        self.path_height * self.scale_factor
         
         # Move to position where text center aligns with (self.x, self.y)
         # We draw at origin then translate
@@ -455,7 +447,6 @@ class PlotWidget(QtWidgets.QWidget):
 
     def save_plot(self):
         # Use PyQtGraph's export functionality
-        import os
         from PySide6.QtWidgets import QFileDialog
         import pyqtgraph.exporters as pg_exporters
         
@@ -471,7 +462,7 @@ class PlotWidget(QtWidgets.QWidget):
                     try:
                         exporter = pg_exporters.SVGExporter(self.plot_widget.plotItem)
                         exporter.export(filename)
-                    except Exception as e:
+                    except Exception:
                         # Fallback to Qt SVG generation if PyQtGraph export fails
                         from PySide6.QtSvg import QSvgGenerator
                         from PySide6.QtGui import QPainter
@@ -524,7 +515,7 @@ class PlotWidget(QtWidgets.QWidget):
                             
                             self.plot_widget.scene().render(painter)
                             painter.end()
-                    except Exception as e:
+                    except Exception:
                         # Final fallback
                         from PySide6.QtPrintSupport import QPrinter
                         printer = QPrinter(QPrinter.HighResolution)
@@ -852,7 +843,7 @@ class PlotWidget(QtWidgets.QWidget):
                         )
                         self.interpolation_thread.start()
                         
-                    except Exception as e:
+                    except Exception:
                         logger.exception("Interpolation failed")
                 else:
                     # --- FAST VECTORIZED POINTS MODE ---
@@ -1277,13 +1268,13 @@ class PlotWidget(QtWidgets.QWidget):
             # Ignore errors resulting from deleted C++ objects
             if "Internal C++ object" not in str(e):
                 logger.debug("RuntimeError in interpolation finished", exc_info=True)
-        except Exception as e:
+        except Exception:
             logger.exception("Error in interpolation finished")
             # Cache the result
             self.cached_categorical_img = color_map.astype(np.uint8).transpose(1, 0, 2)
             self.cached_data_hash = current_hash
                     
-        except Exception as e:
+        except Exception:
             logger.exception("Error creating interpolated image")
         finally:
             self.interpolation_thread = None
@@ -1346,7 +1337,7 @@ class PlotWidget(QtWidgets.QWidget):
             # Ignore errors resulting from deleted C++ objects
             if "Internal C++ object" not in str(e):
                 logger.debug("RuntimeError in quick interpolation", exc_info=True)
-        except Exception as e:
+        except Exception:
             logger.exception("Error creating quick interpolated image")
 
     def _on_interpolation_error(self, error_msg):
@@ -1470,36 +1461,6 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         except ValueError:
             return default
 
-    def apply_optimization_constraints(self, updates: Dict[str, Any]) -> None:
-        """
-        Apply relaxed optimization results as new constraints.
-
-        Updates the quantity of interest table with relaxed bounds from
-        optimization results, disabling optimization flags for those variables.
-
-        Args:
-            updates: Dictionary mapping variable names to constraint updates
-        """
-        self.qoi_table.blockSignals(True)
-
-        for row in range(self.qoi_table.rowCount()):
-            name = self.qoi_table.item(row, 0).text()
-            if name in updates:
-                data = updates[name]
-
-                # Uncheck optimization flags (Cols 6 & 7)
-                self.qoi_table.item(row, 6).setCheckState(QtCore.Qt.Unchecked)
-                self.qoi_table.item(row, 7).setCheckState(QtCore.Qt.Unchecked)
-
-                if 'req_min' in data:
-                    self.qoi_table.setItem(row, 2, QtWidgets.QTableWidgetItem(f"{data['req_min']:.4f}"))
-                    self.qoi_table.item(row, 2).setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEditable)
-
-                if 'req_max' in data:
-                    self.qoi_table.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{data['req_max']:.4f}"))
-                    self.qoi_table.item(row, 3).setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEditable)
-
-        self.qoi_table.blockSignals(False)
         # Optional: Auto-run computation
         # self.run_computation()
 
@@ -2215,8 +2176,6 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                     return v
             raise AttributeError("system_function not found in generated code")
 
-    def load_model_from_system_model(self, m):
-        self.load_model(m.source_code, m.inputs, m.outputs, m.name)
 
     def load_model(self, code, inputs, outputs, name=None):
         """
@@ -2261,7 +2220,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                     show_in_legend=out.get('show_in_legend', True),
                 )
                 
-        except Exception as e:
+        except Exception:
             logger.warning("Failed to initialize problem object", exc_info=True)
             self.problem = None
 
@@ -2445,7 +2404,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                     show_in_legend=out.get('show_in_legend', True),
                 )
 
-        except Exception as e:
+        except Exception:
             logger.warning("Failed to initialize problem object", exc_info=True)
             self.problem = None
 
@@ -2833,7 +2792,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                 try:
                     self.dv_par_box[row, idx] = val
                     # Make a copy of the updated box for thread-safe use
-                    dv_par_box_copy = self.dv_par_box.copy()
+                    self.dv_par_box.copy()
                 finally:
                     self.dv_par_box_mutex.unlock()
                 
@@ -2907,27 +2866,6 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                     if self.problem and row < len(self.problem.quantities_of_interest):
                         self.problem.quantities_of_interest[row]['weight'] = 1.0
         
-        # Update button states based on objectives
-        if self.problem:
-            has_objectives = any(qoi.get('minimize', False) or qoi.get('maximize', False) 
-                               for qoi in self.problem.quantities_of_interest)
-
-    def update_table_from_box(self):
-        self.dv_par_box_mutex.lock()
-        try:
-            dv_par_box_copy = self.dv_par_box.copy() if self.dv_par_box is not None else None
-        finally:
-            self.dv_par_box_mutex.unlock()
-            
-        if dv_par_box_copy is None: return
-        
-        self.dv_table.blockSignals(True)
-        for i in range(self.dv_table.rowCount()):
-            if i < len(dv_par_box_copy):
-                self.dv_table.setItem(i, 4, QtWidgets.QTableWidgetItem(f"{dv_par_box_copy[i, 0]:.4f}"))
-                self.dv_table.setItem(i, 5, QtWidgets.QTableWidgetItem(f"{dv_par_box_copy[i, 1]:.4f}"))
-        self.dv_table.blockSignals(False)
-
     def update_single_dv_row(self, row_idx):
         """Update only a single row in the DV table for performance during dragging."""
         self.dv_par_box_mutex.lock()
@@ -3924,7 +3862,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
             plot_widget.deleteLater()
             
             while self.plots_layout.count():
-                item = self.plots_layout.takeAt(0)
+                self.plots_layout.takeAt(0)
             
             for i, widget in enumerate(self.plot_widgets):
                 row = i // self.plot_columns
@@ -4530,7 +4468,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                         )
                         self.problem.set_system_model(sm.system_function)
                         
-                    except Exception as e:
+                    except Exception:
                         logger.warning("Failed to recompile system model", exc_info=True)
                         # Fallback to exec if file creation fails
                         try:
@@ -4749,7 +4687,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                             if 'results' in h5f:
                                 for key in h5f['results'].keys():
                                     results_data[key] = h5f[f'results/{key}'][:]
-                    except Exception as e:
+                    except Exception:
                         logger.warning("Could not load HDF5 data", exc_info=True)
                 
                 p_data = data.get('problem_data')
@@ -4791,9 +4729,6 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                 
                 if self.problem and self.problem.system_model:
                      self.btn_compute_feasible.setEnabled(True)
-                     # Check if there are any objectives defined
-                     has_objectives = any(qoi.get('minimize', False) or qoi.get('maximize', False) 
-                                        for qoi in self.problem.quantities_of_interest)
                      self.btn_compute_family.setEnabled(True)
                      # Restoring a saved project: show its samples.
                      self._has_sampled = True
@@ -5002,65 +4937,6 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         self.family_progress.close()
         self.btn_compute_family.setEnabled(True)
 
-    def update_family_plots(self):
-        """Update product family visualization plots."""
-        if not hasattr(self, 'family_results') or not self.family_results:
-            return
-            
-        # Clear existing family plots
-        for i in reversed(range(self.family_plots_layout.count())):
-            widget = self.family_plots_layout.itemAt(i).widget()
-            if widget:
-                widget.deleteLater()
-        
-        # Create plots for each variant and platform
-        plot_widgets = []
-        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
-        
-        row = 0
-        col = 0
-        max_cols = 2
-        
-        for i, (variant_name, box) in enumerate(self.family_results.items()):
-            if box is None:
-                continue
-                
-            # Create a simple plot showing the variant box
-            plot_widget = pg.PlotWidget()
-            plot_widget.setTitle(f"{variant_name}")
-            plot_widget.setLabel('left', 'Design Variable 2')
-            plot_widget.setLabel('bottom', 'Design Variable 1')
-            
-            # Add rectangle for the box
-            if box.shape[0] >= 2:  # At least 2D
-                x_min, x_max = box[0, 0], box[0, 1]
-                y_min, y_max = box[1, 0], box[1, 1]
-                
-                # Create rectangle
-                rect = QtCore.QRectF(x_min, y_min, x_max - x_min, y_max - y_min)
-                rect_item = pg.QtGui.QGraphicsRectItem(rect)
-                rect_item.setPen(pg.mkPen(colors[i % len(colors)], width=2))
-                rect_item.setBrush(pg.mkBrush(colors[i % len(colors)], alpha=100))
-                plot_widget.addItem(rect_item)
-                
-                # Set axis ranges with some padding
-                padding = 0.1
-                x_range = x_max - x_min
-                y_range = y_max - y_min
-                plot_widget.setXRange(x_min - padding * x_range, x_max + padding * x_range)
-                plot_widget.setYRange(y_min - padding * y_range, y_max + padding * y_range)
-            
-            plot_widgets.append(plot_widget)
-            
-            # Add to layout
-            self.family_plots_layout.addWidget(plot_widget, row, col)
-            col += 1
-            if col >= max_cols:
-                col = 0
-                row += 1
-        
-        # Update the container
-        self.family_plots_container.update()
 
     def add_variant(self):
         """Add a new product variant."""
@@ -5440,7 +5316,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                 else:
                     V_SPACING = NODE_DIAMETER * 2.0
                 
-                max_level_num = max(nodes_by_level.keys()) if nodes_by_level else 0
+                max(nodes_by_level.keys()) if nodes_by_level else 0
                 
                 pos = {}
                 for level, nodes in nodes_by_level.items():
@@ -5474,11 +5350,6 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         
         return pos
     
-    def update_adg_layout(self):
-        """Update graph layout when layout algorithm changes."""
-        if hasattr(self, 'adg_graph') and hasattr(self, 'adg_positions'):
-            # Re-visualize with new layout
-            self.visualize_adg(self.adg_graph)
     
     def save_adg_graph(self):
         """Save the ADG graph visualization."""

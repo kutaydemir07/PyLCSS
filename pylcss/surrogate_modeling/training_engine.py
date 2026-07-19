@@ -7,7 +7,7 @@ Supports multiple architecture types and manages the spy-model generation proces
 Includes robust error handling for optional dependencies (PyTorch).
 """
 
-from typing import Optional, List, Dict, Any, Tuple, Callable, Union
+from typing import Optional, List, Dict, Any, Tuple, Callable
 import numpy as np
 import time
 import logging
@@ -21,9 +21,9 @@ try:
     from sklearn.neural_network import MLPRegressor
     from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
     from sklearn.gaussian_process import GaussianProcessRegressor
-    from sklearn.gaussian_process.kernels import RBF, Matern, ConstantKernel as C, WhiteKernel
+    from sklearn.gaussian_process.kernels import Matern, ConstantKernel as C, WhiteKernel
     from sklearn.pipeline import Pipeline
-    from sklearn.preprocessing import StandardScaler, MinMaxScaler
+    from sklearn.preprocessing import StandardScaler
     from sklearn.compose import TransformedTargetRegressor
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import mean_squared_error, r2_score
@@ -51,7 +51,7 @@ except ImportError:
 
 # --- Enhanced Pickling Support ---
 try:
-    import dill
+    import dill  # noqa: F401 - availability probe
     DILL_AVAILABLE = True
 except ImportError:
     DILL_AVAILABLE = False
@@ -63,7 +63,7 @@ try:
     import torch.optim as optim
     from torch.utils.data import DataLoader, TensorDataset
     TORCH_AVAILABLE = True
-except (ImportError, OSError) as e:
+except (ImportError, OSError):
     logger.warning("PyTorch could not be loaded; advanced neural networks will be disabled.")
     logger.debug("PyTorch import error details", exc_info=True)
     TORCH_AVAILABLE = False

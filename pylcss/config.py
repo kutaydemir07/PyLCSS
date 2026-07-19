@@ -11,7 +11,6 @@ changing core logic.
 
 import logging
 import os
-import tempfile
 from dataclasses import dataclass
 from typing import Optional
 

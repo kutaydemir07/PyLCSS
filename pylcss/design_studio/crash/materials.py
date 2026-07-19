@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 """Crash material node — elastic + plasticity properties for impact simulation."""
+import math
+
 from pylcss.design_studio.core.base_node import CadQueryNode
 
 
@@ -110,6 +112,7 @@ class CrashMaterialNode(CadQueryNode):
         self.create_property('strain_rate_sensitive', True, widget_type='checkbox')
 
     def run(self):
+        self.clear_error()
         preset = self.get_property('preset')
         if preset != 'Custom' and preset in CRASH_MATERIAL_PRESETS:
             p = CRASH_MATERIAL_PRESETS[preset]
@@ -126,12 +129,16 @@ class CrashMaterialNode(CadQueryNode):
                 src = 0.0
                 srp = 0.0
         else:
-            E   = float(self.get_property('youngs_modulus'))
-            nu  = float(self.get_property('poissons_ratio'))
-            rho = float(self.get_property('density'))
-            sy  = float(self.get_property('yield_strength'))
-            H   = float(self.get_property('tangent_modulus'))
-            ef  = float(self.get_property('failure_strain'))
+            try:
+                E   = float(self.get_property('youngs_modulus'))
+                nu  = float(self.get_property('poissons_ratio'))
+                rho = float(self.get_property('density'))
+                sy  = float(self.get_property('yield_strength'))
+                H   = float(self.get_property('tangent_modulus'))
+                ef  = float(self.get_property('failure_strain'))
+            except (TypeError, ValueError):
+                self.set_error("Crash material properties must be numeric.")
+                return None
             if _as_bool(self.get_property('strain_rate_sensitive')):
                 p = CRASH_MATERIAL_PRESETS['Custom']
                 src = float(p.get('strain_rate_c', 0.0) or 0.0)
@@ -139,6 +146,29 @@ class CrashMaterialNode(CadQueryNode):
             else:
                 src = 0.0
                 srp = 0.0
+
+        values = (E, nu, rho, sy, H, ef, src, srp)
+        if not all(math.isfinite(float(value)) for value in values):
+            self.set_error("Crash material properties must be finite numbers.")
+            return None
+        if E <= 0.0:
+            self.set_error("Young's modulus must be greater than zero.")
+            return None
+        if not (-1.0 < nu < 0.5):
+            self.set_error("Poisson's ratio must be between -1 and 0.5 (exclusive).")
+            return None
+        if rho <= 0.0 or sy <= 0.0:
+            self.set_error("Density and yield strength must be greater than zero.")
+            return None
+        if H < 0.0 or H >= E:
+            self.set_error("Tangent modulus must be non-negative and smaller than Young's modulus.")
+            return None
+        if _as_bool(self.get_property('enable_fracture')) and ef <= 0.0:
+            self.set_error("Failure strain must be greater than zero when fracture is enabled.")
+            return None
+        if src < 0.0 or srp < 0.0:
+            self.set_error("Strain-rate constants cannot be negative.")
+            return None
 
         return {
             'E':              E,

@@ -60,7 +60,6 @@ if 'distutils.version' not in sys.modules:
     distutils_version.LooseVersion = Version
     sys.modules['distutils.version'] = distutils_version
 
-from NodeGraphQt import NodeGraph
 from NodeGraphQt.base.commands import NodesRemovedCmd
 
 # Monkey patch NodesRemovedCmd to keep strong references to node views
@@ -503,7 +502,7 @@ class ModelingWidget(QtWidgets.QWidget):
                         self.rename_port(node_in, port_in.name(), var_name, 'input', node_out, preferred_target=var_name, fallback_target=port_out.name())
                     if port_out.name() != var_name:
                         self.rename_port(node_out, port_out.name(), var_name, 'output', node_in, preferred_target=var_name, fallback_target=port_in.name())
-        except Exception as e:
+        except Exception:
             logger.exception("Error in on_port_connected")
 
     def on_property_changed(self, node, prop_name, value):
@@ -515,7 +514,7 @@ class ModelingWidget(QtWidgets.QWidget):
         
         try:
             # --- NEW: Surrogate Training Trigger ---
-            # Handles the signal from the new SurrogateControlWidget 'Train' button
+            # Handle the node's surrogate-training trigger.
             if prop_name == 'surrogate_train_trigger':
                 # Select the node first so the global function knows which one to train
                 if self.current_graph:
@@ -631,7 +630,7 @@ class ModelingWidget(QtWidgets.QWidget):
 
                     QtCore.QTimer.singleShot(0, rename_intermediate_task)
 
-        except Exception as e:
+        except Exception:
             logger.exception("Error in on_property_changed")
         finally:
             # Reconnect the signal
@@ -750,7 +749,7 @@ class ModelingWidget(QtWidgets.QWidget):
                         if hasattr(graph, 'connect_ports'): graph.connect_ports(new_port, target_port)
                         else: new_port.connect_to(target_port)
                 graph._viewer.update()
-            except Exception as e:
+            except Exception:
                 logger.exception("Rename port error")
             finally:
                 # END UNDO MACRO
@@ -811,7 +810,6 @@ class NodeTrainingWorker(QtCore.QThread):
         try:
             # Import sklearn modules here to avoid numpy compatibility issues at module load
             import joblib
-            import warnings
             from sklearn.neural_network import MLPRegressor
             from sklearn.preprocessing import StandardScaler
             from sklearn.pipeline import Pipeline

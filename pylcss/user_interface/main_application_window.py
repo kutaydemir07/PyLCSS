@@ -474,10 +474,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, 'assistant_status_label'):
             self.assistant_status_label.setText("Error")
 
-    def _open_llm_chat(self) -> None:
-        """Backward-compatible chat entry point routed through the side panel."""
-        if hasattr(self, 'assistant_panel') and not self.assistant_panel.isVisible():
-            self._toggle_assistant_panel()
     
     def _open_llm_settings(self) -> None:
         """Open the LLM configuration dialog."""

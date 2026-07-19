@@ -8,7 +8,7 @@ Provides comprehensive documentation and guidance for all application features
 organized in tabbed sections for easy navigation.
 """
 
-from PySide6 import QtWidgets, QtCore
+from PySide6 import QtWidgets
 import qtawesome as qta
 
 class HelpWidget(QtWidgets.QWidget):

@@ -2,7 +2,7 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 from PySide6 import QtCore
-from .core import Variable, Objective, Constraint, OptimizationResult
+from .core import Variable, Objective, Constraint
 from .evaluator import ModelEvaluator
 from .solvers.factory import get_solver
 import time

@@ -602,6 +602,7 @@ def run_calculix_static(
                 cwd=work_dir,
                 timeout_s=config.timeout_s,
                 extra_path_dirs=(exe_dir,),
+                cancel_callback=config.cancel_callback,
             )
             solver_log = tail(proc.stdout or "")
             if proc.returncode != 0:

@@ -1,7 +1,26 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
+import math
+
 from pylcss.design_studio.core.base_node import CadQueryNode
+
+
+def _finite_value_node_result(node):
+    """Resolve the visible text field without silently masking invalid text."""
+    raw = node.get_property('value_input')
+    if raw is None or str(raw).strip() == '':
+        raw = node.get_property('value')
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        node.set_error(f"Value must be numeric; received {raw!r}.")
+        return None
+    if not math.isfinite(value):
+        node.set_error("Value must be finite (not NaN or infinity).")
+        return None
+    node.clear_error()
+    return value
 
 class NumberNode(CadQueryNode):
     """Provides a numeric value."""
@@ -22,16 +41,7 @@ class NumberNode(CadQueryNode):
         self.create_property('exposed_name', '', widget_type='text')
 
     def run(self):
-        # Try to get value from the text input on the node first
-        try:
-            val_str = self.get_property('value_input')
-            if val_str is not None:
-                return float(val_str)
-        except Exception:
-            pass
-            
-        # Fallback to the standard property
-        return self.get_property('value')
+        return _finite_value_node_result(self)
 
 class VariableNode(CadQueryNode):
     """Defines a named variable that can be used elsewhere."""
@@ -54,12 +64,4 @@ class VariableNode(CadQueryNode):
         self.create_property('exposed_name', '', widget_type='text')
 
     def run(self):
-        # Try to get value from the text input on the node first
-        try:
-            val_str = self.get_property('value_input')
-            if val_str is not None:
-                return float(val_str)
-        except Exception:
-            pass
-            
-        return self.get_property('value')
+        return _finite_value_node_result(self)

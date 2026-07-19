@@ -6,6 +6,14 @@ from collections import deque
 import hashlib
 import pickle
 
+
+class GraphExecutionCancelled(RuntimeError):
+    """Raised when a graph worker stops between safe node boundaries."""
+
+    def __init__(self, results=None):
+        super().__init__("Graph execution cancelled by the user.")
+        self.results = dict(results or {})
+
 # Node identifiers for simulation nodes (skip during auto-update)
 SIMULATION_NODE_IDENTIFIERS = {
     'com.cad.sim.material',
@@ -30,8 +38,37 @@ def _hash_value(value):
     try:
         data = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
         return hashlib.md5(data).hexdigest()
-    except (TypeError, pickle.PicklingError):
-        return hashlib.md5(str(value).encode()).hexdigest()
+    except Exception:
+        return hashlib.md5(repr(value).encode("utf-8", errors="replace")).hexdigest()
+
+
+_NON_EXECUTION_PROPERTIES = {
+    # Viewer/post-processing settings update cached results directly and must
+    # not invalidate an expensive engineering solve.
+    'visualization', 'deformation_scale', 'disp_scale', 'density_cutoff',
+    'advanced_settings_visible', 'cad_export_filename',
+    'cad_reconstruction_method',
+    # Hidden compatibility-only properties retained for old .cad sessions.
+    'solver_backend', 'moment_x', 'moment_y', 'moment_z',
+    'damping_alpha', 'damping_beta', 'enable_corotation', 'enable_contact',
+    'contact_stiffness', 'contact_thickness', 'contact_update_interval',
+    'mass_scaling_threshold', 'bc_preset', 'quality_preset',
+    # Internal UI/error bookkeeping.
+    'error_state', 'error_message',
+}
+
+
+def _execution_properties(node):
+    """Return only custom properties that can affect ``node.run()``."""
+    try:
+        props = node.properties()
+        custom = dict(props.get('custom', {}) or {})
+    except Exception:
+        return {}
+    return {
+        key: value for key, value in custom.items()
+        if key not in _NON_EXECUTION_PROPERTIES
+    }
 
 def _is_simulation_node(node):
     """Check if a node is a simulation node that should be skipped during auto-update."""
@@ -153,7 +190,7 @@ def execute_graph(graph_or_nodes, skip_simulation=False, **kwargs):
     if hasattr(graph_or_nodes, 'all_nodes'):
         nodes = list(graph_or_nodes.all_nodes())
     else:
-        nodes = graph_or_nodes
+        nodes = list(graph_or_nodes)
 
     # Filter out simulation nodes and their downstream consumers if
     # skip_simulation is True.
@@ -184,56 +221,102 @@ def execute_graph(graph_or_nodes, skip_simulation=False, **kwargs):
                     deps[n].add(dep_node)
                     rev[dep_node].add(n)
 
+    dependencies = {node: set(upstream) for node, upstream in deps.items()}
+
     # 2. Topological Sort (Kahn's Algorithm)
-    ready = deque([n for n, d in deps.items() if not d])
+    remaining_deps = {node: set(upstream) for node, upstream in deps.items()}
+    ready = deque([n for n, d in remaining_deps.items() if not d])
     order = []
 
     while ready:
         n = ready.popleft()
         order.append(n)
         for m in list(rev.get(n, [])):
-            deps[m].discard(n)
-            if not deps[m]:
+            remaining_deps[m].discard(n)
+            if not remaining_deps[m]:
                 ready.append(m)
 
-    # Handle cycles
+    # A cyclic engineering graph has no valid execution order.  Running it in
+    # insertion order made connected input resolvers recurse unpredictably and
+    # could launch solvers with stale inputs.
     if len(order) != len(nodes_to_execute):
-        order = nodes_to_execute
+        cyclic = [n for n in nodes_to_execute if remaining_deps.get(n)]
+        names = []
+        for node in cyclic[:10]:
+            try:
+                names.append(node.name() if callable(node.name) else str(node.name))
+            except Exception:
+                names.append(node.__class__.__name__)
+        suffix = "" if len(cyclic) <= 10 else f" and {len(cyclic) - 10} more"
+        raise RuntimeError(
+            "Graph contains a dependency cycle involving: "
+            + ", ".join(names)
+            + suffix
+            + ". Remove the feedback connection before running."
+        )
 
     # 3. Execution with Deep Hash-Based Caching
     cancel_callback = kwargs.pop('cancel_callback', None)
+    kwargs.setdefault('preview', bool(skip_simulation))
     results = {}
-    executed_nodes = set()
+    failed_nodes = set()
     errors = []
 
     for n in order:
         if callable(cancel_callback) and cancel_callback():
-            break
+            raise GraphExecutionCancelled(results)
+
+        failed_upstream = [up for up in dependencies.get(n, ()) if up in failed_nodes]
+        if failed_upstream:
+            upstream_names = []
+            for upstream in failed_upstream:
+                try:
+                    upstream_names.append(
+                        upstream.name() if callable(upstream.name) else str(upstream.name)
+                    )
+                except Exception:
+                    upstream_names.append(upstream.__class__.__name__)
+            message = "Skipped because upstream failed: " + ", ".join(upstream_names)
+            setattr(n, '_last_result', None)
+            setattr(n, '_last_input_hash', None)
+            setattr(n, '_dirty', True)
+            setattr(n, '_force_execute', False)
+            if hasattr(n, 'set_error'):
+                n.set_error(message)
+            failed_nodes.add(n)
+            continue
+
         # Collect current input values for hashing
-        current_input_hash = ""
+        input_signature = []
         if hasattr(n, 'input_ports'):
             inputs = n.input_ports()
             if isinstance(inputs, dict):
                 inputs = list(inputs.values())
 
-            input_values = []
             for inp in inputs:
                 if hasattr(inp, 'connected_ports'):
                     for cp in inp.connected_ports():
                         upstream_node = cp.node()
-                        upstream_result = getattr(upstream_node, '_last_result', None)
-                        if upstream_result is not None:
-                            input_values.append((cp.name(), upstream_result))
+                        input_signature.append((
+                            id(upstream_node),
+                            cp.name(),
+                            int(getattr(upstream_node, '_result_revision', 0)),
+                        ))
 
-            input_values.sort(key=lambda x: x[0])
-            current_input_hash = _hash_value(input_values)
+        input_signature.sort(key=lambda value: (value[0], value[1]))
+        current_input_hash = _hash_value((
+            input_signature,
+            _execution_properties(n),
+            bool(skip_simulation),
+        ))
 
         # Check if node needs execution
         last_input_hash = getattr(n, '_last_input_hash', None)
+        has_cached_result = hasattr(n, '_last_result')
         cached_result = getattr(n, '_last_result', None)
 
         can_skip = (current_input_hash == last_input_hash and
-                   cached_result is not None and
+                   has_cached_result and
                    not getattr(n, '_dirty', False) and
                    not getattr(n, '_force_execute', False))
 
@@ -277,10 +360,9 @@ def execute_graph(graph_or_nodes, skip_simulation=False, **kwargs):
 
             setattr(n, '_last_result', res)
             setattr(n, '_last_input_hash', current_input_hash)
+            setattr(n, '_result_revision', int(getattr(n, '_result_revision', 0)) + 1)
             setattr(n, '_dirty', False)
             setattr(n, '_force_execute', False)
-            executed_nodes.add(n)
-
             results[n] = res
         except Exception as e:
             setattr(n, '_last_result', None)
@@ -296,6 +378,10 @@ def execute_graph(graph_or_nodes, skip_simulation=False, **kwargs):
             if not node_name:
                 node_name = getattr(n, 'NODE_NAME', None) or n.__class__.__name__
             errors.append((str(node_name), str(e)))
+            failed_nodes.add(n)
+
+    if callable(cancel_callback) and cancel_callback():
+        raise GraphExecutionCancelled(results)
 
     if errors:
         error_lines = [f"{name}: {message}" for name, message in errors[:10]]

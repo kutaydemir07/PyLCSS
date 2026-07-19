@@ -22,7 +22,7 @@ function          terminal node identifier       backend
 
 Inputs are matched against ``NumberNode`` / ``VariableNode`` instances in the
 ``.cad`` graph whose ``exposed_name`` property equals the kwarg name, and
-against named ``CadQueryCodeNode`` parameters.  The optional ``_settings``
+against named ``CadQueryCodeNode`` or ``FreeCadPartNode`` parameters.  The optional ``_settings``
 mapping can also drive validated numeric material, mesh, load, impact, crash,
 and topology-optimization properties discovered by the function-block UI. Results
 are wrapped in :class:`CadResult`, which gives attribute *and* dict access plus
@@ -44,7 +44,7 @@ import os
 import re
 import threading
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Sequence
+from typing import Any, Dict, Mapping, Sequence
 
 import numpy as np
 
@@ -87,8 +87,7 @@ _OVERRIDEABLE_PROPERTIES = {
         "displacement_z_enabled",
     ),
     "com.cad.sim.load": (
-        "force_x", "force_y", "force_z", "moment_x", "moment_y", "moment_z",
-        "gravity_accel",
+        "force_x", "force_y", "force_z", "gravity_accel",
     ),
     "com.cad.sim.pressure_load": ("pressure",),
     "com.cad.sim.impact": (
@@ -97,9 +96,7 @@ _OVERRIDEABLE_PROPERTIES = {
     ),
     "com.cad.sim.crash_solver": (
         "end_time", "n_frames", "time_steps", "enable_mass_scaling",
-        "damping_alpha", "damping_beta", "enable_corotation", "enable_contact",
-        "contact_stiffness", "contact_thickness", "contact_update_interval",
-        "mass_scaling_threshold", "impactor_mass_kg",
+        "impactor_mass_kg",
     ),
     "com.cad.sim.topopt_voxel": (
         "nelx", "nely", "nelz", "volfrac", "rmin", "penal",
@@ -173,7 +170,9 @@ def discover_override_controls(session_data: Mapping[str, Any]) -> list[dict[str
             if not isinstance(value, (bool, int, float)):
                 continue
             controls.append({
-                "key": f"{node_name}::{prop}",
+                # NodeGraphQt IDs are stable in a saved session and avoid the
+                # ambiguity of several default-named Material or Load nodes.
+                "key": f"{node_id}::{prop}",
                 "node_id": str(node_id),
                 "node": node_name,
                 "group": _OVERRIDE_GROUPS.get(identifier, "Analysis setting"),
@@ -308,6 +307,71 @@ def clear_cache() -> None:
         _cache.clear()
 
 
+_DEPENDENCY_SUFFIXES = {
+    ".step", ".stp", ".iges", ".igs", ".stl", ".obj", ".fcstd",
+    ".brep", ".k", ".rad",
+}
+
+
+def _study_dependency_fingerprint(cad_path: str) -> tuple:
+    """Fingerprint geometry/deck files referenced by a saved study.
+
+    The runtime cache previously watched only the ``.cad`` JSON timestamp, so
+    editing an imported STEP/STL/FreeCAD model or a referenced Radioss deck
+    could return an old solve. Missing paths are included too, which means the
+    cache also invalidates when a previously missing dependency appears.
+    """
+    project = Path(cad_path).resolve()
+    try:
+        session = json.loads(project.read_text(encoding="utf-8"))
+    except Exception:
+        return ()
+
+    try:
+        from pylcss.config import BASE_DIR
+        repo_root = Path(BASE_DIR).resolve().parent
+    except Exception:
+        repo_root = project.parent
+
+    records = []
+    for node_data in (session.get("nodes", {}) or {}).values():
+        node_type = str(node_data.get("type_", "")).lower()
+        custom = node_data.get("custom", {}) or {}
+        for prop, raw_value in custom.items():
+            if not isinstance(raw_value, str) or not raw_value.strip():
+                continue
+            raw = os.path.expandvars(os.path.expanduser(raw_value.strip()))
+            suffix = Path(raw).suffix.lower()
+            if suffix not in _DEPENDENCY_SUFFIXES:
+                continue
+
+            candidates = []
+            if "freecad_part" in node_type and str(prop) == "fcstd_filename":
+                try:
+                    from pylcss.design_studio.freecad_bridge.paths import freecad_data_dir
+                    candidates.append(freecad_data_dir(create=False) / Path(raw).name)
+                except Exception:
+                    pass
+            raw_path = Path(raw)
+            if raw_path.is_absolute():
+                candidates.append(raw_path)
+            else:
+                candidates.extend((project.parent / raw_path, repo_root / raw_path))
+
+            resolved = next((p.resolve() for p in candidates if p.is_file()), None)
+            if resolved is None:
+                records.append((str(prop), raw, "missing"))
+                continue
+            try:
+                stat = resolved.stat()
+                records.append((
+                    str(resolved), int(stat.st_mtime_ns), int(stat.st_size),
+                ))
+            except OSError:
+                records.append((str(resolved), "unreadable"))
+    return tuple(sorted(set(records), key=repr))
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Public entry points
 # ──────────────────────────────────────────────────────────────────────
@@ -351,15 +415,23 @@ def _evaluate(
         raise FileNotFoundError(f"CAD graph file not found: {abs_path}")
 
     try:
-        mtime = os.path.getmtime(abs_path)
+        stat = os.stat(abs_path)
+        project_fingerprint = (int(stat.st_mtime_ns), int(stat.st_size))
     except OSError:
-        mtime = 0.0
+        project_fingerprint = (0, 0)
 
     canonical_inputs = tuple(sorted((str(k), _to_float(v)) for k, v in inputs.items()))
     canonical_settings = tuple(
         sorted((str(k), _to_float(v)) for k, v in (settings or {}).items())
     )
-    cache_key = (abs_path, mtime, kind, canonical_inputs, canonical_settings)
+    cache_key = (
+        abs_path,
+        project_fingerprint,
+        _study_dependency_fingerprint(abs_path),
+        kind,
+        canonical_inputs,
+        canonical_settings,
+    )
 
     with _cache_lock:
         cached = _cache.get(cache_key)
@@ -375,9 +447,7 @@ def _evaluate(
     _ensure_qapp()
     graph = _load_graph(abs_path)
 
-    set_count, available_names = _apply_exposed_inputs(graph, dict(canonical_inputs))
-    missing = set(dict(canonical_inputs).keys()) - {k for k, _ in canonical_inputs[:set_count]}
-    # The above ‘missing’ is computed inside _apply_exposed_inputs already; recompute defensively.
+    _set_count, available_names = _apply_exposed_inputs(graph, dict(canonical_inputs))
     requested = {k for k, _ in canonical_inputs}
     if not requested.issubset(available_names):
         missing = sorted(requested - available_names)
@@ -430,6 +500,9 @@ def _load_graph(abs_path: str):
         session_data = json.load(f)
     graph.clear_session()
     graph.deserialize_session(session_data)
+    project_dir = str(Path(abs_path).resolve().parent)
+    for node in graph.all_nodes():
+        node._project_dir = project_dir
     return graph
 
 
@@ -479,30 +552,44 @@ def _apply_exposed_inputs(graph, inputs: Mapping[str, float]) -> tuple[int, set]
 
 
 def _apply_property_overrides(graph, settings: Mapping[str, float]) -> int:
-    """Apply validated ``node_name::property`` overrides to a fresh CAD graph."""
+    """Apply validated ``node_id::property`` overrides to a fresh CAD graph.
+
+    Legacy ``node_name::property`` keys remain accepted when the display name
+    uniquely identifies one node.
+    """
     if not settings:
         return 0
 
     nodes_by_name = {}
+    nodes_by_id = {}
     for node in graph.all_nodes():
         node_name = node.name() if hasattr(node, "name") else ""
-        nodes_by_name[str(node_name)] = node
+        nodes_by_name.setdefault(str(node_name), []).append(node)
+        nodes_by_id[str(getattr(node, "id", ""))] = node
 
     applied = 0
     for key, numeric_value in settings.items():
         if "::" not in key:
             raise KeyError(
-                f"Invalid Design Studio setting key {key!r}; expected 'node_name::property'."
+                f"Invalid Design Studio setting key {key!r}; expected 'node_id::property'."
             )
-        node_name, prop = key.rsplit("::", 1)
-        node = nodes_by_name.get(node_name)
+        node_key, prop = key.rsplit("::", 1)
+        node = nodes_by_id.get(node_key)
         if node is None:
-            raise KeyError(f"Design Studio node {node_name!r} no longer exists in the saved study.")
+            named = nodes_by_name.get(node_key, [])
+            if len(named) > 1:
+                raise KeyError(
+                    f"Design Studio node name {node_key!r} is ambiguous; refresh the "
+                    "coupling so it uses stable node IDs."
+                )
+            node = named[0] if named else None
+        if node is None:
+            raise KeyError(f"Design Studio node {node_key!r} no longer exists in the saved study.")
 
         identifier = _override_identifier(getattr(node, "__identifier__", ""))
         allowed = _OVERRIDEABLE_PROPERTIES.get(identifier or "", ())
         if prop not in allowed or not node.has_property(prop):
-            node_name = node.name() if hasattr(node, "name") else node_name
+            node_name = node.name() if hasattr(node, "name") else node_key
             raise KeyError(
                 f"Setting {prop!r} on {node_name!r} is not an externally controllable numeric setting."
             )
@@ -514,6 +601,18 @@ def _apply_property_overrides(graph, settings: Mapping[str, float]) -> int:
             value = int(round(float(numeric_value)))
         else:
             value = float(numeric_value)
+        # Named material presets own their database values.  A numeric override
+        # must switch the affected material to Custom or the backend would
+        # silently ignore the requested value.
+        if identifier == "com.cad.sim.material" and prop in {
+            "youngs_modulus", "poissons_ratio", "density",
+        }:
+            node.set_property("preset", "Custom")
+        elif identifier == "com.cad.sim.crash_material" and prop in {
+            "youngs_modulus", "poissons_ratio", "density", "yield_strength",
+            "tangent_modulus", "failure_strain",
+        }:
+            node.set_property("preset", "Custom")
         node.set_property(prop, value)
         _mark_node_dirty(node)
         applied += 1
@@ -522,8 +621,10 @@ def _apply_property_overrides(graph, settings: Mapping[str, float]) -> int:
 
 def _is_code_part_node(node) -> bool:
     return (
-        getattr(node, "__identifier__", "") == "com.cad.code_part"
-        or node.__class__.__name__ == "CadQueryCodeNode"
+        getattr(node, "__identifier__", "") in {
+            "com.cad.code_part", "com.cad.freecad_part",
+        }
+        or node.__class__.__name__ in {"CadQueryCodeNode", "FreeCadPartNode"}
     )
 
 
@@ -578,7 +679,8 @@ def _format_code_part_parameters(params: Mapping[str, Any]) -> str:
 def _apply_code_part_inputs(node, inputs: Mapping[str, float], available: set) -> int:
     applied = 0
 
-    for idx in range(1, 7):
+    max_params = max(1, int(getattr(node, "MAX_PARAMS", 6) or 6))
+    for idx in range(1, max_params + 1):
         name_prop = f"param_{idx}_name"
         value_prop = f"param_{idx}_value"
         if not node.has_property(name_prop) or not node.has_property(value_prop):
@@ -595,6 +697,8 @@ def _apply_code_part_inputs(node, inputs: Mapping[str, float], available: set) -
             logger.warning("cad runtime: failed to set code parameter %s: %s", pname, exc)
         else:
             _mark_node_dirty(node)
+            if getattr(node, "__identifier__", "") == "com.cad.freecad_part":
+                setattr(node, "_parameter_override_pending", True)
             applied += 1
 
     if not node.has_property("parameters"):
@@ -644,7 +748,11 @@ def _find_terminal_result(graph, terminal_id: str | Sequence[str]):
     if not candidates:
         return None
 
-    def _depth(node) -> int:
+    def _depth(node, visited=None) -> int:
+        visited = set(visited or ())
+        if id(node) in visited:
+            return 0
+        visited.add(id(node))
         count = 0
         if not hasattr(node, "input_ports"):
             return 0
@@ -657,7 +765,7 @@ def _find_terminal_result(graph, terminal_id: str | Sequence[str]):
             for cp in port.connected_ports():
                 count += 1
                 up = cp.node()
-                count += _depth(up) if up is not node else 0
+                count += _depth(up, visited) if up is not node else 0
         return count
 
     candidates.sort(key=_depth, reverse=True)
@@ -691,6 +799,9 @@ def _ensure_qapp():
 def _to_float(value: Any) -> float:
     """Coerce kwarg values so cache keys are hashable & stable."""
     try:
-        return float(value)
-    except (TypeError, ValueError):
-        return float("nan")
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"Design Studio inputs and settings must be numeric, got {value!r}.") from exc
+    if not np.isfinite(numeric):
+        raise ValueError(f"Design Studio inputs and settings must be finite, got {value!r}.")
+    return numeric

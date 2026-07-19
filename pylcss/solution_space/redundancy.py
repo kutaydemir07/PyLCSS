@@ -102,5 +102,3 @@ class RedundancyResolutionMixin:
 
     # Compatibility for code written before the paper's five-stage naming was
     # adopted in PyLCSS.
-    def _phase3_redundancy_resolution(self, boxes, callback=None):
-        return self._resolve_redundant_solution_spaces(boxes, callback=callback)

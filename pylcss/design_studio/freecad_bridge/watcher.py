@@ -9,13 +9,14 @@ the PyLCSS viewer can read with OCCT, and ``<base>.fcmeta.json`` for the
 sidecar that maps face/edge indices back to FreeCAD's semantic names +
 any FEM analysis constraints/loads the user authored.
 
-``FCStdWatcher`` raises a single ``saved`` signal once **all three**
-files have stabilised, so consumers don't try to read a half-written
-BREP.
+``FCStdWatcher`` raises a single ``saved`` signal once the document and
+sidecar plus any expected BREP have stabilised, so consumers never read a
+half-written export. An intentionally empty document has no BREP.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Optional
@@ -105,15 +106,30 @@ class FCStdWatcher(QObject):
         self._debounce.start()
 
     def _emit_saved_if_ready(self) -> None:
-        # The minimum we need to proceed is the .FCStd itself; .brep and
-        # the sidecar are optional in the POC -- consumers degrade
-        # gracefully if they're missing.
-        if not self._fcstd_path.exists():
+        if not self._fcstd_path.is_file() or not self._sidecar_path.is_file():
+            return
+        try:
+            source_mtime = self._fcstd_path.stat().st_mtime_ns
+            if self._sidecar_path.stat().st_size <= 0 \
+                    or self._sidecar_path.stat().st_mtime_ns < source_mtime:
+                return
+            brep_ready = (
+                self._brep_path.is_file()
+                and self._brep_path.stat().st_size > 0
+                and self._brep_path.stat().st_mtime_ns >= source_mtime
+            )
+            if not brep_ready:
+                sidecar = json.loads(self._sidecar_path.read_text(encoding="utf-8"))
+                if sidecar.get("shapes") != []:
+                    return
+        except OSError:
+            return
+        except (json.JSONDecodeError, TypeError, AttributeError):
             return
         logger.debug(
             "FCStdWatcher: save detected for %s (brep=%s, sidecar=%s)",
             self._fcstd_path.name,
             self._brep_path.exists(),
-            self._sidecar_path.exists(),
+            True,
         )
         self.saved.emit(str(self._fcstd_path))

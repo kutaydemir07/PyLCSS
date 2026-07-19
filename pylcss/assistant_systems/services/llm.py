@@ -13,7 +13,7 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Callable, Any
+from typing import Dict, List, Optional, Callable
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
@@ -389,7 +389,6 @@ class GoogleProvider(LLMProvider):
             "Content-Type": "application/json",
         }
         
-        last_error = None
         for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):
             try:
                 if data:
@@ -410,7 +409,6 @@ class GoogleProvider(LLMProvider):
                         delay = min(RATE_LIMIT_BASE_DELAY * (2 ** attempt), RATE_LIMIT_MAX_DELAY)
                         logger.warning(f"Rate limit hit, waiting {delay:.1f}s before retry ({attempt + 1}/{RATE_LIMIT_MAX_RETRIES})...")
                         time.sleep(delay)
-                        last_error = e
                         continue
                     else:
                         raise RateLimitError(f"Google rate limit exceeded after {RATE_LIMIT_MAX_RETRIES} retries.")
@@ -549,7 +547,7 @@ class GoogleProvider(LLMProvider):
                 logger.warning(f"Model {try_model} rate limited, trying fallback...")
                 last_error = e
                 continue
-            except LLMProviderError as e:
+            except LLMProviderError:
                 # For non-rate-limit errors, don't try fallback
                 raise
         

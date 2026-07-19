@@ -5,10 +5,7 @@ from .training_engine import SurrogateTrainer
 from .models import ConfigurableNet, PyTorchWrapper
 from .validation import (
     CrossValidator,
-    HyperparameterOptimizer,
     FeatureImportanceAnalyzer,
     ModelComparator,
     CVResult,
-    HPOResult
 )
-

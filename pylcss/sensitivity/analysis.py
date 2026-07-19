@@ -14,7 +14,6 @@ Supports multi-output batch analysis, S2 interaction matrices,
 convergence analysis, and importance ranking.
 """
 
-import warnings
 import math
 import numpy as np
 from typing import Dict, List, Any, Optional, Tuple

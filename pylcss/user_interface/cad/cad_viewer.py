@@ -9,6 +9,7 @@ from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
 _MESH_COMPONENT_INDEX_BASE = 1000
 _MESH_COMPONENT_INDEX_STRIDE = 1000
+_MESH_FEATURE_INDEX_BASE = 100000
 _MESH_PICKING_MAX_SURFACE_CELLS = 50000
 
 
@@ -1132,6 +1133,12 @@ class CQ3DViewer(QtWidgets.QWidget):
         # Use cell picker for face selection
         picker = vtk.vtkCellPicker()
         picker.SetTolerance(0.001)
+        # Restrict hits to the rendered engineering surface. Without a pick
+        # list, a BC overlay/highlight actor can return its own local cell id,
+        # which may accidentally resolve to a different geometry face.
+        if self.current_actor is not None:
+            picker.AddPickList(self.current_actor)
+            picker.PickFromListOn()
         picker.Pick(x, y, 0, self.renderer)
 
         cell_id = picker.GetCellId()
@@ -1343,7 +1350,7 @@ class CQ3DViewer(QtWidgets.QWidget):
         self.disable_picking_mode()
         # Re-add highlights in a passive/dimmed color to keep them visible
         for idx in picked_indices:
-            if idx < len(self._face_polydata_list) and self._face_polydata_list[idx] is not None:
+            if 0 <= idx < len(self._face_polydata_list) and self._face_polydata_list[idx] is not None:
                 mapper = vtk.vtkPolyDataMapper()
                 mapper.SetInputData(self._face_polydata_list[idx])
                 mapper.ScalarVisibilityOff()
@@ -1372,8 +1379,18 @@ class CQ3DViewer(QtWidgets.QWidget):
     def highlight_faces(self, face_indices):
         """Public method to highlight specific face indices matching current geometry."""
         self._clear_highlight_actors()
-        for idx in face_indices:
-            if idx < len(self._face_polydata_list) and self._face_polydata_list[idx] is not None:
+        for stored_idx in face_indices:
+            idx = int(stored_idx)
+            if idx >= _MESH_COMPONENT_INDEX_BASE:
+                idx = next(
+                    (
+                        face_idx for face_idx, face in enumerate(self._all_occ_faces)
+                        if isinstance(face, dict)
+                        and int(face.get('stored_index', -1)) == int(stored_idx)
+                    ),
+                    -1,
+                )
+            if 0 <= idx < len(self._face_polydata_list) and self._face_polydata_list[idx] is not None:
                 mapper = vtk.vtkPolyDataMapper()
                 mapper.SetInputData(self._face_polydata_list[idx])
                 mapper.ScalarVisibilityOff()
@@ -1731,7 +1748,6 @@ class CQ3DViewer(QtWidgets.QWidget):
 
     def _set_camera_view(self, position, view_up):
         """Sets the camera to look at the focal point from the given relative direction."""
-        import math
         camera = self.renderer.GetActiveCamera()
 
         # Normalize the position direction vector so distance is consistent
@@ -2248,7 +2264,7 @@ class CQ3DViewer(QtWidgets.QWidget):
             return None
 
     def _configure_mesh_face_picking_from_surface(self, dataset):
-        """Expose six directional surface patches for interactive picking on meshes."""
+        """Expose feature-bounded curved and planar regions for mesh picking."""
         self._face_map = {}
         self._all_occ_faces = []
         self._face_polydata_list = []
@@ -2456,6 +2472,46 @@ class CQ3DViewer(QtWidgets.QWidget):
                         if float(score) > previous:
                             face_cell_scores[int(local_cell_id)] = float(score)
                             self._face_map[int(local_cell_id)] = face_idx
+
+            # Directional patches above preserve compatibility with saved
+            # projects. New clicks resolve to geometric feature regions, so a
+            # cylindrical side, cone, fillet, or freeform smooth face can be
+            # selected as one surface instead of only ±X/±Y/±Z end patches.
+            from pylcss.design_studio.nodes.modeling import (
+                _feature_surface_component_indices,
+            )
+            triangle_ids = np.asarray(
+                [ids[:3] for ids in valid_point_ids], dtype=int
+            )
+            feature_components = _feature_surface_component_indices(
+                all_points, triangle_ids, normals, centers, areas,
+            )
+            for component_index, component in enumerate(feature_components):
+                cell_ids = [int(v) for v in valid_cell_ids[component].tolist()]
+                if not cell_ids:
+                    continue
+                face_idx = len(self._all_occ_faces)
+                comp_area = float(np.sum(areas[component]))
+                comp_center = np.sum(
+                    centers[component] * areas[component, None], axis=0
+                ) / max(comp_area, 1e-12)
+                self._all_occ_faces.append({
+                    'mesh_virtual_face': True,
+                    'selector': 'Feature',
+                    'component_index': int(component_index),
+                    'stored_index': int(_MESH_FEATURE_INDEX_BASE + component_index),
+                    'label': f"Surface {component_index + 1}",
+                    'face_index': face_idx,
+                    'center': [float(v) for v in comp_center.tolist()],
+                    'area': comp_area,
+                })
+                self._face_polydata_list.append(
+                    self._polydata_from_cells(dataset, cell_ids)
+                )
+                # Feature regions intentionally win over the legacy
+                # directional map for interactive clicks.
+                for cell_id in cell_ids:
+                    self._face_map[int(cell_id)] = face_idx
         except Exception:
             self._face_map = {}
             self._all_occ_faces = []
