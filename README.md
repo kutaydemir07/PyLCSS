@@ -48,6 +48,7 @@ The core concept is the **Solution Space** approach for robust design: instead o
 - **Topology Optimization** — SIMP-based voxel topology optimization via pyMOTO; direct STL/OBJ export of optimized geometry
 - **Crash / Impact Simulation** — OpenRadioss explicit solver integration with animated VTK result playback
 - **Solution Space Exploration** — Find all designs that satisfy your requirements, not just a single optimum; includes product family analysis to identify a common platform across variants
+- **Multi-Modal Solution Spaces (MMSS)** — Follow the five-stage method: deflated searches from Latin-hypercube starts, HDBSCAN clustering, one box-shaped solution space per mode, largest-space retention within each all-variable overlap set, and an extended-problem decoupled form with common and separating variables; the `data` folder includes Resonance Avoiding Beam, Gaussian Wells, and Three Islands JSON examples
 - **Multi-Objective Optimization** — 7 solvers: SLSQP, COBYLA, trust-constr, Differential Evolution, Nevergrad, NSGA-II, and Multi-Start
 - **Global Sensitivity Analysis** — 4 methods: Sobol, Morris, FAST, and Delta (DMIM)
 - **Surrogate Modelling** — 4 algorithms (MLP, Random Forest, Gradient Boosting, Gaussian Process / Kriging) with cross-validation, hyperparameter search, and feature importance

@@ -1971,6 +1971,7 @@ class OutputNode(BaseNode):
                             tooltip='Feasibility upper limit; use inf for no upper limit')
         self.create_property('minimize', False)
         self.create_property('maximize', False)
+        self.create_property('show_in_legend', True)
         self.add_combo_menu(
             'objective_mode', 'Optimization role',
             items=['Constraint only', 'Minimize', 'Maximize'],

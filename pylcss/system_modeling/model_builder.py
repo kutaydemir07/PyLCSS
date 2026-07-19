@@ -127,6 +127,11 @@ class GraphBuilder:
 
             minimize = n.get_property('minimize')
             maximize = n.get_property('maximize')
+            show_in_legend = (
+                n.get_property('show_in_legend')
+                if n.has_property('show_in_legend')
+                else True
+            )
             color_tuple = n.get_property('plot_color')
             hex_color = None
             if color_tuple:
@@ -146,6 +151,7 @@ class GraphBuilder:
                 'req_max': req_max,
                 'minimize': minimize,
                 'maximize': maximize,
+                'show_in_legend': show_in_legend,
                 'color': hex_color
             })
 

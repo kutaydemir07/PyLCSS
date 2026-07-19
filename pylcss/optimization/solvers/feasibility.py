@@ -82,6 +82,94 @@ class FeasibilityProblem:
             y = self.problem.evaluate_matrix(x_full.reshape(-1, 1)).flatten()
         return y, is_scipy_2d
 
+    def evaluate_batch(self, x_batch):
+        """Evaluate normalized row-major candidates with shape ``(N, dim)``.
+
+        Multi-Modal discovery works with optimizer-style row-major populations,
+        while :meth:`XRayProblem.evaluate_matrix` expects ``(dim, N)``.  Keep
+        that conversion here so all discovery algorithms use the same parameter
+        expansion and model-evaluation path as the single-space solver.
+        """
+        x_batch = np.asarray(x_batch, dtype=float)
+        if x_batch.ndim == 1:
+            x_batch = x_batch.reshape(1, -1)
+        if x_batch.ndim != 2 or x_batch.shape[1] != len(self.dv_norm):
+            raise ValueError(
+                "x_batch must have shape (N, active_dimensions); "
+                f"got {x_batch.shape}"
+            )
+
+        x_phys = self.denormalize(x_batch.T)
+        x_full = self.construct_full_vector(x_phys)
+        return np.asarray(self.problem.evaluate_matrix(x_full), dtype=float)
+
+    def compute_violation_and_margin(self, x_batch):
+        """Return normalized violation and robustness margin for each candidate.
+
+        A feasible candidate has zero violation.  Its margin is the smallest
+        normalized distance to any finite requirement boundary, which gives
+        basin discovery a useful ranking inside feasible regions.  Non-finite
+        model outputs are treated as invalid candidates.
+        """
+        y = self.evaluate_batch(x_batch)
+        if y.ndim == 1:
+            y = y.reshape(-1, 1)
+
+        n_qoi, n_samples = y.shape
+        req_l = self.reqL.astype(float)
+        req_u = self.reqU.astype(float)
+        has_lower = np.isfinite(req_l)
+        has_upper = np.isfinite(req_u)
+
+        req_width = np.abs(req_u - req_l)
+        scale_u = np.where(has_upper, np.abs(req_u), 1.0)
+        scale_l = np.where(has_lower, np.abs(req_l), 1.0)
+        scale_u = np.where(scale_u < 1e-12, 1.0, scale_u)
+        scale_l = np.where(scale_l < 1e-12, 1.0, scale_l)
+        width_u = np.where(np.isfinite(req_width), req_width, scale_u)
+        width_l = np.where(np.isfinite(req_width), req_width, scale_l)
+        width_u = np.where(width_u < 1e-12, 1.0, width_u)[:, None]
+        width_l = np.where(width_l < 1e-12, 1.0, width_l)[:, None]
+
+        upper_violation = np.zeros((n_qoi, n_samples), dtype=float)
+        lower_violation = np.zeros((n_qoi, n_samples), dtype=float)
+        if np.any(has_upper):
+            upper_violation[has_upper] = np.maximum(
+                0.0,
+                (y[has_upper] - req_u[has_upper, None]) / width_u[has_upper],
+            )
+        if np.any(has_lower):
+            lower_violation[has_lower] = np.maximum(
+                0.0,
+                (req_l[has_lower, None] - y[has_lower]) / width_l[has_lower],
+            )
+
+        invalid = ~np.isfinite(y)
+        upper_violation[invalid] = 1e6
+        lower_violation[invalid] = 1e6
+        violation = np.sum(upper_violation + lower_violation, axis=0)
+        violation = np.nan_to_num(
+            violation, nan=1e12, posinf=1e12, neginf=1e12
+        )
+
+        margins = []
+        if np.any(has_upper):
+            margins.append(
+                (req_u[has_upper, None] - y[has_upper]) / width_u[has_upper]
+            )
+        if np.any(has_lower):
+            margins.append(
+                (y[has_lower] - req_l[has_lower, None]) / width_l[has_lower]
+            )
+        margin = (
+            np.min(np.vstack(margins), axis=0)
+            if margins
+            else np.zeros(n_samples, dtype=float)
+        )
+        margin = np.where(np.any(invalid, axis=0), -1e6, margin)
+        margin = np.nan_to_num(margin, nan=-1e6, posinf=0.0, neginf=-1e6)
+        return violation, margin
+
     def _constraint_scales(self):
         req_width = np.abs(self.reqU - self.reqL)
         scale_u = np.where(np.isfinite(self.reqU), np.abs(self.reqU), 1.0)
@@ -95,7 +183,13 @@ class FeasibilityProblem:
         return w_u, w_l
 
     def compute_objective(self, x_norm):
-        """Aggregate normalized positive constraint violation."""
+        """Compute the paper's aggregate violation ``V0(x)``.
+
+        Each finite lower or upper requirement is represented as a normalized
+        one-sided constraint ``g_j(x)``. The discovery objective is therefore
+        ``V0(x) = sum_j max(0, g_j(x))`` and a good design has
+        ``V0(x) < epsilon``.
+        """
         y, _ = self.evaluate(x_norm)
         w_u, w_l = self._constraint_scales()
 

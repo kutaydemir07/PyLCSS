@@ -30,13 +30,13 @@ def make_point_box(anchor: np.ndarray, dsl: np.ndarray, dsu: np.ndarray) -> np.n
 
 
 # ---------------------------------------------------------------------------
-# Branch state
+# Modal solution-space state
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class BoxState:
-    """Current candidate box Omega^z and sampling statistics for one branch.
+    """Current candidate box Omega^z and statistics for one MMSS mode.
 
     Passed into phase1_iter and phase2_iter, which update it in place each
     iteration. When phase1_done is True the box has converged in Phase I;

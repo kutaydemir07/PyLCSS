@@ -162,6 +162,80 @@ def resample_solution_space(
 
     return samples_list
 
+
+def resample_multimodal_solution_spaces(
+    problem,
+    boxes,
+    dsl,
+    dsu,
+    reqU,
+    reqL,
+    parameters,
+    sample_size=1000,
+    active_plots=None,
+    center_slice=False,
+):
+    """Resample multiple solution boxes using the standard per-plot strategy.
+
+    Every visible plot is sampled independently, exactly as it is for the
+    single-box Model Control view. For a DV-DV plot, the two displayed axes
+    span the complete design space while all remaining design variables stay
+    within the respective mode box (or at its center for a center slice).
+
+    ``sample_size`` is the approximate total number of samples in each plot;
+    that budget is divided evenly among the supplied boxes.
+    """
+    boxes = list(boxes)
+    active_plots = list(active_plots or [])
+    if not boxes or not active_plots:
+        return []
+
+    samples_per_box = max(1, int(np.ceil(float(sample_size) / len(boxes))))
+    samples_by_plot = [[] for _ in active_plots]
+
+    for box in boxes:
+        bounds = box.bounds if hasattr(box, "bounds") else np.asarray(box)
+        box_samples = resample_solution_space(
+            problem,
+            np.asarray(bounds, dtype=float),
+            dsl,
+            dsu,
+            reqU,
+            reqL,
+            parameters,
+            samples_per_box,
+            active_plots=active_plots,
+            center_slice=center_slice,
+        )
+        for plot_index, samples in enumerate(box_samples):
+            samples_by_plot[plot_index].append(samples)
+
+    combined = []
+    for plot_samples in samples_by_plot:
+        if not plot_samples:
+            continue
+        is_good = np.concatenate([sample["is_good"] for sample in plot_samples])
+        order = np.argsort(is_good.astype(np.int8))
+        combined.append(
+            {
+                "points": np.hstack(
+                    [sample["points"] for sample in plot_samples]
+                )[:, order],
+                "is_good": is_good[order],
+                "is_bad": np.concatenate(
+                    [sample["is_bad"] for sample in plot_samples]
+                )[order],
+                "violation_idx": np.concatenate(
+                    [sample["violation_idx"] for sample in plot_samples]
+                )[order],
+                "qoi_values": np.hstack(
+                    [sample["qoi_values"] for sample in plot_samples]
+                )[:, order],
+            }
+        )
+
+    return combined
+
 def compute_product_family_solutions(problem, weight, dsl, dsu, l, u, reqU, reqL, parameters, solver_type, progress_callback=None, stop_callback=None):
     """
     Compute solution spaces for product family variants and platform with progress reporting.
@@ -365,6 +439,5 @@ def calculate_variable_communality(variant_boxes, platform_box):
             )
     
     return communality
-
 
 

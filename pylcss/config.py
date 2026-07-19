@@ -300,7 +300,7 @@ SOLVER_DESCRIPTIONS = {
     'Differential Evolution': {
         'name': 'Differential Evolution',
         'description': 'Population-based evolutionary global optimizer',
-        'best_for': 'Multi-modal landscapes requiring global search',
+        'best_for': 'Multi-Modal landscapes requiring global search',
         'supports_constraints': True,
         'speed': 'Very Slow',
         'robustness': 'Very High',
@@ -318,7 +318,7 @@ SOLVER_DESCRIPTIONS = {
     'Multi-Start': {
         'name': 'Multi-Start Global Search',
         'description': 'Runs a local optimizer from multiple random starting points (LHS)',
-        'best_for': 'Multi-modal problems where global optimum is desired',
+        'best_for': 'Multi-Modal problems where global optimum is desired',
         'supports_constraints': True,
         'speed': 'Medium',
         'robustness': 'High',

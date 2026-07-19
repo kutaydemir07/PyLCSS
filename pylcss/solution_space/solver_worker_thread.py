@@ -7,6 +7,83 @@
 import time
 from PySide6 import QtCore
 from .computation_engine import compute_product_family_solutions
+from .multimodal_models import MMSSParameters, MultiModalResult
+from .multimodal_solver import MultiModalSolutionSpaceSolver
+
+
+class MultiModalSolverWorker(QtCore.QThread):
+    """Run Multi-Modal discovery and box refinement off the UI thread."""
+
+    progress_signal = QtCore.Signal(str)
+    finished_signal = QtCore.Signal(object)
+    error_signal = QtCore.Signal(str)
+
+    def __init__(
+        self,
+        problem,
+        dsl,
+        dsu,
+        reqL,
+        reqU,
+        parameters=None,
+        params=None,
+        weight=None,
+    ):
+        super().__init__()
+        self.problem = problem
+        self.dsl = dsl
+        self.dsu = dsu
+        self.reqL = reqL
+        self.reqU = reqU
+        self.parameters = parameters
+        self.params = params if params is not None else MMSSParameters()
+        self.weight = weight
+        self._stop_requested = False
+        self.result: MultiModalResult | None = None
+        self.result_mutex = QtCore.QMutex()
+        self.solver = None
+
+    def stop(self):
+        self._stop_requested = True
+        if self.solver is not None:
+            self.solver.stop()
+
+    def run(self):
+        try:
+            self.solver = MultiModalSolutionSpaceSolver(
+                problem=self.problem,
+                dsl=self.dsl,
+                dsu=self.dsu,
+                reqL=self.reqL,
+                reqU=self.reqU,
+                parameters=self.parameters,
+                params=self.params,
+                weight=self.weight,
+            )
+
+            def progress_callback(_box, _samples, message):
+                if self._stop_requested:
+                    self.solver.stop()
+                self.progress_signal.emit(message)
+
+            result = self.solver.solve(
+                callback=progress_callback,
+                stop_callback=lambda: self._stop_requested,
+            )
+            if self._stop_requested:
+                return
+
+            self.result_mutex.lock()
+            try:
+                self.result = result
+            finally:
+                self.result_mutex.unlock()
+            self.finished_signal.emit(result)
+        except Exception as exc:
+            if not self._stop_requested:
+                import traceback
+
+                self.error_signal.emit(f"{exc}\n{traceback.format_exc()}")
 
 class SolverWorker(QtCore.QThread):
     progress_signal = QtCore.Signal(str)  # Only msg to prevent GUI freezing from large data
@@ -112,8 +189,6 @@ class ProductFamilyWorker(QtCore.QThread):
             return
         # Emit variant progress with message (e.g., "Phase I - Iter 5")
         self.progress_signal.emit(variant_name, self.current_variant, self.total_variants, progress_msg)
-
-
 
 
 

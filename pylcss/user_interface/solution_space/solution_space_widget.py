@@ -43,10 +43,23 @@ from scipy.interpolate import NearestNDInterpolator
 import logging
 
 from ...system_modeling.problem_definition.problem_setup import XRayProblem
-from pylcss.solution_space.computation_engine import compute_solution_space, resample_solution_space
+from pylcss.solution_space.computation_engine import (
+    compute_solution_space,
+    resample_multimodal_solution_spaces,
+    resample_solution_space,
+)
 from pylcss.solution_space.solver_engine import SolutionSpaceSolver
+from pylcss.solution_space.multimodal_models import (
+    BoxSolutionSpace,
+    MMSSParameters,
+    MultiModalResult,
+)
 from typing import List, Dict, Any, Optional, Tuple, Union
-from pylcss.solution_space.solver_worker_thread import SolverWorker, ProductFamilyWorker
+from pylcss.solution_space.solver_worker_thread import (
+    MultiModalSolverWorker,
+    ProductFamilyWorker,
+    SolverWorker,
+)
 from pylcss.solution_space.resample_worker_thread import ResampleThread
 from pylcss.solution_space.interpolation_worker_thread import InterpolationThread
 
@@ -982,8 +995,19 @@ class PlotWidget(QtWidgets.QWidget):
                 self.scatter_optimal.setZValue(100)  # Ensure it's on top
                 self.plot_widget.addItem(self.scatter_optimal)
 
-        # Draw Solution Box (if available and both axes are DVs)
-        if dv_par_box_copy is not None:
+        # Match the MMSS result views: one selected mode uses the standard
+        # black ROI, while All boxes and D_MMSS use read-only coloured overlays.
+        has_multimodal_result = bool(
+            getattr(self.parent_widget, 'multi_modal_boxes', [])
+        )
+        multimodal_view_mode = getattr(
+            self.parent_widget, 'multimodal_view_mode', 'all'
+        )
+        draw_multimodal_overlays = (
+            has_multimodal_result
+            and multimodal_view_mode in ('all', 'recommended')
+        )
+        if dv_par_box_copy is not None and not draw_multimodal_overlays:
             dvs = [dv['name'] for dv in self.parent_widget.problem.design_variables]
             if x_name in dvs and y_name in dvs:
                 x_idx = dvs.index(x_name)
@@ -1074,6 +1098,61 @@ class PlotWidget(QtWidgets.QWidget):
                 self.plot_widget.addItem(hline_bottom)
                 self.plot_widget.addItem(hline_top)
                 self.roi_lines = [vline_left, vline_right, hline_bottom, hline_top]
+
+        if draw_multimodal_overlays:
+            dvs = [dv['name'] for dv in self.parent_widget.problem.design_variables]
+            if x_name in dvs and y_name in dvs:
+                x_idx = dvs.index(x_name)
+                y_idx = dvs.index(y_name)
+                for mode_index, box in enumerate(
+                    self.parent_widget._get_multimodal_display_boxes()
+                ):
+                    bx_min, bx_max = box.bounds[x_idx]
+                    by_min, by_max = box.bounds[y_idx]
+                    width = max(0.0, float(bx_max - bx_min))
+                    height = max(0.0, float(by_max - by_min))
+                    color = QtGui.QColor(
+                        self.parent_widget._get_branch_color(mode_index, box)
+                    )
+                    fill = QtGui.QColor(color)
+                    fill.setAlpha(40)
+                    fill_item = QtWidgets.QGraphicsRectItem(
+                        float(bx_min), float(by_min), width, height
+                    )
+                    fill_item.setPen(QtGui.QPen(QtCore.Qt.NoPen))
+                    fill_item.setBrush(QtGui.QBrush(fill))
+                    fill_item.setZValue(0)
+                    self.plot_widget.addItem(fill_item)
+
+                    pen_style = QtCore.Qt.SolidLine
+                    center_slice = bool(
+                        hasattr(self.parent_widget, 'chk_center_slice')
+                        and self.parent_widget.chk_center_slice.isChecked()
+                    )
+                    if center_slice:
+                        pen_style = QtCore.Qt.DashLine
+
+                    border_item = pg.ROI(
+                        [float(bx_min), float(by_min)],
+                        [width, height],
+                        pen=pg.mkPen(color, width=3, style=pen_style),
+                        movable=False,
+                        rotatable=False,
+                    )
+                    border_item.setZValue(100)
+                    self.plot_widget.addItem(border_item)
+
+                    if center_slice:
+                        center_item = pg.ScatterPlotItem(
+                            x=[(float(bx_min) + float(bx_max)) / 2.0],
+                            y=[(float(by_min) + float(by_max)) / 2.0],
+                            pen=pg.mkPen(color, width=2),
+                            brush=pg.mkBrush(color),
+                            size=12,
+                            symbol='+',
+                        )
+                        center_item.setZValue(101)
+                        self.plot_widget.addItem(center_item)
 
         # Set axis labels
         x_unit = self.parent_widget.input_units.get(x_name) or self.parent_widget.output_units.get(x_name) or '-'
@@ -1374,6 +1453,13 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
             return
         self.resample_timer.start()
 
+    def _resample_current_view(self, silent=False):
+        """Refresh samples with the strategy for the currently displayed view."""
+        if self.multi_modal_boxes:
+            self.resample_multimodal(silent=silent)
+        else:
+            self.resample_box(silent=silent)
+
     def _safe_get_float(self, item, default=0.0):
         """Safely convert table item text to float."""
         if item is None: return default
@@ -1440,12 +1526,27 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         self._has_sampled = False
         self.qoi_colors = {}
         self.optimal_point = None
+
+        # Multi-Modal solution-space state.  The controls live on their own
+        # configuration tab so the established single-box workflow stays clean.
+        self.multi_modal_result: Optional[MultiModalResult] = None
+        self.multi_modal_boxes: List[BoxSolutionSpace] = []
+        self.active_box_index = -1
+        self.multimodal_view_mode = "all"
+        self.multi_modal_worker: Optional[MultiModalSolverWorker] = None
+        self.box_colors = [
+            '#3498db', '#9b59b6', '#f39c12', '#1abc9c', '#e91e63',
+            '#e6194b', '#4363d8', '#ffe119', '#f58231', '#911eb4',
+            '#46f0f0', '#f032e6', '#9a6324', '#800000', '#000075',
+        ]
         
         # Debounce timer for resampling
         self.resample_timer = QtCore.QTimer()
         self.resample_timer.setSingleShot(True)
         self.resample_timer.setInterval(300) # 300ms delay
-        self.resample_timer.timeout.connect(lambda: self.resample_box(silent=True))
+        self.resample_timer.timeout.connect(
+            lambda: self._resample_current_view(silent=True)
+        )
         
         # Thread safety: Mutex for dv_par_box access
         self.dv_par_box_mutex = QtCore.QRecursiveMutex()
@@ -1478,6 +1579,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         threads = []
         for name in (
             'solver_worker',
+            'multi_modal_worker',
             'family_worker',
             'resample_thread',
             'candidate_worker',
@@ -1578,7 +1680,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         
         self.sample_size_spin = QtWidgets.QSpinBox()
         self.sample_size_spin.setRange(10, 100000)
-        self.sample_size_spin.setValue(3000)
+        self.sample_size_spin.setValue(300)
         self.sample_size_spin.setPrefix("N=")
         self.sample_size_spin.setToolTip(
             "Points to sample per Resample/Compute — one model evaluation each. "
@@ -1603,7 +1705,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         # Row 4: Refinement
         row4 = QtWidgets.QHBoxLayout()
         self.btn_resample = QtWidgets.QPushButton("Resample")
-        self.btn_resample.clicked.connect(self.resample_box)
+        self.btn_resample.clicked.connect(self._resample_current_view)
         self.btn_resample.setEnabled(False)
         row4.addWidget(self.btn_resample)
 
@@ -1639,8 +1741,75 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         model_layout.addWidget(self.vars_tabs)
         
         self.config_tabs.addTab(tab_model, "Model Control")
+
+        # Tab 2: compact Multi-Modal controls.  The plots stay on the shared
+        # Solution Spaces canvas and this tab only changes the box overlay/view.
+        tab_multimodal = QtWidgets.QWidget()
+        multimodal_layout = QtWidgets.QVBoxLayout(tab_multimodal)
+
+        method_group = QtWidgets.QGroupBox("Multi-Modal Method")
+        method_form = QtWidgets.QFormLayout(method_group)
+
+        self.mm_solver_combo = QtWidgets.QComboBox()
+        self.mm_solver_combo.addItem("SLSQP", "goal_attainment")
+        self.mm_solver_combo.addItem("Nevergrad", "nevergrad")
+        self.mm_solver_combo.setToolTip(
+            "Choose the optimizer used by the deflation-based feasible-basin search."
+        )
+        method_form.addRow("Optimizer", self.mm_solver_combo)
+        multimodal_layout.addWidget(method_group)
+
+        self.btn_compute_multimodal = QtWidgets.QPushButton("Compute Multi-Modal Spaces")
+        self.btn_compute_multimodal.setEnabled(False)
+        self.btn_compute_multimodal.clicked.connect(self.run_multimodal_computation)
+        multimodal_layout.addWidget(self.btn_compute_multimodal)
+
+        view_group = QtWidgets.QGroupBox("Multi-Modal Plot View")
+        view_layout = QtWidgets.QVBoxLayout(view_group)
+
+        branch_row = QtWidgets.QHBoxLayout()
+        branch_row.addWidget(QtWidgets.QLabel("Show"))
+        self.combo_active_box = QtWidgets.QComboBox()
+        self.combo_active_box.currentIndexChanged.connect(self.on_active_box_changed)
+        branch_row.addWidget(self.combo_active_box, stretch=1)
+        view_layout.addLayout(branch_row)
+
+        sample_row = QtWidgets.QHBoxLayout()
+        sample_row.addWidget(QtWidgets.QLabel("Plot sample size"))
+        self.mm_plot_sample_size_spin = QtWidgets.QSpinBox()
+        self.mm_plot_sample_size_spin.setRange(10, 100_000)
+        self.mm_plot_sample_size_spin.setValue(300)
+        self.mm_plot_sample_size_spin.setSingleStep(10)
+        self.mm_plot_sample_size_spin.setPrefix("N=")
+        sample_row.addWidget(self.mm_plot_sample_size_spin, stretch=1)
+        self.btn_resample_multimodal = QtWidgets.QPushButton("Refresh Plots")
+        self.btn_resample_multimodal.setEnabled(False)
+        self.btn_resample_multimodal.clicked.connect(
+            lambda: self.resample_multimodal(silent=False)
+        )
+        sample_row.addWidget(self.btn_resample_multimodal)
+        view_layout.addLayout(sample_row)
+
+        self.lbl_multimodal_info = QtWidgets.QLabel("No Multi-Modal result yet.")
+        self.lbl_multimodal_info.setWordWrap(True)
+        view_layout.addWidget(self.lbl_multimodal_info)
+
+        self.multibox_table = QtWidgets.QTableWidget()
+        self.multibox_table.setColumnCount(4)
+        self.multibox_table.setHorizontalHeaderLabels(
+            ["Box / Mode", "Volume", "a lower", "Samples"]
+        )
+        self.multibox_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.multibox_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.multibox_table.setMaximumHeight(180)
+        self.multibox_table.cellClicked.connect(self.on_multibox_table_clicked)
+        view_layout.addWidget(self.multibox_table)
+        multimodal_layout.addWidget(view_group)
+        multimodal_layout.addStretch()
+
+        self.config_tabs.addTab(tab_multimodal, "Multi-Modal")
         
-        # Tab 4: Product Family
+        # Tab 3: Product Family
         tab_family = QtWidgets.QWidget()
         family_layout = QtWidgets.QVBoxLayout(tab_family)
         
@@ -2056,6 +2225,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         outputs: List of dicts {'name', 'unit', 'req_min', 'req_max'}
         name: Optional system name
         """
+        self._reset_multimodal_state()
         self.system_code = code
         self.system_name = name
         
@@ -2068,11 +2238,11 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
             sm = SystemModel.from_code_string(model_name, self.system_code, inputs, outputs)
             system_func = sm.system_function
             
-            # Use sample_size_spin if available, otherwise default to 3000
+            # Use the shared plot sample setting, defaulting to 300.
             if hasattr(self, 'sample_size_spin'):
                 n_samples = self.sample_size_spin.value()
             else:
-                n_samples = 3000
+                n_samples = 300
             # Use provided name, else default
             model_name = name if name else "Loaded_Model"
             self.problem = XRayProblem(model_name, n_samples)
@@ -2084,7 +2254,12 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
             for out in outputs:
                 minimize = out.get('minimize', False)
                 maximize = out.get('maximize', False)
-                self.problem.add_quantity_of_interest(out['name'], out.get('unit', '-'), out['req_min'], out['req_max'], minimize=minimize, maximize=maximize, weight=1.0)
+                self.problem.add_quantity_of_interest(
+                    out['name'], out.get('unit', '-'), out['req_min'], out['req_max'],
+                    minimize=minimize, maximize=maximize, weight=1.0,
+                    display_name=out.get('display_name', out['name']),
+                    show_in_legend=out.get('show_in_legend', True),
+                )
                 
         except Exception as e:
             logger.warning("Failed to initialize problem object", exc_info=True)
@@ -2204,6 +2379,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                 self.qoi_colors[name] = self.default_colors[i % len(self.default_colors)]
 
         self.btn_compute_feasible.setEnabled(True)
+        self.btn_compute_multimodal.setEnabled(self.problem is not None)
         # Check if there are any objectives defined
         has_objectives = self.problem is not None and any(qoi.get('minimize', False) or qoi.get('maximize', False) 
                            for qoi in self.problem.quantities_of_interest)
@@ -2230,16 +2406,17 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         """
         Load a model from a SystemModel instance.
         """
+        self._reset_multimodal_state()
         # Use the compiled function directly
         self.system_code = system_model.source_code
 
         # Initialize Problem Object
         try:
-            # Use sample_size_spin if available, otherwise default to 3000
+            # Use the shared plot sample setting, defaulting to 300.
             if hasattr(self, 'sample_size_spin'):
                 n_samples = self.sample_size_spin.value()
             else:
-                n_samples = 3000
+                n_samples = 300
             model_name = system_model.name
             self.problem = XRayProblem(model_name, n_samples)
             self.problem.set_system_model(system_model.system_function)
@@ -2261,7 +2438,12 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                             except (ValueError, AttributeError):
                                 weight = 1.0
                             break
-                self.problem.add_quantity_of_interest(out['name'], out.get('unit', '-'), out['req_min'], out['req_max'], minimize=minimize, maximize=maximize, weight=weight)
+                self.problem.add_quantity_of_interest(
+                    out['name'], out.get('unit', '-'), out['req_min'], out['req_max'],
+                    minimize=minimize, maximize=maximize, weight=weight,
+                    display_name=out.get('display_name', out['name']),
+                    show_in_legend=out.get('show_in_legend', True),
+                )
 
         except Exception as e:
             logger.warning("Failed to initialize problem object", exc_info=True)
@@ -2374,6 +2556,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                 self.qoi_colors[name] = self.default_colors[i % len(self.default_colors)]
 
         self.btn_compute_feasible.setEnabled(True)
+        self.btn_compute_multimodal.setEnabled(self.problem is not None)
         # Check if there are any objectives defined
         has_objectives = self.problem is not None and any(qoi.get('minimize', False) or qoi.get('maximize', False) 
                            for qoi in self.problem.quantities_of_interest)
@@ -2659,7 +2842,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                 self.update_all_plots()
                 
                 # Auto resample with the copied data
-                self.resample_box(silent=True)
+                self._resample_current_view(silent=True)
                 
             except ValueError:
                 pass # Ignore invalid input
@@ -2761,10 +2944,389 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         self.dv_table.setItem(row_idx, 5, QtWidgets.QTableWidgetItem(f"{dv_par_box_copy[row_idx, 1]:.4f}"))
         self.dv_table.blockSignals(False)
 
+    def _reset_multimodal_state(self):
+        worker = getattr(self, "multi_modal_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.stop()
+        self.multi_modal_result = None
+        self.multi_modal_boxes = []
+        self.active_box_index = -1
+        self.multimodal_view_mode = "all"
+        if hasattr(self, "combo_active_box"):
+            self.combo_active_box.blockSignals(True)
+            self.combo_active_box.clear()
+            self.combo_active_box.blockSignals(False)
+        if hasattr(self, "multibox_table"):
+            self.multibox_table.setRowCount(0)
+        if hasattr(self, "lbl_multimodal_info"):
+            self.lbl_multimodal_info.setText("No Multi-Modal result yet.")
+        if hasattr(self, "btn_resample_multimodal"):
+            self.btn_resample_multimodal.setEnabled(False)
+        self.last_samples = None
+        for plot_widget in getattr(self, "plot_widgets", []):
+            plot_widget.samples = None
+
+    def _multimodal_problem_arrays(self):
+        dsl = np.array([
+            self._safe_get_float(self.dv_table.item(i, 2), np.nan)
+            for i in range(self.dv_table.rowCount())
+        ])
+        dsu = np.array([
+            self._safe_get_float(self.dv_table.item(i, 3), np.nan)
+            for i in range(self.dv_table.rowCount())
+        ])
+        req_l = np.array([
+            self._safe_get_float(self.qoi_table.item(i, 2), -np.inf)
+            for i in range(self.qoi_table.rowCount())
+        ])
+        req_u = np.array([
+            self._safe_get_float(self.qoi_table.item(i, 3), np.inf)
+            for i in range(self.qoi_table.rowCount())
+        ])
+        if dsl.size == 0 or not np.all(np.isfinite(dsl)) or not np.all(np.isfinite(dsu)):
+            raise ValueError("Design-space bounds must be finite numbers.")
+        if np.any(dsu < dsl):
+            raise ValueError("Every design-space maximum must be at least its minimum.")
+        if req_l.size == 0 or req_l.shape != req_u.shape:
+            raise ValueError("At least one quantity-of-interest requirement is needed.")
+        if np.any(req_u < req_l):
+            raise ValueError("Every requirement maximum must be at least its minimum.")
+        return dsl, dsu, req_l, req_u
+
+    def run_multimodal_computation(self):
+        """Run the paper's five-stage MMSS algorithm."""
+        if self.problem is None:
+            return
+        if self.multi_modal_worker is not None and self.multi_modal_worker.isRunning():
+            QtWidgets.QMessageBox.information(
+                self,
+                "Multi-Modal computation",
+                "A Multi-Modal computation is already running.",
+            )
+            return
+
+        self._reset_multimodal_state()
+
+        try:
+            import copy
+
+            dsl, dsu, req_l, req_u = self._multimodal_problem_arrays()
+            self.dsl, self.dsu = dsl.copy(), dsu.copy()
+            self._has_sampled = True
+
+            params = MMSSParameters(
+                solver_type=self.mm_solver_combo.currentData(),
+                decoupling_enabled=True,
+            )
+
+            self.multi_modal_worker = MultiModalSolverWorker(
+                problem=copy.deepcopy(self.problem),
+                dsl=dsl,
+                dsu=dsu,
+                reqL=req_l,
+                reqU=req_u,
+                parameters=None,
+                params=params,
+                weight=np.ones(len(dsl)),
+            )
+            self.multi_modal_worker.progress_signal.connect(self.on_multimodal_progress)
+            self.multi_modal_worker.finished_signal.connect(self.on_multimodal_finished)
+            self.multi_modal_worker.error_signal.connect(self.on_multimodal_error)
+
+            self.btn_compute_multimodal.setEnabled(False)
+            self.btn_resample_multimodal.setEnabled(False)
+            self.status_msg = QtWidgets.QProgressDialog(
+                "Discovering Multi-Modal solution spaces...", "Cancel", 0, 0, self
+            )
+            self.status_msg.setWindowModality(QtCore.Qt.WindowModal)
+            self.status_msg.canceled.connect(self.on_multimodal_cancelled)
+            self.status_msg.show()
+            self.multi_modal_worker.start()
+        except Exception as exc:
+            self.btn_compute_multimodal.setEnabled(True)
+            QtWidgets.QMessageBox.critical(self, "Multi-Modal computation", str(exc))
+
+    def on_multimodal_progress(self, message):
+        if hasattr(self, "status_msg") and self.status_msg is not None:
+            self.status_msg.setLabelText(str(message))
+        self.lbl_multimodal_info.setText(str(message))
+
+    def on_multimodal_cancelled(self):
+        if self.multi_modal_worker is not None:
+            self.multi_modal_worker.stop()
+        if hasattr(self, "status_msg"):
+            self.status_msg.close()
+        self.btn_compute_multimodal.setEnabled(self.problem is not None)
+        self.lbl_multimodal_info.setText("Multi-Modal computation cancelled.")
+
+    def on_multimodal_error(self, error_message):
+        if hasattr(self, "status_msg"):
+            self.status_msg.close()
+        self.btn_compute_multimodal.setEnabled(self.problem is not None)
+        self.lbl_multimodal_info.setText("Multi-Modal computation failed.")
+        QtWidgets.QMessageBox.critical(
+            self, "Multi-Modal computation", f"Computation failed:\n{error_message}"
+        )
+
+    def on_multimodal_finished(self, result: MultiModalResult):
+        if hasattr(self, "status_msg"):
+            self.status_msg.close()
+        self.btn_compute_multimodal.setEnabled(self.problem is not None)
+        self.multi_modal_result = result
+        self.multi_modal_boxes = list(result.boxes)
+        self.active_box_index = -1
+        self.multimodal_view_mode = "all"
+
+        self.combo_active_box.blockSignals(True)
+        self.combo_active_box.clear()
+        self.combo_active_box.addItem("All boxes", "all")
+        for box in self.multi_modal_boxes:
+            self.combo_active_box.addItem(
+                f"Box {box.box_id + 1} (Mode {box.box_id + 1})",
+                f"box:{box.box_id}",
+            )
+        if self._get_shared_display_family() is not None:
+            self.combo_active_box.addItem(
+                "Recommended box (Decoupled form)", "recommended"
+            )
+        self.combo_active_box.setCurrentIndex(0)
+        self.combo_active_box.blockSignals(False)
+
+        self.multibox_table.setRowCount(len(self.multi_modal_boxes))
+        for row, box in enumerate(self.multi_modal_boxes):
+            values = (
+                f"Box {box.box_id + 1} / Mode {box.box_id + 1}",
+                f"{box.volume:.3e}",
+                f"{box.good_fraction_lower_bound:.4f}",
+                str(box.validation_samples),
+            )
+            tint = QtGui.QColor(self._get_branch_color(row, box))
+            tint.setAlpha(45)
+            for col, value in enumerate(values):
+                item = QtWidgets.QTableWidgetItem(value)
+                item.setBackground(tint)
+                self.multibox_table.setItem(row, col, item)
+        self.multibox_table.resizeColumnsToContents()
+
+        if not self.multi_modal_boxes:
+            self.btn_resample_multimodal.setEnabled(False)
+            reason = (
+                "Feasible finds were clustered, but no positive-volume "
+                "solution space survived computation."
+                if result.n_clusters_found
+                else "No feasible basin was discovered."
+            )
+            self.lbl_multimodal_info.setText(reason)
+            QtWidgets.QMessageBox.warning(self, "Multi-Modal result", reason)
+            return
+
+        decoupled = self._get_shared_display_family()
+        decoupled_text = ""
+        if decoupled is not None:
+            names = [dv['name'] for dv in self.problem.design_variables]
+            common_names = [names[i] for i in decoupled.common_variable_indices]
+            separating_names = [
+                names[i] for i in decoupled.separating_variable_indices
+            ]
+            common_text = ", ".join(common_names) if common_names else "none"
+            separating_text = (
+                ", ".join(separating_names) if separating_names else "none"
+            )
+            decoupled_text = (
+                f" | common: {common_text} | separating: {separating_text}"
+            )
+        self.lbl_multimodal_info.setText(
+            f"{len(self.multi_modal_boxes)} mode(s) / box-shaped solution spaces, "
+            "total volume "
+            f"{result.total_volume:.3e}, {result.computation_time:.1f} s, "
+            f"{result.clustering_method}{decoupled_text}"
+        )
+        self.btn_resample_multimodal.setEnabled(True)
+        self._display_all_boxes()
+        self.resample_multimodal(silent=True)
+
+    def _get_shared_display_family(self):
+        result = self.multi_modal_result
+        family = getattr(result, "decoupled_form", None) if result is not None else None
+        return family if family is not None and family.is_valid() else None
+
+    def _get_multimodal_display_boxes(self):
+        if self.multimodal_view_mode == "recommended":
+            family = self._get_shared_display_family()
+            return list(family.mode_boxes) if family is not None else []
+        if self.multimodal_view_mode == "box":
+            return [
+                box
+                for box in self.multi_modal_boxes
+                if box.box_id == self.active_box_index
+            ]
+        return list(self.multi_modal_boxes)
+
+    def _get_branch_color(self, branch_index, box=None):
+        display_boxes = self._get_multimodal_display_boxes()
+        if len(display_boxes) <= 1:
+            return "#000000"
+        if self.multimodal_view_mode == "recommended":
+            family = self._get_shared_display_family()
+            if family is not None and not family.separating_variable_indices:
+                return "#000000"
+            return self.box_colors[branch_index % len(self.box_colors)]
+        color_index = box.box_id if box is not None else branch_index
+        return self.box_colors[color_index % len(self.box_colors)]
+
+    @staticmethod
+    def _combine_multimodal_samples(boxes):
+        samples = [box.samples for box in boxes if box.samples and box.samples["points"].size]
+        if not samples:
+            return None
+        return {
+            "points": np.hstack([sample["points"] for sample in samples]),
+            "is_good": np.concatenate([sample["is_good"] for sample in samples]),
+            "is_bad": np.concatenate([sample["is_bad"] for sample in samples]),
+            "violation_idx": np.concatenate([sample["violation_idx"] for sample in samples]),
+            "qoi_values": np.hstack([sample["qoi_values"] for sample in samples]),
+        }
+
+    def _show_multimodal_samples(self, samples):
+        if samples is None:
+            self.update_all_plots()
+            return
+        if isinstance(samples, dict):
+            for plot_widget in self.plot_widgets:
+                plot_widget.samples = samples
+        self.process_results(samples)
+        self.lbl_global_title.setText(
+            f"Multi-Modal Solution Spaces for {self.problem.name}"
+        )
+
+    def on_active_box_changed(self, _index):
+        if not self.multi_modal_boxes:
+            return
+        selection = str(self.combo_active_box.currentData())
+        if selection == "all":
+            self.multimodal_view_mode = "all"
+            self.active_box_index = -1
+            self._display_all_boxes()
+        elif selection == "recommended":
+            self.multimodal_view_mode = "recommended"
+            self.active_box_index = -1
+            self._display_recommended_box()
+        elif selection.startswith("box:"):
+            box_id = int(selection.split(":", 1)[1])
+            self.multimodal_view_mode = "box"
+            for box in self.multi_modal_boxes:
+                if box.box_id == box_id:
+                    self._display_box(box)
+                    break
+        self.resample_multimodal(silent=True)
+
+    def on_multibox_table_clicked(self, row, _column):
+        if 0 <= row < len(self.multi_modal_boxes):
+            self.combo_active_box.setCurrentIndex(row + 1)
+
+    def _display_all_boxes(self):
+        self.multimodal_view_mode = "all"
+        boxes = list(self.multi_modal_boxes)
+        if not boxes:
+            return
+        self.active_box_index = -1
+        self.dv_par_box = boxes[0].bounds.copy()
+        self.dv_table.blockSignals(True)
+        for row in range(min(self.dv_table.rowCount(), len(self.dv_par_box))):
+            self.dv_table.setItem(row, 4, QtWidgets.QTableWidgetItem("multiple"))
+            self.dv_table.setItem(row, 5, QtWidgets.QTableWidgetItem("multiple"))
+        self.dv_table.blockSignals(False)
+        samples = self._combine_multimodal_samples(boxes)
+        if samples is None and self.multi_modal_result is not None:
+            samples = self.multi_modal_result.samples_all
+        self._show_multimodal_samples(samples)
+
+    def _display_recommended_box(self):
+        boxes = self._get_multimodal_display_boxes()
+        if not boxes:
+            return
+        self.active_box_index = -1
+        self.dv_par_box = boxes[0].bounds.copy()
+        stacked = np.stack([box.bounds for box in boxes])
+        self.dv_table.blockSignals(True)
+        for row in range(min(self.dv_table.rowCount(), stacked.shape[1])):
+            lower = stacked[:, row, 0]
+            upper = stacked[:, row, 1]
+            if np.allclose(lower, lower[0]) and np.allclose(upper, upper[0]):
+                low_text, high_text = f"{lower[0]:.6g}", f"{upper[0]:.6g}"
+            else:
+                low_text = high_text = "multiple"
+            self.dv_table.setItem(row, 4, QtWidgets.QTableWidgetItem(low_text))
+            self.dv_table.setItem(row, 5, QtWidgets.QTableWidgetItem(high_text))
+        self.dv_table.blockSignals(False)
+        self._show_multimodal_samples(self._combine_multimodal_samples(boxes))
+
+    def _display_box(self, box):
+        self.active_box_index = box.box_id
+        # Keep the selected result box connected to the standard black ROI,
+        # as in the reference MMSS individual-mode plot.
+        self.dv_par_box = box.bounds
+        self.dv_table.blockSignals(True)
+        for row, bounds in enumerate(box.bounds):
+            self.dv_table.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{bounds[0]:.6g}"))
+            self.dv_table.setItem(row, 5, QtWidgets.QTableWidgetItem(f"{bounds[1]:.6g}"))
+        self.dv_table.blockSignals(False)
+        self._show_multimodal_samples(box.samples)
+
+    def resample_multimodal(self, silent=True):
+        """Evaluate fresh per-plot samples around the visible MMSS boxes."""
+        boxes = self._get_multimodal_display_boxes()
+        if self.problem is None or not boxes:
+            return
+        try:
+            dsl, dsu, req_l, req_u = self._multimodal_problem_arrays()
+            num_inputs = len(self.inputs)
+            active_plots = []
+            for widget in self.plot_widgets:
+                x_idx = (
+                    self.inputs.index(widget.x_name)
+                    if widget.x_name in self.inputs
+                    else num_inputs + self.outputs.index(widget.x_name)
+                )
+                y_idx = (
+                    self.inputs.index(widget.y_name)
+                    if widget.y_name in self.inputs
+                    else num_inputs + self.outputs.index(widget.y_name)
+                )
+                active_plots.append((x_idx, y_idx))
+
+            center_slice = bool(
+                hasattr(self, "chk_center_slice")
+                and self.chk_center_slice.isChecked()
+            )
+            samples = resample_multimodal_solution_spaces(
+                self.problem,
+                boxes,
+                dsl,
+                dsu,
+                req_u,
+                req_l,
+                None,
+                self.mm_plot_sample_size_spin.value(),
+                active_plots=active_plots,
+                center_slice=center_slice,
+            )
+            self._show_multimodal_samples(samples)
+            if not silent:
+                self.lbl_multimodal_info.setText(
+                    f"Plotted {len(boxes)} visible box(es) with "
+                    f"approximately {self.mm_plot_sample_size_spin.value()} samples."
+                )
+        except Exception as exc:
+            logger.exception("Multi-Modal resampling failed")
+            if not silent:
+                QtWidgets.QMessageBox.critical(self, "Multi-Modal resampling", str(exc))
+
     def run_computation(self, include_objectives=False):
         # 1. Prepare Problem Object (if not already set)
         if not self.problem:
             return
+        self._reset_multimodal_state()
         # Compute is an explicit user action — allow its post-compute sample.
         self._has_sampled = True
 
@@ -3354,7 +3916,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         self.plot_widgets.append(plot_widget)
         self.plots_container.update()
         if do_resample:
-            self.resample_box(silent=True)
+            self._resample_current_view(silent=True)
         
     def remove_plot(self, plot_widget):
         if plot_widget in self.plot_widgets:
@@ -3370,7 +3932,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
                 self.plots_layout.addWidget(widget, row, col)
             
             self.plots_container.update()
-            self.resample_box(silent=True)
+            self._resample_current_view(silent=True)
 
     def process_results(self, samples, update_table=True):
         # 1. Store Global Samples
@@ -3410,7 +3972,10 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         model_name = "Unknown Model"
         if self.problem and hasattr(self.problem, 'name'):
             model_name = self.problem.name
-        self.lbl_global_title.setText(f"Solution Spaces for {model_name}")
+        if self.multi_modal_boxes:
+            self.lbl_global_title.setText(f"Multi-Modal Solution Spaces for {model_name}")
+        else:
+            self.lbl_global_title.setText(f"Solution Spaces for {model_name}")
 
     def update_all_plots(self):
         if self.updating_plots:
@@ -3468,16 +4033,78 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
             item = self.legend_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        self.add_legend_item("Good Design", '#00aa00', legend_layout=self.legend_layout)
-        
-        qoi_names = []
-        if hasattr(self, 'outputs') and self.outputs:
-            qoi_names = self.outputs
-        elif self.problem:
-            qoi_names = [q['name'] for q in self.problem.quantities_of_interest]
-        for name in qoi_names:
+
+        container = QtWidgets.QWidget()
+        columns = QtWidgets.QHBoxLayout(container)
+        columns.setContentsMargins(0, 0, 0, 0)
+        columns.setSpacing(10)
+
+        left_column = QtWidgets.QWidget()
+        left_layout = QtWidgets.QVBoxLayout(left_column)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(2)
+        left_layout.setAlignment(QtCore.Qt.AlignTop)
+        self.add_legend_item("Good Design", '#00aa00', legend_layout=left_layout)
+
+        if self.problem and self.problem.quantities_of_interest:
+            qois_to_show = self.problem.quantities_of_interest
+        else:
+            qois_to_show = [{'name': name} for name in self.outputs]
+        for qoi in qois_to_show:
+            if not qoi.get('show_in_legend', True):
+                continue
+            name = qoi['name']
+            display_name = qoi.get('display_name', name)
             color = self.qoi_colors.get(name, 'red')
-            self.add_legend_item(f"Violating {format_html(name)}", color, legend_layout=self.legend_layout)
+            self.add_legend_item(
+                f"Violating {format_html(display_name)}",
+                color,
+                legend_layout=left_layout,
+            )
+        left_layout.addStretch()
+        columns.addWidget(left_column, stretch=1)
+
+        if self.multi_modal_boxes:
+            right_column = QtWidgets.QWidget()
+            right_layout = QtWidgets.QVBoxLayout(right_column)
+            right_layout.setContentsMargins(0, 0, 0, 0)
+            right_layout.setSpacing(2)
+            right_layout.setAlignment(QtCore.Qt.AlignTop)
+            boxes = self._get_multimodal_display_boxes()
+
+            if self.multimodal_view_mode == "box":
+                for box in boxes:
+                    self.add_legend_item(
+                        f"Ω<sub>{box.box_id + 1}</sub>",
+                        "#000000",
+                        legend_layout=right_layout,
+                    )
+            elif self.multimodal_view_mode == "recommended":
+                colors = [self._get_branch_color(i, box) for i, box in enumerate(boxes)]
+                if colors and all(color == "#000000" for color in colors):
+                    self.add_legend_item(
+                        "D<sub>MMSS</sub> (common)",
+                        "#000000",
+                        legend_layout=right_layout,
+                    )
+                else:
+                    for index, box in enumerate(boxes):
+                        self.add_legend_item(
+                            f"D<sub>MMSS</sub>: Ω<sub>{index + 1}</sub>",
+                            colors[index],
+                            legend_layout=right_layout,
+                        )
+            else:
+                for index, box in enumerate(boxes):
+                    self.add_legend_item(
+                        f"Ω<sub>{box.box_id + 1}</sub>",
+                        self._get_branch_color(index, box),
+                        legend_layout=right_layout,
+                    )
+            right_layout.addStretch()
+            columns.addWidget(right_column, stretch=1)
+
+        self.legend_layout.addWidget(container)
 
     def add_legend_item(self, name, color, legend_layout=None):
         item = QtWidgets.QWidget()

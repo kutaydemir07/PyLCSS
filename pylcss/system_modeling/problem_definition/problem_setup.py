@@ -3,7 +3,7 @@
 
 import numpy as np
 import scipy.io
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Optional, Union
 import logging
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ class XRayProblem:
     Stores design variables, parameters, and quantities of interest.
     Includes robust evaluation logic with fallbacks for non-vectorized models.
     """
-    def __init__(self, name: str, sample_size: int = 3000) -> None:
+    def __init__(self, name: str, sample_size: int = 300) -> None:
         self.name = name
         if sample_size <= 0:
             raise ValueError(f"sample_size must be positive, got {sample_size}")
@@ -64,10 +64,15 @@ class XRayProblem:
             'name': name, 'unit': unit, 'value': value
         })
 
-    def add_quantity_of_interest(self, name: str, unit: str, min_val: Union[int, float], max_val: Union[int, float], 
-                               minimize: bool = False, maximize: bool = False, weight: float = 1.0) -> None:
+    def add_quantity_of_interest(self, name: str, unit: str, min_val: Union[int, float], max_val: Union[int, float],
+                               minimize: bool = False, maximize: bool = False, weight: float = 1.0,
+                               display_name: Optional[str] = None,
+                               show_in_legend: bool = True) -> None:
         self.quantities_of_interest.append({
-            'name': name, 'unit': unit, 'min': min_val, 'max': max_val, 'minimize': minimize, 'maximize': maximize, 'weight': weight
+            'name': name, 'display_name': display_name or name, 'unit': unit,
+            'min': min_val, 'max': max_val, 'minimize': minimize,
+            'maximize': maximize, 'weight': weight,
+            'show_in_legend': bool(show_in_legend),
         })
 
     def add_requirement_set(self, name: str, overrides: Dict[str, Dict[str, Union[int, float]]]) -> None:
