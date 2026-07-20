@@ -6341,8 +6341,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         except Exception:
             return False
 
-    @staticmethod
-
     def _topopt_preflight_error(self, node):
         if getattr(node, "__identifier__", "") != "com.cad.sim.topopt_voxel":
             return None
