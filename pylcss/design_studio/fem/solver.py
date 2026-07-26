@@ -55,9 +55,9 @@ class SolverNode(CadQueryNode):
                              items=['Von Mises Stress', 'Displacement'])
         self.create_property('deformation_scale', 'Auto', widget_type='combo',
                              items=['Auto', '1x', '5x', '10x', '50x', '100x', '200x'])
-        # Linear vs nonlinear static.  'Nonlinear (Plastic)' is auto-enabled
-        # whenever the connected material has yield_strength > 0 — picking it
-        # here just makes the intent explicit in the deck header.
+        # The constitutive model is explicit. A yield strength is retained as
+        # an allowable for linear safety-factor reporting and never silently
+        # promotes a study to nonlinear plasticity.
         self.create_property('analysis_type', 'Linear', widget_type='combo',
                              items=['Linear',
                                     'Nonlinear (Geometric)',

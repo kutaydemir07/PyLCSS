@@ -2,16 +2,16 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 """
-CAD Nodes — code-first authoring + the FEA / crash / optimisation surface.
+CAD Nodes — interactive parametric authoring and engineering analysis.
 
-PyLCSS is code-first: parametric geometry is authored in a
-:class:`CadQueryCodeNode` (one readable CadQuery script per part / assembly),
-or imported via STEP / STL.  The hand-placed primitive / sketch / 3-D-op /
-transform / pattern nodes have been removed.
+GUI-native primitive, feature, transform, and pattern nodes are the default
+authoring path. A CadQuery code node remains available for exceptional custom
+geometry, but ordinary examples and engineering studies require no scripts.
 
 Active node modules:
     nodes/
-    ├── code_part.py    # CadQueryCodeNode — primary authoring node
+    ├── parametric.py   # native primitives, features, transforms, patterns
+    ├── code_part.py    # optional expert CadQuery node
     ├── analysis.py     # MassPropertiesNode, BoundingBoxNode
     ├── assembly.py     # AssemblyNode (combine multiple shapes)
     ├── values.py       # NumberNode, VariableNode
@@ -31,7 +31,20 @@ from pylcss.design_studio.core.base_node import (
     resolve_numeric_input, resolve_shape_input,
 )
 
-# Geometry — code-first.
+# GUI-native parametric geometry.
+from pylcss.design_studio.nodes.parametric import (
+    BooleanNode,
+    BoxNode,
+    CylindricalShellNode,
+    CylinderNode,
+    FilletNode,
+    LinearPatternNode,
+    ThroughHoleNode,
+    TransformNode,
+    TubeNode,
+)
+
+# Optional expert geometry.
 from pylcss.design_studio.nodes.code_part import CadQueryCodeNode
 
 # Geometry — interactive (FreeCAD GUI subprocess + BREP round-trip).
@@ -73,7 +86,11 @@ __all__ = [
     "CadQueryNode",
     "is_numeric", "is_shape", "resolve_numeric_input", "resolve_shape_input",
 
-    # Code-first geometry
+    # GUI-native geometry
+    "BoxNode", "CylinderNode", "TubeNode", "CylindricalShellNode", "BooleanNode",
+    "ThroughHoleNode", "FilletNode", "TransformNode", "LinearPatternNode",
+
+    # Optional expert geometry
     "CadQueryCodeNode",
 
     # Interactive geometry (FreeCAD)

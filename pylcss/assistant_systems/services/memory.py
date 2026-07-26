@@ -272,6 +272,11 @@ class LLMMemory:
                 self._conversations = {c.id: c for c in sorted_convs[:self.max_conversations]}
             
             data = {
+                "_copyright": "Copyright (c) 2026 Kutay Demir.",
+                "_license": (
+                    "Licensed under the PolyForm Shield License 1.0.0. "
+                    "See LICENSE file for details."
+                ),
                 "conversations": [c.to_dict() for c in self._conversations.values()],
                 "current_conversation_id": self._current_conversation_id,
             }
@@ -368,4 +373,3 @@ class LLMMemory:
         self._current_conversation_id = None
         self._save()
         logger.info("Cleared all conversation memory")
-

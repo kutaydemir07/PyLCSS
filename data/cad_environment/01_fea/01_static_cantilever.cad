@@ -1,0 +1,106 @@
+{
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "beam": {
+      "type_": "com.cad.geometry.box.BoxNode",
+      "name": "Cantilever Beam",
+      "pos": [-900.0, -100.0],
+      "custom": {
+        "length_x": 180.0,
+        "width_y": 32.0,
+        "height_z": 16.0,
+        "centered": true
+      }
+    },
+    "fixed-face": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "name": "Select Clamped End",
+      "pos": [-650.0, -250.0],
+      "custom": {"selector_type": "Direction", "direction": "<X"}
+    },
+    "loaded-face": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "name": "Select Loaded End",
+      "pos": [-650.0, 20.0],
+      "custom": {"selector_type": "Direction", "direction": ">X"}
+    },
+    "mesh": {
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "name": "Quadratic Solid Mesh",
+      "pos": [-650.0, 190.0],
+      "custom": {
+        "mesh_type": "Tet10",
+        "element_size": 6.0,
+        "refinement_size": 3.0
+      }
+    },
+    "material": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "name": "Structural Steel",
+      "pos": [-370.0, 220.0],
+      "custom": {
+        "preset": "Steel (Structural)",
+        "youngs_modulus": 210000.0,
+        "poissons_ratio": 0.3,
+        "density": 7.85e-09,
+        "thermal_conductivity": 45.0,
+        "yield_strength": 355.0,
+        "tangent_modulus": 0.0
+      }
+    },
+    "constraint": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "name": "Fixed Root",
+      "pos": [-370.0, -250.0],
+      "custom": {"constraint_type": "Fixed"}
+    },
+    "load": {
+      "type_": "com.cad.sim.load.LoadNode",
+      "name": "3 kN Downward End Load",
+      "pos": [-370.0, 20.0],
+      "custom": {
+        "load_type": "Force",
+        "force_x": 0.0,
+        "force_y": -3000.0,
+        "force_z": 0.0
+      }
+    },
+    "solver": {
+      "type_": "com.cad.sim.solver.SolverNode",
+      "name": "CalculiX Static Verification",
+      "pos": [-40.0, -30.0],
+      "custom": {
+        "deck_only": false,
+        "external_timeout_s": 3600.0,
+        "visualization": "Von Mises Stress",
+        "deformation_scale": "Auto",
+        "analysis_type": "Linear",
+        "solver_backend": "CalculiX",
+        "run_external_solver": true
+      }
+    }
+  },
+  "connections": [
+    {"out": ["beam", "shape"], "in": ["fixed-face", "shape"]},
+    {"out": ["beam", "shape"], "in": ["loaded-face", "shape"]},
+    {"out": ["beam", "shape"], "in": ["mesh", "shape"]},
+    {"out": ["fixed-face", "workplane"], "in": ["constraint", "target_face"]},
+    {"out": ["loaded-face", "workplane"], "in": ["load", "target_face"]},
+    {"out": ["mesh", "mesh"], "in": ["constraint", "mesh"]},
+    {"out": ["mesh", "mesh"], "in": ["load", "mesh"]},
+    {"out": ["mesh", "mesh"], "in": ["solver", "mesh"]},
+    {"out": ["material", "material"], "in": ["solver", "material"]},
+    {"out": ["constraint", "constraints"], "in": ["solver", "constraints"]},
+    {"out": ["load", "loads"], "in": ["solver", "loads"]}
+  ]
+}

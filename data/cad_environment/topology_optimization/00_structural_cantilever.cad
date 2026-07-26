@@ -1,0 +1,77 @@
+{
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "graph": {"layout_direction": 0, "acyclic": true, "pipe_collision": false, "pipe_slicing": true, "pipe_style": 1, "accept_connection_types": "{}", "reject_connection_types": "{}"},
+  "nodes": {
+    "domain": {
+      "type_": "com.cad.geometry.box.BoxNode",
+      "name": "Cantilever Design Space",
+      "pos": [-760.0, -40.0],
+      "custom": {"length_x": 90.0, "width_y": 30.0, "height_z": 12.0, "centered": true}
+    },
+    "material": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "name": "Structural Steel",
+      "pos": [-500.0, -300.0],
+      "custom": {"preset": "Steel (Structural)", "youngs_modulus": 210000.0, "poissons_ratio": 0.3, "density": 7.85e-09, "thermal_conductivity": 45.0, "yield_strength": 355.0, "tangent_modulus": 0.0}
+    },
+    "fixed-face": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "name": "Select Fixed End",
+      "pos": [-500.0, -100.0],
+      "custom": {"selector_type": "Direction", "direction": "<X"}
+    },
+    "loaded-face": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "name": "Select Loaded End",
+      "pos": [-500.0, 100.0],
+      "custom": {"selector_type": "Direction", "direction": ">X"}
+    },
+    "support": {
+      "type_": "com.cad.topopt.support.TopologySupportNode",
+      "name": "Fixed Root",
+      "pos": [-240.0, -100.0],
+      "custom": {"support_type": "Fixed"}
+    },
+    "force": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "name": "Downward Tip Load",
+      "pos": [-240.0, 100.0],
+      "custom": {"force_x": 0.0, "force_y": -1000.0, "force_z": 0.0}
+    },
+    "topopt": {
+      "type_": "com.cad.sim.topopt_voxel.TopologyOptVoxelNode",
+      "name": "Structural Cantilever Topology",
+      "pos": [100.0, 0.0],
+      "custom": {
+        "workflow_mode": "Guided",
+        "design_goal": "Lightweight Stiffness",
+        "physics_mode": "Structural",
+        "manufacturing_process": "Symmetric",
+        "advanced_settings_visible": false,
+        "volfrac": 0.30,
+        "optimizer": "Auto",
+        "max_iter": 40,
+        "tol": 0.008,
+        "convergence_patience": 4,
+        "density_cutoff": 0.40,
+        "symmetry": "Z",
+        "visualization": "Recovered Shape",
+        "print_ready_mesh": true,
+        "mesh_decimate_ratio": 0.35,
+        "surface_recovery_method": "Volume-Preserving SDF (VTK)",
+        "structure_mode": "Solid Envelope"
+      }
+    }
+  },
+  "connections": [
+    {"out": ["domain", "shape"], "in": ["fixed-face", "shape"]},
+    {"out": ["domain", "shape"], "in": ["loaded-face", "shape"]},
+    {"out": ["domain", "shape"], "in": ["topopt", "design_domain"]},
+    {"out": ["material", "material"], "in": ["topopt", "material"]},
+    {"out": ["fixed-face", "workplane"], "in": ["support", "target_region"]},
+    {"out": ["loaded-face", "workplane"], "in": ["force", "target_region"]},
+    {"out": ["support", "supports"], "in": ["topopt", "supports"]},
+    {"out": ["force", "loads"], "in": ["topopt", "loads"]}
+  ]
+}

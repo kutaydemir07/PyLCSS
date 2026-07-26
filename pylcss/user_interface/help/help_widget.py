@@ -122,7 +122,7 @@ class HelpWidget(QtWidgets.QWidget):
         <li><b>Node-Based Workflow:</b> Connect parts into assemblies, mesh, define materials, constraints, loads, and solve — all in one graph.</li>
         <li><b>FEM Simulation:</b> Netgen meshing + CalculiX static solver.</li>
         <li><b>Crash Simulation:</b> OpenRadioss explicit dynamics with animation playback.</li>
-        <li><b>Topology Optimization:</b> SIMP with MMA solver, shape recovery, STL export.</li>
+        <li><b>Topology Optimization:</b> density/SIMP or reaction-diffusion level-set, OC/MMA/GCMMA updates, joints, thermal coupling, shape recovery, and STL export.</li>
         <li><b>Export Options:</b> STEP, STL, OBJ.</li>
         </ul>
 
@@ -171,11 +171,13 @@ class HelpWidget(QtWidgets.QWidget):
         </ol>
 
         <h3>Topology Optimization</h3>
-        <p>The topology optimization module uses the SIMP (Solid Isotropic Material with Penalization) method with MMA (Method of Moving Asymptotes) optimizer to find optimal material layouts. Features include:</p>
+        <p>Topology studies can use filtered density/SIMP or a signed reaction-diffusion level-set field. Density is the general default; level-set is intended for crisp compliance/volume concepts. OC is selected for one volume constraint, while GCMMA is used for stress-constrained minimum-mass studies. Features include:</p>
         <ul>
         <li><b>Density Filtering:</b> Smooth density fields for manufacturable designs.</li>
+        <li><b>Level-Set Interface Evolution:</b> Crisp material/void boundaries with exact volume restoration.</li>
         <li><b>Volume Constraints:</b> Control material usage.</li>
-        <li><b>Shape Recovery:</b> Extract clean geometry using marching cubes.</li>
+        <li><b>Multibody and Thermal Inputs:</b> Typed joints, operating cases, heat inputs, and sinks.</li>
+        <li><b>Shape Recovery:</b> Extract a smooth, volume-preserving print surface.</li>
         </ul>
 
         <h3>Units System</h3>

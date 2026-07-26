@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Kutay Demir.
+# Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
@@ -128,4 +130,7 @@ testpaths = [
 filterwarnings = [
     # pyMOTO's sparse LU converts CSR→CSC internally; benign and noisy.
     "ignore::scipy.sparse.SparseEfficiencyWarning",
+]
+markers = [
+    "slow: numerical integration or external-solver smoke tests",
 ]

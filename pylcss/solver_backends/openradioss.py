@@ -1012,6 +1012,15 @@ def run_openradioss_existing_deck(
         end_time=end_time,
     )
     warnings.extend(anim_warnings)
+    stress_scale = float(stress_scale_to_mpa)
+    if stress_scale != 1.0:
+        for frame in raw_frames:
+            for field_name in ("stress_vm", "stress_vm_cell"):
+                values = frame.get(field_name)
+                if values is not None:
+                    frame[field_name] = (
+                        np.asarray(values, dtype=float) * stress_scale
+                    )
 
     if not raw_frames:
         return _wrap_deck_result(
@@ -1025,13 +1034,13 @@ def run_openradioss_existing_deck(
     last = raw_frames[-1]
     flat_disp = np.asarray(last.get("displacement", []), dtype=float).reshape(-1)
     n_points = flat_disp.size // 3 if flat_disp.size else 0
-    peak_disp = (
+    final_peak_disp = (
         float(np.max(np.linalg.norm(flat_disp.reshape(n_points, 3), axis=1)))
         if n_points
         else 0.0
     )
     stress_vm = np.asarray(last.get("stress_vm", []), dtype=float)
-    peak_vm = float(stress_vm.max()) if stress_vm.size else 0.0
+    final_peak_vm = float(stress_vm.max()) if stress_vm.size else 0.0
 
     def _primary_cell_field(name):
         raw = last.get(name)
@@ -1049,7 +1058,8 @@ def run_openradioss_existing_deck(
     final_failed = _primary_cell_field("failed_cell")
     element_stress = _primary_cell_field("stress_vm_cell")
     if element_stress is not None and np.asarray(element_stress).size:
-        peak_vm = float(np.max(element_stress))
+        final_peak_vm = float(np.max(element_stress))
+    peak_disp, peak_vm = _animation_event_peaks(raw_frames)
 
     return {
         "type": "crash",
@@ -1064,6 +1074,8 @@ def run_openradioss_existing_deck(
         "frames": raw_frames,
         "peak_displacement": peak_disp,
         "peak_stress": peak_vm,
+        "final_frame_displacement": final_peak_disp,
+        "final_frame_stress": final_peak_vm,
         "plastic_strain": final_plastic,
         "failed_elements": final_failed,
         "n_failed": int(np.count_nonzero(
@@ -1218,6 +1230,32 @@ def _build_animation_frames_with_mesh(mesh: Any, frames: list) -> list:
             }
         )
     return fixed
+
+
+def _animation_event_peaks(frames: list) -> tuple[float, float]:
+    """Return event-wide displacement and Von Mises maxima across all frames."""
+    peak_displacement = 0.0
+    peak_stress = 0.0
+    for frame in frames:
+        displacement = np.asarray(
+            frame.get("displacement", []),
+            dtype=float,
+        ).reshape(-1)
+        if displacement.size and displacement.size % 3 == 0:
+            vectors = displacement.reshape((-1, 3))
+            peak_displacement = max(
+                peak_displacement,
+                float(np.max(np.linalg.norm(vectors, axis=1))),
+            )
+        cell_stress = frame.get("stress_vm_cell")
+        stress = (
+            np.asarray(cell_stress, dtype=float).reshape(-1)
+            if cell_stress is not None
+            else np.asarray(frame.get("stress_vm", []), dtype=float).reshape(-1)
+        )
+        if stress.size:
+            peak_stress = max(peak_stress, float(np.max(stress)))
+    return peak_displacement, peak_stress
 
 
 def _compute_time_history(
@@ -1501,7 +1539,14 @@ def run_openradioss_crash(
         last = frames[-1]
         displacement_flat = last["displacement"]
         stress_field = last["stress_vm"]
-        peak_disp = float(np.max(np.linalg.norm(displacement_flat.reshape(n_points, 3), axis=1)))
+        final_peak_disp = float(
+            np.max(
+                np.linalg.norm(
+                    displacement_flat.reshape(n_points, 3),
+                    axis=1,
+                )
+            )
+        )
         element_stress = last.get("stress_vm_cell")
         stress_for_peak = (
             np.asarray(element_stress, dtype=float)
@@ -1513,7 +1558,10 @@ def run_openradioss_crash(
         # system, so no extra stress_scale_to_mpa step is applied here. That
         # rescale belongs only to run_openradioss_existing_deck, where the
         # deck's native stress unit is user-supplied.
-        peak_vm = float(np.max(stress_for_peak)) if stress_for_peak.size else 0.0
+        final_peak_vm = (
+            float(np.max(stress_for_peak)) if stress_for_peak.size else 0.0
+        )
+        peak_disp, peak_vm = _animation_event_peaks(frames)
         time_history = _compute_time_history(mesh, material, frames, end_time)
         final_plastic = last.get("eps_p_cell")
         final_failed = last.get("failed_cell")
@@ -1535,6 +1583,8 @@ def run_openradioss_crash(
             "frames": frames,
             "peak_displacement": peak_disp,
             "peak_stress": peak_vm,
+            "final_frame_displacement": final_peak_disp,
+            "final_frame_stress": final_peak_vm,
             "plastic_strain": final_plastic,
             "failed_elements": final_failed,
             "n_failed": n_failed,

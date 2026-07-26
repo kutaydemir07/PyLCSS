@@ -1111,6 +1111,10 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
             "  com.cad.assembly, com.cad.select_face,\n"
             "  com.cad.sim.material, com.cad.sim.mesh, com.cad.sim.constraint,\n"
             "  com.cad.sim.load, com.cad.sim.solver, com.cad.sim.topopt_voxel,\n"
+            "  com.cad.topopt.support, com.cad.topopt.load, "
+            "com.cad.topopt.joint,\n"
+            "  com.cad.topopt.operating_case, com.cad.topopt.thermal_sink, "
+            "com.cad.topopt.heat_load,\n"
             "  com.cad.number, com.cad.variable, com.cad.export_step, com.cad.export_stl"
         ),
         parameters=[
@@ -1547,7 +1551,8 @@ CAD_NODE_TYPES = {
     "com.cad.sim.material": {
         "name": "Material",
         "properties": {"preset": "Steel (Structural)", "youngs_modulus": 210000.0,
-                        "poissons_ratio": 0.3, "density": 7.85e-9},
+                        "poissons_ratio": 0.3, "density": 7.85e-9,
+                        "thermal_conductivity": 45.0},
         "outputs": ["material"],
     },
     "com.cad.sim.mesh": {
@@ -1579,15 +1584,56 @@ CAD_NODE_TYPES = {
         "name": "Topology Optimization",
         "properties": {
             "design_goal": "Lightweight Stiffness",
-            "quality_preset": "Balanced",
+            "physics_mode": "Structural",
+            "quality_preset": "Automatic",
             "manufacturing_process": "None",
+            "optimizer": "Auto",
+            "load_aggregation": "Weighted Sum",
             "volfrac": 0.4,
             "validate_after_optimize": False,
             "generate_cad_after_optimize": False,
             "cad_reconstruction_method": "Recovered Shape",
         },
-        "inputs": ["mesh", "material", "constraints", "loads"],
+        "inputs": [
+            "design_domain", "material", "supports", "loads", "joints",
+            "load_cases", "thermal_sinks", "thermal_loads",
+        ],
         "outputs": ["result", "recovered_shape"],
+    },
+    "com.cad.topopt.support": {
+        "name": "TopOpt Support",
+        "properties": {"support_type": "Fixed"},
+        "inputs": ["target_region"], "outputs": ["supports"],
+    },
+    "com.cad.topopt.load": {
+        "name": "TopOpt Force",
+        "properties": {"force_x": 0.0, "force_y": -1000.0, "force_z": 0.0},
+        "inputs": ["target_region"], "outputs": ["loads"],
+    },
+    "com.cad.topopt.joint": {
+        "name": "TopOpt Joint",
+        "properties": {
+            "joint_name": "Joint", "joint_type": "Spherical",
+            "axis": "X", "relative_stiffness": 100.0,
+        },
+        "inputs": ["anchor_a", "anchor_b"], "outputs": ["joints"],
+    },
+    "com.cad.topopt.operating_case": {
+        "name": "TopOpt Operating Case",
+        "properties": {"case_name": "Operating Case 1", "weight": 1.0},
+        "inputs": ["supports", "loads", "joints"], "outputs": ["load_case"],
+    },
+    "com.cad.topopt.thermal_sink": {
+        "name": "TopOpt Thermal Sink",
+        "properties": {},
+        "inputs": ["target_region"], "outputs": ["thermal_sinks"],
+    },
+    "com.cad.topopt.heat_load": {
+        "name": "TopOpt Heat Load",
+        "properties": {
+            "case_name": "Thermal Case 1", "total_heat": 100.0, "weight": 1.0,
+        },
+        "inputs": ["target_region"], "outputs": ["thermal_loads"],
     },
     "com.cad.sim.remesh": {
         "name": "Remesh Surface",

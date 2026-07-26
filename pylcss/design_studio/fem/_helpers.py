@@ -36,33 +36,49 @@ def suppress_output():
         yield
         return
 
-    sys.stdout.flush()
-    sys.stderr.flush()
-
-    old_stdout_fd = os.dup(1)
-    old_stderr_fd = os.dup(2)
-
-    try:
-        with open(os.devnull, 'w') as devnull:
-            devnull_fd = devnull.fileno()
-            os.dup2(devnull_fd, 1)
-            os.dup2(devnull_fd, 2)
-            old_py_stdout = sys.stdout
-            old_py_stderr = sys.stderr
-            sys.stdout = open(os.devnull, 'w')
-            sys.stderr = open(os.devnull, 'w')
+    old_py_stdout = sys.stdout
+    old_py_stderr = sys.stderr
+    for stream in (old_py_stdout, old_py_stderr):
+        flush = getattr(stream, "flush", None)
+        if callable(flush):
             try:
-                yield
-            finally:
-                sys.stdout.close()
-                sys.stderr.close()
-                sys.stdout = old_py_stdout
-                sys.stderr = old_py_stderr
+                flush()
+            except (OSError, ValueError):
+                pass
+
+    # ``pythonw.exe`` and frozen windowed applications have no console:
+    # sys.stdout/sys.stderr are None and descriptors 1/2 may be unavailable.
+    # Redirect every channel that exists without requiring any of them.
+    saved_fds = {}
+    devnull = open(os.devnull, "w")
+    try:
+        devnull_fd = devnull.fileno()
+        for fd in (1, 2):
+            try:
+                saved_fd = os.dup(fd)
+            except OSError:
+                continue
+            try:
+                os.dup2(devnull_fd, fd)
+            except OSError:
+                os.close(saved_fd)
+            else:
+                saved_fds[fd] = saved_fd
+
+        sys.stdout = devnull
+        sys.stderr = devnull
+        yield
     finally:
-        os.dup2(old_stdout_fd, 1)
-        os.dup2(old_stderr_fd, 2)
-        os.close(old_stdout_fd)
-        os.close(old_stderr_fd)
+        for fd, saved_fd in saved_fds.items():
+            try:
+                os.dup2(saved_fd, fd)
+            except OSError:
+                pass
+            finally:
+                os.close(saved_fd)
+        sys.stdout = old_py_stdout
+        sys.stderr = old_py_stderr
+        devnull.close()
 
 
 try:
@@ -73,22 +89,22 @@ except ImportError:
 
 # Professional Material Database (E in MPa, density in tonne/mm^3)
 MATERIAL_DATABASE = {
-    'Custom': {'E': 210000.0, 'nu': 0.30, 'rho': 7.85e-9},
-    'Steel (Structural)': {'E': 210000.0, 'nu': 0.30, 'rho': 7.85e-9},
-    'Steel (Stainless 304)': {'E': 193000.0, 'nu': 0.29, 'rho': 8.00e-9},
-    'Aluminum 6061-T6': {'E': 68900.0, 'nu': 0.33, 'rho': 2.70e-9},
-    'Aluminum 7075-T6': {'E': 71700.0, 'nu': 0.33, 'rho': 2.81e-9},
-    'Titanium Ti-6Al-4V': {'E': 113800.0, 'nu': 0.34, 'rho': 4.43e-9},
-    'Copper (Annealed)': {'E': 110000.0, 'nu': 0.34, 'rho': 8.96e-9},
-    'Brass': {'E': 100000.0, 'nu': 0.34, 'rho': 8.50e-9},
-    'Cast Iron (Gray)': {'E': 100000.0, 'nu': 0.26, 'rho': 7.20e-9},
-    'Magnesium AZ31': {'E': 45000.0, 'nu': 0.35, 'rho': 1.77e-9},
-    'Nickel Alloy 718': {'E': 200000.0, 'nu': 0.30, 'rho': 8.19e-9},
-    'CFRP (Quasi-Isotropic)': {'E': 70000.0, 'nu': 0.30, 'rho': 1.55e-9},
-    'GFRP (E-Glass)': {'E': 25000.0, 'nu': 0.23, 'rho': 1.90e-9},
-    'Concrete (Normal)': {'E': 30000.0, 'nu': 0.20, 'rho': 2.40e-9},
-    'ABS Plastic': {'E': 2300.0, 'nu': 0.35, 'rho': 1.05e-9},
-    'Nylon 6/6': {'E': 2900.0, 'nu': 0.40, 'rho': 1.14e-9},
-    'PEEK': {'E': 3600.0, 'nu': 0.38, 'rho': 1.30e-9},
-    'Wood (Oak)': {'E': 12000.0, 'nu': 0.35, 'rho': 0.60e-9},
+    'Custom': {'E': 210000.0, 'nu': 0.30, 'rho': 7.85e-9, 'k': 45.0},
+    'Steel (Structural)': {'E': 210000.0, 'nu': 0.30, 'rho': 7.85e-9, 'k': 45.0},
+    'Steel (Stainless 304)': {'E': 193000.0, 'nu': 0.29, 'rho': 8.00e-9, 'k': 16.2},
+    'Aluminum 6061-T6': {'E': 68900.0, 'nu': 0.33, 'rho': 2.70e-9, 'k': 167.0},
+    'Aluminum 7075-T6': {'E': 71700.0, 'nu': 0.33, 'rho': 2.81e-9, 'k': 130.0},
+    'Titanium Ti-6Al-4V': {'E': 113800.0, 'nu': 0.34, 'rho': 4.43e-9, 'k': 6.7},
+    'Copper (Annealed)': {'E': 110000.0, 'nu': 0.34, 'rho': 8.96e-9, 'k': 401.0},
+    'Brass': {'E': 100000.0, 'nu': 0.34, 'rho': 8.50e-9, 'k': 109.0},
+    'Cast Iron (Gray)': {'E': 100000.0, 'nu': 0.26, 'rho': 7.20e-9, 'k': 52.0},
+    'Magnesium AZ31': {'E': 45000.0, 'nu': 0.35, 'rho': 1.77e-9, 'k': 96.0},
+    'Nickel Alloy 718': {'E': 200000.0, 'nu': 0.30, 'rho': 8.19e-9, 'k': 11.4},
+    'CFRP (Quasi-Isotropic)': {'E': 70000.0, 'nu': 0.30, 'rho': 1.55e-9, 'k': 6.0},
+    'GFRP (E-Glass)': {'E': 25000.0, 'nu': 0.23, 'rho': 1.90e-9, 'k': 0.3},
+    'Concrete (Normal)': {'E': 30000.0, 'nu': 0.20, 'rho': 2.40e-9, 'k': 1.7},
+    'ABS Plastic': {'E': 2300.0, 'nu': 0.35, 'rho': 1.05e-9, 'k': 0.18},
+    'Nylon 6/6': {'E': 2900.0, 'nu': 0.40, 'rho': 1.14e-9, 'k': 0.25},
+    'PEEK': {'E': 3600.0, 'nu': 0.38, 'rho': 1.30e-9, 'k': 0.25},
+    'Wood (Oak)': {'E': 12000.0, 'nu': 0.35, 'rho': 0.60e-9, 'k': 0.17},
 }

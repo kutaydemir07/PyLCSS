@@ -3,7 +3,20 @@
 
 import math
 
+import cadquery as cq
+
 from pylcss.design_studio.core.base_node import CadQueryNode
+
+
+def _analysis_shape_value(shape):
+    if isinstance(shape, cq.Assembly):
+        compound = shape.toCompound()
+        solids = list(compound.Solids())
+        if solids:
+            return cq.Compound.makeCompound(solids)
+        return compound
+    return shape.val() if hasattr(shape, "val") else shape
+
 
 class MassPropertiesNode(CadQueryNode):
     """Calculate mass properties of a part."""
@@ -32,7 +45,7 @@ class MassPropertiesNode(CadQueryNode):
         
         try:
             # Handle Workplane vs value
-            solid = shape.val() if hasattr(shape, 'val') else shape
+            solid = _analysis_shape_value(shape)
             
             # Note: Volume() returns mm^3. Density typically tonne/mm^3 in this system.
             # So mass (tonne) = Volume(mm^3) * density(tonne/mm^3)
@@ -81,7 +94,7 @@ class BoundingBoxNode(CadQueryNode):
             return None
         
         try:
-            val = shape.val() if hasattr(shape, 'val') else shape
+            val = _analysis_shape_value(shape)
             bb = val.BoundingBox()
             return {
                 'type': 'analysis',

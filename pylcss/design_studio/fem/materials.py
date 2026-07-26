@@ -19,6 +19,7 @@ class MaterialNode(CadQueryNode):
         self.add_input('youngs_modulus', color=(180, 180, 0))
         self.add_input('poissons_ratio', color=(180, 180, 0))
         self.add_input('density', color=(180, 180, 0))
+        self.add_input('thermal_conductivity', color=(255, 110, 50))
         
         # Preset dropdown
         self.create_property('preset', 'Steel (Structural)', widget_type='combo',
@@ -28,11 +29,15 @@ class MaterialNode(CadQueryNode):
         self.create_property('youngs_modulus', 210000.0, widget_type='float')  # MPa
         self.create_property('poissons_ratio', 0.3, widget_type='float')
         self.create_property('density', 7.85e-9, widget_type='float')  # tonne/mm^3
+        self.create_property(
+            'thermal_conductivity',
+            45.0,
+            widget_type='float',
+        )
 
-        # Optional plasticity — pure elastic when yield_strength == 0.
-        # When > 0 the CalculiX backend writes a *PLASTIC card (isotropic
-        # bilinear hardening) and CCX automatically enables NLGEOM, giving
-        # a nonlinear material+geometric static solve.
+        # Yield is an allowable in a linear study. It becomes an isotropic
+        # bilinear-hardening law only when the solver explicitly selects
+        # Nonlinear (Plastic).
         self.create_property('yield_strength',  0.0, widget_type='float')   # MPa
         self.create_property('tangent_modulus', 0.0, widget_type='float')   # MPa
 
@@ -46,11 +51,16 @@ class MaterialNode(CadQueryNode):
             E = mat['E']
             nu = mat['nu']
             rho = mat['rho']
+            thermal_conductivity = mat['k']
         else:
             # Resolve inputs with fallback to properties
             E = self.get_input_value('youngs_modulus', 'youngs_modulus')
             nu = self.get_input_value('poissons_ratio', 'poissons_ratio')
             rho = self.get_input_value('density', 'density')
+            thermal_conductivity = self.get_input_value(
+                'thermal_conductivity',
+                'thermal_conductivity',
+            )
 
         # Plasticity is independent of the preset choice — surface as
         # explicit overrides so a user can mix Steel (preset) + custom
@@ -62,10 +72,11 @@ class MaterialNode(CadQueryNode):
             E = float(E)
             nu = float(nu)
             rho = float(rho)
+            thermal_conductivity = float(thermal_conductivity)
         except (TypeError, ValueError):
             self.set_error("Material properties must be numeric.")
             return None
-        values = (E, nu, rho, sigma_y, Et)
+        values = (E, nu, rho, thermal_conductivity, sigma_y, Et)
         if not all(math.isfinite(value) for value in values):
             self.set_error("Material properties must be finite numbers.")
             return None
@@ -78,6 +89,9 @@ class MaterialNode(CadQueryNode):
         if rho <= 0.0:
             self.set_error("Density must be greater than zero.")
             return None
+        if thermal_conductivity <= 0.0:
+            self.set_error("Thermal conductivity must be greater than zero.")
+            return None
         if sigma_y < 0.0 or Et < 0.0:
             self.set_error("Yield strength and tangent modulus cannot be negative.")
             return None
@@ -89,6 +103,7 @@ class MaterialNode(CadQueryNode):
             'E': E,
             'nu': nu,
             'rho': rho,
+            'thermal_conductivity': thermal_conductivity,
         }
         if sigma_y > 0.0:
             out['yield_strength']  = sigma_y

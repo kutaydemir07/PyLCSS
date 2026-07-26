@@ -156,8 +156,10 @@ class NavCubeWidget(QtWidgets.QWidget):
     def _hit_test(self, mx, my):
         # Roll buttons (top-left, top-right corners of widget)
         if my < 30:
-            if mx < 35: return ('roll', -90.0)
-            if mx > self.SIZE - 35: return ('roll', 90.0)
+            if mx < 35:
+                return ('roll', -90.0)
+            if mx > self.SIZE - 35:
+                return ('roll', 90.0)
 
         p  = self._project()
         vd = self._rot[2]  # camera Z = direction from focal point toward camera
@@ -356,6 +358,10 @@ class CQ3DViewer(QtWidgets.QWidget):
     picking_cancelled = QtCore.Signal()
     face_picking_requested = QtCore.Signal()
 
+    SCALAR_BAR_WIDTH = 0.10
+    SCALAR_BAR_RIGHT_MARGIN = 0.012
+    SCALAR_BAR_X = 1.0 - SCALAR_BAR_WIDTH - SCALAR_BAR_RIGHT_MARGIN
+
     def __init__(self, parent=None):
         super(CQ3DViewer, self).__init__(parent)
         self.main_layout = QtWidgets.QVBoxLayout(self)
@@ -467,12 +473,11 @@ class CQ3DViewer(QtWidgets.QWidget):
         # Scalar Bar (Legend)
         self.scalar_bar = vtk.vtkScalarBarActor()
         self.scalar_bar.SetOrientationToVertical()
-        self.scalar_bar.SetWidth(0.08)
+        self.scalar_bar.SetWidth(self.SCALAR_BAR_WIDTH)
         self.scalar_bar.SetHeight(0.6)
-        # Keep the bar off the right edge: the title is centred over the bar, so
-        # a far-right position (0.9) pushed "Von Mises Stress (MPa)" past the
-        # viewport edge and clipped it.  Centre ~0.8 leaves room for the title.
-        self.scalar_bar.SetPosition(0.76, 0.2)
+        # Anchor the entire legend box to the right viewport border. Labels are
+        # laid out inside this box, so the model keeps almost all of the canvas.
+        self.scalar_bar.SetPosition(self.SCALAR_BAR_X, 0.2)
         self.scalar_bar.VisibilityOff()
         self._style_scalar_bar()
         self.renderer.AddActor(self.scalar_bar)
@@ -959,10 +964,12 @@ class CQ3DViewer(QtWidgets.QWidget):
         n = np.asarray(normal, dtype=float)
         nn = float(np.linalg.norm(n))
         if nn < 1e-9:
-            n = np.array([0.0, 0.0, 1.0]); nn = 1.0
+            n = np.array([0.0, 0.0, 1.0])
+            nn = 1.0
         n = n / nn
         a = np.array([1.0, 0.0, 0.0]) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-        u = np.cross(n, a); un = float(np.linalg.norm(u))
+        u = np.cross(n, a)
+        un = float(np.linalg.norm(u))
         if un < 1e-9:
             return None
         u = u / un
@@ -1471,6 +1478,7 @@ class CQ3DViewer(QtWidgets.QWidget):
                     except Exception:
                         pass
         self.actors = []
+        self._topopt_joint_actors = []
 
         self.scalar_bar.VisibilityOff()
         self.vtkWidget.GetRenderWindow().Render()
@@ -1832,7 +1840,7 @@ class CQ3DViewer(QtWidgets.QWidget):
                 pass
         try:
             title_tp.BoldOn()
-            title_tp.SetFontSize(13)
+            title_tp.SetFontSize(12)
             label_tp.BoldOff()
             label_tp.SetFontSize(11)
             label_tp.SetColor(0.78, 0.82, 0.88)
@@ -1845,7 +1853,12 @@ class CQ3DViewer(QtWidgets.QWidget):
             self.scalar_bar.VisibilityOff()
             return
 
-        self.scalar_bar.SetTitle(title)
+        compact_titles = {
+            "Von Mises Stress (MPa)": "Von Mises Stress\n(MPa)",
+            "Equivalent Plastic Strain": "Plastic Strain",
+            "Element Failure (0=intact, 1=failed)": "Element Failure",
+        }
+        self.scalar_bar.SetTitle(compact_titles.get(str(title), str(title)))
 
         if lut:
             self.scalar_bar.SetLookupTable(lut)
@@ -3279,9 +3292,72 @@ class CQ3DViewer(QtWidgets.QWidget):
         self.renderer.AddActor(actor)
         self.current_actor = actor
         self.actors.append(actor)
+        self._render_topopt_joint_overlays(data)
         self._update_scalar_bar("Density", 0.0, 1.0, lut)
         self.renderer.ResetCamera()
         self.vtkWidget.GetRenderWindow().Render()
+
+    def _clear_topopt_joint_overlays(self):
+        """Remove multibody joint reference geometry from the previous result."""
+        for actor in list(getattr(self, "_topopt_joint_actors", [])):
+            self.renderer.RemoveActor(actor)
+            if actor in self.actors:
+                self.actors.remove(actor)
+        self._topopt_joint_actors = []
+
+    def _render_topopt_joint_overlays(self, data):
+        """Show kinematic joint pins without treating them as optimized material."""
+        self._clear_topopt_joint_overlays()
+        multibody = data.get("multibody") if isinstance(data, dict) else None
+        joints = multibody.get("global_joints") if isinstance(multibody, dict) else None
+        bounds = data.get("bounds") if isinstance(data, dict) else None
+        if not joints or not isinstance(bounds, dict):
+            return
+        try:
+            mins = np.asarray(bounds["min"], dtype=float)[:3]
+            maxs = np.asarray(bounds["max"], dtype=float)[:3]
+        except Exception:
+            return
+        span = maxs - mins
+        if not np.all(np.isfinite(span)) or np.any(span <= 0.0):
+            return
+
+        radius = max(0.35, 0.012 * float(np.max(span)))
+        axis_index = {"x": 0, "y": 1, "z": 2}
+        for joint in joints:
+            try:
+                start = mins + np.asarray(joint["anchor_a"], dtype=float)[:3] * span
+                end = mins + np.asarray(joint["anchor_b"], dtype=float)[:3] * span
+            except Exception:
+                continue
+            if float(np.linalg.norm(end - start)) < 1e-9:
+                index = axis_index.get(str(joint.get("axis") or "z").lower(), 2)
+                direction = np.zeros(3, dtype=float)
+                direction[index] = max(4.0 * radius, 0.12 * float(span[index]))
+                start = start - 0.5 * direction
+                end = end + 0.5 * direction
+
+            line = vtk.vtkLineSource()
+            line.SetPoint1(*(float(value) for value in start))
+            line.SetPoint2(*(float(value) for value in end))
+            tube = vtk.vtkTubeFilter()
+            tube.SetInputConnection(line.GetOutputPort())
+            tube.SetRadius(radius)
+            tube.SetNumberOfSides(24)
+            tube.CappingOn()
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputConnection(tube.GetOutputPort())
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            actor.GetProperty().SetColor(1.0, 0.58, 0.16)
+            try:
+                actor.GetProperty().SetMetallic(0.35)
+                actor.GetProperty().SetRoughness(0.32)
+            except AttributeError:
+                pass
+            self.renderer.AddActor(actor)
+            self.actors.append(actor)
+            self._topopt_joint_actors.append(actor)
 
     def render_simulation(self, data):
         """
@@ -3306,6 +3382,7 @@ class CQ3DViewer(QtWidgets.QWidget):
             self._crash_wall_info = None
 
         # 1. Clean up previous render
+        self._clear_topopt_joint_overlays()
         if self.current_actor:
             self.renderer.RemoveActor(self.current_actor)
             self.current_actor = None
@@ -3359,6 +3436,8 @@ class CQ3DViewer(QtWidgets.QWidget):
 
                 self.renderer.AddActor(actor)
                 self.current_actor = actor
+                self.actors.append(actor)
+                self._render_topopt_joint_overlays(data)
 
                 self._pickable_surface_dataset = vtk.vtkPolyData()
                 self._pickable_surface_dataset.DeepCopy(poly_data)

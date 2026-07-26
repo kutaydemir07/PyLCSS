@@ -42,7 +42,15 @@ def save_graph_to_file(widget, path):
         product_name = widget.system_manager.product_name.text().strip() or "Product"
 
         # Prepare data structure
-        data = {"product_name": product_name, "systems": []}
+        data = {
+            "_copyright": "Copyright (c) 2026 Kutay Demir.",
+            "_license": (
+                "Licensed under the PolyForm Shield License 1.0.0. "
+                "See LICENSE file for details."
+            ),
+            "product_name": product_name,
+            "systems": [],
+        }
 
         # Serialize each system's graph
         for sys in widget.system_manager.systems:
@@ -181,7 +189,6 @@ def load_graph_from_file(widget, path):
             QtWidgets.QMessageBox.critical(widget, "Error", f"Failed to load: {e}")
         else:
             logger.exception("Error loading graph")
-
 
 
 

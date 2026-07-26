@@ -4053,6 +4053,7 @@ class SolutionSpaceWidget(QtWidgets.QWidget):
         lbl_color.setFixedSize(18, 18)
         lbl_color.setStyleSheet(f"background-color: {color}; border: 1px solid #666; border-radius: 4px;")
         lbl_text = QtWidgets.QLabel(name)
+        lbl_text.setTextFormat(QtCore.Qt.RichText)
         lbl_text.setStyleSheet("font-size: 9pt;")
         layout.addWidget(lbl_color)
         layout.addWidget(lbl_text)

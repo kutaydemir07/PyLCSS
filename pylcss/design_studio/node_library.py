@@ -1,19 +1,14 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""
-Central registry for CAD nodes.
-
-PyLCSS is code-first: parametric geometry is authored in a
-:class:`~pylcss.design_studio.nodes.code_part.CadQueryCodeNode` (one readable CadQuery
-script per part / assembly), or imported via STEP / STL.  The hand-placed
-primitive / sketch / 3-D-op / transform / pattern nodes have been removed.
-
-Maps node identifiers (``com.cad.*``) to their Python classes.
-"""
+"""Central registry for GUI-native CAD and engineering nodes."""
 
 from pylcss.design_studio.nodes import (
-    # Code-based geometry — the primary authoring path.
+    # GUI-native parametric geometry.
+    BoxNode, CylinderNode, TubeNode, CylindricalShellNode, BooleanNode, ThroughHoleNode,
+    FilletNode, TransformNode, LinearPatternNode,
+
+    # Optional expert geometry.
     CadQueryCodeNode,
 
     # Interactive geometry (FreeCAD GUI subprocess + BREP round-trip).
@@ -42,11 +37,30 @@ from pylcss.design_studio.nodes import (
     ExportStepNode, ExportStlNode,
     NumberNode, VariableNode,
 )
+from pylcss.design_studio.topology_optimization.integration import (
+    TopologyHeatLoadNode,
+    TopologyJointNode,
+    TopologyLoadNode,
+    TopologyOperatingCaseNode,
+    TopologySupportNode,
+    TopologyThermalSinkNode,
+)
 
-# Master mapping of Node ID -> Node Class.  Keep this in lockstep with the
-# LibraryPanel toolbar in pylcss/user_interface/cad/cad_widget.py.
+# Master mapping of Node ID -> Node Class. The compact public LibraryPanel is a
+# curated subset; legacy/expert nodes stay registered so existing studies load.
 NODE_CLASS_MAPPING = {
-    # Geometry — code-first.
+    # Geometry — GUI-native parametric modeling.
+    'com.cad.geometry.box': BoxNode,
+    'com.cad.geometry.cylinder': CylinderNode,
+    'com.cad.geometry.tube': TubeNode,
+    'com.cad.geometry.cylindrical_shell': CylindricalShellNode,
+    'com.cad.geometry.boolean': BooleanNode,
+    'com.cad.geometry.through_hole': ThroughHoleNode,
+    'com.cad.geometry.fillet': FilletNode,
+    'com.cad.geometry.transform': TransformNode,
+    'com.cad.geometry.linear_pattern': LinearPatternNode,
+
+    # Geometry — optional expert path.
     'com.cad.code_part': CadQueryCodeNode,
     # Geometry — interactive (opens FreeCAD GUI on double-click, BREP round-trip).
     'com.cad.freecad_part': FreeCadPartNode,
@@ -75,6 +89,12 @@ NODE_CLASS_MAPPING = {
     'com.cad.sim.pressure_load':  PressureLoadNode,
     'com.cad.sim.solver':         SolverNode,
     'com.cad.sim.topopt_voxel':    TopologyOptVoxelNode,
+    'com.cad.topopt.support':       TopologySupportNode,
+    'com.cad.topopt.load':          TopologyLoadNode,
+    'com.cad.topopt.joint':         TopologyJointNode,
+    'com.cad.topopt.operating_case': TopologyOperatingCaseNode,
+    'com.cad.topopt.thermal_sink':  TopologyThermalSinkNode,
+    'com.cad.topopt.heat_load':     TopologyHeatLoadNode,
     'com.cad.sim.remesh':         RemeshNode,
 
     # Crash / Impact Simulation.

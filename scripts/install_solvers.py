@@ -87,6 +87,7 @@ SOLVERS: Dict[str, Dict[str, SolverAsset]] = {
             # statically) and works out of the box.
             binary_glob="**/ccx_static.exe",
             env_var="PYLCSS_CALCULIX_CCX",
+            sha256="87fc4e1721df37370ec67d0a244bb14f9bf804b0a95df49e2ae7369d30ec72e8",
         ),
         # dhondt.de does not ship Linux/macOS binaries; the .tar.bz2 there is
         # source-only.  The most reliable cross-distro path is the OS package
@@ -107,18 +108,19 @@ SOLVERS: Dict[str, Dict[str, SolverAsset]] = {
         ),
     },
     "radioss": {
-        # OpenRadioss publishes per-platform zips under a rolling "latest-*"
-        # tag.  The /releases/latest/download/ path is a stable GitHub redirect
-        # to whichever asset name we request.
+        # Pin the current stable OpenRadioss build and its GitHub-published
+        # asset digest. This avoids silently changing the engineering solver
+        # beneath an otherwise reproducible PyLCSS installation.
         "Windows": SolverAsset(
             name="OpenRadioss",
             url=(
-                "https://github.com/OpenRadioss/OpenRadioss/releases/latest/"
-                "download/OpenRadioss_win64.zip"
+                "https://github.com/OpenRadioss/OpenRadioss/releases/download/"
+                "latest-20260615/OpenRadioss_win64.zip"
             ),
             archive="OpenRadioss_win64.zip",
             binary_glob="**/starter_win64.exe",
             env_var="PYLCSS_OPENRADIOSS_STARTER",
+            sha256="096698f9d08f420ae2d14a3da1610b52dff98cd3206462cbbcc8573163cae2d6",
             extra_globs={
                 "PYLCSS_OPENRADIOSS_ENGINE": "**/engine_win64.exe",
                 "PYLCSS_OPENRADIOSS_ANIM2VTK": "**/anim_to_vtk*.exe",
@@ -127,12 +129,13 @@ SOLVERS: Dict[str, Dict[str, SolverAsset]] = {
         "Linux": SolverAsset(
             name="OpenRadioss",
             url=(
-                "https://github.com/OpenRadioss/OpenRadioss/releases/latest/"
-                "download/OpenRadioss_linux64.zip"
+                "https://github.com/OpenRadioss/OpenRadioss/releases/download/"
+                "latest-20260615/OpenRadioss_linux64.zip"
             ),
             archive="OpenRadioss_linux64.zip",
             binary_glob="**/starter_linux64_gf",
             env_var="PYLCSS_OPENRADIOSS_STARTER",
+            sha256="2afc007190b8058194959304918ec21baaaad9017570d9bbf6330f965c28f329",
             extra_globs={
                 "PYLCSS_OPENRADIOSS_ENGINE": "**/engine_linux64_gf",
                 "PYLCSS_OPENRADIOSS_ANIM2VTK": "**/anim_to_vtk*",
@@ -149,10 +152,10 @@ SOLVERS: Dict[str, Dict[str, SolverAsset]] = {
         ),
     },
     "freecad": {
-        # FreeCAD bakes the version into every asset name, so the
-        # /releases/latest/download/<name> redirect only stays valid while
-        # 1.1.1 is the latest tag.  When upstream ships 1.1.2 / 1.2.0 the
-        # default URL must be bumped here (or overridden via --url-override).
+        # FreeCAD bakes the version into every asset name. Keep this on a
+        # verified stable release rather than a weekly development build.
+        # The SHA-256 values below come from the matching upstream
+        # *-SHA256.txt release assets.
         #
         # We default to the Windows INSTALLER (.exe) because the portable 7z
         # uses LZMA2 + BCJ2 which py7zr can't decompress, and most users
@@ -163,16 +166,17 @@ SOLVERS: Dict[str, Dict[str, SolverAsset]] = {
         # Power users who DO have 7z.exe on PATH can switch to the portable
         # build with:
         #   python scripts/install_solvers.py --only freecad \
-        #     --url-override https://github.com/FreeCAD/FreeCAD/releases/latest/download/FreeCAD_1.1.1-Windows-x86_64-py311.7z
+        #     --url-override https://github.com/FreeCAD/FreeCAD/releases/download/1.1.3/FreeCAD_1.1.3-Windows-x86_64-py311.7z
         "Windows": SolverAsset(
             name="FreeCAD",
             url=(
-                "https://github.com/FreeCAD/FreeCAD/releases/latest/download/"
-                "FreeCAD_1.1.1-Windows-x86_64-py311-installer.exe"
+                "https://github.com/FreeCAD/FreeCAD/releases/download/1.1.3/"
+                "FreeCAD_1.1.3-Windows-x86_64-py311-installer.exe"
             ),
-            archive="FreeCAD_1.1.1-Windows-x86_64-py311-installer.exe",
+            archive="FreeCAD_1.1.3-Windows-x86_64-py311-installer.exe",
             binary_glob="**/bin/FreeCAD.exe",
             env_var="PYLCSS_FREECAD_EXE",
+            sha256="3de56676dedb7c68f4da9734c79abeaff9bbbf09f6a2c01df72a82beeee81c11",
             extra_globs={
                 "PYLCSS_FREECAD_CMD": "**/bin/FreeCADCmd.exe",
                 "PYLCSS_FREECAD_PYTHON": "**/bin/python.exe",
@@ -181,15 +185,16 @@ SOLVERS: Dict[str, Dict[str, SolverAsset]] = {
         "Linux": SolverAsset(
             name="FreeCAD",
             url=(
-                "https://github.com/FreeCAD/FreeCAD/releases/latest/download/"
-                "FreeCAD_1.1.1-Linux-x86_64-py311.AppImage"
+                "https://github.com/FreeCAD/FreeCAD/releases/download/1.1.3/"
+                "FreeCAD_1.1.3-Linux-x86_64-py311.AppImage"
             ),
-            archive="FreeCAD_1.1.1-Linux-x86_64-py311.AppImage",
+            archive="FreeCAD_1.1.3-Linux-x86_64-py311.AppImage",
             # AppImages are single-file self-extracting; we don't unzip them,
             # just chmod +x and point at them directly.  install_solver()
             # special-cases the .AppImage suffix below.
             binary_glob="*.AppImage",
             env_var="PYLCSS_FREECAD_EXE",
+            sha256="3a853eb69ee595f779f2255dbf80a765926981d8ff68903cefee4dfb03a8f5ef",
         ),
         "Darwin": SolverAsset(
             name="FreeCAD",

@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Kutay Demir.
+﻿# Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 """Engineering design studio - full-featured interface.
@@ -24,11 +24,13 @@ from PySide6.QtCore import QMimeData
 from PySide6.QtGui import QDrag
 from NodeGraphQt import NodeGraph
 from pylcss.design_studio.node_library import NODE_CLASS_MAPPING
-from pylcss.design_studio.topology_optimization.presets import (
+from pylcss.design_studio.topology_optimization.configuration.presets import (
     industrial_topopt_defaults,
-    INDUSTRIAL_WORKFLOW_MODES,
     INDUSTRIAL_DESIGN_GOALS,
     INDUSTRIAL_MANUFACTURING_PROCESSES,
+)
+from pylcss.user_interface.system_modeling.system_node_types import (
+    CodeEditor as _CodeEditor,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,11 +39,6 @@ try:
     from simpleeval import simple_eval
 except ImportError:
     simple_eval = None  # Fallback if not installed
-
-
-# Reuse the Python-aware editor widget from the system-modeling tab so the
-# CAD code editor matches the look-and-feel users already know.
-from pylcss.user_interface.system_modeling.system_node_types import CodeEditor as _CodeEditor
 
 
 class CadCodeEditorDialog(QtWidgets.QDialog):
@@ -375,7 +372,9 @@ class GraphExecutionWorker(QtCore.QThread):
 
 def _external_write_cad_step(payload, path):
     import cadquery as cq
-    from pylcss.design_studio.topology_optimization.cad_reconstruction import reconstruct_topopt_cad
+    from pylcss.design_studio.topology_optimization.geometry.cad_reconstruction import (
+        reconstruct_topopt_cad,
+    )
     shape = reconstruct_topopt_cad(
         payload,
         source_geometry="Recovered Shape",
@@ -472,7 +471,73 @@ class ExpressionEdit(QtWidgets.QLineEdit):
         except Exception:
             # If invalid (e.g. text), keep it but don't emit
             pass
-        
+
+
+class InspectorSection(QtWidgets.QWidget):
+    """Compact collapsible wrapper for one inspector property group."""
+
+    def __init__(self, title, content, expanded=False, parent=None):
+        super().__init__(parent)
+        self._content = content
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.toggle = QtWidgets.QToolButton()
+        self.toggle.setObjectName("InspectorSectionHeader")
+        self.toggle.setText(str(title))
+        self.toggle.setCheckable(True)
+        self.toggle.setChecked(bool(expanded))
+        self.toggle.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        self.toggle.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Fixed,
+        )
+        self.toggle.setStyleSheet(
+            """
+            QToolButton#InspectorSectionHeader {
+                background: #24272d;
+                border: 1px solid #313641;
+                border-radius: 6px;
+                color: #cdd2d9;
+                font-size: 11px;
+                font-weight: 700;
+                padding: 5px 7px;
+                text-align: left;
+            }
+            QToolButton#InspectorSectionHeader:hover {
+                background: #2a2e35;
+                border-color: #4a9eff;
+            }
+            """
+        )
+        layout.addWidget(self.toggle)
+
+        content.setTitle("")
+        content.setStyleSheet(
+            """
+            QGroupBox {
+                margin-top: 2px;
+                padding: 6px;
+                border: 1px solid #2f333a;
+                border-top-left-radius: 3px;
+                border-top-right-radius: 3px;
+                background: #202329;
+            }
+            """
+        )
+        layout.addWidget(content)
+
+        self.toggle.toggled.connect(self._set_expanded)
+        self._set_expanded(bool(expanded))
+
+    def _set_expanded(self, expanded):
+        self._content.setVisible(bool(expanded))
+        self.toggle.setArrowType(
+            QtCore.Qt.DownArrow if expanded else QtCore.Qt.RightArrow
+        )
+
+
 class PropertiesPanel(QtWidgets.QWidget):
     """Inspector Panel: Specialized UI for editing node properties."""
     property_changed = QtCore.Signal(object, str, object, object)
@@ -497,10 +562,10 @@ class PropertiesPanel(QtWidgets.QWidget):
         QGroupBox {
             background: #24272d;
             border: 1px solid #2f333a;
-            border-radius: 8px;
-            margin-top: 16px;
-            padding: 12px 10px 10px 10px;
-            font-size: 12px;
+            border-radius: 7px;
+            margin-top: 13px;
+            padding: 9px 7px 7px 7px;
+            font-size: 11px;
             font-weight: 600;
             color: #cdd2d9;
         }
@@ -512,12 +577,12 @@ class PropertiesPanel(QtWidgets.QWidget):
             color: #6fb3ff;
             font-weight: 700;
         }
-        QLabel { color: #aab0b8; font-size: 12px; background: transparent; }
+        QLabel { color: #aab0b8; font-size: 11px; background: transparent; }
         QLineEdit {
             background: #14161a;
             border: 1px solid #313641;
             border-radius: 6px;
-            padding: 5px 8px;
+            padding: 4px 6px;
             color: #eef1f5;
             min-height: 18px;
             selection-background-color: #4a9eff;
@@ -553,17 +618,19 @@ class PropertiesPanel(QtWidgets.QWidget):
         self.setObjectName("InspectorPanel")
         self.setStyleSheet(self._INSPECTOR_QSS)
         self.layout = QtWidgets.QVBoxLayout(self)
-        self.layout.setContentsMargins(12, 12, 12, 12)
-        self.layout.setSpacing(8)
+        self.layout.setContentsMargins(8, 7, 8, 7)
+        self.layout.setSpacing(5)
         self.current_node = None
         self.property_widgets = {}
         self._updating_property = False  # guard against feedback loop
         self._active_pick_connections = None
 
         # Title
-        title = QtWidgets.QLabel("INSPECTOR")
-        title.setStyleSheet("font-weight: 900; font-size: 14px; letter-spacing: 1px; color: #E0E0E0;")
-        title.setAlignment(QtCore.Qt.AlignCenter)
+        title = QtWidgets.QLabel("Properties")
+        title.setStyleSheet(
+            "font-weight: 800; font-size: 13px; color: #E0E0E0;"
+        )
+        title.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         self.layout.addWidget(title)
         
         # Separator
@@ -571,10 +638,15 @@ class PropertiesPanel(QtWidgets.QWidget):
         
         # Properties area (scrollable)
         scroll = QtWidgets.QScrollArea()
+        self.scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.props_widget = QtWidgets.QWidget()
+        self.props_widget.setMinimumWidth(0)
         self.props_layout = QtWidgets.QVBoxLayout(self.props_widget)
+        self.props_layout.setContentsMargins(2, 2, 2, 2)
+        self.props_layout.setSpacing(5)
         self.props_layout.setAlignment(QtCore.Qt.AlignTop)
         scroll.setWidget(self.props_widget)
         self.layout.addWidget(scroll)
@@ -615,15 +687,31 @@ class PropertiesPanel(QtWidgets.QWidget):
 
             # Node Header
             node_name = node.name() if callable(node.name) else node.name
+            node_name = str(node_name).replace(
+                "Topology Opt (Voxel)", "Topology Optimization"
+            ).replace("TopOpt", "Topology")
             header = QtWidgets.QLabel(f"{node_name}")
-            header.setStyleSheet("font-weight: bold; font-size: 16px; margin-bottom: 5px;")
-            header.setAlignment(QtCore.Qt.AlignCenter)
+            header.setWordWrap(True)
+            header.setStyleSheet(
+                "font-weight: 700; font-size: 14px; color:#eef1f5; "
+                "margin:2px 1px 3px 1px;"
+            )
+            header.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
             self.props_layout.addWidget(header)
 
-            sub_header = QtWidgets.QLabel(f"{node.__identifier__.split('.')[-1].upper()}")
-            sub_header.setStyleSheet("color: #888; font-size: 10px; font-weight: bold; margin-bottom: 15px;")
-            sub_header.setAlignment(QtCore.Qt.AlignCenter)
-            self.props_layout.addWidget(sub_header)
+            node_type = str(
+                getattr(node, "NODE_NAME", "") or node.__class__.__name__
+            )
+            node_type = node_type.removesuffix("Node").replace("_", " ").strip()
+            if node_type and node_type.casefold() != str(node_name).casefold():
+                sub_header = QtWidgets.QLabel(node_type)
+                sub_header.setStyleSheet(
+                    "color:#7f8792; font-size:10px; margin:0 1px 5px 1px;"
+                )
+                sub_header.setAlignment(
+                    QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
+                )
+                self.props_layout.addWidget(sub_header)
 
             # Route: specialized builders based on node class
             node_class = node.__class__.__name__
@@ -641,8 +729,76 @@ class PropertiesPanel(QtWidgets.QWidget):
                 self._build_fea_bc_ui(node)
             else:
                 self._build_generic_ui(node)
+            self._compact_inspector_content(node_class)
         finally:
             self.props_widget.setUpdatesEnabled(True)
+
+    def _compact_inspector_content(self, node_class):
+        """Wrap direct property groups and make narrow forms readable."""
+        groups = []
+        for index in range(self.props_layout.count()):
+            item = self.props_layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if isinstance(widget, QtWidgets.QGroupBox):
+                groups.append((index, widget, str(widget.title() or "Properties")))
+
+        if not groups:
+            return
+
+        preferred_open = {
+            "TopologyOptVoxelNode": {"Design Intent"},
+            "MaterialNode": {"Material Definition"},
+            "CrashMaterialNode": {"Material Definition"},
+            "InteractiveSelectFaceNode": {"Face Selection"},
+            "SelectFaceNode": {"Selector", "Parameters"},
+            "ConstraintNode": {"Boundary Condition"},
+            "LoadNode": {"Load"},
+            "PressureLoadNode": {"Pressure"},
+        }.get(node_class, set())
+
+        for ordinal, (index, group, title) in enumerate(reversed(groups)):
+            # Every QFormLayout gets a narrow-panel policy. Long labels move
+            # above their editor instead of squeezing the editor to a sliver.
+            for form in group.findChildren(QtWidgets.QFormLayout):
+                form.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
+                form.setLabelAlignment(
+                    QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
+                )
+                form.setHorizontalSpacing(7)
+                form.setVerticalSpacing(5)
+                form.setFieldGrowthPolicy(
+                    QtWidgets.QFormLayout.AllNonFixedFieldsGrow
+                )
+            for widget_type in (
+                QtWidgets.QComboBox,
+                QtWidgets.QLineEdit,
+                QtWidgets.QSpinBox,
+                QtWidgets.QDoubleSpinBox,
+            ):
+                for widget in group.findChildren(widget_type):
+                    widget.setMinimumWidth(0)
+                    widget.setSizePolicy(
+                        QtWidgets.QSizePolicy.Expanding,
+                        QtWidgets.QSizePolicy.Fixed,
+                    )
+            for label in group.findChildren(QtWidgets.QLabel):
+                if label.wordWrap():
+                    label.setMinimumWidth(0)
+                    label.setSizePolicy(
+                        QtWidgets.QSizePolicy.Ignored,
+                        QtWidgets.QSizePolicy.Preferred,
+                    )
+
+            item = self.props_layout.takeAt(index)
+            if item is None or item.widget() is not group:
+                continue
+            expanded = (
+                title in preferred_open
+                if preferred_open
+                else index == groups[0][0]
+            )
+            wrapper = InspectorSection(title, group, expanded, self.props_widget)
+            self.props_layout.insertWidget(index, wrapper)
 
     def _build_code_part_ui(self, node):
         """Inspector for the code-based parametric geometry node.
@@ -814,6 +970,14 @@ class PropertiesPanel(QtWidgets.QWidget):
             ('poissons_ratio', 'nu', "Poisson's ratio"),
             ('density', 'rho', "Density (t/mm^3)"),
         ]
+        if not is_crash:
+            field_specs.append(
+                (
+                    'thermal_conductivity',
+                    'k',
+                    "Thermal conductivity (W/m K)",
+                )
+            )
         if is_crash:
             field_specs.extend([
                 ('yield_strength', 'yield_strength', "Yield strength (MPa)"),
@@ -909,6 +1073,14 @@ class PropertiesPanel(QtWidgets.QWidget):
 
         def _combo(prop, items, default=None):
             widget = QtWidgets.QComboBox()
+            widget.setMinimumContentsLength(8)
+            widget.setSizeAdjustPolicy(
+                QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon
+            )
+            widget.setSizePolicy(
+                QtWidgets.QSizePolicy.Expanding,
+                QtWidgets.QSizePolicy.Fixed,
+            )
             item_texts = [str(item) for item in items]
             widget.addItems(item_texts)
             current = str(node.get_property(prop) or default or item_texts[0])
@@ -941,148 +1113,11 @@ class PropertiesPanel(QtWidgets.QWidget):
             widget.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
             return widget
 
-
         def _refresh_topopt_later():
             QtCore.QTimer.singleShot(
                 0,
                 lambda n=node: self.display_node(n) if self.current_node is n else None,
             )
-
-        def _points_bounds(points, *, column_major=False):
-            try:
-                import numpy as np
-
-                pts = np.asarray(points, dtype=float)
-                if pts.ndim != 2 or pts.size == 0:
-                    return None
-                if column_major:
-                    if pts.shape[0] < 3 or pts.shape[1] == 0:
-                        return None
-                    coords = pts[:3, :]
-                    return coords.min(axis=1), coords.max(axis=1)
-                if pts.shape[1] >= 3:
-                    coords = pts[:, :3]
-                    return coords.min(axis=0), coords.max(axis=0)
-                if pts.shape[0] >= 3:
-                    coords = pts[:3, :]
-                    return coords.min(axis=1), coords.max(axis=1)
-            except Exception:
-                return None
-            return None
-
-        def _bbox_bounds(value):
-            try:
-                bb = value.BoundingBox()
-            except Exception:
-                bb = value
-            try:
-                return (
-                    (float(bb.xmin), float(bb.ymin), float(bb.zmin)),
-                    (float(bb.xmax), float(bb.ymax), float(bb.zmax)),
-                )
-            except Exception:
-                return None
-
-        def _bounds_from_value(value, depth=0):
-            if value is None or depth > 3:
-                return None
-            if isinstance(value, dict):
-                for key in ("mesh", "shape", "cad", "cadquery_object", "result"):
-                    bounds = _bounds_from_value(value.get(key), depth + 1)
-                    if bounds is not None:
-                        return bounds
-                return None
-            if isinstance(value, (list, tuple)) and not isinstance(value, (str, bytes)):
-                bounds_list = [
-                    bounds for bounds in (_bounds_from_value(item, depth + 1) for item in value)
-                    if bounds is not None
-                ]
-                if bounds_list:
-                    try:
-                        import numpy as np
-
-                        mins = np.vstack([b[0] for b in bounds_list]).min(axis=0)
-                        maxs = np.vstack([b[1] for b in bounds_list]).max(axis=0)
-                        return mins, maxs
-                    except Exception:
-                        return None
-                return None
-            if hasattr(value, "p"):
-                bounds = _points_bounds(value.p, column_major=True)
-                if bounds is not None:
-                    return bounds
-            for attr in ("vertices", "points"):
-                if hasattr(value, attr):
-                    bounds = _points_bounds(getattr(value, attr))
-                    if bounds is not None:
-                        return bounds
-            if hasattr(value, "val"):
-                try:
-                    bounds = _bounds_from_value(value.val(), depth + 1)
-                    if bounds is not None:
-                        return bounds
-                except Exception:
-                    pass
-            if hasattr(value, "wrapped"):
-                try:
-                    bounds = _bounds_from_value(value.wrapped, depth + 1)
-                    if bounds is not None:
-                        return bounds
-                except Exception:
-                    pass
-            return _bbox_bounds(value)
-
-        def _topopt_input_spans():
-            try:
-                bounds = _bounds_from_value(node.get_input_value("mesh", None))
-            except Exception:
-                bounds = None
-            if bounds is None:
-                return None
-            try:
-                import numpy as np
-
-                mins, maxs = bounds
-                spans = np.asarray(maxs, dtype=float) - np.asarray(mins, dtype=float)
-                if spans.shape[0] < 3 or not np.all(np.isfinite(spans)):
-                    return None
-                positive = spans[spans > 1e-9]
-                if positive.size == 0:
-                    return None
-                fill = float(positive.min())
-                return np.where(spans > 1e-9, spans, fill)
-            except Exception:
-                return None
-
-        def _generalized_grid():
-            import numpy as np
-
-            spans = _topopt_input_spans()
-            if spans is None:
-                spans = np.asarray([
-                    max(1, _get_int("nelx", 30)),
-                    max(1, _get_int("nely", 20)),
-                    max(1, _get_int("nelz", 10)),
-                ], dtype=float)
-
-            target_cells = 24000.0
-            max_cells = 50000
-            min_axis = 6
-            max_axis = 160
-
-            voxel = max(float(np.prod(spans) / target_cells) ** (1.0 / 3.0), 1e-9)
-            dims = np.ceil(spans / voxel).astype(int)
-            dims = np.maximum(dims, min_axis)
-
-            if int(dims.max()) > max_axis:
-                scale = max_axis / float(dims.max())
-                dims = np.maximum(np.floor(dims * scale).astype(int), min_axis)
-
-            while int(np.prod(dims)) > max_cells and int(dims.max()) > min_axis:
-                scale = (max_cells / float(np.prod(dims))) ** (1.0 / 3.0) * 0.98
-                dims = np.maximum(np.floor(dims * scale).astype(int), min_axis)
-
-            return [int(v) for v in dims[:3]]
 
 
         def _intent_combo(prop, items, default=None):
@@ -1118,10 +1153,6 @@ class PropertiesPanel(QtWidgets.QWidget):
         intent_group = QtWidgets.QGroupBox("Design Intent")
         intent_layout = QtWidgets.QFormLayout()
         intent_layout.addRow(
-            "Workflow:",
-            _combo("workflow_mode", INDUSTRIAL_WORKFLOW_MODES, "Guided"),
-        )
-        intent_layout.addRow(
             "Goal:",
             _intent_combo("design_goal", INDUSTRIAL_DESIGN_GOALS, "Lightweight Stiffness"),
         )
@@ -1129,6 +1160,36 @@ class PropertiesPanel(QtWidgets.QWidget):
             "Manufacturing:",
             _intent_combo("manufacturing_process", INDUSTRIAL_MANUFACTURING_PROCESSES, "None"),
         )
+        formulation_combo = _combo(
+            "formulation",
+            [
+                "Density (SIMP)",
+                "Level Set (Reaction-Diffusion)",
+            ],
+            "Density (SIMP)",
+        )
+        formulation_combo.currentTextChanged.connect(
+            lambda _value: _refresh_topopt_later()
+        )
+        intent_layout.addRow("Formulation:", formulation_combo)
+        if str(
+            node.get_property("formulation") or "Density (SIMP)"
+        ).lower().startswith("level set"):
+            level_set_algorithm = QtWidgets.QLabel("Reaction-Diffusion")
+            level_set_algorithm.setToolTip(
+                "The level-set formulation evolves its signed interface with "
+                "a volume-constrained reaction-diffusion update."
+            )
+            intent_layout.addRow("Interface Update:", level_set_algorithm)
+        else:
+            intent_layout.addRow(
+                "Algorithm:",
+                _combo(
+                    "optimizer",
+                    ["Auto", "OC", "MMA", "GCMMA", "Projected Gradient"],
+                    "Auto",
+                ),
+            )
 
         volfrac = max(0.01, min(0.99, _get_float("volfrac", 0.5)))
         material_container = QtWidgets.QWidget()
@@ -1156,31 +1217,134 @@ class PropertiesPanel(QtWidgets.QWidget):
         material_spin.valueChanged.connect(update_material_volfrac)
         material_layout.addWidget(material_slider, 1)
         material_layout.addWidget(material_spin)
-        intent_layout.addRow(
-            "Allowable Stress (MPa):",
-            _double("yield_stress", 250.0, 0.001, 1_000_000.0, decimals=3, step=10.0),
-        )
-        advanced_toggle = QtWidgets.QCheckBox("Show solver and recovery controls")
-        advanced_toggle.setChecked(_get_bool("advanced_settings_visible"))
-
-        def _toggle_advanced(state):
-            self.update_property("advanced_settings_visible", bool(state))
-            _refresh_topopt_later()
-
-        advanced_toggle.stateChanged.connect(_toggle_advanced)
-        intent_layout.addRow("Advanced:", advanced_toggle)
+        if (
+            str(node.get_property("design_goal") or "").strip().lower()
+            == "minimum mass under stress"
+        ):
+            intent_layout.addRow(
+                "Allowable Stress (MPa):",
+                _double(
+                    "yield_stress",
+                    250.0,
+                    0.001,
+                    1_000_000.0,
+                    decimals=3,
+                    step=10.0,
+                ),
+            )
         intent_layout.addRow("Material Budget:", material_container)
 
         intent_group.setLayout(intent_layout)
         self.props_layout.addWidget(intent_group)
 
-        pipeline_group = QtWidgets.QGroupBox("CAD Export")
+        def _connected_count(port_name):
+            try:
+                port = node.get_input(port_name)
+                return len(port.connected_ports()) if port else 0
+            except Exception:
+                return 0
+
+        setup_group = QtWidgets.QGroupBox("Study Definition")
+        setup_layout = QtWidgets.QFormLayout(setup_group)
+        setup_ports = [
+            ("Design domain", "design_domain"),
+            ("Material", "material"),
+            ("Supports", "supports"),
+            ("Forces", "loads"),
+            ("Joints", "joints"),
+            ("Operating cases", "load_cases"),
+            ("Thermal sinks", "thermal_sinks"),
+            ("Heat loads", "thermal_loads"),
+        ]
+        for label, port_name in setup_ports:
+            count = _connected_count(port_name)
+            status = QtWidgets.QLabel(
+                f"{count} connected" if count else "Not connected"
+            )
+            status.setStyleSheet(
+                "color:#72d38a;" if count else "color:#ffb35c;"
+            )
+            setup_layout.addRow(label + ":", status)
+
+        button_panel = QtWidgets.QWidget()
+        button_layout = QtWidgets.QGridLayout(button_panel)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_specs = [
+            ("Add Support", "com.cad.topopt.support", "Topology Support", "supports", "supports"),
+            ("Add Force", "com.cad.topopt.load", "Topology Force", "loads", "loads"),
+            ("Add Joint", "com.cad.topopt.joint", "Topology Joint", "joints", "joints"),
+            (
+                "Add Case",
+                "com.cad.topopt.operating_case",
+                "Operating Case",
+                "load_case",
+                "load_cases",
+            ),
+            (
+                "Add Sink",
+                "com.cad.topopt.thermal_sink",
+                "Temperature Boundary",
+                "thermal_sinks",
+                "thermal_sinks",
+            ),
+            (
+                "Add Heat",
+                "com.cad.topopt.heat_load",
+                "Heat Input",
+                "thermal_loads",
+                "thermal_loads",
+            ),
+        ]
+
+        def _add_setup_node(spec):
+            _button, node_id, label, output_name, input_name = spec
+            app = self._get_main_app()
+            if app is None:
+                return
+            try:
+                x, y = node.pos()
+            except Exception:
+                x, y = (0.0, 0.0)
+            created = app._spawn_node(
+                node_id,
+                label,
+                x=float(x) - 330.0,
+                y=float(y) + 120.0 * _connected_count(input_name),
+            )
+            if created is None:
+                return
+            try:
+                created.get_output(output_name).connect_to(
+                    node.get_input(input_name)
+                )
+            except Exception:
+                pass
+            _refresh_topopt_later()
+
+        for index, spec in enumerate(button_specs):
+            button = QtWidgets.QPushButton(spec[0])
+            button.clicked.connect(
+                lambda _checked=False, item=spec: _add_setup_node(item)
+            )
+            button_layout.addWidget(button, index // 2, index % 2)
+        setup_layout.addRow(button_panel)
+        setup_hint = QtWidgets.QLabel(
+            "Select regions with Select Face (Interactive), then connect them "
+            "to the support, force, joint, sink, or heat nodes. Operating Case "
+            "nodes group pose-specific conditions."
+        )
+        setup_hint.setWordWrap(True)
+        setup_hint.setStyleSheet("color:#8f98a5; font-size:10px;")
+        setup_layout.addRow(setup_hint)
+        self.props_layout.addWidget(setup_group)
+
+        pipeline_group = QtWidgets.QGroupBox("Export")
         pipeline_layout = QtWidgets.QFormLayout()
         step_name = QtWidgets.QLineEdit(str(node.get_property("cad_export_filename") or "topology_optimized.step"))
         step_name.editingFinished.connect(
             lambda w=step_name: self.update_property("cad_export_filename", w.text())
         )
-        pipeline_layout.addRow("STEP Name:", step_name)
+        pipeline_layout.addRow("STEP File:", step_name)
         btn_export_step = QtWidgets.QPushButton("Export STEP")
         btn_export_step.clicked.connect(lambda: self._export_topopt_step(node))
         pipeline_layout.addRow("Export:", btn_export_step)
@@ -1188,183 +1352,130 @@ class PropertiesPanel(QtWidgets.QWidget):
         pipeline_group.setLayout(pipeline_layout)
         self.props_layout.addWidget(pipeline_group)
 
-        advanced_group = QtWidgets.QGroupBox("Solver Settings")
-        advanced_group.setToolTip("Raw solver controls for topology studies and reproducibility.")
-        advanced_layout = QtWidgets.QVBoxLayout()
-
-        domain_group = QtWidgets.QGroupBox("Voxel Grid")
-        domain_layout = QtWidgets.QFormLayout()
-        for label, prop, default in (
-            ("X Cells:", "nelx", 30),
-            ("Y Cells:", "nely", 20),
-            ("Z Cells:", "nelz", 10),
-        ):
-            spin = QtWidgets.QSpinBox()
-            spin.setRange(1, 500)
-            spin.setValue(_get_int(prop, default))
-            spin.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
-            domain_layout.addRow(label, spin)
-        domain_group.setLayout(domain_layout)
-        advanced_layout.addWidget(domain_group)
-
-        opt_group = QtWidgets.QGroupBox("Optimization")
-        opt_layout = QtWidgets.QFormLayout()
-
-        volfrac = max(0.01, min(0.99, _get_float("volfrac", 0.5)))
-        vol_container = QtWidgets.QWidget()
-        vol_layout = QtWidgets.QHBoxLayout(vol_container)
-        vol_layout.setContentsMargins(0, 0, 0, 0)
-        vol_layout.setSpacing(6)
-        vol_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        vol_slider.setRange(1, 99)
-        vol_slider.setValue(int(round(volfrac * 100)))
-        vol_spin = QtWidgets.QSpinBox()
-        vol_spin.setRange(1, 99)
-        vol_spin.setSuffix("%")
-        vol_spin.setValue(int(round(volfrac * 100)))
-
-        def update_volfrac(percent):
-            vol_slider.blockSignals(True)
-            vol_spin.blockSignals(True)
-            vol_slider.setValue(percent)
-            vol_spin.setValue(percent)
-            vol_slider.blockSignals(False)
-            vol_spin.blockSignals(False)
-            self.update_property("volfrac", percent / 100.0)
-
-        vol_slider.valueChanged.connect(update_volfrac)
-        vol_spin.valueChanged.connect(update_volfrac)
-        vol_layout.addWidget(vol_slider, 1)
-        vol_layout.addWidget(vol_spin)
-        opt_layout.addRow("Keep Volume:", vol_container)
-
-        rmin = QtWidgets.QDoubleSpinBox()
-        rmin.setRange(0.0, 100.0)
-        rmin.setDecimals(2)
-        rmin.setSingleStep(0.1)
-        rmin.setValue(_get_float("rmin", 1.5))
-        rmin.valueChanged.connect(lambda v: self.update_property("rmin", v))
-        opt_layout.addRow("Filter Radius:", rmin)
-
-        penal = QtWidgets.QDoubleSpinBox()
-        penal.setRange(1.0, 10.0)
-        penal.setDecimals(2)
-        penal.setSingleStep(0.1)
-        penal.setValue(_get_float("penal", 3.0))
-        penal.valueChanged.connect(lambda v: self.update_property("penal", v))
-        opt_layout.addRow("Penalization:", penal)
-
-        cutoff = QtWidgets.QDoubleSpinBox()
-        cutoff.setRange(0.0, 1.0)
-        cutoff.setDecimals(2)
-        cutoff.setSingleStep(0.05)
-        cutoff.setValue(_get_float("density_cutoff", 0.45))
-        cutoff.valueChanged.connect(lambda v: self.update_property("density_cutoff", v))
-        opt_layout.addRow("Density Cutoff:", cutoff)
-
-        opt_group.setLayout(opt_layout)
-        advanced_layout.addWidget(opt_group)
-
-        solver_group = QtWidgets.QGroupBox("Solver")
-        solver_layout = QtWidgets.QFormLayout()
-
-        optimizer = QtWidgets.QComboBox()
-        optimizer.addItems(["OC", "MMA"])
-        current_optimizer = str(node.get_property("optimizer") or "OC")
-        index = optimizer.findText(current_optimizer)
-        optimizer.setCurrentIndex(index if index >= 0 else 0)
-        optimizer.currentTextChanged.connect(
-            lambda v: self.update_property("optimizer", v)
-        )
-        solver_layout.addRow("Optimizer:", optimizer)
-
-        max_iter = QtWidgets.QSpinBox()
-        max_iter.setRange(1, 1000)
-        max_iter.setValue(_get_int("max_iter", 80))
-        max_iter.valueChanged.connect(lambda v: self.update_property("max_iter", v))
-        solver_layout.addRow("Iterations:", max_iter)
-
-        tol = QtWidgets.QDoubleSpinBox()
-        tol.setRange(0.00001, 1.0)
-        tol.setDecimals(5)
-        tol.setSingleStep(0.001)
-        tol.setValue(_get_float("tol", 0.01))
-        tol.valueChanged.connect(lambda v: self.update_property("tol", v))
-        solver_layout.addRow("Tolerance:", tol)
-
-        solver_group.setLayout(solver_layout)
-        advanced_layout.addWidget(solver_group)
-
-        stress_group = QtWidgets.QGroupBox("Stress Constraint")
-        stress_layout = QtWidgets.QFormLayout()
-        stress_layout.addRow("Enable:", _check("stress_constraint"))
-        stress_layout.addRow(
-            "Yield Stress:",
-            _double("yield_stress", 1.0, 0.0, 1_000_000.0, decimals=3, step=10.0),
-        )
-        stress_group.setToolTip(
-            "P-norm von Mises stress constraint aggregated over ALL load cases.\n"
-            "Forces the optimiser to MMA. The numerical relaxation and\n"
-            "aggregation policy is selected internally by the solver."
-        )
-        stress_group.setLayout(stress_layout)
-        advanced_layout.addWidget(stress_group)
-
-        mfg_group = QtWidgets.QGroupBox("Manufacturing Constraints")
+        mfg_group = QtWidgets.QGroupBox("Manufacturing")
         mfg_layout = QtWidgets.QFormLayout()
-        mfg_layout.addRow(
-            "Symmetry:",
-            _combo("symmetry", ["None", "X", "Y", "Z", "XY", "XZ", "YZ", "XYZ"], "None"),
+        is_level_set = str(
+            node.get_property("formulation") or "Density (SIMP)"
+        ).lower().startswith("level set")
+        if not is_level_set:
+            mfg_layout.addRow(
+                "Symmetry:",
+                _combo("symmetry", ["None", "X", "Y", "Z", "XY", "XZ", "YZ", "XYZ"], "None"),
+            )
+            mfg_layout.addRow("Extrusion:", _combo("extrusion", ["None", "X", "Y", "Z"], "None"))
+            mfg_layout.addRow(
+                "Build Axis:",
+                _combo("overhang_build_axis", ["None", "+X", "-X", "+Y", "-Y", "+Z", "-Z"], "None"),
+            )
+            mfg_layout.addRow(
+                "Max Member Radius:",
+                _double("max_member_size_voxels", 0.0, 0.0, 100.0, decimals=2, step=0.5),
+            )
+            mfg_layout.addRow("Pattern Count:", _int("pattern_repeat", 1, 1, 64))
+            mfg_layout.addRow("Pattern Axis:", _combo("pattern_axis", ["X", "Y", "Z"], "Y"))
+        structure_items = (
+            ["Solid Envelope"]
+            if is_level_set
+            else [
+                "Solid Envelope",
+                "Topology-Following Ribs",
+                "Gyroid Lattice",
+                "Diamond Lattice",
+            ]
         )
-        mfg_layout.addRow("Extrusion:", _combo("extrusion", ["None", "X", "Y", "Z"], "None"))
+        structure_combo = _combo(
+            "structure_mode",
+            structure_items,
+            "Solid Envelope",
+        )
+        structure_combo.currentTextChanged.connect(
+            lambda _value: _refresh_topopt_later()
+        )
+        mfg_layout.addRow("Output Structure:", structure_combo)
         mfg_layout.addRow(
-            "Build Axis:",
-            _combo("overhang_build_axis", ["None", "+X", "-X", "+Y", "-Y", "+Z", "-Z"], "None"),
+            "Cell Size (voxels):",
+            _double(
+                "structure_cell_size_voxels",
+                6.0,
+                3.0,
+                50.0,
+                decimals=2,
+                step=0.5,
+            ),
         )
         mfg_layout.addRow(
-            "Max Member Radius:",
-            _double("max_member_size_voxels", 0.0, 0.0, 100.0, decimals=2, step=0.5),
+            "Minimum Wall/Member:",
+            _double(
+                "structure_member_thickness_voxels",
+                1.0,
+                0.25,
+                20.0,
+                decimals=2,
+                step=0.25,
+            ),
         )
-        mfg_layout.addRow("Pattern Count:", _int("pattern_repeat", 1, 1, 64))
-        mfg_layout.addRow("Pattern Axis:", _combo("pattern_axis", ["X", "Y", "Z"], "Y"))
+        mfg_layout.addRow(
+            "Skin Thickness:",
+            _double(
+                "structure_skin_thickness_voxels",
+                0.75,
+                0.0,
+                20.0,
+                decimals=2,
+                step=0.25,
+            ),
+        )
+        structure_mode = str(
+            node.get_property("structure_mode") or "Solid Envelope"
+        ).lower()
+        if "lattice" in structure_mode:
+            mfg_layout.addRow(
+                "Optimize Local Density:",
+                _check("lattice_variable_density"),
+            )
+            mfg_layout.addRow(
+                "Minimum Relative Density:",
+                _double(
+                    "lattice_min_relative_density",
+                    0.12,
+                    0.01,
+                    0.80,
+                    decimals=3,
+                    step=0.01,
+                ),
+            )
+            mfg_layout.addRow(
+                "Maximum Relative Density:",
+                _double(
+                    "lattice_max_relative_density",
+                    0.90,
+                    0.20,
+                    0.99,
+                    decimals=3,
+                    step=0.01,
+                ),
+            )
+            mfg_layout.addRow(
+                "Solid Transition:",
+                _double(
+                    "lattice_solid_transition_density",
+                    0.92,
+                    0.30,
+                    1.0,
+                    decimals=3,
+                    step=0.01,
+                ),
+            )
         mfg_group.setToolTip(
             "Projection-style constraints applied after each density update: symmetry, extrusion, AM overhang, max member size, and repeated patterns."
         )
         mfg_group.setLayout(mfg_layout)
         self.props_layout.addWidget(mfg_group)
 
-        advanced_group.setLayout(advanced_layout)
-        # Industrial TopOpt keeps solver/grid knobs automated.  The controls
-        # above still exist as node properties for reproducibility and saved
-        # studies, but the normal GUI exposes only design intent, setup, CAD,
-        # and manufacturing choices.
-
-        if _get_bool("advanced_settings_visible"):
-            self.props_layout.addWidget(advanced_group)
-        # Boundary conditions are supplied through the TopOpt input ports.
-        # Keep the legacy property editors available in saved projects, but do
-        # not construct duplicate setup/load controls in the normal inspector.
-
-        post_group = QtWidgets.QGroupBox("Post-Processing")
-        post_layout = QtWidgets.QFormLayout()
-        post_layout.addRow("Print-Ready Mesh:", _check("print_ready_mesh"))
-        post_layout.addRow(
-            "Decimate Ratio:",
-            _double("mesh_decimate_ratio", 1.0, 0.01, 1.0, decimals=2, step=0.05),
-        )
-        post_group.setToolTip(
-            "Controls marching-cubes cleanup, hole filling, smoothing, and optional mesh decimation before STL/CAD handoff."
-        )
-        post_group.setLayout(post_layout)
-        # Post-processing is part of the automated industrial preset now.
-        # Keep the properties for saved studies, but do not show this group.
-
         view_group = QtWidgets.QGroupBox("Visualization")
         view_layout = QtWidgets.QFormLayout()
-        if _get_bool("advanced_settings_visible"):
-            self.props_layout.addWidget(post_group)
 
-        validation_group = QtWidgets.QGroupBox("Validation & CAD Handoff")
+        validation_group = QtWidgets.QGroupBox("Validation and CAD")
         validation_layout = QtWidgets.QFormLayout()
         validation_layout.addRow("Validate after solve:", _check("validate_after_optimize"))
         validation_layout.addRow(
@@ -1404,7 +1515,12 @@ class PropertiesPanel(QtWidgets.QWidget):
             return result.get('recovered_shape') if isinstance(result, dict) else None
         try:
             import numpy as np
-            from pylcss.design_studio.topology_optimization.recovery import _recover_voxel_shape
+            from pylcss.design_studio.topology_optimization.geometry.surface_recovery import (
+                _recover_voxel_shape,
+            )
+            from pylcss.design_studio.topology_optimization.manufacturing.structures import (
+                structure_options_from_values,
+            )
 
             bounds_payload = result.get('bounds')
             bounds = None
@@ -1419,6 +1535,16 @@ class PropertiesPanel(QtWidgets.QWidget):
                     bounds = (mins[:3], maxs[:3])
 
             bc = node._build_bc() if hasattr(node, '_build_bc') else None
+            structure_options = structure_options_from_values(
+                node.get_property('structure_mode'),
+                node.get_property('structure_cell_size_voxels'),
+                node.get_property('structure_member_thickness_voxels'),
+                node.get_property('structure_skin_thickness_voxels'),
+                node.get_property('lattice_variable_density'),
+                node.get_property('lattice_min_relative_density'),
+                node.get_property('lattice_max_relative_density'),
+                node.get_property('lattice_solid_transition_density'),
+            )
             recovered = _recover_voxel_shape(
                 np.asarray(result['density'], dtype=float),
                 bounds,
@@ -1435,6 +1561,14 @@ class PropertiesPanel(QtWidgets.QWidget):
                     or 'none'
                 ).lower(),
                 source_mask=result.get('design_domain'),
+                structure_options=structure_options,
+                surface_backend=(
+                    'legacy'
+                    if str(
+                        node.get_property('surface_recovery_method') or ''
+                    ).lower().startswith('legacy')
+                    else 'vtk_sdf'
+                ),
             )
             if recovered is not None and len(recovered.get('faces', [])) > 0:
                 result['recovered_shape'] = recovered
@@ -1719,7 +1853,9 @@ class PropertiesPanel(QtWidgets.QWidget):
         'youngs_modulus':   "Young's modulus E (MPa in the standard mm/t/s unit system).",
         'poissons_ratio':   "Poisson's ratio Î½ (typical 0.27–0.34 for metals).",
         'density':          "Mass density ρ (tonne/mm³ — 7.85e-9 for steel).",
-        'yield_strength':   "Initial yield stress Ïƒ_y (MPa).  Non-zero triggers *PLASTIC in CalculiX.",
+        'yield_strength':
+            "Initial yield stress (MPa). Linear studies use it as an allowable; "
+            "the plastic law is active only when Analysis Type is Nonlinear (Plastic).",
         'tangent_modulus':  "Bilinear hardening slope after yield (MPa).  Set to 0 for perfectly plastic.",
         'failure_strain':   "Equivalent plastic strain at element deletion (crash only).",
         'exposed_name':
@@ -1773,7 +1909,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         'filter_radius':     "Density / sensitivity filter radius [mm] — controls minimum feature size.",
         'filter_type':       "density: physical density filter (preferred).\nsensitivity: heuristic sensitivity smoothing.",
         'yield_stress':       "Yield stress σ_y for the PNorm constraint: ||vm||_PNorm ≤ σ_y.",
-        'stress_constraint':  "Add a P-norm von Mises stress constraint.  Forces the optimiser to MMA.",
+        'stress_constraint':  "Add a P-norm von Mises stress constraint. Auto selects GCMMA.",
         'strain_rate_sensitive':
             "Use the material preset's internal strain-rate sensitivity for crash runs.",
         'update_scheme':     "MMA: gradient-based, robust.  OC: simpler optimality-criteria update.",
@@ -1836,6 +1972,46 @@ class PropertiesPanel(QtWidgets.QWidget):
     }
 
     _PROPERTY_LABELS = {
+        'length_x': 'Length X (mm)',
+        'width_y': 'Width Y (mm)',
+        'height_z': 'Height Z (mm)',
+        'length': 'Length (mm)',
+        'width': 'Width (mm)',
+        'height': 'Height (mm)',
+        'diameter': 'Diameter (mm)',
+        'outer_diameter': 'Outer Diameter (mm)',
+        'wall_thickness': 'Wall Thickness (mm)',
+        'centered': 'Center on Origin',
+        'axis': 'Axis',
+        'operation': 'Operation',
+        'edge_selection': 'Edges',
+        'radius': 'Radius (mm)',
+        'count': 'Instance Count',
+        'spacing': 'Spacing (mm)',
+        'fuse': 'Fuse Instances',
+        'translate_x': 'Move X (mm)',
+        'translate_y': 'Move Y (mm)',
+        'translate_z': 'Move Z (mm)',
+        'rotate_x': 'Rotate X (deg)',
+        'rotate_y': 'Rotate Y (deg)',
+        'rotate_z': 'Rotate Z (deg)',
+        'exposed_name': 'Exposed Parameter Name',
+        'variable_name': 'Parameter Name',
+        'value_input': 'Value',
+        'filepath': 'Source File',
+        'fcstd_filename': 'FreeCAD File',
+        'cad_export_filename': 'STEP Export File',
+        'cad_reconstruction_method': 'CAD Recovery Method',
+        'generate_cad_after_optimize': 'Build CAD After Solve',
+        'element_size': 'Element Size (mm)',
+        'refinement_size': 'Local Element Size (mm)',
+        'shell_thickness': 'Shell Thickness (mm)',
+        'shell_nip': 'Through-Thickness Points',
+        'mesh_type': 'Element Formulation',
+        'analysis_type': 'Analysis Type',
+        'visualization': 'Result Display',
+        'deformation_scale': 'Deformation Scale',
+        'external_solver_path': 'CalculiX Application',
         'application_scope': 'Crash Scenario',
         'velocity_x': 'Velocity X (mm/ms)',
         'velocity_y': 'Velocity Y (mm/ms)',
@@ -1863,6 +2039,38 @@ class PropertiesPanel(QtWidgets.QWidget):
         'failure_strain': 'Failure Strain',
         'strain_rate_sensitive': 'Strain-Rate Sensitive',
     }
+
+    _PROPERTY_ACRONYMS = {
+        "am": "AM",
+        "cad": "CAD",
+        "cfrp": "CFRP",
+        "fea": "FEA",
+        "gcmma": "GCMMA",
+        "id": "ID",
+        "mma": "MMA",
+        "mpa": "MPa",
+        "oc": "OC",
+        "stl": "STL",
+        "step": "STEP",
+        "tpms": "TPMS",
+        "vtk": "VTK",
+        "x": "X",
+        "y": "Y",
+        "z": "Z",
+    }
+
+    @classmethod
+    def _human_property_label(cls, property_name):
+        """Return a readable inspector label with no implementation syntax."""
+        explicit = cls._PROPERTY_LABELS.get(property_name)
+        if explicit:
+            return explicit
+        words = []
+        for token in str(property_name or "").strip("_").split("_"):
+            if not token:
+                continue
+            words.append(cls._PROPERTY_ACRONYMS.get(token.lower(), token.title()))
+        return " ".join(words) or "Property"
 
     @classmethod
     def _section_for(cls, prop_name):
@@ -2097,7 +2305,7 @@ class PropertiesPanel(QtWidgets.QWidget):
             layout.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
 
             for name, val in entries:
-                label_text = self._PROPERTY_LABELS.get(name, name.replace('_', ' ').title())
+                label_text = self._human_property_label(name)
                 attrs = prop_attrs.get(name, {})
                 combo_items = attrs.get('items') if isinstance(attrs, dict) else None
                 if name == 'application_scope':
@@ -2109,6 +2317,10 @@ class PropertiesPanel(QtWidgets.QWidget):
 
                 if combo_items:
                     widget = QtWidgets.QComboBox()
+                    widget.setMinimumContentsLength(8)
+                    widget.setSizeAdjustPolicy(
+                        QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon
+                    )
                     item_texts = [str(item) for item in combo_items]
                     if val is not None and str(val) not in item_texts:
                         item_texts.append(str(val))
@@ -2153,10 +2365,14 @@ class PropertiesPanel(QtWidgets.QWidget):
                         v = conv(s)
                         if is_int:
                             v = int(round(v))
-                        sp.blockSignals(True); sp.setValue(v); sp.blockSignals(False)
+                        sp.blockSignals(True)
+                        sp.setValue(v)
+                        sp.blockSignals(False)
                         self.update_property(n, v)
                     def on_spin(v, n=name, sl=slider, conv=_to_slider):
-                        sl.blockSignals(True); sl.setValue(conv(float(v))); sl.blockSignals(False)
+                        sl.blockSignals(True)
+                        sl.setValue(conv(float(v)))
+                        sl.blockSignals(False)
                         self.update_property(n, v)
                     slider.valueChanged.connect(on_slider)
                     spin.valueChanged.connect(on_spin)
@@ -2174,6 +2390,11 @@ class PropertiesPanel(QtWidgets.QWidget):
                 else:
                     continue
 
+                widget.setMinimumWidth(0)
+                widget.setSizePolicy(
+                    QtWidgets.QSizePolicy.Expanding,
+                    QtWidgets.QSizePolicy.Fixed,
+                )
                 # Fall back to the panel's static tooltip table when the
                 # node itself didn't ship one.  Lets us document the meaning
                 # of obscure knobs without touching every node class.
@@ -2286,15 +2507,20 @@ class PropertiesPanel(QtWidgets.QWidget):
         def _spin(prop, lo=-1e4, hi=1e4, dec=3):
             val = float(node.get_property(prop) or 0.0)
             w = QtWidgets.QDoubleSpinBox()
-            w.setRange(lo, hi); w.setDecimals(dec); w.setValue(val)
+            w.setRange(lo, hi)
+            w.setDecimals(dec)
+            w.setValue(val)
             w.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
             return w
 
         def _intspin(prop, lo=0, hi=10_000):
-            try: val = int(node.get_property(prop) or 0)
-            except Exception: val = 0
+            try:
+                val = int(node.get_property(prop) or 0)
+            except Exception:
+                val = 0
             w = QtWidgets.QSpinBox()
-            w.setRange(lo, hi); w.setValue(val)
+            w.setRange(lo, hi)
+            w.setValue(val)
             w.valueChanged.connect(lambda v, p=prop: self.update_property(p, v))
             return w
 
@@ -3118,7 +3344,8 @@ class PropertiesPanel(QtWidgets.QWidget):
                     self.current_node._last_hash = None  # Invalidate hash cache
                 try:
                     self.property_changed.emit(self.current_node, prop_name, old, value)
-                except Exception: pass
+                except Exception:
+                    pass
             except Exception:
                 pass
             finally:
@@ -3322,9 +3549,13 @@ class ResultsPanel(QtWidgets.QWidget):
         if rtype == 'crash':
             crash_rows = []
             if 'peak_displacement' in data:
-                crash_rows.append(("Peak displacement", self._fmt(data['peak_displacement'], "mm")))
+                crash_rows.append(("Event peak displacement", self._fmt(data['peak_displacement'], "mm")))
+            if 'final_frame_displacement' in data:
+                crash_rows.append(("Final-frame displacement", self._fmt(data['final_frame_displacement'], "mm")))
             if 'peak_stress' in data:
-                crash_rows.append(("Peak Von Mises", self._fmt(data['peak_stress'], "MPa")))
+                crash_rows.append(("Event peak Von Mises", self._fmt(data['peak_stress'], "MPa")))
+            if 'final_frame_stress' in data:
+                crash_rows.append(("Final-frame Von Mises", self._fmt(data['final_frame_stress'], "MPa")))
             if 'absorbed_energy' in data:
                 crash_rows.append(("Absorbed / internal energy", self._fmt(data['absorbed_energy'], "N·mm")))
             if 'n_failed' in data:
@@ -3510,7 +3741,10 @@ class StudyWorkbenchPanel(QtWidgets.QWidget):
             ready, _detail = LibraryPanel._openradioss_status()
             return ready, "OpenRadioss backend" if ready else "OpenRadioss missing"
         try:
-            import pymoto  # noqa: F401
+            from pylcss.design_studio.topology_optimization.optimization.voxel_solver import (
+                import_pymoto,
+            )
+            import_pymoto()
             return True, "pyMOTO backend"
         except Exception:
             return False, "pyMOTO missing"
@@ -3554,62 +3788,70 @@ class StudyWorkbenchPanel(QtWidgets.QWidget):
                 )),
             ])
         elif study_name == 'Topology Opt':
-            def _finite_float(name, default=0.0):
-                try:
-                    value = float(target.get_property(name) if target is not None else default)
-                    return value if value == value and abs(value) != float('inf') else default
-                except (TypeError, ValueError):
-                    return default
-
-            try:
-                dims = tuple(int(target.get_property(name)) for name in ('nelx', 'nely', 'nelz'))
-                grid_ready = min(dims) >= 1 and dims[0] * dims[1] * dims[2] <= 500_000
-            except (AttributeError, TypeError, ValueError):
-                grid_ready = False
-
-            support_props = (
-                'left_support', 'right_support', 'top_support',
-                'bottom_support', 'front_support', 'back_support',
+            goal = (
+                str(target.get_property('design_goal') or '').strip().lower()
+                if target is not None else ''
             )
-            property_support = target is not None and any(
-                str(target.get_property(name) or 'None').strip().lower() != 'none'
-                for name in support_props
+            physics = (
+                str(target.get_property('physics_mode') or 'Structural')
+                .strip()
+                .lower()
+                if target is not None else 'structural'
             )
-            property_support = property_support or (
-                target is not None
-                and str(target.get_property('support_regions') or '').strip() not in {'', '[]'}
-            )
-
-            fx = _finite_float('force_dir_x')
-            fy = _finite_float('force_dir_y')
-            fz = _finite_float('force_dir_z')
-            magnitude = _finite_float('force_magnitude')
-            property_load = target is not None and magnitude > 0.0 and any(
-                abs(v) > 1e-15 for v in (fx, fy, fz)
-            )
-            property_load = property_load or (
-                target is not None
-                and str(target.get_property('load_cases') or '').strip() not in {'', '[]'}
-            )
-
-            connected_constraints = [
-                n for n in nodes if n.__class__.__name__ == 'ConstraintNode'
-            ]
-            connected_loads = [
-                n for n in nodes
-                if n.__class__.__name__ in {'LoadNode', 'PressureLoadNode'}
-            ]
+            if goal == 'thermal conduction':
+                physics = 'thermal'
+            elif goal == 'thermo-mechanical':
+                physics = 'thermo-mechanical'
+            elif goal in {
+                'lightweight stiffness',
+                'minimum mass under stress',
+                'multibody load envelope',
+            }:
+                physics = 'structural'
+            structural = physics in {'structural', 'thermo-mechanical'}
+            thermal = physics in {'thermal', 'thermo-mechanical'}
+            multibody = goal == 'multibody load envelope'
             checks.extend([
                 ("TopOpt terminal", target is not None),
-                ("Design domain", target is not None and (
-                    self._has_connected_port(target, 'mesh') or grid_ready
-                )),
-                ("Material", target is not None and (
-                    self._has_connected_port(target, 'material')
-                    or (_finite_float('E0') > 0.0 and -1.0 < _finite_float('nu') < 0.5)
-                )),
-                ("Support", property_support or bool(connected_constraints)),
-                ("Load", property_load or bool(connected_loads)),
+                (
+                    "Design domain",
+                    target is not None
+                    and self._has_connected_port(target, 'design_domain'),
+                ),
+                (
+                    "Material",
+                    target is not None
+                    and self._has_connected_port(target, 'material'),
+                ),
+                (
+                    "Structural conditions",
+                    not structural or (
+                        target is not None
+                        and (
+                            self._has_connected_port(target, 'load_cases')
+                            if multibody
+                            else (
+                                self._has_connected_port(target, 'supports')
+                                and self._has_connected_port(target, 'loads')
+                            )
+                        )
+                    ),
+                ),
+                (
+                    "Joint definition",
+                    not multibody or (
+                        target is not None
+                        and self._has_connected_port(target, 'joints')
+                    ),
+                ),
+                (
+                    "Thermal conditions",
+                    not thermal or (
+                        target is not None
+                        and self._has_connected_port(target, 'thermal_sinks')
+                        and self._has_connected_port(target, 'thermal_loads')
+                    ),
+                ),
             ])
         else:
             constraints = [n for n in nodes if n.__class__.__name__ == 'ConstraintNode']
@@ -3687,16 +3929,55 @@ class StudyWorkbenchPanel(QtWidgets.QWidget):
 class LibraryPanel(QtWidgets.QWidget):
     """Component library with categorized nodes."""
 
-    # QtAwesome icon names per category prefix.  The first prefix that matches
-    # wins, so order from most specific to most general.
-    _CATEGORY_ICONS = (
-        ("Geometry",                     "fa5s.code",            "#81C784"),
-        ("Simulation - Pre-Processing",  "fa5s.project-diagram", "#80CBC4"),
-        ("Simulation - Loads",           "fa5s.weight-hanging",  "#FF8A65"),
-        ("Simulation - Solve",           "fa5s.calculator",      "#9CCC65"),
-        ("Crash Simulation",             "fa5s.car-crash",       "#EF5350"),
-        ("Analysis",                     "fa5s.balance-scale",   "#B39DDB"),
-        ("IO",                           "fa5s.file-export",     "#90A4AE"),
+    _CATEGORY_ICONS = {
+        "Modeling": ("fa5s.cube", "#81C784"),
+        "Prepare": ("fa5s.mouse-pointer", "#80CBC4"),
+        "FEA": ("fa5s.calculator", "#64B5F6"),
+        "Topology": ("fa5s.project-diagram", "#9CCC65"),
+        "Crash": ("fa5s.car-crash", "#EF5350"),
+        "Measure": ("fa5s.ruler-combined", "#B39DDB"),
+        "Data & Export": ("fa5s.file-export", "#90A4AE"),
+    }
+    _NODE_ICONS = (
+        ("com.cad.geometry.box", "fa5s.cube", "#81C784"),
+        ("com.cad.geometry.cylinder", "fa5s.database", "#81C784"),
+        ("com.cad.geometry.tube", "fa5s.circle", "#81C784"),
+        ("com.cad.geometry.cylindrical_shell", "fa5s.circle-notch", "#81C784"),
+        ("com.cad.geometry.boolean", "fa5s.object-group", "#81C784"),
+        ("com.cad.geometry.through_hole", "fa5s.dot-circle", "#81C784"),
+        ("com.cad.geometry.fillet", "fa5s.bezier-curve", "#81C784"),
+        ("com.cad.geometry.transform", "fa5s.arrows-alt", "#81C784"),
+        ("com.cad.geometry.linear_pattern", "fa5s.grip-horizontal", "#81C784"),
+        ("com.cad.freecad_part", "fa5s.drafting-compass", "#81C784"),
+        ("com.cad.import_step", "fa5s.file-import", "#90A4AE"),
+        ("com.cad.import_stl", "fa5s.file-import", "#90A4AE"),
+        ("com.cad.select_face_interactive", "fa5s.mouse-pointer", "#80CBC4"),
+        ("com.cad.sim.mesh", "fa5s.project-diagram", "#80CBC4"),
+        ("com.cad.sim.material", "fa5s.layer-group", "#64B5F6"),
+        ("com.cad.sim.constraint", "fa5s.anchor", "#FF8A65"),
+        ("com.cad.sim.load", "fa5s.arrow-down", "#FF8A65"),
+        ("com.cad.sim.pressure_load", "fa5s.compress-arrows-alt", "#FF8A65"),
+        ("com.cad.sim.solver", "fa5s.play-circle", "#9CCC65"),
+        ("com.cad.topopt.support", "fa5s.anchor", "#9CCC65"),
+        ("com.cad.topopt.load", "fa5s.arrow-down", "#9CCC65"),
+        ("com.cad.topopt.joint", "fa5s.link", "#9CCC65"),
+        ("com.cad.topopt.operating_case", "fa5s.sitemap", "#9CCC65"),
+        ("com.cad.topopt.thermal_sink", "fa5s.temperature-low", "#9CCC65"),
+        ("com.cad.topopt.heat_load", "fa5s.fire", "#9CCC65"),
+        ("com.cad.sim.topopt_voxel", "fa5s.project-diagram", "#9CCC65"),
+        ("com.cad.sim.remesh", "fa5s.sync-alt", "#9CCC65"),
+        ("com.cad.sim.crash_material", "fa5s.shield-alt", "#EF5350"),
+        ("com.cad.sim.impact", "fa5s.car-crash", "#EF5350"),
+        ("com.cad.sim.crash_solver", "fa5s.play-circle", "#EF5350"),
+        ("com.cad.sim.radioss_deck", "fa5s.file-code", "#EF5350"),
+        ("com.cad.assembly", "fa5s.cubes", "#B39DDB"),
+        ("com.cad.mass_properties", "fa5s.weight", "#B39DDB"),
+        ("com.cad.bounding_box", "fa5s.vector-square", "#B39DDB"),
+        ("com.cad.measure_distance", "fa5s.ruler", "#B39DDB"),
+        ("com.cad.surface_area", "fa5s.draw-polygon", "#B39DDB"),
+        ("com.cad.number", "fa5s.hashtag", "#90A4AE"),
+        ("com.cad.export_step", "fa5s.file-export", "#90A4AE"),
+        ("com.cad.export_stl", "fa5s.file-export", "#90A4AE"),
     )
 
     @staticmethod
@@ -3704,14 +3985,33 @@ class LibraryPanel(QtWidgets.QWidget):
         try:
             import qtawesome as qta
         except Exception:
-            return None
-        for prefix, icon_name, color in LibraryPanel._CATEGORY_ICONS:
-            if label.startswith(prefix):
-                try:
-                    return qta.icon(icon_name, color=color)
-                except Exception:
-                    return None
-        return None
+            qta = None
+        icon_spec = LibraryPanel._CATEGORY_ICONS.get(label)
+        if qta is not None and icon_spec is not None:
+            try:
+                return qta.icon(icon_spec[0], color=icon_spec[1])
+            except Exception:
+                pass
+        return QtWidgets.QApplication.style().standardIcon(
+            QtWidgets.QStyle.SP_DirClosedIcon
+        )
+
+    @staticmethod
+    def _icon_for_node(node_id: str):
+        try:
+            import qtawesome as qta
+        except Exception:
+            qta = None
+        if qta is not None:
+            for prefix, icon_name, color in LibraryPanel._NODE_ICONS:
+                if node_id == prefix or node_id.startswith(prefix + "."):
+                    try:
+                        return qta.icon(icon_name, color=color)
+                    except Exception:
+                        break
+        return QtWidgets.QApplication.style().standardIcon(
+            QtWidgets.QStyle.SP_FileIcon
+        )
 
     @staticmethod
     def _calculix_status():
@@ -3774,7 +4074,7 @@ class LibraryPanel(QtWidgets.QWidget):
 
         # Search box — title was redundant with the dock title, dropped.
         self.search = QtWidgets.QLineEdit()
-        self.search.setPlaceholderText("Search components...")
+        self.search.setPlaceholderText("Search tools")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._filter_tree)
         self.layout.addWidget(self.search)
@@ -3782,9 +4082,12 @@ class LibraryPanel(QtWidgets.QWidget):
         # Tree view for categories
         self.tree = QtWidgets.QTreeWidget()
         self.tree.setHeaderHidden(True)
-        self.tree.setIndentation(14)
+        self.tree.setIndentation(16)
+        self.tree.setIconSize(QtCore.QSize(16, 16))
         self.tree.setUniformRowHeights(True)
         self.tree.setAnimated(True)
+        self.tree.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.tree.setTextElideMode(QtCore.Qt.ElideRight)
         self.tree.setStyleSheet(
             """
             QTreeWidget {
@@ -3809,20 +4112,30 @@ class LibraryPanel(QtWidgets.QWidget):
         self.tree.setDragEnabled(True)
         self.tree.itemPressed.connect(self._start_drag)
         
-        # Component categories — only entries reachable in the new code-first
-        # workflow are listed.  Hand-placed primitives / sketches / 3-D ops /
-        # transforms / patterns have been removed; geometry is created either
-        # in a Code Part / Assembly node (one readable CadQuery script) or
-        # imported from a STEP / mesh file.
+        # Compact public palette. Legacy/script nodes remain registered so old
+        # studies load, but they do not duplicate the native interactive tools.
         # Format: (Label, node_id, tooltip_description)
         categories = {
-            "Geometry": [
-                ("Code Part / Assembly", "com.cad.code_part",
-                 "Parametric CAD as one readable CadQuery script.\n"
-                 "Set up to 6 named parameters (with optional inputs from Number / Variable\n"
-                 "nodes) and write `result = cq.Workplane(...)...`.  The output 'shape' port\n"
-                 "feeds straight into Mesh / Select Face / Assembly nodes."),
-                ("FreeCAD Part (interactive)", "com.cad.freecad_part",
+            "Modeling": [
+                ("Box", "com.cad.geometry.box",
+                 "Create a dimensioned rectangular solid from inspector values."),
+                ("Cylinder", "com.cad.geometry.cylinder",
+                 "Create a dimensioned solid cylinder on X, Y, or Z."),
+                ("Tube", "com.cad.geometry.tube",
+                 "Create a hollow circular tube from diameter, wall, and length."),
+                ("Cylindrical Shell", "com.cad.geometry.cylindrical_shell",
+                 "Create a midsurface tube for shell FEA or crash analysis."),
+                ("Boolean", "com.cad.geometry.boolean",
+                 "Union, subtract, or intersect two connected solids."),
+                ("Through Hole", "com.cad.geometry.through_hole",
+                 "Cut a dimensioned through-hole without an expression."),
+                ("Fillet", "com.cad.geometry.fillet",
+                 "Round all edges or one principal edge family."),
+                ("Transform", "com.cad.geometry.transform",
+                 "Translate and rotate a connected solid."),
+                ("Linear Pattern", "com.cad.geometry.linear_pattern",
+                 "Create a linear array with optional fusion."),
+                ("FreeCAD Part", "com.cad.freecad_part",
                  "Interactive parametric CAD authored in FreeCAD's own GUI.\n"
                  "Double-click the node to launch FreeCAD on a node-owned .FCStd file.\n"
                  "Draw sketches, add PartDesign features, set named faces / FEM loads;\n"
@@ -3835,60 +4148,118 @@ class LibraryPanel(QtWidgets.QWidget):
                  "Import an STL / OBJ surface mesh."),
             ],
 
-            # ───────────────────────────────────────────────────────────────
-            # WORKBENCH: SIMULATION (FEA)
-            # ───────────────────────────────────────────────────────────────
-            "Simulation - Pre-Processing": [
-                ("Select Face", "com.cad.select_face", "Select face for BCs using text selectors (Direction, Index, Box…)"),
-                ("Select Face (Interactive)", "com.cad.select_face_interactive",
-                 "Click faces directly in the 3D viewer to select them — no code required"),
-                ("Material", "com.cad.sim.material", "Define material"),
-                ("Generate Mesh", "com.cad.sim.mesh", "Create FEM mesh"),
+            "Prepare": [
+                (
+                    "Pick Faces",
+                    "com.cad.select_face_interactive",
+                    "Click faces directly in the 3D viewer and keep the selection "
+                    "with the study.",
+                ),
+                (
+                    "Mesh",
+                    "com.cad.sim.mesh",
+                    "Create solid or shell elements for FEA and crash analysis.",
+                ),
             ],
-            "Simulation - Loads & Constraints": [
-                ("Constraint", "com.cad.sim.constraint", "Apply fixation/support"),
-                ("Force Load", "com.cad.sim.load", "Apply force"),
-                ("Pressure Load", "com.cad.sim.pressure_load", "Apply uniform pressure"),
+            "FEA": [
+                ("Material", "com.cad.sim.material", "Define the structural material."),
+                (
+                    "Support",
+                    "com.cad.sim.constraint",
+                    "Apply a support or prescribed displacement.",
+                ),
+                ("Force", "com.cad.sim.load", "Apply a resultant force."),
+                (
+                    "Pressure",
+                    "com.cad.sim.pressure_load",
+                    "Apply a uniform face pressure.",
+                ),
+                (
+                    "Static Solver",
+                    "com.cad.sim.solver",
+                    "Run the CalculiX structural solver.",
+                ),
             ],
-            "Simulation - Solve & Optimize": [
-                ("Solver", "com.cad.sim.solver", "Run FEA solver"),
-                ("Topology Opt (Voxel)", "com.cad.sim.topopt_voxel", "Run structured 3D voxel topology optimization with pyMOTO"),
-                ("Remesh Surface", "com.cad.sim.remesh", "Convert TopOpt surface to volume mesh"),
+            "Topology": [
+                (
+                    "Topology Support",
+                    "com.cad.topopt.support",
+                    "Apply a support to a selected CAD face without a prebuilt FE mesh.",
+                ),
+                (
+                    "Topology Force",
+                    "com.cad.topopt.load",
+                    "Apply a resultant force to a selected CAD face.",
+                ),
+                (
+                    "Topology Joint",
+                    "com.cad.topopt.joint",
+                    "Connect two selected anchor regions with a fixed, revolute, "
+                    "spherical, or prismatic joint.",
+                ),
+                (
+                    "Operating Case",
+                    "com.cad.topopt.operating_case",
+                    "Group pose-specific supports, loads, and joints into one "
+                    "multi-body operating case.",
+                ),
+                (
+                    "Temperature Boundary",
+                    "com.cad.topopt.thermal_sink",
+                    "Hold a selected region at the thermal reference temperature.",
+                ),
+                (
+                    "Heat Input",
+                    "com.cad.topopt.heat_load",
+                    "Apply total heat input to a selected CAD face.",
+                ),
+                (
+                    "Topology Solver",
+                    "com.cad.sim.topopt_voxel",
+                    "Run structural, thermal, multibody, rib, or lattice topology "
+                    "optimization.",
+                ),
+                (
+                    "Volume Remesh",
+                    "com.cad.sim.remesh",
+                    "Convert a recovered surface into a volume mesh.",
+                ),
             ],
-
-            # ───────────────────────────────────────────────────────────────
-            # WORKBENCH: CRASH / IMPACT SIMULATION
-            # ───────────────────────────────────────────────────────────────
-            "Crash Simulation": [
-                ("Crash Material",    "com.cad.sim.crash_material",
-                 "Elasto-plastic material with yield strength, hardening and failure strain (presets: A36, DP780, UHSS 1500, Al 6061, Al 5052, CFRP)"),
-                ("Impact Condition",  "com.cad.sim.impact",
-                 "Define initial velocity (mm/ms = m/s) applied to impact face nodes"),
-                ("Crash Solver",       "com.cad.sim.crash_solver",
-                 "Explicit transient crash solver — runs OpenRadioss on the connected mesh, material, constraints and impact condition"),
-                ("Run Radioss Deck",    "com.cad.sim.radioss_deck",
-                 "Run an existing OpenRadioss/LS-DYNA `.k` or `.rad` deck (e.g. the Chrysler Neon HPC benchmark) end-to-end and play the animation in the viewer"),
+            "Crash": [
+                (
+                    "Crash Material",
+                    "com.cad.sim.crash_material",
+                    "Elasto-plastic material for an explicit crash study.",
+                ),
+                (
+                    "Impact Setup",
+                    "com.cad.sim.impact",
+                    "Define the impact scenario, velocity, wall, and contact scope.",
+                ),
+                (
+                    "Crash Solver",
+                    "com.cad.sim.crash_solver",
+                    "Run the OpenRadioss explicit transient solver.",
+                ),
+                (
+                    "OpenRadioss Deck",
+                    "com.cad.sim.radioss_deck",
+                    "Run an existing OpenRadioss or LS-DYNA deck.",
+                ),
             ],
-
-            # ───────────────────────────────────────────────────────────────
-            # WORKBENCH: ANALYSIS & UTILITIES
-            # ───────────────────────────────────────────────────────────────
-            "Analysis & Assembly": [
+            "Measure": [
                 ("Assembly", "com.cad.assembly", "Combine parts"),
                 ("Mass Properties", "com.cad.mass_properties", "Calculate mass/volume"),
                 ("Bounding Box", "com.cad.bounding_box", "Measure dimensions"),
-                ("Math Expression", "com.cad.math_expression",
-                 "Evaluate a scalar expression from up to three connected values (x, y, z)."),
                 ("Measure Distance", "com.cad.measure_distance",
                  "Measure the minimum distance between two connected CAD shapes."),
                 ("Surface Area", "com.cad.surface_area",
                  "Calculate the surface area of a connected CAD shape."),
             ],
-            "IO & Parameters": [
-                ("Number", "com.cad.number",
-                 "Numeric constant.  Set its `exposed_name` to make it a kwarg on cad.fea / cad.crash / cad.topopt from the system-modeling tab."),
-                ("Variable", "com.cad.variable",
-                 "Named variable.  Like Number but with a label; falls back to `variable_name` if `exposed_name` is blank."),
+            "Data & Export": [
+                ("Parameter", "com.cad.number",
+                 "Reusable numeric input. Give it an Exposed Parameter Name "
+                 "to drive it from the Modeling Environment."),
                 ("Export STEP", "com.cad.export_step", "Export the current shape to a .step file"),
                 ("Export STL", "com.cad.export_stl",  "Export the current mesh / shape to a .stl file"),
             ],
@@ -3909,6 +4280,7 @@ class LibraryPanel(QtWidgets.QWidget):
                 label, node_id, tooltip = item_data
                 item = QtWidgets.QTreeWidgetItem([label])
                 item.setData(0, QtCore.Qt.UserRole, node_id)
+                item.setIcon(0, self._icon_for_node(node_id))
                 if node_id == "com.cad.sim.solver":
                     tooltip += "\n\n" + calculix_status
                     item.setData(0, QtCore.Qt.UserRole + 1, calculix_ready)
@@ -3924,7 +4296,9 @@ class LibraryPanel(QtWidgets.QWidget):
 
             self.tree.addTopLevelItem(cat_item)
 
-        self.tree.expandAll()
+        # A seven-row category overview fits the default panel. Searching
+        # expands only matching groups; clearing the search closes them again.
+        self.tree.collapseAll()
         self.tree.itemDoubleClicked.connect(self._on_component_selected)
         self.layout.addWidget(self.tree)
     
@@ -3975,7 +4349,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         super(ProfessionalCadApp, self).__init__(parent)
         
         self.setWindowTitle("Engineering Design Studio")
-        self.resize(1200, 800)
+        self.resize(1280, 800)
         
         # Initialize data
         self.undo_stack = []
@@ -4047,7 +4421,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         left_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         left_splitter.addWidget(self.library)
         left_splitter.setSizes([500])
-        left_splitter.setMinimumWidth(220)
+        left_splitter.setMinimumWidth(190)
         
         # CENTER AREA
         center_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
@@ -4065,7 +4439,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         self._graph_widget = graph_widget
         center_splitter.addWidget(graph_widget)
         center_splitter.setSizes([600, 400])
-        center_splitter.setMinimumWidth(500)
+        center_splitter.setMinimumWidth(480)
         
         # Setup context menu for the graph
         try:
@@ -4109,15 +4483,18 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         self._engineering_tabs = lower_tabs
         right_splitter.addWidget(self.properties)
         right_splitter.addWidget(lower_tabs)
-        right_splitter.setSizes([480, 300])
-        right_splitter.setMinimumWidth(340)
+        right_splitter.setSizes([500, 260])
+        right_splitter.setMinimumWidth(300)
         
         # Main splitter
         main_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         main_splitter.addWidget(left_splitter)
         main_splitter.addWidget(center_splitter)
         main_splitter.addWidget(right_splitter)
-        main_splitter.setSizes([240, 960, 400])
+        main_splitter.setSizes([210, 850, 330])
+        main_splitter.setStretchFactor(0, 0)
+        main_splitter.setStretchFactor(1, 1)
+        main_splitter.setStretchFactor(2, 0)
         
         main_h_layout.addWidget(main_splitter)
         
@@ -5546,7 +5923,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             # Fallback - try basic centering
             try:
                 self.graph.center_selection()
-            except:
+            except Exception:
                 pass
             self.statusBar().showMessage("View adjusted")
     
@@ -5615,7 +5992,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 for key, val in list(props.items())[:5]:  # First 5 properties
                     if not key.startswith('_'):
                         report_lines.append(f"      {key}: {val}")
-            except:
+            except Exception:
                 pass
         
         report_lines.append("\n" + "=" * 60)
@@ -6295,6 +6672,14 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             self._set_project_context(self.current_file)
             # Serialize graph using NodeGraphQt's built-in session manager
             project_data = self.graph.serialize_session()
+            project_data = {
+                "_copyright": "Copyright (c) 2026 Kutay Demir.",
+                "_license": (
+                    "Licensed under the PolyForm Shield License 1.0.0. "
+                    "See LICENSE file for details."
+                ),
+                **project_data,
+            }
 
             target_dir = os.path.dirname(self.current_file) or None
             fd, temp_path = tempfile.mkstemp(prefix='pylcss_cad_', suffix='.tmp', dir=target_dir)
@@ -6344,13 +6729,14 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
     def _topopt_preflight_error(self, node):
         if getattr(node, "__identifier__", "") != "com.cad.sim.topopt_voxel":
             return None
-        # Design domain: a mesh input is mandatory. Without one the optimiser
-        # falls back to a default unit voxel grid and produces meaningless
-        # results — so block the run rather than let it appear to "succeed".
-        if not self._port_has_connections(node, 'mesh'):
+        # The CAD design domain is mandatory. The topology node voxelizes it
+        # internally, so a separate finite-element mesh node is not part of
+        # the study definition.
+        if not self._port_has_connections(node, 'design_domain'):
             return (
-                "Topology Opt needs a design-domain mesh. Connect a Remesh, "
-                "Import STL, or FreeCAD Part node to the TopOpt 'mesh' input."
+                "Topology Opt needs a design domain. Connect a CAD solid or "
+                "watertight imported surface directly to 'design_domain'; the "
+                "voxel analysis grid is generated internally."
             )
         if not self._port_has_connections(node, 'material'):
             return (
@@ -6358,25 +6744,65 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 "mass, and downstream FEA use consistent units."
             )
 
-        # Fixed support: either a property-based support (e.g. left_support)
-        # or a wired Constraint node on the 'constraints' input.
-        if not self._port_has_connections(node, 'constraints'):
-            return (
-                "Topology Opt needs at least one connected Constraint selected "
-                "on the current design domain."
-            )
-        if not self._port_has_connections(node, 'loads'):
-            return (
-                "Topology Opt needs at least one connected Force Load or Pressure Load. "
-                "The GUI does not use hidden fallback loads."
-            )
+        # Physics-specific study nodes are required explicitly; no hidden
+        # default support, load, or heat condition is fabricated.
+        goal = str(node.get_property('design_goal') or '').strip().lower()
+        physics = str(
+            node.get_property('physics_mode') or 'Structural'
+        ).strip().lower()
+        if goal == 'thermal conduction':
+            physics = 'thermal'
+        elif goal == 'thermo-mechanical':
+            physics = 'thermo-mechanical'
+        elif goal in {
+            'lightweight stiffness',
+            'minimum mass under stress',
+            'multibody load envelope',
+        }:
+            physics = 'structural'
+
+        if physics in {'structural', 'thermo-mechanical'}:
+            if goal == 'multibody load envelope':
+                if not self._port_has_connections(node, 'load_cases'):
+                    return (
+                        "Multi-body TopOpt needs connected TopOpt Operating "
+                        "Case nodes containing their supports and loads."
+                    )
+                if not self._port_has_connections(node, 'joints'):
+                    return (
+                        "Multi-body TopOpt needs at least one connected TopOpt "
+                        "Joint with both anchors selected on the design domain."
+                    )
+            else:
+                if not self._port_has_connections(node, 'supports'):
+                    return (
+                        "Structural TopOpt needs a connected TopOpt Support "
+                        "placed on a selected design-domain face."
+                    )
+                if not self._port_has_connections(node, 'loads'):
+                    return (
+                        "Structural TopOpt needs a connected TopOpt Force "
+                        "placed on a selected design-domain face."
+                    )
+
+        if physics in {'thermal', 'thermo-mechanical'}:
+            if not self._port_has_connections(node, 'thermal_sinks'):
+                return (
+                    "Thermal TopOpt needs a connected TopOpt Thermal Sink "
+                    "placed on a selected design-domain face."
+                )
+            if not self._port_has_connections(node, 'thermal_loads'):
+                return (
+                    "Thermal TopOpt needs a connected TopOpt Heat Load "
+                    "placed on a selected design-domain face."
+                )
 
         return None
 
     @staticmethod
-    def _topopt_cached_mesh_value(node):
+    def _topopt_cached_domain_value(node):
         try:
-            port = node.get_input('mesh')
+            port = node.get_input('design_domain')
             connected = list(port.connected_ports()) if port else []
         except Exception:
             connected = []
@@ -6392,8 +6818,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 output_name = ''
             if output_name and output_name in value:
                 value = value[output_name]
-            elif 'mesh' in value:
-                value = value['mesh']
+            elif 'shape' in value:
+                value = value['shape']
         return value
 
     @staticmethod
@@ -6455,7 +6881,9 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         if getattr(node, "__identifier__", "") != "com.cad.sim.topopt_voxel":
             return
 
-        spans = self._topopt_spans_from_value(self._topopt_cached_mesh_value(node))
+        spans = self._topopt_spans_from_value(
+            self._topopt_cached_domain_value(node)
+        )
         if spans is None:
             try:
                 spans = [
@@ -6471,20 +6899,45 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         }
         goal = str(node.get_property('design_goal') or '').lower()
         stress_goal = 'stress' in goal
+        physics_mode = (
+            'Thermal'
+            if goal == 'thermal conduction'
+            else 'Thermo-Mechanical'
+            if goal == 'thermo-mechanical'
+            else 'Structural'
+        )
         settings = {
             'advanced_settings_visible': False,
+            'formulation': 'Density (SIMP)',
             'nelx': nelx,
             'nely': nely,
             'nelz': nelz,
             'rmin': round(max(1.2, min(5.0, max(nelx, nely, nelz) * 0.030)), 2),
             'penal': 3.0,
             'density_cutoff': 0.45,
-            'optimizer': 'MMA' if stress_enabled or stress_goal else 'OC',
+            'optimizer': (
+                'GCMMA'
+                if stress_enabled or stress_goal
+                else 'MMA'
+                if goal in {'thermo-mechanical', 'multibody load envelope'}
+                else 'Auto'
+            ),
+            'physics_mode': physics_mode,
+            'load_aggregation': (
+                'Worst Case'
+                if goal == 'multibody load envelope'
+                else 'Weighted Sum'
+            ),
             'max_iter': 100,
             'tol': 0.005,
             'convergence_patience': 5,
             'print_ready_mesh': False,
             'mesh_decimate_ratio': 1.0,
+            'surface_recovery_method': 'Volume-Preserving SDF (VTK)',
+            'structure_mode': 'Solid Envelope',
+            'structure_cell_size_voxels': 6.0,
+            'structure_member_thickness_voxels': 1.0,
+            'structure_skin_thickness_voxels': 0.75,
         }
         for key, value in settings.items():
             try:

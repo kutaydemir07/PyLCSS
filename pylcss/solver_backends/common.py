@@ -420,10 +420,6 @@ def mesh_to_tet4(mesh: Any, warnings: List[str]) -> Tuple[np.ndarray, np.ndarray
     if n_flipped:
         # Swapping any two corners inverts orientation; swap n0/n1.
         cells[flipped, 0], cells[flipped, 1] = cells[flipped, 1], cells[flipped, 0].copy()
-        warnings.append(
-            f"Reoriented {n_flipped}/{cells.shape[0]} tetrahedra with negative "
-            "signed volume so CalculiX/OpenRadioss accept them as C3D4."
-        )
 
     degenerate = np.isclose(signed_vol, 0.0)
     n_deg = int(np.count_nonzero(degenerate))
@@ -503,10 +499,6 @@ def mesh_to_tet10(mesh: Any, warnings: List[str]) -> Tuple[np.ndarray, np.ndarra
         # Relabel midsides to match the corner 0↔1 swap.
         cells[flipped, 5], cells[flipped, 6] = cells[flipped, 6], cells[flipped, 5].copy()
         cells[flipped, 7], cells[flipped, 8] = cells[flipped, 8], cells[flipped, 7].copy()
-        warnings.append(
-            f"Reoriented {n_flipped}/{cells.shape[0]} C3D10 tetrahedra with "
-            "negative corner signed volume so CalculiX accepts them."
-        )
 
     degenerate = np.isclose(signed_vol, 0.0)
     n_deg = int(np.count_nonzero(degenerate))

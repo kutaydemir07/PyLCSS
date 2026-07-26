@@ -1,0 +1,82 @@
+{
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "graph": {"layout_direction": 0, "acyclic": true, "pipe_collision": false, "pipe_slicing": true, "pipe_style": 1, "accept_connection_types": "{}", "reject_connection_types": "{}"},
+  "nodes": {
+    "domain": {
+      "type_": "com.cad.geometry.box.BoxNode",
+      "name": "Minimum-Mass Design Space",
+      "pos": [-760.0, -40.0],
+      "custom": {"length_x": 100.0, "width_y": 40.0, "height_z": 16.0, "centered": true}
+    },
+    "material": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "name": "Aluminum 6061-T6",
+      "pos": [-500.0, -300.0],
+      "custom": {"preset": "Aluminum 6061-T6", "youngs_modulus": 68900.0, "poissons_ratio": 0.33, "density": 2.7e-09, "thermal_conductivity": 167.0, "yield_strength": 240.0, "tangent_modulus": 0.0}
+    },
+    "fixed-face": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "name": "Select Fixed End",
+      "pos": [-500.0, -100.0],
+      "custom": {"selector_type": "Direction", "direction": "<X"}
+    },
+    "loaded-face": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "name": "Select Loaded End",
+      "pos": [-500.0, 100.0],
+      "custom": {"selector_type": "Direction", "direction": ">X"}
+    },
+    "support": {
+      "type_": "com.cad.topopt.support.TopologySupportNode",
+      "name": "Fixed Root",
+      "pos": [-240.0, -100.0],
+      "custom": {"support_type": "Fixed"}
+    },
+    "force": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "name": "Design Load",
+      "pos": [-240.0, 100.0],
+      "custom": {"force_x": 0.0, "force_y": -3000.0, "force_z": 0.0}
+    },
+    "topopt": {
+      "type_": "com.cad.sim.topopt_voxel.TopologyOptVoxelNode",
+      "name": "GCMMA Minimum Mass Under Stress",
+      "pos": [100.0, 0.0],
+      "custom": {
+        "workflow_mode": "Expert",
+        "design_goal": "Minimum Mass Under Stress",
+        "physics_mode": "Structural",
+        "manufacturing_process": "Additive",
+        "advanced_settings_visible": false,
+        "volfrac": 0.50,
+        "nelx": 40,
+        "nely": 16,
+        "nelz": 8,
+        "optimizer": "GCMMA",
+        "stress_constraint": true,
+        "yield_stress": 160.0,
+        "max_iter": 60,
+        "tol": 0.005,
+        "convergence_patience": 5,
+        "density_cutoff": 0.40,
+        "validate_after_optimize": false,
+        "validation_quality": "Mesh Convergence",
+        "print_ready_mesh": true,
+        "mesh_decimate_ratio": 0.35,
+        "visualization": "Recovered Shape",
+        "surface_recovery_method": "Volume-Preserving SDF (VTK)"
+      }
+    }
+  },
+  "connections": [
+    {"out": ["domain", "shape"], "in": ["fixed-face", "shape"]},
+    {"out": ["domain", "shape"], "in": ["loaded-face", "shape"]},
+    {"out": ["domain", "shape"], "in": ["topopt", "design_domain"]},
+    {"out": ["material", "material"], "in": ["topopt", "material"]},
+    {"out": ["fixed-face", "workplane"], "in": ["support", "target_region"]},
+    {"out": ["loaded-face", "workplane"], "in": ["force", "target_region"]},
+    {"out": ["support", "supports"], "in": ["topopt", "supports"]},
+    {"out": ["force", "loads"], "in": ["topopt", "loads"]}
+  ]
+}

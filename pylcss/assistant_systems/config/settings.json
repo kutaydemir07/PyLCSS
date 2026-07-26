@@ -1,4 +1,6 @@
 {
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
   "llm_control": {
     "enabled": true,
     "provider": "local",

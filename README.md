@@ -1,3 +1,8 @@
+<!--
+Copyright (c) 2026 Kutay Demir.
+Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
+-->
+
 # PyLCSS: Low-Code System Solutions
 
 <div align="center">
@@ -45,10 +50,10 @@ The core concept is the **Solution Space** approach for robust design: instead o
 
 - **Parametric CAD** — Define geometry in Python (CadQuery) or draw it interactively in FreeCAD via a live bridge
 - **FEA** — Static structural analysis via CalculiX with displacement and von Mises stress results visualised in the built-in VTK viewer
-- **Topology Optimization** — SIMP-based voxel topology optimization via pyMOTO; direct STL/OBJ export of optimized geometry
+- **Topology Optimization** — SIMP-based structural, thermal, thermo-mechanical, and multi-body pose-envelope optimization via pyMOTO; OC, MMA, GCMMA, and projected-gradient updates; explicit support/load/joint/operating-case nodes; rib/TPMS lattice manufacturing representations; volume-preserving SDF recovery for STL/STEP handoff
 - **Crash / Impact Simulation** — OpenRadioss explicit solver integration with animated VTK result playback
 - **Solution Space Exploration** — Find all designs that satisfy your requirements, not just a single optimum; includes product family analysis to identify a common platform across variants
-- **Multi-Modal Solution Spaces (MMSS)** — Follow the five-stage method: deflated searches from Latin-hypercube starts, HDBSCAN clustering, one box-shaped solution space per mode, largest-space retention within each all-variable overlap set, and an extended-problem decoupled form with common and separating variables; the `data` folder includes Resonance Avoiding Beam, Gaussian Wells, and Three Islands JSON examples
+- **Multi-Modal Solution Spaces (MMSS)** — Follow the five-stage method: deflated searches from Latin-hypercube starts, HDBSCAN clustering, one box-shaped solution space per mode, largest-space retention within each all-variable overlap set, and an extended-problem decoupled form with common and separating variables; `data/modeling_environment` includes Resonance Avoiding Beam, Gaussian Wells, and Three Islands JSON examples
 - **Multi-Objective Optimization** — 7 solvers: SLSQP, COBYLA, trust-constr, Differential Evolution, Nevergrad, NSGA-II, and Multi-Start
 - **Global Sensitivity Analysis** — 4 methods: Sobol, Morris, FAST, and Delta (DMIM)
 - **Surrogate Modelling** — 4 algorithms (MLP, Random Forest, Gradient Boosting, Gaussian Process / Kriging) with cross-validation, hyperparameter search, and feature importance
@@ -61,6 +66,19 @@ Detailed documentation on node types, workflows, and solver configuration is ava
 ---
 
 ## Installation
+
+### Windows installer
+
+Run `PyLCSS-2.2.0-Setup-x64.exe`. Setup installs an isolated Python runtime,
+all pinned packages, Start Menu/desktop shortcuts, and the selected
+CalculiX/OpenRadioss solver backends. Normal startup is the terminal-free
+`PyLCSS.exe` at the application root; it never runs pip or modifies the system
+PATH.
+
+The reproducible setup recipe and signing-ready installer source are under
+`installer/windows/`.
+
+### Developer installation
 
 **Requirements:** Python 3.10+ · Windows 10/11 (macOS/Linux: experimental)
 
@@ -77,10 +95,8 @@ pip install -r requirements.txt
 # Optional: download CalculiX, OpenRadioss, FreeCAD (interactive)
 python scripts/install_solvers.py
 
-python scripts/main.py
+python -m pylcss.main
 ```
-
-Or on Windows: double-click `run_gui.bat`.
 
 External solvers (CalculiX, OpenRadioss, FreeCAD) are optional. PyLCSS opens cleanly without them; solver nodes remain available for deck-only preparation and show their detected runtime status in the component-library tooltip. Attempting a full solve without the required executable reports a node error. The external tools are governed by their own upstream licenses (CalculiX: GPL, OpenRadioss: AGPL-3.0, FreeCAD: LGPL-2.1+).
 

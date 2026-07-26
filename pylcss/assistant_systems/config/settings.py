@@ -94,8 +94,16 @@ class AssistantConfig:
         save_path = path or CONFIG_FILE
         save_path.parent.mkdir(parents=True, exist_ok=True)
 
+        payload = {
+            "_copyright": "Copyright (c) 2026 Kutay Demir.",
+            "_license": (
+                "Licensed under the PolyForm Shield License 1.0.0. "
+                "See LICENSE file for details."
+            ),
+            **asdict(self),
+        }
         with open(save_path, 'w') as f:
-            json.dump(asdict(self), f, indent=2)
+            json.dump(payload, f, indent=2)
         logger.info(f"Saved assistant config to {save_path}")
 
     @classmethod

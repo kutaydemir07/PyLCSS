@@ -17,7 +17,7 @@ function          terminal node identifier       backend
 ================  =============================  =======================
 ``cad.fea``       ``com.cad.sim.solver``         CalculiX (linear static)
 ``cad.crash``     ``com.cad.sim.crash_solver``   OpenRadioss
-``cad.topopt``    ``com.cad.sim.topopt_voxel``   SIMP topology optimisation
+``cad.topopt``    ``com.cad.sim.topopt_voxel``   Density / level-set topology
 ================  =============================  =======================
 
 Inputs are matched against ``NumberNode`` / ``VariableNode`` instances in the
@@ -70,8 +70,8 @@ _TOPOPT_IDS = ("com.cad.sim.topopt_voxel",)
 # and backend switches intentionally remain owned by the saved .cad study.
 _OVERRIDEABLE_PROPERTIES = {
     "com.cad.sim.material": (
-        "youngs_modulus", "poissons_ratio", "density", "yield_strength",
-        "tangent_modulus",
+        "youngs_modulus", "poissons_ratio", "density",
+        "thermal_conductivity", "yield_strength", "tangent_modulus",
     ),
     "com.cad.sim.crash_material": (
         "youngs_modulus", "poissons_ratio", "density", "yield_strength",
@@ -102,8 +102,11 @@ _OVERRIDEABLE_PROPERTIES = {
         "nelx", "nely", "nelz", "volfrac", "rmin", "penal",
         "density_cutoff", "max_iter", "tol", "convergence_patience",
         "stress_constraint", "yield_stress", "max_member_size_voxels",
-        "pattern_repeat", "force_ix_frac", "force_iy_frac", "force_iz_frac",
-        "force_dir_x", "force_dir_y", "force_dir_z", "force_magnitude",
+        "structure_cell_size_voxels", "structure_member_thickness_voxels",
+        "structure_skin_thickness_voxels", "lattice_variable_density",
+        "lattice_min_relative_density", "lattice_max_relative_density",
+        "lattice_solid_transition_density",
+        "pattern_repeat",
     ),
 }
 
@@ -123,6 +126,7 @@ _PROPERTY_LABELS = {
     "youngs_modulus": "Young's modulus",
     "poissons_ratio": "Poisson's ratio",
     "density": "Density",
+    "thermal_conductivity": "Thermal conductivity",
     "yield_strength": "Yield strength",
     "tangent_modulus": "Tangent modulus",
     "failure_strain": "Failure strain",
@@ -138,7 +142,10 @@ _PROPERTY_LABELS = {
     "penal": "SIMP penalty",
     "max_iter": "Maximum iterations",
     "tol": "Convergence tolerance",
-    "force_magnitude": "Force magnitude",
+    "structure_cell_size_voxels": "Lattice cell size",
+    "structure_member_thickness_voxels": "Minimum lattice wall/member",
+    "lattice_min_relative_density": "Minimum lattice relative density",
+    "lattice_max_relative_density": "Maximum lattice relative density",
     "impactor_mass_kg": "Impactor mass",
 }
 
@@ -285,11 +292,14 @@ def _standardize(kind: str, raw: Mapping[str, Any]) -> Dict[str, Any]:
             else:
                 final_vol_frac = float(np.mean(density)) if density is not None and len(density) else 0.0
         std["final_vol_frac"] = final_vol_frac
-        std["target_vol_frac"] = float(raw.get("target_vol_frac", 0.0))
-        std["compliance"]     = float(raw.get("compliance", 0.0))
-        std["mass"]           = float(raw.get("mass", 0.0))
-        std["volume"]         = float(raw.get("volume", 0.0))
-        std["total_volume"]   = float(raw.get("total_volume", 0.0))
+        std["target_vol_frac"] = float(raw.get("target_vol_frac") or 0.0)
+        std["compliance"] = float(raw.get("compliance") or 0.0)
+        std["thermal_compliance"] = float(
+            raw.get("thermal_compliance") or 0.0
+        )
+        std["mass"] = float(raw.get("mass") or 0.0)
+        std["volume"] = float(raw.get("volume") or 0.0)
+        std["total_volume"] = float(raw.get("total_volume") or 0.0)
 
     return std
 
@@ -386,7 +396,7 @@ def crash(cad_path: str, _settings: Mapping[str, Any] | None = None, **inputs) -
 
 
 def topopt(cad_path: str, _settings: Mapping[str, Any] | None = None, **inputs) -> CadResult:
-    """Run a SIMP topology-optimisation pass through a CAD graph."""
+    """Run the saved density or level-set topology study in a CAD graph."""
     return _evaluate(cad_path, inputs, terminal_id=_TOPOPT_IDS, kind="topopt", settings=_settings)
 
 
@@ -403,7 +413,7 @@ def _evaluate(
     abs_path = os.path.abspath(str(cad_path))
     if not os.path.isfile(abs_path):
         # Fallback: resolve repo-relative paths against the PyLCSS repo root
-        # so that saved system models can reference `data/foo.cad` portably.
+        # so saved models can reference `data/cad_environment/foo.cad` portably.
         try:
             from pylcss.config import BASE_DIR
             repo_relative = os.path.join(os.path.dirname(BASE_DIR), str(cad_path))
@@ -606,6 +616,7 @@ def _apply_property_overrides(graph, settings: Mapping[str, float]) -> int:
         # silently ignore the requested value.
         if identifier == "com.cad.sim.material" and prop in {
             "youngs_modulus", "poissons_ratio", "density",
+            "thermal_conductivity",
         }:
             node.set_property("preset", "Custom")
         elif identifier == "com.cad.sim.crash_material" and prop in {

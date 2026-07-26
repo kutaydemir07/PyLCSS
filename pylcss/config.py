@@ -11,6 +11,7 @@ changing core logic.
 
 import logging
 import os
+import sys
 from dataclasses import dataclass
 from typing import Optional
 
@@ -221,9 +222,10 @@ def setup_logging(level: int = DEFAULT_LOG_LEVEL,
     """
     handlers = []
     
-    # 1. Stream Handler with encoding safety
-    stream_handler = logging.StreamHandler()
-    handlers.append(stream_handler)
+    # 1. Stream handler when a console is attached. ``pythonw.exe`` and
+    # PyInstaller windowed applications intentionally expose stderr as None.
+    if sys.stderr is not None:
+        handlers.append(logging.StreamHandler(sys.stderr))
     
     # 2. File Handler with UTF-8 support
     if log_file:
@@ -231,7 +233,11 @@ def setup_logging(level: int = DEFAULT_LOG_LEVEL,
             file_handler = logging.FileHandler(log_file, encoding='utf-8', errors='replace')
             handlers.append(file_handler)
         except Exception as e:
-            print(f"Warning: Could not initialize file logging: {e}")
+            if sys.stderr is not None:
+                print(
+                    f"Warning: Could not initialize file logging: {e}",
+                    file=sys.stderr,
+                )
     
     logging.basicConfig(
         level=level,

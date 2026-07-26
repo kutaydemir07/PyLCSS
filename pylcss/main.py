@@ -68,8 +68,8 @@ setup_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Apply patches and import main window
-from pylcss.user_interface.common import qt_patches  # noqa: F401 - startup patches
-from pylcss.user_interface.main_application_window import MainWindow
+from pylcss.user_interface.common import qt_patches  # noqa: E402,F401 - startup patch
+from pylcss.user_interface.main_application_window import MainWindow  # noqa: E402
 
 
 def cleanup_temp_models():
@@ -106,4 +106,5 @@ def main() -> NoReturn:
     sys.exit(exit_code)
 
 
-
+if __name__ == "__main__":
+    main()
