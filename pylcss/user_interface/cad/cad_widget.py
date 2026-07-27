@@ -622,6 +622,7 @@ class PropertiesPanel(QtWidgets.QWidget):
         self.layout.setSpacing(5)
         self.current_node = None
         self.property_widgets = {}
+        self._study_status_labels = {}
         self._updating_property = False  # guard against feedback loop
         self._active_pick_connections = None
 
@@ -661,22 +662,22 @@ class PropertiesPanel(QtWidgets.QWidget):
         """Display specialized inspector for a selected node."""
         self.current_node = node
 
-        # Clear previous UI. takeAt() drops the item from the layout but
-        # leaves the widget parented to props_widget, so deleteLater()
-        # alone keeps it painted at its old geometry until the event loop
-        # fires — when display_node() is called several times in a row
-        # (e.g. after a face pick) the survivors stack up as ghost
-        # widgets. setParent(None) detaches them from the paint tree
-        # immediately so only the freshly built panel is visible.
+        # Clear the previous UI without reparenting its widgets. Calling
+        # setParent(None) briefly turns every old inspector section into a
+        # top-level window on Windows, producing a burst of small white
+        # windows before deleteLater() closes them. Hiding first removes the
+        # widgets from the paint tree immediately while their existing parent
+        # continues to own them until deferred deletion runs.
         self.props_widget.setUpdatesEnabled(False)
         try:
             while self.props_layout.count():
                 item = self.props_layout.takeAt(0)
                 w = item.widget() if item is not None else None
                 if w is not None:
-                    w.setParent(None)
+                    w.hide()
                     w.deleteLater()
             self.property_widgets.clear()
+            self._study_status_labels.clear()
 
             if node is None:
                 lbl = QtWidgets.QLabel("No Selection")
@@ -1086,7 +1087,7 @@ class PropertiesPanel(QtWidgets.QWidget):
             finally:
                 app._batching_study_definition_edit = False
 
-            self.display_node(solver_node)
+            self._refresh_study_definition_statuses(solver_node)
 
         QtCore.QTimer.singleShot(0, _finish)
 
@@ -1142,6 +1143,14 @@ class PropertiesPanel(QtWidgets.QWidget):
 
     @staticmethod
     def _study_status_label(count, *, optional=False, detail=""):
+        label = QtWidgets.QLabel()
+        PropertiesPanel._set_study_status_label(
+            label, count, optional=optional, detail=detail
+        )
+        return label
+
+    @staticmethod
+    def _set_study_status_label(label, count, *, optional=False, detail=""):
         if count:
             text, color = f"{count} connected", "#72d38a"
         elif optional:
@@ -1150,10 +1159,55 @@ class PropertiesPanel(QtWidgets.QWidget):
             text, color = "Not connected", "#ffb35c"
         if detail:
             text += f" - {detail}"
-        label = QtWidgets.QLabel(text)
+        label.setText(text)
         label.setWordWrap(True)
         label.setStyleSheet(f"color:{color};")
-        return label
+
+    def _refresh_study_definition_statuses(self, node):
+        """Update connection badges without rebuilding the whole inspector."""
+        if self.current_node is not node:
+            return
+
+        labels = self._study_status_labels
+        node_class = node.__class__.__name__
+        impact_scope = ""
+        support_optional = False
+        driven_displacement = False
+
+        if node_class == "SolverNode":
+            driven_displacement = self._has_driven_displacement(node)
+        elif node_class == "CrashSolverNode":
+            impact_nodes = self._connected_input_nodes(node, "impact")
+            if impact_nodes:
+                try:
+                    impact_scope = str(
+                        impact_nodes[0].get_property("application_scope") or ""
+                    )
+                except Exception:
+                    impact_scope = ""
+            normalized_scope = impact_scope.strip().lower().replace("_", " ")
+            support_optional = normalized_scope.startswith(
+                ("moving body", "prescribed")
+            )
+
+        for port_name, label in labels.items():
+            count = len(self._connected_input_ports(node, port_name))
+            optional = False
+            detail = ""
+            if node_class == "SolverNode" and port_name == "loads":
+                optional = driven_displacement
+                if driven_displacement and not count:
+                    detail = "study is driven by displacement"
+            elif node_class == "CrashSolverNode":
+                if port_name == "impact" and count:
+                    detail = impact_scope
+                elif port_name == "constraints":
+                    optional = support_optional
+                    if support_optional and not count:
+                        detail = "not used by this scenario"
+            self._set_study_status_label(
+                label, count, optional=optional, detail=detail
+            )
 
     @staticmethod
     def _backend_status_label(ready, detail):
@@ -1190,12 +1244,11 @@ class PropertiesPanel(QtWidgets.QWidget):
         """Build the in-node FEA/Crash setup card used by solver nodes."""
         setup_group = QtWidgets.QGroupBox("Study Definition")
         setup_layout = QtWidgets.QFormLayout(setup_group)
-        setup_layout.addRow(
-            "Mesh:",
-            self._study_status_label(
-                len(self._connected_input_ports(node, "mesh"))
-            ),
+        mesh_status = self._study_status_label(
+            len(self._connected_input_ports(node, "mesh"))
         )
+        self._study_status_labels["mesh"] = mesh_status
+        setup_layout.addRow("Mesh:", mesh_status)
 
         if study_kind == "fea":
             material_count = len(self._connected_input_ports(node, "material"))
@@ -1204,21 +1257,22 @@ class PropertiesPanel(QtWidgets.QWidget):
             )
             load_count = len(self._connected_input_ports(node, "loads"))
             driven_displacement = self._has_driven_displacement(node)
-            setup_layout.addRow(
-                "Material:", self._study_status_label(material_count)
+            material_status = self._study_status_label(material_count)
+            support_status = self._study_status_label(support_count)
+            load_status = self._study_status_label(
+                load_count,
+                optional=driven_displacement,
+                detail="study is driven by displacement"
+                if driven_displacement and not load_count else "",
             )
-            setup_layout.addRow(
-                "Supports:", self._study_status_label(support_count)
-            )
-            setup_layout.addRow(
-                "Loads:",
-                self._study_status_label(
-                    load_count,
-                    optional=driven_displacement,
-                    detail="study is driven by displacement"
-                    if driven_displacement and not load_count else "",
-                ),
-            )
+            self._study_status_labels.update({
+                "material": material_status,
+                "constraints": support_status,
+                "loads": load_status,
+            })
+            setup_layout.addRow("Material:", material_status)
+            setup_layout.addRow("Supports:", support_status)
+            setup_layout.addRow("Loads:", load_status)
             try:
                 backend_ready, backend_detail = LibraryPanel._calculix_status()
             except Exception:
@@ -1262,26 +1316,26 @@ class PropertiesPanel(QtWidgets.QWidget):
             support_optional = normalized_scope.startswith(
                 ("moving body", "prescribed")
             )
-            setup_layout.addRow(
-                "Crash material:", self._study_status_label(material_count)
+            material_status = self._study_status_label(material_count)
+            impact_status = self._study_status_label(
+                impact_count, detail=scope if impact_count else ""
             )
-            setup_layout.addRow(
-                "Impact:",
-                self._study_status_label(
-                    impact_count, detail=scope if impact_count else ""
+            support_status = self._study_status_label(
+                support_count,
+                optional=support_optional,
+                detail=(
+                    "not used by this scenario"
+                    if support_optional and not support_count else ""
                 ),
             )
-            setup_layout.addRow(
-                "Supports:",
-                self._study_status_label(
-                    support_count,
-                    optional=support_optional,
-                    detail=(
-                        "not used by this scenario"
-                        if support_optional and not support_count else ""
-                    ),
-                ),
-            )
+            self._study_status_labels.update({
+                "crash_material": material_status,
+                "impact": impact_status,
+                "constraints": support_status,
+            })
+            setup_layout.addRow("Crash material:", material_status)
+            setup_layout.addRow("Impact:", impact_status)
+            setup_layout.addRow("Supports:", support_status)
             try:
                 backend_ready, backend_detail = LibraryPanel._openradioss_status()
             except Exception:
@@ -1556,6 +1610,7 @@ class PropertiesPanel(QtWidgets.QWidget):
             status.setStyleSheet(
                 "color:#72d38a;" if count else "color:#ffb35c;"
             )
+            self._study_status_labels[port_name] = status
             setup_layout.addRow(label + ":", status)
 
         button_panel = QtWidgets.QWidget()
@@ -3722,7 +3777,8 @@ class ResultsPanel(QtWidgets.QWidget):
             item = self._content_layout.takeAt(0)
             w = item.widget()
             if w is not None:
-                w.setParent(None)
+                w.hide()
+                w.deleteLater()
 
     def _add_section(self, title, rows):
         """rows: list of (label, value-string)."""
@@ -5544,7 +5600,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             in {"SolverNode", "CrashSolverNode", "TopologyOptVoxelNode"}
         ):
             QtCore.QTimer.singleShot(
-                0, lambda n=current: self.properties.display_node(n)
+                0, lambda n=current:
+                self.properties._refresh_study_definition_statuses(n)
                 if self.properties.current_node is n else None,
             )
 
