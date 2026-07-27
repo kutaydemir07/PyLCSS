@@ -9,12 +9,11 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-
-NAVY_TOP = (7, 25, 45, 255)
-NAVY_BOTTOM = (3, 12, 24, 255)
-BLUE = (60, 178, 255, 255)
-GREEN = (127, 239, 64, 255)
-WHITE = (245, 249, 255, 255)
+NAVY_TOP = (255, 255, 255, 255)
+NAVY_BOTTOM = (235, 240, 248, 255)
+BLUE = (45, 75, 110, 255)
+GREEN = (32, 59, 90, 255)
+WHITE = (20, 35, 55, 255)
 
 
 def _font(name: str, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -50,14 +49,7 @@ def _create_wizard_image(logo: Image.Image, destination: Path) -> None:
             pixels[x, y] = color
 
     draw = ImageDraw.Draw(canvas, "RGBA")
-    draw.ellipse((-210, 500, 430, 1140), fill=(16, 91, 158, 38))
-    draw.ellipse((120, -180, 680, 380), fill=(104, 239, 66, 25))
-    draw.rounded_rectangle(
-        (44, 62, width - 44, height - 62),
-        radius=28,
-        outline=(89, 180, 255, 65),
-        width=2,
-    )
+    # Clean minimalist design: no blobs, no outlines
 
     fitted_logo = _contain(logo, (350, 350))
     logo_x = (width - fitted_logo.width) // 2
@@ -80,7 +72,7 @@ def _create_wizard_image(logo: Image.Image, destination: Path) -> None:
     detail = "Model  •  Simulate  •  Optimize"
     detail_box = draw.textbbox((0, 0), detail, font=detail_font)
     detail_x = (width - (detail_box[2] - detail_box[0])) // 2
-    draw.text((detail_x, 738), detail, font=detail_font, fill=(190, 210, 230, 255))
+    draw.text((detail_x, 738), detail, font=detail_font, fill=(100, 115, 135, 255))
     canvas.convert("RGB").save(destination, format="PNG", optimize=True)
 
 
