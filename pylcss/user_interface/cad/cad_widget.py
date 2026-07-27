@@ -717,6 +717,10 @@ class PropertiesPanel(QtWidgets.QWidget):
             node_class = node.__class__.__name__
             if node_class == 'TopologyOptVoxelNode':
                 self._build_topopt_voxel_ui(node)
+            elif node_class == 'SolverNode':
+                self._build_fea_solver_ui(node)
+            elif node_class == 'CrashSolverNode':
+                self._build_crash_solver_ui(node)
             elif node_class == 'CadQueryCodeNode':
                 self._build_code_part_ui(node)
             elif node_class in ('MaterialNode', 'CrashMaterialNode'):
@@ -747,6 +751,8 @@ class PropertiesPanel(QtWidgets.QWidget):
 
         preferred_open = {
             "TopologyOptVoxelNode": {"Design Intent"},
+            "SolverNode": {"Study Definition", "Solver"},
+            "CrashSolverNode": {"Study Definition", "Solver"},
             "MaterialNode": {"Material Definition"},
             "CrashMaterialNode": {"Material Definition"},
             "InteractiveSelectFaceNode": {"Face Selection"},
@@ -1048,6 +1054,293 @@ class PropertiesPanel(QtWidgets.QWidget):
             plastic_layout.addRow(hint)
             self.props_layout.addWidget(plasticity)
             
+    @staticmethod
+    def _connected_input_ports(node, port_name):
+        """Return the output ports currently connected to one node input."""
+        try:
+            port = node.get_input(port_name)
+            return list(port.connected_ports()) if port is not None else []
+        except Exception:
+            return []
+
+    @classmethod
+    def _connected_input_nodes(cls, node, port_name):
+        nodes = []
+        for port in cls._connected_input_ports(node, port_name):
+            try:
+                nodes.append(port.node())
+            except Exception:
+                continue
+        return nodes
+
+    def _finish_study_definition_edit(self, app, solver_node):
+        """Restore the solver inspector once an atomic quick-add has finished."""
+        def _finish():
+            # NodeGraphQt may select a node while it is being added. Keep the
+            # study definition anchored to the solver the user was editing.
+            try:
+                app.graph.clear_selection()
+                solver_node.set_selected(True)
+            except Exception:
+                pass
+            finally:
+                app._batching_study_definition_edit = False
+
+            self.display_node(solver_node)
+
+        QtCore.QTimer.singleShot(0, _finish)
+
+    def _add_solver_setup_node(
+        self,
+        solver_node,
+        *,
+        node_id,
+        label,
+        output_name,
+        solver_input,
+        mesh_input=None,
+    ):
+        """Spawn and wire a boundary-condition node from a solver inspector."""
+        app = self._get_main_app()
+        if app is None:
+            return
+        app._batching_study_definition_edit = True
+        try:
+            x, y = solver_node.pos()
+        except Exception:
+            x, y = (0.0, 0.0)
+
+        existing = len(self._connected_input_ports(solver_node, solver_input))
+        created = app._spawn_node(
+            node_id,
+            label,
+            x=float(x) - 330.0,
+            y=float(y) + 120.0 * existing,
+        )
+        if created is None:
+            app._batching_study_definition_edit = False
+            return
+
+        try:
+            created.get_output(output_name).connect_to(
+                solver_node.get_input(solver_input)
+            )
+        except Exception:
+            pass
+
+        # A new FEA condition needs the same mesh as its solver. Reuse that
+        # upstream connection so quick-add leaves only the face to define.
+        if mesh_input:
+            mesh_sources = self._connected_input_ports(solver_node, "mesh")
+            if mesh_sources:
+                try:
+                    mesh_sources[0].connect_to(created.get_input(mesh_input))
+                except Exception:
+                    pass
+
+        self._finish_study_definition_edit(app, solver_node)
+
+    @staticmethod
+    def _study_status_label(count, *, optional=False, detail=""):
+        if count:
+            text, color = f"{count} connected", "#72d38a"
+        elif optional:
+            text, color = "Optional", "#8f98a5"
+        else:
+            text, color = "Not connected", "#ffb35c"
+        if detail:
+            text += f" - {detail}"
+        label = QtWidgets.QLabel(text)
+        label.setWordWrap(True)
+        label.setStyleSheet(f"color:{color};")
+        return label
+
+    @staticmethod
+    def _backend_status_label(ready, detail):
+        label = QtWidgets.QLabel("Detected" if ready else "Not detected")
+        label.setWordWrap(True)
+        label.setStyleSheet(
+            "color:#72d38a;" if ready else "color:#ffb35c;"
+        )
+        label.setToolTip(str(detail))
+        return label
+
+    def _has_driven_displacement(self, solver_node):
+        """Whether a connected support prescribes a nonzero displacement."""
+        for condition in self._connected_input_nodes(solver_node, "constraints"):
+            try:
+                if str(condition.get_property("constraint_type")) != "Displacement":
+                    continue
+                for axis in ("x", "y", "z"):
+                    enabled = condition.get_property(
+                        f"displacement_{axis}_enabled"
+                    )
+                    if enabled is None:
+                        enabled = True
+                    value = float(
+                        condition.get_property(f"displacement_{axis}") or 0.0
+                    )
+                    if bool(enabled) and abs(value) > 1e-15:
+                        return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    def _build_solver_study_definition(self, node, study_kind):
+        """Build the in-node FEA/Crash setup card used by solver nodes."""
+        setup_group = QtWidgets.QGroupBox("Study Definition")
+        setup_layout = QtWidgets.QFormLayout(setup_group)
+        setup_layout.addRow(
+            "Mesh:",
+            self._study_status_label(
+                len(self._connected_input_ports(node, "mesh"))
+            ),
+        )
+
+        if study_kind == "fea":
+            material_count = len(self._connected_input_ports(node, "material"))
+            support_count = len(
+                self._connected_input_ports(node, "constraints")
+            )
+            load_count = len(self._connected_input_ports(node, "loads"))
+            driven_displacement = self._has_driven_displacement(node)
+            setup_layout.addRow(
+                "Material:", self._study_status_label(material_count)
+            )
+            setup_layout.addRow(
+                "Supports:", self._study_status_label(support_count)
+            )
+            setup_layout.addRow(
+                "Loads:",
+                self._study_status_label(
+                    load_count,
+                    optional=driven_displacement,
+                    detail="study is driven by displacement"
+                    if driven_displacement and not load_count else "",
+                ),
+            )
+            try:
+                backend_ready, backend_detail = LibraryPanel._calculix_status()
+            except Exception:
+                backend_ready = False
+                backend_detail = "CalculiX status unavailable"
+            setup_layout.addRow(
+                "CalculiX:",
+                self._backend_status_label(backend_ready, backend_detail),
+            )
+            button_specs = [
+                ("Add Support", "com.cad.sim.constraint", "FEA Support",
+                 "constraints", "constraints", "mesh"),
+                ("Add Force", "com.cad.sim.load", "FEA Force",
+                 "loads", "loads", "mesh"),
+                ("Add Pressure", "com.cad.sim.pressure_load", "FEA Pressure",
+                 "loads", "loads", "mesh"),
+            ]
+            hint_text = (
+                "Quick-add connects the new condition to this solver and reuses "
+                "its mesh connection. Connect a Pick Faces output to the new "
+                "node's target_face input; gravity loads need no face."
+            )
+        else:
+            material_count = len(
+                self._connected_input_ports(node, "crash_material")
+            )
+            impact_nodes = self._connected_input_nodes(node, "impact")
+            impact_count = len(impact_nodes)
+            support_count = len(
+                self._connected_input_ports(node, "constraints")
+            )
+            scope = ""
+            if impact_nodes:
+                try:
+                    scope = str(
+                        impact_nodes[0].get_property("application_scope") or ""
+                    )
+                except Exception:
+                    scope = ""
+            normalized_scope = scope.strip().lower().replace("_", " ")
+            support_optional = normalized_scope.startswith(
+                ("moving body", "prescribed")
+            )
+            setup_layout.addRow(
+                "Crash material:", self._study_status_label(material_count)
+            )
+            setup_layout.addRow(
+                "Impact:",
+                self._study_status_label(
+                    impact_count, detail=scope if impact_count else ""
+                ),
+            )
+            setup_layout.addRow(
+                "Supports:",
+                self._study_status_label(
+                    support_count,
+                    optional=support_optional,
+                    detail=(
+                        "not used by this scenario"
+                        if support_optional and not support_count else ""
+                    ),
+                ),
+            )
+            try:
+                backend_ready, backend_detail = LibraryPanel._openradioss_status()
+            except Exception:
+                backend_ready = False
+                backend_detail = "OpenRadioss status unavailable"
+            setup_layout.addRow(
+                "OpenRadioss:",
+                self._backend_status_label(backend_ready, backend_detail),
+            )
+            button_specs = [
+                ("Add Impact", "com.cad.sim.impact", "Impact Condition",
+                 "impact", "impact", None),
+                ("Add Support", "com.cad.sim.constraint", "Crash Support",
+                 "constraints", "constraints", "mesh"),
+            ]
+            hint_text = (
+                "Quick-add wires the condition to this solver. Fixed-specimen "
+                "and prescribed-wall scenarios also need a Pick Faces output "
+                "on the Impact node. A support is required only for the "
+                "fixed-specimen moving-impactor scenario."
+            )
+
+        buttons = QtWidgets.QWidget()
+        button_layout = QtWidgets.QGridLayout(buttons)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(5)
+        for index, spec in enumerate(button_specs):
+            text, node_id, label, output_name, solver_input, mesh_input = spec
+            button = QtWidgets.QPushButton(text)
+            button.clicked.connect(
+                lambda _checked=False, values=spec[1:]:
+                    self._add_solver_setup_node(
+                        node,
+                        node_id=values[0],
+                        label=values[1],
+                        output_name=values[2],
+                        solver_input=values[3],
+                        mesh_input=values[4],
+                    )
+            )
+            button_layout.addWidget(button, index // 2, index % 2)
+        setup_layout.addRow(buttons)
+
+        hint = QtWidgets.QLabel(hint_text)
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#8f98a5; font-size:10px;")
+        setup_layout.addRow(hint)
+        self.props_layout.addWidget(setup_group)
+
+    def _build_fea_solver_ui(self, node):
+        """FEA solver inspector with study setup next to solver settings."""
+        self._build_solver_study_definition(node, "fea")
+        self._build_generic_ui(node)
+
+    def _build_crash_solver_ui(self, node):
+        """Crash solver inspector with study setup next to solver settings."""
+        self._build_solver_study_definition(node, "crash")
+        self._build_generic_ui(node)
+
     def _build_topopt_voxel_ui(self, node):
         """Compact inspector for the structured voxel topology optimizer."""
 
@@ -1118,7 +1411,6 @@ class PropertiesPanel(QtWidgets.QWidget):
                 0,
                 lambda n=node: self.display_node(n) if self.current_node is n else None,
             )
-
 
         def _intent_combo(prop, items, default=None):
             widget = _combo(prop, items, default)
@@ -1301,6 +1593,7 @@ class PropertiesPanel(QtWidgets.QWidget):
             app = self._get_main_app()
             if app is None:
                 return
+            app._batching_study_definition_edit = True
             try:
                 x, y = node.pos()
             except Exception:
@@ -1312,6 +1605,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                 y=float(y) + 120.0 * _connected_count(input_name),
             )
             if created is None:
+                app._batching_study_definition_edit = False
                 return
             try:
                 created.get_output(output_name).connect_to(
@@ -1319,7 +1613,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                 )
             except Exception:
                 pass
-            _refresh_topopt_later()
+            self._finish_study_definition_edit(app, node)
 
         for index, spec in enumerate(button_specs):
             button = QtWidgets.QPushButton(spec[0])
@@ -1746,7 +2040,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                               "deck_path", "engine_path", "engine_executable_path", "starter_path",
                               "work_dir", "timeout_s", "stress_scale_to_mpa")),
         ("Visualization",   ("visualization", "deformation_scale", "disp_scale", "n_frames")),
-        ("Solver",          ("end_time", "time_steps", "damping", "enable_", "contact_", "mass_scaling", "iterations",
+        ("Solver",          ("analysis_", "end_time", "time_steps", "damping", "enable_", "contact_", "mass_scaling", "iterations",
                              "convergence_tol", "move_limit", "min_density", "penal", "filter_radius",
                              "update_scheme", "filter_type",
                              "element_type", "shape_recovery", "recovery_resolution", "smoothing_iterations",
@@ -3603,329 +3897,6 @@ class ResultsPanel(QtWidgets.QWidget):
             self._add_warnings(list(warnings))
 
 
-class StudyWorkbenchPanel(QtWidgets.QWidget):
-    """Workflow-oriented setup surface for the three engineering study types.
-
-    The node graph remains the source of truth.  This panel only inspects the
-    connected upstream closure of the relevant solver node and presents a
-    compact engineering checklist.  Running and result export stay in the main
-    toolbar so the workbench does not duplicate global actions.
-    """
-
-    _GEOMETRY_CLASSES = {
-        'CadQueryCodeNode', 'FreeCadPartNode', 'ImportStepNode', 'ImportStlNode',
-        'AssemblyNode',
-    }
-    _STUDIES = {
-        'FEA': {
-            'terminal_classes': ('SolverNode',),
-        },
-        'Crash / Impact': {
-            'terminal_classes': ('CrashSolverNode', 'RunRadiossDeckNode'),
-        },
-        'Topology Opt': {
-            'terminal_classes': ('TopologyOptVoxelNode',),
-        },
-    }
-
-    def __init__(self, host):
-        super().__init__(host)
-        self.host = host
-        self._pages = {}
-        outer = QtWidgets.QVBoxLayout(self)
-        outer.setContentsMargins(5, 5, 5, 5)
-        outer.setSpacing(4)
-
-        self.tabs = QtWidgets.QTabWidget()
-        for study_name in self._STUDIES:
-            page = QtWidgets.QWidget()
-            layout = QtWidgets.QVBoxLayout(page)
-            layout.setContentsMargins(7, 7, 7, 7)
-            layout.setSpacing(5)
-
-            status = QtWidgets.QLabel()
-            status.setWordWrap(True)
-            status.setStyleSheet(
-                "background:#20242a; border:1px solid #353b45; border-radius:5px; "
-                "padding:5px; font-weight:600;"
-            )
-            layout.addWidget(status)
-
-            checklist = QtWidgets.QListWidget()
-            checklist.setAlternatingRowColors(True)
-            checklist.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
-            checklist.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-            checklist.setTextElideMode(QtCore.Qt.ElideRight)
-            checklist.setMinimumHeight(115)
-            layout.addWidget(checklist, 1)
-
-            compact_tab = {
-                'Crash / Impact': 'Crash',
-                'Topology Opt': 'TopOpt',
-            }.get(study_name, study_name)
-            self.tabs.addTab(page, compact_tab)
-            self._pages[study_name] = {
-                'status': status,
-                'checklist': checklist,
-            }
-        outer.addWidget(self.tabs)
-        self.refresh()
-
-    def _all_nodes(self):
-        try:
-            return list(self.host.graph.all_nodes())
-        except Exception:
-            return []
-
-    def _target_node(self, study_name):
-        terminal_classes = set(self._STUDIES[study_name]['terminal_classes'])
-        candidates = []
-        try:
-            candidates.extend(list(self.host.graph.selected_nodes()))
-        except Exception:
-            pass
-        current = getattr(getattr(self.host, 'properties', None), 'current_node', None)
-        if current is not None and current not in candidates:
-            candidates.append(current)
-        for node in reversed(self._all_nodes()):
-            if node not in candidates:
-                candidates.append(node)
-        return next(
-            (node for node in candidates if node.__class__.__name__ in terminal_classes),
-            None,
-        )
-
-    def _scope(self, study_name):
-        target = self._target_node(study_name)
-        if target is None:
-            return target, self._all_nodes()
-        try:
-            return target, list(self.host._upstream_closure(target))
-        except Exception:
-            return target, [target]
-
-    @staticmethod
-    def _class_names(nodes):
-        return {node.__class__.__name__ for node in nodes}
-
-    @staticmethod
-    def _has_connected_port(node, name):
-        if node is None:
-            return False
-        try:
-            port = node.get_input(name)
-            return bool(port and port.connected_ports())
-        except Exception:
-            return False
-
-    @classmethod
-    def _has_face_or_condition(cls, node, port_name='target_face'):
-        if cls._has_connected_port(node, port_name):
-            return True
-        try:
-            return bool(str(node.get_property('condition') or '').strip())
-        except Exception:
-            return False
-
-    def _solver_ready(self, study_name, target=None):
-        try:
-            from pylcss.solver_backends.common import as_bool
-            if target is not None and as_bool(target.get_property('deck_only')):
-                return True, "Deck-only mode (solver launch disabled)"
-        except Exception:
-            pass
-        if study_name == 'FEA':
-            ready, _detail = LibraryPanel._calculix_status()
-            return ready, "CalculiX backend" if ready else "CalculiX missing"
-        if study_name == 'Crash / Impact':
-            ready, _detail = LibraryPanel._openradioss_status()
-            return ready, "OpenRadioss backend" if ready else "OpenRadioss missing"
-        try:
-            from pylcss.design_studio.topology_optimization.optimization.voxel_solver import (
-                import_pymoto,
-            )
-            import_pymoto()
-            return True, "pyMOTO backend"
-        except Exception:
-            return False, "pyMOTO missing"
-
-    def _checks(self, study_name, target, nodes):
-        classes = self._class_names(nodes)
-        checks = []
-
-        if study_name == 'Crash / Impact' and target is not None and target.__class__.__name__ == 'RunRadiossDeckNode':
-            raw_path = str(target.get_property('deck_path') or '').strip()
-            try:
-                deck_ok = bool(
-                    target._resolve_deck_path(
-                        raw_path, getattr(target, "_project_dir", None)
-                    )
-                )
-            except Exception:
-                deck_ok = False
-            checks.extend([
-                ("Prepared deck", deck_ok),
-                ("Radioss terminal", True),
-            ])
-        elif study_name == 'Crash / Impact':
-            impact = next((n for n in nodes if n.__class__.__name__ == 'ImpactConditionNode'), None)
-            scope = str(impact.get_property('application_scope') or '') if impact is not None else ''
-            normalized_scope = scope.lower().replace('_', ' ')
-            needs_support = not normalized_scope.startswith(('moving body', 'prescribed'))
-            needs_face = not normalized_scope.startswith('moving body')
-            checks.extend([
-                ("Crash terminal", target is not None),
-                ("Mesh", target is not None and self._has_connected_port(target, 'mesh')),
-                ("Material", target is not None and self._has_connected_port(target, 'crash_material')),
-                ("Impact", target is not None and self._has_connected_port(target, 'impact')),
-                ("Impact face", impact is not None and (
-                    self._has_connected_port(impact, 'impact_face') or not needs_face
-                )),
-                ("Support", not needs_support or (
-                    'ConstraintNode' in classes
-                    and target is not None
-                    and self._has_connected_port(target, 'constraints')
-                )),
-            ])
-        elif study_name == 'Topology Opt':
-            goal = (
-                str(target.get_property('design_goal') or '').strip().lower()
-                if target is not None else ''
-            )
-            physics = (
-                str(target.get_property('physics_mode') or 'Structural')
-                .strip()
-                .lower()
-                if target is not None else 'structural'
-            )
-            if goal == 'thermal conduction':
-                physics = 'thermal'
-            elif goal == 'thermo-mechanical':
-                physics = 'thermo-mechanical'
-            elif goal in {
-                'lightweight stiffness',
-                'minimum mass under stress',
-                'multibody load envelope',
-            }:
-                physics = 'structural'
-            structural = physics in {'structural', 'thermo-mechanical'}
-            thermal = physics in {'thermal', 'thermo-mechanical'}
-            multibody = goal == 'multibody load envelope'
-            checks.extend([
-                ("TopOpt terminal", target is not None),
-                (
-                    "Design domain",
-                    target is not None
-                    and self._has_connected_port(target, 'design_domain'),
-                ),
-                (
-                    "Material",
-                    target is not None
-                    and self._has_connected_port(target, 'material'),
-                ),
-                (
-                    "Structural conditions",
-                    not structural or (
-                        target is not None
-                        and (
-                            self._has_connected_port(target, 'load_cases')
-                            if multibody
-                            else (
-                                self._has_connected_port(target, 'supports')
-                                and self._has_connected_port(target, 'loads')
-                            )
-                        )
-                    ),
-                ),
-                (
-                    "Joint definition",
-                    not multibody or (
-                        target is not None
-                        and self._has_connected_port(target, 'joints')
-                    ),
-                ),
-                (
-                    "Thermal conditions",
-                    not thermal or (
-                        target is not None
-                        and self._has_connected_port(target, 'thermal_sinks')
-                        and self._has_connected_port(target, 'thermal_loads')
-                    ),
-                ),
-            ])
-        else:
-            constraints = [n for n in nodes if n.__class__.__name__ == 'ConstraintNode']
-            loads = [n for n in nodes if n.__class__.__name__ in {'LoadNode', 'PressureLoadNode'}]
-            prescribed = any(
-                str(n.get_property('constraint_type') or '') == 'Displacement'
-                for n in constraints
-            )
-            constraint_ready = bool(constraints) and all(
-                self._has_connected_port(n, 'mesh') and self._has_face_or_condition(n)
-                for n in constraints
-            )
-            loads_ready = bool(loads) and all(
-                self._has_connected_port(load, 'mesh')
-                and (
-                    str(load.get_property('load_type') or 'Force') == 'Gravity'
-                    or self._has_face_or_condition(load)
-                )
-                for load in loads
-            )
-            terminal_label = "FEA terminal" if study_name == 'FEA' else "TopOpt terminal"
-            checks.extend([
-                (terminal_label, target is not None),
-                ("Mesh / design domain", target is not None and self._has_connected_port(target, 'mesh')),
-                ("Material", target is not None and self._has_connected_port(target, 'material')),
-                ("Support", constraint_ready and target is not None
-                 and self._has_connected_port(target, 'constraints')),
-                ("Load", (loads_ready and target is not None
-                 and self._has_connected_port(target, 'loads')) or prescribed),
-            ])
-
-        node_errors = [n for n in nodes if getattr(n, 'has_error', lambda: False)()]
-        checks.append(("No node errors", not node_errors))
-        backend_ok, backend_message = self._solver_ready(study_name, target)
-        checks.append((backend_message, backend_ok))
-        return checks
-
-    def refresh(self):
-        if not hasattr(self.host, 'graph'):
-            return
-        for study_name, widgets in self._pages.items():
-            target, scope = self._scope(study_name)
-            checks = self._checks(study_name, target, scope)
-            checklist = widgets['checklist']
-            checklist.clear()
-            missing = 0
-            for label, ok in checks:
-                item = QtWidgets.QListWidgetItem(("OK   " if ok else "MISS ") + label)
-                item.setForeground(QtGui.QColor("#72d38a" if ok else "#ffb35c"))
-                item.setToolTip(label)
-                checklist.addItem(item)
-                if not ok:
-                    missing += 1
-
-            target_name = "No terminal node"
-            if target is not None:
-                try:
-                    target_name = target.name() if callable(target.name) else str(target.name)
-                except Exception:
-                    target_name = target.__class__.__name__
-            if missing:
-                widgets['status'].setText(f"{target_name}  |  {missing} setup item(s) need attention")
-                widgets['status'].setStyleSheet(
-                    "background:#3a2b18; border:1px solid #735426; border-radius:5px; "
-                    "padding:5px; color:#ffd08a; font-weight:600;"
-                )
-            else:
-                widgets['status'].setText(f"{target_name}  |  Study is ready to run")
-                widgets['status'].setStyleSheet(
-                    "background:#173522; border:1px solid #2c6840; border-radius:5px; "
-                    "padding:5px; color:#8fe3a5; font-weight:600;"
-                )
-
-
 class LibraryPanel(QtWidgets.QWidget):
     """Component library with categorized nodes."""
 
@@ -4472,12 +4443,10 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         except Exception:
             pass
         self.results = ResultsPanel()
-        self.studies = StudyWorkbenchPanel(self)
         self.timeline = TimelinePanel()
 
         lower_tabs = QtWidgets.QTabWidget()
         lower_tabs.setDocumentMode(True)
-        lower_tabs.addTab(self.studies, "Studies")
         lower_tabs.addTab(self.results, "Results")
         lower_tabs.addTab(self.timeline, "History")
         self._engineering_tabs = lower_tabs
@@ -4711,9 +4680,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
             self.timeline.add_event(f"Added {label} node")
             self.statusBar().showMessage(f"Created {label}")
-            studies = getattr(self, 'studies', None)
-            if studies is not None:
-                studies.refresh()
             return node
         except Exception as e:
             self.statusBar().showMessage(f"Error: {e}")
@@ -4942,6 +4908,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             highlights still update because they're cheap.
         """
         if not node:
+            return
+        if getattr(self, "_batching_study_definition_edit", False):
             return
         if self.properties.current_node is node and self._last_rendered_node is node:
             return
@@ -5470,9 +5438,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             pass
         # Anything we forget here gets garbage-collected when the cad_widget
         # itself is torn down (the launcher's QProcess is parented to us).
-        studies = getattr(self, 'studies', None)
-        if studies is not None:
-            QtCore.QTimer.singleShot(0, studies.refresh)
 
 
     # Property names whose changes don't affect anything the inspector renders
@@ -5492,10 +5457,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         if getattr(self, '_suppress_graph_property_changed', False):
             return
 
-        if prop_name not in self._SILENT_PROP_NAMES:
-            studies = getattr(self, 'studies', None)
-            if studies is not None:
-                studies.refresh()
 
         # Update the properties panel if this node is selected.
         # Skip if the inspector itself triggered the change to avoid a reset loop.
@@ -5565,13 +5526,27 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         if port_out:
             node = port_out.node()
             setattr(node, '_dirty', True)
-            
+
+        # Quick-add can create more than one connection for a single click
+        # (for example condition -> solver and mesh -> condition). Treat that
+        # as one UI edit: do not run an incomplete setup or rebuild the
+        # inspector for every intermediate signal.
+        if getattr(self, "_batching_study_definition_edit", False):
+            return
+
         self.timeline.add_event("Connection changed")
-        studies = getattr(self, 'studies', None)
-        if studies is not None:
-            studies.refresh()
         # Auto-execute with skip_simulation for fast CAD preview
         self._execute_graph(skip_simulation=True)
+        current = getattr(self.properties, "current_node", None)
+        if (
+            current is not None
+            and current.__class__.__name__
+            in {"SolverNode", "CrashSolverNode", "TopologyOptVoxelNode"}
+        ):
+            QtCore.QTimer.singleShot(
+                0, lambda n=current: self.properties.display_node(n)
+                if self.properties.current_node is n else None,
+            )
 
     def eventFilter(self, source, event):
         """Handle drag/drop events on the graph widget to spawn nodes at drop location."""
@@ -5678,9 +5653,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
 
             except Exception:
                 pass
-            studies = getattr(self, 'studies', None)
-            if studies is not None:
-                studies.refresh()
         finally:
             self._prefer_topopt_after_run = False
             self.result_mutex.unlock()
@@ -5718,9 +5690,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         self.toolbar.setEnabled(True)
         self.statusBar().showMessage(f"Error: {error_msg}")
         self.timeline.add_event(f"Execution failed: {error_msg}")
-        studies = getattr(self, 'studies', None)
-        if studies is not None:
-            studies.refresh()
         try:
             sim_node = self._find_renderable_simulation_node()
             if sim_node is not None:
@@ -5743,9 +5712,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         self.toolbar.setEnabled(True)
         self.statusBar().showMessage("Computation stopped")
         self.timeline.add_event("Graph execution cancelled")
-        studies = getattr(self, 'studies', None)
-        if studies is not None:
-            studies.refresh()
         # A topology solver can return a valid partial design at its safe stop
         # point. Keep that cached result visible and exportable.
         try:
@@ -6134,8 +6100,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             pass
         self.timeline.add_event("New project created")
         self.statusBar().showMessage("New project")
-        if getattr(self, 'studies', None) is not None:
-            self.studies.refresh()
     
     def _open_project(self):
         """Open a project file."""
@@ -6178,8 +6142,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 
                 self.timeline.add_event(f"Opened project: {fname}")
                 self.statusBar().showMessage(f"Opened: {fname}")
-                if getattr(self, 'studies', None) is not None:
-                    self.studies.refresh()
                 
                 # Execute to restore view (but skip heavy simulation)
                 self._execute_graph(skip_simulation=True)

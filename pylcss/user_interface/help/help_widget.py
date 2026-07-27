@@ -1,435 +1,401 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""
-# Help widget for PyLCSS.
+"""Searchable in-app guide for the workflows exposed by the current UI."""
 
-Provides comprehensive documentation and guidance for all application features
-organized in tabbed sections for easy navigation.
-"""
+from PySide6 import QtCore, QtGui, QtWidgets
 
-from PySide6 import QtWidgets
-import qtawesome as qta
+
+_HTML_HEAD = """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+body { background:#1e1f22; color:#dce2eb; font-family:'Segoe UI',sans-serif;
+       font-size:13px; line-height:1.6; margin:20px 25px; }
+h1 { color:#d9a441; font-size:21px; border-bottom:1px solid #343943;
+     padding-bottom:8px; margin:0 0 12px; }
+h2 { color:#e7bd63; font-size:15px; margin:22px 0 7px; }
+p { margin:5px 0 10px; } ul,ol { margin:5px 0 12px 22px; padding:0; }
+li { margin:3px 0; } b { color:#f2f5f9; }
+code,pre { background:#15171b; border:1px solid #343943; border-radius:4px;
+           font-family:'Consolas','Courier New',monospace; font-size:12px; }
+code { padding:1px 5px; } pre { padding:10px 13px; white-space:pre-wrap; }
+table { border-collapse:collapse; width:100%; margin:10px 0; }
+th { background:#282c33; color:#e7bd63; text-align:left; }
+th,td { border:1px solid #343943; padding:7px 9px; vertical-align:top; }
+tr:nth-child(even) td { background:#1a1c20; } a { color:#65aaf2; }
+.tip { background:#192844; border-left:3px solid #579bea; padding:9px 12px;
+       border-radius:0 4px 4px 0; margin:12px 0; }
+.warn { background:#322617; border-left:3px solid #d9a441; padding:9px 12px;
+        border-radius:0 4px 4px 0; margin:12px 0; }
+</style></head><body>"""
+
+
+def _page(body: str) -> str:
+    return _HTML_HEAD + body + "</body></html>"
+
+
+_PAGES: dict[str, str] = {
+"Start Here": _page("""
+<h1>Start Here</h1>
+<p>PyLCSS separates system-level design work from detailed CAD and simulation.
+Choose the tab that matches the job.</p>
+<table><tr><th>Task</th><th>Tab</th></tr>
+<tr><td>Build a functional model from variables, calculations, and quantities of interest</td><td><b>Modeling Environment</b></td></tr>
+<tr><td>Create geometry and run FEA, crash, or topology optimization</td><td><b>Design Studio</b></td></tr>
+<tr><td>Train a fast approximation from model data or a saved CAD study</td><td><b>Surrogate Training</b></td></tr>
+<tr><td>Sample feasible designs and compute solution spaces</td><td><b>Solution Space</b></td></tr>
+<tr><td>Optimize objectives under constraints</td><td><b>Optimization</b></td></tr>
+<tr><td>Rank variable influence on an output</td><td><b>Sensitivity Analysis</b></td></tr></table>
+<h2>A reliable first workflow</h2><ol>
+<li>In Modeling Environment, add Design Variable, Function Block, and QoI nodes.</li>
+<li>Connect the ports and use <b>Validate</b>.</li>
+<li>Use <b>Build Model</b> to forward the compiled model to Solution Space and Optimization.</li>
+<li>Set QoI limits, objectives, and constraints in the target analysis tab.</li></ol>
+<div class="tip">The robot button at the upper-right opens the optional AI Assistant. Its gear button opens provider settings.</div>
+"""),
+"Projects and Files": _page("""
+<h1>Projects and Files</h1>
+<h2>Application project folder</h2>
+<p><b>File &rarr; Save Project</b> creates a folder named from the product and saves
+Modeling, Surrogate, Solution Space, Optimization, and Sensitivity state.
+<b>File &rarr; Load Project</b> loads such a folder.</p>
+<h2>Design Studio file</h2>
+<p>Design Studio has separate <b>New</b>, <b>Open</b>, and <b>Save</b> toolbar
+commands. Its graph and settings are stored in a <code>.cad</code> file.</p>
+<div class="warn"><b>Keep both when a project uses CAD:</b> the application project
+folder does not replace the Design Studio <code>.cad</code> file.</div>
+<h2>Computed results</h2>
+<p><b>Save Results</b> in Design Studio exports an already-computed result as JSON
+or HDF5; it does not run a solver. Geometry export uses the STEP or STL actions.</p>
+"""),
+"Interface": _page("""
+<h1>Interface</h1>
+<h2>Design Studio layout</h2><ul>
+<li><b>Left:</b> searchable node library; double-click or drag an item.</li>
+<li><b>Center top:</b> 3D viewer for previews and results.</li>
+<li><b>Center bottom:</b> node graph.</li>
+<li><b>Right top:</b> inspector for the selected node.</li>
+<li><b>Right bottom:</b> Results and History tabs.</li></ul>
+<p>FEA, Crash, and Topology setup lives in each solver node's inspector. There is
+no separate Studies tab.</p>
+<h2>Design Studio shortcuts</h2><table>
+<tr><td>Run selected study or graph</td><td><code>F5</code></td></tr>
+<tr><td>Stop computation</td><td><code>Shift+F5</code></td></tr>
+<tr><td>Fit graph / Reset 3D view</td><td><code>F</code> / <code>R</code></td></tr>
+<tr><td>Undo / Redo</td><td><code>Ctrl+Z</code> / <code>Ctrl+Y</code></td></tr>
+<tr><td>Delete selected nodes</td><td><code>Delete</code></td></tr></table>
+"""),
+"Design Studio Overview": _page("""
+<h1>Design Studio Overview</h1>
+<p>Design Studio is a saved node graph for parametric geometry, preparation,
+simulation, measurement, and export.</p>
+<h2>Geometry sources</h2><ul>
+<li>Native Box, Cylinder, Tube, shell, Boolean, hole, fillet, transform, and pattern nodes.</li>
+<li><b>Code Part</b> for CadQuery scripts and named scalar parameters.</li>
+<li><b>FreeCAD Part</b> for a node-owned FreeCAD document when FreeCAD is installed.</li>
+<li>STEP/IGES/BREP or surface-mesh import.</li></ul>
+<h2>Run behavior</h2>
+<p>With exactly one node selected, <b>Run</b> evaluates that node and its upstream
+dependencies. With no single selection, Run evaluates the graph.</p>
+<div class="tip">Property edits perform a CAD-only preview. Expensive FEA, Crash,
+and Topology solves start only from the explicit Run action.</div>
+<h2>Solver branches</h2><ul>
+<li><b>Static FEA:</b> Netgen mesh plus CalculiX.</li>
+<li><b>Crash:</b> prepared mesh and OpenRadioss.</li>
+<li><b>Topology:</b> direct design domain with structural and/or thermal conditions.</li></ul>
+"""),
+"Face Selection": _page("""
+<h1>Face Selection</h1>
+<p>Boundary conditions normally reference geometry through a <b>Pick Faces</b>
+node. The selection is saved in the graph.</p><ol>
+<li>Connect the geometry shape to Pick Faces.</li>
+<li>Select it and click <b>Pick Faces in 3D Viewer</b>.</li>
+<li>Pick and accept one or more faces.</li>
+<li>Connect its <code>workplane</code> output to a condition face input.</li>
+<li>Use <b>Preview in 3D</b> on FEA conditions to inspect the overlay.</li></ol>
+<p>A selector node is also available for direction, point, index, box,
+coordinate-expression, or tag selection.</p>
+<div class="warn">Raw face indices can change with upstream geometry. Interactive
+or geometric selectors are generally more stable.</div>
+"""),
+"Static FEA": _page("""
+<h1>Static FEA</h1>
+<p>The FEA Solver writes and runs a CalculiX static analysis. CalculiX is the
+supported solve path.</p>
+<h2>Required connections</h2><table>
+<tr><th>Input</th><th>Connect</th></tr>
+<tr><td><code>mesh</code></td><td>Mesh output using Tet or Tet10 solid elements</td></tr>
+<tr><td><code>material</code></td><td>Material output</td></tr>
+<tr><td><code>constraints</code></td><td>One or more Support outputs</td></tr>
+<tr><td><code>loads</code></td><td>Force or Pressure; optional only for a nonzero prescribed displacement</td></tr></table>
+<h2>Study Definition in the node</h2>
+<p>Select the FEA Solver to see connection counts and CalculiX availability.
+<b>Add Support</b>, <b>Add Force</b>, and <b>Add Pressure</b> create and connect a
+condition. If the solver has a mesh, it is also connected to the new condition.
+Connect a Pick Faces output to finish a face-based condition. Gravity needs no face.</p>
+<h2>Settings</h2><ul>
+<li>Linear, Nonlinear (Geometric), and Nonlinear (Plastic) analysis types.</li>
+<li>Von Mises stress or displacement visualization with display-only deformation scale.</li>
+<li><b>Deck only</b> writes the input without launching CalculiX.</li></ul>
+<div class="warn">Static FEA accepts Tet and Tet10 solid meshes. Shell meshes are for the Crash Solver.</div>
+"""),
+"Crash": _page("""
+<h1>Crash and Impact</h1>
+<p>The Crash Solver prepares and runs an OpenRadioss explicit transient study.</p>
+<h2>Required connections</h2><table>
+<tr><th>Input</th><th>Connect</th></tr>
+<tr><td><code>mesh</code></td><td>Mesh output; solid or shell as appropriate</td></tr>
+<tr><td><code>crash_material</code></td><td>Crash Material output</td></tr>
+<tr><td><code>impact</code></td><td>Impact Condition output</td></tr>
+<tr><td><code>constraints</code></td><td>Support when the scenario requires a fixed specimen</td></tr></table>
+<h2>Study Definition in the node</h2>
+<p>Select the Crash Solver to see connection counts, impact scenario, and
+OpenRadioss availability. <b>Add Impact</b> and <b>Add Support</b> create and wire
+the corresponding nodes.</p>
+<h2>Impact scenarios</h2><ul>
+<li><b>Fixed specimen + moving impactor:</b> requires impact face and rear support.</li>
+<li><b>Moving body + fixed wall:</b> requires neither impact face nor support.</li>
+<li><b>Prescribed moving wall:</b> requires impact face but not support.</li></ul>
+<p>Velocity is mm/ms (numerically m/s); End Time is ms. Mass scaling trades
+physical inertia accuracy for a larger stable time step.</p>
+<p><b>OpenRadioss Deck</b> runs an existing deck and does not use the graph-built Study Definition.</p>
+"""),
+"Topology Optimization": _page("""
+<h1>Topology Optimization</h1>
+<p>The Topology Solver works directly from a CAD design domain. Do not insert the
+standard FEA Mesh node before it.</p>
+<h2>Study Definition in the node</h2>
+<p>The embedded section reports design domain, material, structural, multibody,
+and thermal inputs. Buttons add Topology Support, Force, Joint, Operating Case,
+Temperature Boundary, and Heat Input nodes.</p>
+<h2>Common setups</h2><ul>
+<li><b>Structural:</b> domain + material + topology support + topology force.</li>
+<li><b>Multibody:</b> domain + material + joints and operating cases.</li>
+<li><b>Thermal:</b> domain + material + temperature boundary + heat input.</li>
+<li><b>Thermo-mechanical:</b> structural and thermal conditions.</li></ul>
+<p>The same inspector owns goal, material budget, formulation, manufacturing,
+optional CalculiX validation, CAD reconstruction, and visualization.</p>
+<p>After a run, export the recovered surface to STL or STEP. Volume Remesh makes
+a volume mesh for downstream validation.</p>
+"""),
+"Units and Solvers": _page("""
+<h1>Units and External Solvers</h1><table>
+<tr><th>Quantity</th><th>Unit</th></tr>
+<tr><td>Length and displacement</td><td>mm</td></tr>
+<tr><td>Force</td><td>N</td></tr>
+<tr><td>Stress, pressure, Young's modulus</td><td>MPa = N/mm<sup>2</sup></td></tr>
+<tr><td>Density</td><td>tonne/mm<sup>3</sup>; steel about <code>7.85e-9</code></td></tr>
+<tr><td>Crash time / velocity</td><td>ms / mm/ms</td></tr></table>
+<h2>Optional installations</h2><pre>python scripts/install_solvers.py --only ccx
+python scripts/install_solvers.py --only radioss
+python scripts/install_solvers.py --only freecad</pre>
+<p>PyLCSS starts without them. Solver nodes can prepare decks, but a full solve
+requires the executable. Library tooltips and Study Definition show status.</p>
+"""),
+"Modeling Environment": _page("""
+<h1>Modeling Environment</h1><table>
+<tr><th>Node</th><th>Role</th></tr>
+<tr><td>Design Variable</td><td>Input with value, bounds, and unit</td></tr>
+<tr><td>Intermediate</td><td>Named value between calculations</td></tr>
+<tr><td>Function Block</td><td>Python calculation or linked Design Studio solver</td></tr>
+<tr><td>QoI</td><td>Result, requirement, constraint, or objective</td></tr></table>
+<h2>Workflow</h2><ol>
+<li>Create or select a system.</li><li>Add nodes and connect ports.</li>
+<li>Double-click nodes to edit configuration.</li><li>Use <b>Validate</b>.</li>
+<li>Use <b>Build Model</b> to forward it to Solution Space and Optimization.</li></ol>
+<p>A Design Studio Function Block reads a saved <code>.cad</code> graph, maps
+inputs to exposed parameters, and calls the chosen FEA, Crash, or Topology terminal.</p>
+"""),
+"Surrogate Training": _page("""
+<h1>Surrogate Training</h1><ol>
+<li>Select a Function Block from Modeling Environment.</li>
+<li>Generate samples or upload CSV/JSON.</li>
+<li>Choose an available algorithm and configure it.</li>
+<li>Train and inspect metrics, parity, learning curves, cross-validation, and feature importance.</li>
+<li>Save only when error is acceptable for the intended decision.</li></ol>
+<p>Core choices are MLP Regressor, Random Forest, Gradient Boosting, and Gaussian
+Process. PyTorch and geometry-aware choices appear only with their dependencies.</p>
+<div class="warn">Debug overfit modes intentionally train and test on the same tiny
+data. They test the pipeline, not predictive accuracy.</div>
+"""),
+"Solution Space": _page("""
+<h1>Solution Space</h1>
+<p>This tab samples a compiled model and finds regions satisfying all QoI limits.</p><ol>
+<li>Build a model.</li><li>Review variables and QoIs.</li>
+<li>Define lower and/or upper QoI requirements.</li>
+<li>Choose sample count and compute.</li>
+<li>Inspect plots, data, and feasible box; export when needed.</li></ol>
+<p><b>Multi-Modal</b> searches separated feasible regions. <b>Product Family</b>
+compares variants and common-platform choices.</p>
+<p>Method background: <a href="https://doi.org/10.1002/nme.4450">Computing solution spaces for robust design</a>.</p>
+"""),
+"Optimization": _page("""
+<h1>Optimization</h1><ol>
+<li>Select a compiled system.</li><li>Choose QoI objectives and direction.</li>
+<li>Configure constraints and variable bounds.</li>
+<li>Choose an algorithm and settings.</li>
+<li>Run and inspect objective, variable, constraint, and Pareto plots.</li></ol>
+<table><tr><th>Algorithm</th><th>Typical use</th></tr>
+<tr><td>SLSQP</td><td>Smooth constrained local problems</td></tr>
+<tr><td>COBYLA / trust-constr</td><td>Derivative-free or robust constrained local search</td></tr>
+<tr><td>Differential Evolution / Nevergrad</td><td>Global or black-box search</td></tr>
+<tr><td>NSGA-II</td><td>Multiple objectives and Pareto front</td></tr>
+<tr><td>Multi-Start</td><td>Repeated local search from multiple starts</td></tr></table>
+"""),
+"Sensitivity Analysis": _page("""
+<h1>Sensitivity Analysis</h1><ol>
+<li>Build the system model.</li><li>Select method and output.</li>
+<li>Set base sample size or Morris trajectories.</li>
+<li>Run and inspect method-specific plots and tables.</li></ol>
+<table><tr><th>Method</th><th>Behavior</th></tr>
+<tr><td>Sobol</td><td>First, total, and optional second-order variance effects</td></tr>
+<tr><td>Morris</td><td>Low-cost elementary-effect screening</td></tr>
+<tr><td>FAST</td><td>Fourier-based first-order sensitivity</td></tr>
+<tr><td>Delta</td><td>Moment-independent distributional sensitivity</td></tr></table>
+<p>Available methods depend on installed dependencies. Use the UI's evaluation
+estimate for the selected method and variable count.</p>
+"""),
+"AI Assistant": _page("""
+<h1>AI Assistant</h1>
+<p>Click the upper-right robot button, enter a request, and press Enter or Send.
+The assistant can call registered in-app actions.</p>
+<h2>Setup</h2><ol><li>Open the panel and click the gear.</li>
+<li>Select a cloud provider or OpenAI-compatible local server.</li>
+<li>Enter credentials or base URL, select a model, and test.</li>
+<li>Save and begin with a small request.</li></ol>
+<p>State the target tab, dimensions, units, bounds, and solver type. Ask for graph
+validation after node changes.</p>
+<div class="warn">Review generated engineering work. Validate units, connections,
+boundary conditions, solver settings, and results before decisions.</div>
+"""),
+"Troubleshooting": _page("""
+<h1>Troubleshooting</h1>
+<h2>Solver will not start</h2><ul>
+<li>Check the backend row in the solver's Study Definition.</li>
+<li>Hover the solver in the library for detection detail.</li>
+<li>Use Deck Only if you only need an input deck.</li></ul>
+<h2>Connected study still fails</h2><ul>
+<li>Give each FEA condition its required mesh and face.</li>
+<li>For FEA, provide support and load unless displacement drives the model.</li>
+<li>For fixed-specimen crash, provide impact face and support.</li></ul>
+<h2>Wrong branch runs</h2><p>Select exactly the terminal node, then press F5.</p>
+<h2>3D viewer is empty</h2><p>Run a geometry node first. Face picking also requires
+an upstream shape and a completed preview.</p>
+"""),
+"About": _page("""
+<h1>About PyLCSS</h1>
+<p><b>PyLCSS 2.2.0</b> is a source-available desktop environment for system
+modeling, parametric CAD, simulation, solution-space exploration, optimization,
+sensitivity analysis, and surrogate modeling.</p>
+<p>Copyright &copy; 2026 Kutay Demir.</p>
+<p>Licensed under the <b>PolyForm Shield License 1.0.0</b>. See LICENSE and NOTICE.</p>
+"""),
+}
+
+_NAV = [
+    ("Getting Started", ["Start Here", "Projects and Files", "Interface"]),
+    ("Design Studio", ["Design Studio Overview", "Face Selection", "Static FEA",
+                       "Crash", "Topology Optimization", "Units and Solvers"]),
+    ("System Workflows", ["Modeling Environment", "Surrogate Training",
+                          "Solution Space", "Optimization", "Sensitivity Analysis"]),
+    ("Support", ["AI Assistant", "Troubleshooting", "About"]),
+]
+
 
 class HelpWidget(QtWidgets.QWidget):
-    """
-    Help widget containing documentation for all application features.
+    """Two-panel help browser with title and content search."""
 
-    Organized as a tabbed interface with sections for each main application
-    component, providing detailed usage instructions and feature descriptions.
+    _SIDEBAR_STYLE = """
+        QWidget#helpSidebar { background:#1a1c20; }
+        QTreeWidget { background:#1a1c20; border:none; outline:0; font-size:12px; }
+        QTreeWidget::item { padding:4px 6px; color:#b9c0ca; }
+        QTreeWidget::item:selected { background:#2c3546; color:white; }
+        QTreeWidget::item:hover:!selected { background:#24272d; color:#eef2f7; }
+        QLineEdit { background:#24272d; border:1px solid #363b44; border-radius:5px;
+                    color:#e1e6ed; padding:6px 8px; }
+        QLineEdit:focus { border-color:#579bea; }
     """
 
     def __init__(self) -> None:
-        """Initialize the help widget with all documentation tabs."""
         super().__init__()
+        root = QtWidgets.QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # specialized layout for help widget
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+        sidebar = QtWidgets.QWidget()
+        sidebar.setObjectName("helpSidebar")
+        sidebar.setFixedWidth(230)
+        sidebar.setStyleSheet(self._SIDEBAR_STYLE)
+        side_layout = QtWidgets.QVBoxLayout(sidebar)
+        side_layout.setContentsMargins(9, 11, 9, 9)
+        side_layout.setSpacing(7)
+        title = QtWidgets.QLabel("PyLCSS Help")
+        title.setStyleSheet("color:#d9a441; font-size:15px; font-weight:700; padding:2px 4px 5px;")
+        side_layout.addWidget(title)
 
-        # Title
-        title = QtWidgets.QLabel("PyLCSS Documentation")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 5px;")
-        layout.addWidget(title)
+        self._search = QtWidgets.QLineEdit()
+        self._search.setPlaceholderText("Search help")
+        self._search.setClearButtonEnabled(True)
+        self._search.textChanged.connect(self._filter_tree)
+        side_layout.addWidget(self._search)
+        self._tree = QtWidgets.QTreeWidget()
+        self._tree.setHeaderHidden(True)
+        self._tree.setIndentation(14)
+        self._tree.setUniformRowHeights(True)
+        self._tree.itemClicked.connect(self._on_tree_click)
+        side_layout.addWidget(self._tree, 1)
 
-        # Tab widget for different help sections
-        self.help_tabs = QtWidgets.QTabWidget()
-        layout.addWidget(self.help_tabs)
+        self._browser = QtWidgets.QTextBrowser()
+        self._browser.setOpenExternalLinks(True)
+        self._browser.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self._browser.setStyleSheet("background:#1e1f22; border:none;")
+        divider = QtWidgets.QFrame()
+        divider.setFrameShape(QtWidgets.QFrame.VLine)
+        divider.setStyleSheet("color:#343943;")
+        divider.setFixedWidth(1)
+        root.addWidget(sidebar)
+        root.addWidget(divider)
+        root.addWidget(self._browser, 1)
 
-        # Add help tabs for each main section
-        self._add_modeling_help()
-        self._add_cad_help()
-        self._add_surrogate_help()
-        self._add_solution_space_help()
-        self._add_optimization_help()
-        self._add_sensitivity_help()
-        self._add_assistant_help()
-        self._add_about_tab()
+        self._build_tree()
+        first = self._tree.topLevelItem(0).child(0)
+        self._tree.setCurrentItem(first)
+        self._show_page(first.data(0, QtCore.Qt.UserRole))
 
-    def _create_browser(self, html_content: str) -> QtWidgets.QTextBrowser:
-        """Helper to create a configured QTextBrowser."""
-        browser = QtWidgets.QTextBrowser()
-        browser.setHtml(html_content)
-        
-        # [CRITICAL FIX]: Allow links to open in the system default browser
-        # If False (default), clicking a link tries to load it inside the widget,
-        # which fails and makes the content disappear.
-        browser.setOpenExternalLinks(True)
-        
-        # Ensure it looks good in both light/dark themes by respecting palette
-        browser.setAutoFillBackground(True)
-        return browser
+    def _build_tree(self) -> None:
+        self._tree.clear()
+        for section, pages in _NAV:
+            parent = QtWidgets.QTreeWidgetItem([section])
+            parent.setFlags(parent.flags() & ~QtCore.Qt.ItemIsSelectable)
+            font = parent.font(0)
+            font.setBold(True)
+            parent.setFont(0, font)
+            parent.setForeground(0, QtGui.QColor("#82b8ef"))
+            self._tree.addTopLevelItem(parent)
+            for page_key in pages:
+                item = QtWidgets.QTreeWidgetItem([page_key])
+                item.setData(0, QtCore.Qt.UserRole, page_key)
+                parent.addChild(item)
+            parent.setExpanded(True)
 
-    def _add_modeling_help(self) -> None:
-        """Add comprehensive help for the Modeling Environment tab."""
-        help_text = """
-        <h2>Modeling Environment</h2>
+    def _filter_tree(self, query: str) -> None:
+        query = query.strip().casefold()
+        for index in range(self._tree.topLevelItemCount()):
+            parent = self._tree.topLevelItem(index)
+            visible_children = 0
+            for child_index in range(parent.childCount()):
+                child = parent.child(child_index)
+                key = str(child.data(0, QtCore.Qt.UserRole) or "")
+                visible = not query or query in (key + " " + _PAGES.get(key, "")).casefold()
+                child.setHidden(not visible)
+                visible_children += int(visible)
+            parent.setHidden(bool(query) and not visible_children)
+            if query and visible_children:
+                parent.setExpanded(True)
 
-        <h3>Overview</h3>
-        <p>The Modeling Environment is the core of PyLCSS, offering a visual, node-based interface for constructing complex engineering systems. It combines the ease of drag-and-drop design with the power of Python scripting.</p>
+    def _on_tree_click(self, item: QtWidgets.QTreeWidgetItem, _column: int) -> None:
+        key = item.data(0, QtCore.Qt.UserRole)
+        if key:
+            self._show_page(str(key))
 
-        <h3>Key Capabilities</h3>
-        <ul>
-        <li><b>Visual Design:</b> Build systems by connecting nodes representing inputs, outputs, and operations.</li>
-        <li><b>Python Integration:</b> Write custom logic using standard Python syntax with NumPy support.</li>
-        <li><b>Unit Intelligence:</b> Automatic unit conversion and compatibility checking via the Pint library.</li>
-        <li><b>High Performance:</b> Models are compiled into optimized vectorized code for fast execution.</li>
-        </ul>
-
-        <h3>Building a Model</h3>
-        <ol>
-        <li><b>Add Nodes:</b> Right-click the canvas to add Input, Output, Intermediate, or Custom Block nodes.</li>
-        <li><b>Connect:</b> Drag connections between ports to define data flow.</li>
-        <li><b>Configure:</b> Double-click nodes to set parameters, units, and bounds.</li>
-        <li><b>Validate:</b> Use the validation tools to ensure connectivity and unit consistency.</li>
-        <li><b>Build:</b> Compile the model to prepare it for analysis and optimization.</li>
-        </ol>
-
-        <h3>Node Types</h3>
-        <ul>
-        <li><b>Input Node:</b> Defines design variables with min/max bounds and units.</li>
-        <li><b>Output Node:</b> Marks system results for analysis and optimization objectives.</li>
-        <li><b>Custom Block:</b> Executes user-defined Python code. Supports complex logic and math.</li>
-        <li><b>Intermediate Node:</b> Provides intermediate values with units to the system.</li>
-        </ul>
-
-        <h3>Best Practices</h3>
-        <ul>
-        <li><b>Define Units:</b> Always specify units for inputs and outputs to prevent physical errors.</li>
-        <li><b>Modularize:</b> Break down complex systems into smaller, manageable subsystems.</li>
-        <li><b>Test Blocks:</b> Verify custom code blocks individually before integrating them.</li>
-        </ul>
-        """
-        browser = self._create_browser(help_text)
-        self.help_tabs.addTab(browser, qta.icon('fa5s.project-diagram'), "Modeling")
-
-    def _add_cad_help(self) -> None:
-        """Add comprehensive help for the Design Studio tab."""
-        help_text = """
-        <h2>Design Studio: CAD Modeling and FEM Simulation</h2>
-
-        <h3>Overview</h3>
-        <p>PyLCSS has two complementary parametric CAD authoring paths, both feeding the same node graph and downstream FEA / crash / topology optimisation:</p>
-        <ul>
-        <li><b>Code Part Node (CadQuery)</b> — write one short Python snippet that builds your geometry; named parameters (L, W, H, hole_d, …) are exposed as live optimisable inputs.</li>
-        <li><b>FreeCAD Part Node (interactive)</b> — double-click to launch the real FreeCAD GUI as a subprocess; sketch in PartDesign, define Spreadsheet aliases, save. PyLCSS auto-imports the geometry via BREP + sidecar JSON and exposes your aliases as live parametric properties. The optimiser drives them back into FreeCAD headlessly between iterations.</li>
-        </ul>
-
-        <h3>Key Capabilities</h3>
-        <ul>
-        <li><b>Two authoring modes:</b> Pick CadQuery (code-first, scriptable) or FreeCAD (interactive, GUI-driven). Both produce the same downstream <code>shape</code> output.</li>
-        <li><b>Node-Based Workflow:</b> Connect parts into assemblies, mesh, define materials, constraints, loads, and solve — all in one graph.</li>
-        <li><b>FEM Simulation:</b> Netgen meshing + CalculiX static solver.</li>
-        <li><b>Crash Simulation:</b> OpenRadioss explicit dynamics with animation playback.</li>
-        <li><b>Topology Optimization:</b> density/SIMP or reaction-diffusion level-set, OC/MMA/GCMMA updates, joints, thermal coupling, shape recovery, and STL export.</li>
-        <li><b>Export Options:</b> STEP, STL, OBJ.</li>
-        </ul>
-
-        <h3>FreeCAD Part Node Workflow</h3>
-        <ol>
-        <li><b>Drag in:</b> From the library panel, Geometry → "FreeCAD Part (interactive)".</li>
-        <li><b>Double-click the node</b> → FreeCAD launches in a separate window on a node-owned <code>.FCStd</code> file (auto-created on first open).</li>
-        <li><b>(Optional) Add Spreadsheet:</b> Spreadsheet workbench → new Spreadsheet → fill cells like <code>A1=Length, B1=50</code>, right-click the value cell → Properties → Alias = <code>L</code>. Repeat for every parameter you want PyLCSS to drive (W, hole_d, …).</li>
-        <li><b>Author your part:</b> PartDesign workbench → Body → Sketch → Pad. In each value field, right-click → Expression editor → <code>Spreadsheet.L</code> (or whichever alias). A small <i>fx</i> icon confirms the binding.</li>
-        <li><b>Ctrl+S</b> inside FreeCAD. The PyLCSS Mod observer (installed under <code>%APPDATA%/FreeCAD/v1-1/Mod/PyLCSS/</code>) writes a sibling <code>.brep</code> + <code>.fcmeta.json</code> the moment you save.</li>
-        <li><b>PyLCSS reacts automatically:</b> a file-system watcher fires, the graph re-executes, the 3D viewer refreshes, and the spreadsheet aliases populate the node's <code>param_&lt;i&gt;_name</code> / <code>param_&lt;i&gt;_value</code> properties.</li>
-        <li><b>Optimisation / sensitivity</b> can now mutate those parameters; the next graph execute headlessly pushes the new values back into FreeCAD, recomputes, saves, and re-reads the BREP. No GUI clicks in the loop.</li>
-        </ol>
-
-        <h3>FreeCAD Requirements</h3>
-        <p>The FreeCAD Part node needs FreeCAD 1.x installed. From a terminal:</p>
-        <pre>python scripts/install_solvers.py --only freecad</pre>
-        <p>The script downloads the official Windows installer wizard from the FreeCAD GitHub release and auto-detects the install path. If you already have FreeCAD installed, the script skips the wizard and just registers the path. PyLCSS opens cleanly without FreeCAD installed — only the FreeCAD Part node is disabled.</p>
-
-        <h3>CadQuery Code Part Node</h3>
-        <ul>
-        <li><b>Code:</b> any CadQuery expression assigned to <code>result</code>. Example:
-            <code>result = cq.Workplane('XY').box(L, W, H).faces('&gt;Z').workplane().hole(d)</code></li>
-        <li><b>Parameters:</b> <code>name=value</code> lines (one per line) become identifiers usable in the code AND live properties on the node.</li>
-        <li><b>Best for:</b> reproducible scripted geometry, sharing parametric models as plain text.</li>
-        </ul>
-
-        <h3>Other Node Types</h3>
-        <ul>
-        <li><b>Import:</b> STEP, STL — bring in external CAD.</li>
-        <li><b>Select Face:</b> text selectors (Direction, Index, Box, NearestToPoint) OR interactive click-to-pick in the viewer.</li>
-        <li><b>Assembly:</b> combine multiple shape outputs into one assembly.</li>
-        <li><b>Analysis:</b> Mass Properties, Bounding Box, Surface Area, Measure Distance.</li>
-        <li><b>Booleans:</b> handled inside the Code Part node (cq.cut / .union / .intersect) or via Assembly + FreeCAD multi-body.</li>
-        </ul>
-
-        <h3>FEM Simulation Workflow</h3>
-        <ol>
-        <li><b>Create Geometry:</b> Build your 3D model using CAD nodes.</li>
-        <li><b>Generate Mesh:</b> Use the Mesh node to create finite elements with Netgen.</li>
-        <li><b>Define Material:</b> Set material properties (Young's modulus, Poisson's ratio, density).</li>
-        <li><b>Apply Constraints:</b> Fix supports on specific faces.</li>
-        <li><b>Apply Loads:</b> Define forces or pressure loads on faces.</li>
-        <li><b>Solve:</b> Run the FEA solver to compute stress and displacement.</li>
-        <li><b>Visualize:</b> View results with color-coded stress/displacement maps.</li>
-        </ol>
-
-        <h3>Topology Optimization</h3>
-        <p>Topology studies can use filtered density/SIMP or a signed reaction-diffusion level-set field. Density is the general default; level-set is intended for crisp compliance/volume concepts. OC is selected for one volume constraint, while GCMMA is used for stress-constrained minimum-mass studies. Features include:</p>
-        <ul>
-        <li><b>Density Filtering:</b> Smooth density fields for manufacturable designs.</li>
-        <li><b>Level-Set Interface Evolution:</b> Crisp material/void boundaries with exact volume restoration.</li>
-        <li><b>Volume Constraints:</b> Control material usage.</li>
-        <li><b>Multibody and Thermal Inputs:</b> Typed joints, operating cases, heat inputs, and sinks.</li>
-        <li><b>Shape Recovery:</b> Extract a smooth, volume-preserving print surface.</li>
-        </ul>
-
-        <h3>Units System</h3>
-        <p>PyLCSS CAD uses a consistent unit system throughout:</p>
-        <table border="1" cellpadding="5" cellspacing="0">
-        <tr><th>Quantity</th><th>Unit</th><th>Examples</th></tr>
-        <tr><td>Length</td><td><b>mm</b> (millimeters)</td><td>Box width: 20 = 20 mm</td></tr>
-        <tr><td>Force</td><td><b>N</b> (Newtons)</td><td>Load: 1000 = 1000 N</td></tr>
-        <tr><td>Stress/Pressure</td><td><b>MPa</b> (N/mm²)</td><td>Yield: 250 = 250 MPa</td></tr>
-        <tr><td>Young's Modulus</td><td><b>MPa</b></td><td>Steel: 210000 = 210 GPa</td></tr>
-        <tr><td>Density</td><td><b>tonne/mm³</b></td><td>Steel: 7.85e-9</td></tr>
-        </table>
-        <p><i>Note: This unit system (mm-N-MPa-tonne) is consistent for FEA and ensures numerical stability.</i></p>
-
-        <h3>Best Practices</h3>
-        <ul>
-        <li><b>Mesh Quality:</b> Use appropriate element sizes - smaller for detailed features.</li>
-        <li><b>Convergence:</b> Check that FEA results converge with mesh refinement.</li>
-        <li><b>Units:</b> All dimensions are in mm. Material E in MPa, forces in N.</li>
-        <li><b>Export:</b> Use STEP format for maximum compatibility with other CAD software.</li>
-        </ul>
-        """
-        browser = self._create_browser(help_text)
-        self.help_tabs.addTab(browser, qta.icon('fa5s.cube'), "CAD and FEM")
-
-    def _add_surrogate_help(self) -> None:
-        """Add comprehensive help for the Surrogate Training tab."""
-        help_text = """
-        <h2>Surrogate Modeling</h2>
-
-        <h3>Overview</h3>
-        <p>Accelerate your simulations by replacing computationally expensive components with fast, accurate machine learning models. The Surrogate Modeling module supports a wide range of algorithms, from traditional regression to deep learning.</p>
-
-        <h3>Supported Algorithms</h3>
-        <ul>
-        <li><b>PyTorch Neural Networks:</b> Deep learning models with customizable architecture and GPU support.</li>
-        <li><b>Random Forest:</b> Robust ensemble method, great for non-linear relationships.</li>
-        <li><b>Gradient Boosting:</b> High-performance tree-based method.</li>
-        <li><b>Gaussian Process:</b> Probabilistic models providing uncertainty estimates.</li>
-        <li><b>MLP Regressor:</b> Standard neural networks for simpler problems.</li>
-        </ul>
-
-        <h3>Training Workflow</h3>
-        <ol>
-        <li><b>Select Node:</b> Choose the system component to approximate.</li>
-        <li><b>Generate Data:</b> Create a training dataset using Monte Carlo sampling.</li>
-        <li><b>Configure Model:</b> Select an algorithm and tune hyperparameters (layers, learning rate, etc.).</li>
-        <li><b>Train:</b> Execute the training process with real-time loss monitoring.</li>
-        <li><b>Evaluate:</b> Check R² scores, RMSE, and parity plots to verify accuracy.</li>
-        <li><b>Deploy:</b> Attach the trained surrogate to the node to speed up system analysis.</li>
-        </ol>
-
-        <h3>Sanity Check</h3>
-        <p>Use the "Sanity Check" mode to debug your training pipeline. Try overfitting a small number of samples (1 or 10) to ensure the model architecture is capable of learning the data patterns.</p>
-        """
-        browser = self._create_browser(help_text)
-        self.help_tabs.addTab(browser, qta.icon('fa5s.brain'), "Surrogate AI")
-
-    def _add_solution_space_help(self) -> None:
-        """Add comprehensive help for the Solution Space tab."""
-        help_text = """
-        <h2>Solution Space Exploration</h2>
-
-        <h3>Overview</h3>
-        <p>Understand your design space through extensive Monte Carlo sampling. This module helps you visualize trade-offs, identify feasible regions, and explore the robustness of your design.</p>
-
-        <h3>Features</h3>
-        <ul>
-        <li><b>Monte Carlo Sampling:</b> Rapidly evaluate thousands of design points.</li>
-        <li><b>Feasibility Analysis:</b> Automatically classify designs as "Feasible" or "Infeasible" based on constraints.</li>
-        <li><b>Interactive Visualization:</b> Explore data with 2D scatter plots, histograms, and parallel coordinates.</li>
-        <li><b>Product Families:</b> Analyze multiple system variants simultaneously to find common platforms.</li>
-        </ul>
-
-        <h3>Analysis Steps</h3>
-        <ol>
-        <li><b>Configure Sampling:</b> Set the number of samples and input distributions.</li>
-        <li><b>Run Simulation:</b> Execute the sampling process.</li>
-        <li><b>Visualize:</b> Use the plotting tools to find correlations and design limits.</li>
-        <li><b>Filter:</b> Isolate specific regions of interest for detailed analysis.</li>
-        <li><b>Export:</b> Save results to CSV for external reporting.</li>
-        </ol>
-
-        <h3>Scientific Reference</h3>
-        <p>The solution space computation methods implemented in this module are based on:</p>
-        <p><b>Markus Zimmermann, Johannes Edler von Hoessle</b><br>
-        <i>"Computing solution spaces for robust design"</i><br>
-        International Journal for Numerical Methods in Engineering (2013)<br>
-        DOI: <a href="https://doi.org/10.1002/nme.4450">10.1002/nme.4450</a></p>
-        """
-        browser = self._create_browser(help_text)
-        self.help_tabs.addTab(browser, qta.icon('fa5s.chart-area'), "Solution Space")
-
-    def _add_optimization_help(self) -> None:
-        """Add comprehensive help for the Optimization tab."""
-        help_text = """
-        <h2>Optimization</h2>
-
-        <h3>Overview</h3>
-        <p>Find the optimal design parameters that minimize or maximize your objectives while satisfying all constraints. PyLCSS provides a suite of industry-standard algorithms for both local and global optimization.</p>
-
-        <h3>Algorithms</h3>
-        <ul>
-        <li><b>SLSQP:</b> Efficient gradient-based method for smooth, constrained problems.</li>
-        <li><b>Nevergrad:</b> Powerful gradient-free optimizer for noisy or black-box functions.</li>
-        <li><b>Differential Evolution:</b> Global optimization method robust against local minima.</li>
-        <li><b>COBYLA:</b> Linear approximation method for constrained problems without derivatives.</li>
-        </ul>
-
-        <h3>Setting Up an Optimization</h3>
-        <ol>
-        <li><b>Objectives:</b> Select outputs to minimize or maximize. You can weight multiple objectives.</li>
-        <li><b>Constraints:</b> Define limits on outputs (e.g., Stress < 200 MPa).</li>
-        <li><b>Algorithm:</b> Choose the solver that best fits your problem characteristics.</li>
-        <li><b>Run:</b> Execute the optimization and monitor convergence in real-time.</li>
-        </ol>
-
-        <h3>Advanced Features</h3>
-        <ul>
-        <li><b>Smart Scaling:</b> Automatically normalizes variables and constraints for better numerical stability.</li>
-        <li><b>Multi-Start:</b> Run optimization from multiple initial points to find global optima.</li>
-        <li><b>Pareto Analysis:</b> Explore trade-offs between conflicting objectives.</li>
-        </ul>
-        """
-        browser = self._create_browser(help_text)
-        self.help_tabs.addTab(browser, qta.icon('fa5s.rocket'), "Optimization")
-
-    def _add_sensitivity_help(self) -> None:
-        """Add comprehensive help for the Sensitivity Analysis tab."""
-        help_text = """
-        <h2>Sensitivity Analysis</h2>
-
-        <h3>Overview</h3>
-        <p>Identify which input parameters have the most impact on your system's performance. Sensitivity analysis is crucial for model simplification, robust design, and prioritizing design efforts.</p>
-
-        <h3>Methodology: Sobol Indices</h3>
-        <p>PyLCSS uses variance-based Sobol sensitivity analysis, providing:</p>
-        <ul>
-        <li><b>First-Order Indices:</b> The direct contribution of each parameter to output variance.</li>
-        <li><b>Total-Order Indices:</b> The total contribution, including interactions with other parameters.</li>
-        </ul>
-
-        <h3>Workflow</h3>
-        <ol>
-        <li><b>Select Outputs:</b> Choose the target results to analyze.</li>
-        <li><b>Configure Samples:</b> Set the sample size (powers of 2 recommended).</li>
-        <li><b>Analyze:</b> Run the Sobol analysis.</li>
-        <li><b>Interpret:</b> View bar charts to identify critical parameters and interactions.</li>
-        </ol>
-
-        <h3>Why Use It?</h3>
-        <ul>
-        <li><b>Focus Effort:</b> Spend time optimizing only the most influential variables.</li>
-        <li><b>Simplify Models:</b> Fix non-influential variables to constant values.</li>
-        <li><b>Understand Physics:</b> Gain insights into the driving forces of your system.</li>
-        </ul>
-        """
-        browser = self._create_browser(help_text)
-        self.help_tabs.addTab(browser, qta.icon('fa5s.chart-bar'), "Sensitivity")
-
-    def _add_assistant_help(self) -> None:
-        """Add help for the AI assistant panel."""
-        help_text = """
-        <h2>AI Assistant</h2>
-
-        <h3>Overview</h3>
-        <p>PyLCSS ships a PydanticAI-based agent that uses <b>native LLM function-calling</b> to
-        drive 25 in-app tools — CAD authoring, system-graph building, simulations,
-        optimisation, sensitivity, surrogate training, and UI navigation. Strict JSON-schema
-        validation on every tool call (with auto-retry on validation errors) makes even small
-        local models reliable for production use.</p>
-
-        <h3>Setup</h3>
-        <ol>
-        <li><b>Open Assistant:</b> Click the robot button in the top-right corner.</li>
-        <li><b>Text Input:</b> Type a request and press Enter or Send.</li>
-        </ol>
-
-        <h3>LLM Providers</h3>
-        <p>Configure from the assistant panel's settings (gear icon). Every provider uses native function-calling — no JSON-plan parsing fallback.</p>
-        <ul>
-        <li><b>OpenAI:</b> GPT-4.x / GPT-5 family.</li>
-        <li><b>Anthropic:</b> Claude Haiku, Sonnet, Opus 4.x.</li>
-        <li><b>Google:</b> Gemini 2.5 Pro / Flash.</li>
-        <li><b>Local (recommended for privacy):</b> Any OpenAI-compatible server — <b>LM Studio</b>, <b>Ollama</b>, <b>vLLM</b>. Set the base URL to e.g. <code>http://localhost:1234/v1</code> and pick a model that supports tool calling (Qwen 2.5 7B+, Llama 3.1 8B+, Mistral Nemo, GPT-OSS 20B). All LLM work runs offline.</li>
-        </ul>
-
-        <h3>What the assistant can do</h3>
-        <ul>
-        <li>Create CadQuery code-part geometry: <i>"Make a 100x50x10 bracket with a 10 mm hole on the top face."</i></li>
-        <li>Insert a FreeCAD Part node for interactive sketching: <i>"Open a new FreeCAD part for a fork bracket."</i></li>
-        <li>Build a system model with inputs / outputs / custom Python blocks.</li>
-        <li>Run sensitivity analysis and summarise the most influential variables.</li>
-        <li>Train a surrogate (MLP / GP / Random Forest / PyTorch DNN) on the active design.</li>
-        <li>Switch tabs, save the project, kick off an NSGA-II optimisation.</li>
-        </ul>
-
-        <h3>Tips</h3>
-        <ul>
-        <li><b>Decompose:</b> The assistant is instructed to issue parallel tool calls when steps are independent (e.g. "create geometry AND switch to FEA tab AND save"). Phrasing your request as one sentence still works.</li>
-        <li><b>Local models:</b> The strict-schema retry loop means an 8B model can handle multi-step requests that used to require GPT-4. Try Qwen 2.5 7B first.</li>
-        <li><b>Privacy:</b> API keys are encrypted with a machine-specific cipher in <code>llm_memory.json</code>. Pick the Local provider to keep every byte on your machine.</li>
-        </ul>
-
-        <h3>Current Limitations</h3>
-        <ul>
-        <li><b>File Selection:</b> Native file dialogs still require direct user selection.</li>
-        <li><b>Provider Setup:</b> Cloud LLM providers require valid API credentials.</li>
-        <li><b>Verification:</b> Treat generated graphs and simulation setup as drafts until validated.</li>
-        </ul>
-        """       
-        browser = self._create_browser(help_text)
-        self.help_tabs.addTab(browser, qta.icon('fa5s.robot'), "AI Assistant")
-
-    def _add_about_tab(self) -> None:
-        """Add the About information as a help tab."""
-        about_text = """
-        <h2>About PyLCSS</h2>
-
-        <h3>Engineering Design Optimization Platform</h3>
-        <p><b>Version 2.0.0</b></p>
-        <p>PyLCSS is a professional engineering platform for system modeling, parametric CAD, 
-        FEA simulation, multi-disciplinary optimization, sensitivity analysis, solution-space 
-        exploration, and surrogate modeling.</p>
-
-        <h3>Core Technologies</h3>
-        <ul>
-        <li><b>Python & PySide6:</b> Modern, responsive desktop UI with DPI awareness.</li>
-        <li><b>CadQuery & OpenCASCADE:</b> Parametric solid modeling and B-Rep CAD kernel.</li>
-        <li><b>scikit-fem & Netgen:</b> Finite Element Analysis and mesh generation.</li>
-        <li><b>NumPy, SciPy & scikit-learn:</b> High-performance computing and ML surrogates.</li>
-        <li><b>PyTorch:</b> Deep learning surrogate models (ConfigurableNet).</li>
-        <li><b>Nevergrad, NSGA-II & Multi-Start:</b> 7 optimization solvers (local, global, multi-objective).</li>
-        <li><b>SALib:</b> 4 sensitivity methods (Sobol, Morris, FAST, Delta/DMIM).</li>
-        <li><b>VTK & pyqtgraph:</b> 3D visualization and interactive 2D plotting.</li>
-        <li><b>pint:</b> Physical unit conversion across SI, Imperial, CGS systems.</li>
-        <li><b>meshio & h5py:</b> Multi-format mesh and HDF5 data I/O.</li>
-        </ul>
-
-        <h3>Key Capabilities</h3>
-        <ul>
-        <li>Node-based visual system modeling with 50+ CAD, math, and simulation nodes</li>
-        <li>Topology optimization (SIMP with MMA/OC, symmetry, Heaviside projection)</li>
-        <li>Cross-validation, hyperparameter optimization, and feature importance analysis</li>
-        <li>Each tab provides its own integrated import/export capabilities</li>
-        </ul>
-
-        <h3>License & Copyright</h3>
-        <p>Licensed under the PolyForm Shield License 1.0.0.</p>
-        <p>Copyright © 2026 Kutay Demir. All rights reserved.</p>
-
-        <p><i>Developed for advanced engineering research and industrial applications.</i></p>
-        """
-        browser = self._create_browser(about_text)
-        self.help_tabs.addTab(browser, qta.icon('fa5s.info-circle'), "About")
+    def _show_page(self, key: str) -> None:
+        self._browser.setHtml(_PAGES.get(key, _page(f"<h1>{key}</h1><p>Page not found.</p>")))
+        self._browser.verticalScrollBar().setValue(0)
