@@ -251,7 +251,7 @@ def run_process(
 
     def _popen_kwargs() -> dict:
         if os.name == "nt":
-            return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+            return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
         return {"start_new_session": True}
 
     def _wait_for_file_process(proc: subprocess.Popen) -> int:

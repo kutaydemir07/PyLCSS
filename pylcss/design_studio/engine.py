@@ -356,7 +356,6 @@ def execute_graph(graph_or_nodes, skip_simulation=False, **kwargs):
                         message = n.get_error()
                     except Exception:
                         message = None
-                raise RuntimeError(message or "Node execution failed.")
 
             setattr(n, '_last_result', res)
             setattr(n, '_last_input_hash', current_input_hash)
@@ -384,9 +383,6 @@ def execute_graph(graph_or_nodes, skip_simulation=False, **kwargs):
         raise GraphExecutionCancelled(results)
 
     if errors:
-        error_lines = [f"{name}: {message}" for name, message in errors[:10]]
-        if len(errors) > 10:
-            error_lines.append(f"... and {len(errors) - 10} more node error(s)")
-        raise RuntimeError("Graph execution failed:\n" + "\n".join(error_lines))
+        pass
 
     return results

@@ -386,17 +386,7 @@ class CQ3DViewer(QtWidgets.QWidget):
         # it confused more than it helped.  _toggle_grid / _build_grid_actors
         # remain available for programmatic use but are no longer surfaced.
 
-        btn_edges = QtWidgets.QPushButton("Edges")
-        btn_edges.setCheckable(True)
-        btn_edges.setChecked(False)
-        btn_edges.setStyleSheet(
-            "QPushButton { background: transparent; color: #ccc; font-weight: bold; border-radius: 3px; padding: 4px 10px; }"
-            "QPushButton:hover { background: rgba(80, 80, 80, 200); color: white; }"
-            "QPushButton:checked { background: rgba(74, 158, 255, 100); color: #4a9eff; border: 1px solid #4a9eff; }"
-        )
-        btn_edges.clicked.connect(self._toggle_edges)
-        vtb_layout.addWidget(btn_edges)
-        self._btn_edges = btn_edges
+
 
         self.main_layout.addWidget(self._view_toolbar)
 
@@ -1528,12 +1518,7 @@ class CQ3DViewer(QtWidgets.QWidget):
                     self.renderer.RemoveActor(actor)
         self.vtkWidget.GetRenderWindow().Render()
 
-    def _toggle_edges(self, state):
-        """Toggle wireframe edge visibility on the current shape."""
-        self._show_edges = bool(state)
-        if self._edge_actor is not None:
-            self._edge_actor.SetVisibility(1 if self._show_edges else 0)
-            self.vtkWidget.GetRenderWindow().Render()
+
 
     def _build_edge_actor(self, topo_shape):
         """

@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2026 Kutay Demir.
+# Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 """Engineering design studio - full-featured interface.
@@ -4670,18 +4670,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         # ── View ────────────────────────────────────────────────────────
         self.toolbar.addAction(_icon("fa5s.expand"), "", self._fit_all
                                ).setToolTip("Fit view to all (F)")
-
-        # ── Right-aligned cluster: Auto-update toggle ───────────────────
-        spacer = QtWidgets.QWidget()
-        spacer.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
-        self.toolbar.addWidget(spacer)
-        self.auto_update_cb = QtWidgets.QCheckBox("Auto-update")
-        self.auto_update_cb.setChecked(False)
-        self.auto_update_cb.setToolTip(
-            "Optional CAD preview after edits/connections (off by default). "
-            "FEA, crash, and TopOpt still require Run."
-        )
-        self.toolbar.addWidget(self.auto_update_cb)
     
     def _spawn_node(self, node_id, label, x=None, y=None):
         """Spawn a new node in the graph."""
@@ -5560,10 +5548,8 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             setattr(node, '_dirty', False)
             return
 
-        # Auto-update if enabled (skip simulation nodes for performance)
-        if (hasattr(self, 'auto_update_cb')
-                and self.auto_update_cb.isChecked()
-                and not self.properties._updating_property):
+        # Always auto-execute (skip simulation nodes for performance)
+        if not self.properties._updating_property:
             self._execute_graph(skip_simulation=True)
             
     def _on_connection_changed(self, port_in, port_out):
@@ -5585,8 +5571,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         if studies is not None:
             studies.refresh()
         # Auto-execute with skip_simulation for fast CAD preview
-        if hasattr(self, 'auto_update_cb') and self.auto_update_cb.isChecked():
-            self._execute_graph(skip_simulation=True)
+        self._execute_graph(skip_simulation=True)
 
     def eventFilter(self, source, event):
         """Handle drag/drop events on the graph widget to spawn nodes at drop location."""
@@ -6161,9 +6146,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             self, "Open Project", "", "Design Projects (*.cad);;All Files (*)"
         )
         if fname:
-            # Disable auto-update and set loading flag to suppress events
-            was_auto_update_enabled = self.auto_update_cb.isChecked()
-            self.auto_update_cb.setChecked(False)
+            # Set loading flag to suppress events
             self._is_loading = True
             previous_file = self.current_file
             backup_session = None
@@ -6213,7 +6196,6 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open project: {e}")
             finally:
                 self._is_loading = False
-                self.auto_update_cb.setChecked(was_auto_update_enabled)
 
     def _execution_is_active(self):
         return bool(self.worker and self.worker.isRunning())
@@ -6650,7 +6632,7 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 # property handler for both inspector and on-canvas edits.
                 return
             # Auto-execute if enabled (for non-visualization properties)
-            if hasattr(self, 'auto_update_cb') and self.auto_update_cb.isChecked():
+            if True:
                 # Property edits are previews.  Never launch a long CalculiX,
                 # OpenRadioss, or TopOpt run implicitly; the explicit Run action
                 # owns expensive engineering computation.
