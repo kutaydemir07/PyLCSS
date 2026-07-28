@@ -7,27 +7,53 @@ needs for visualization: nodal coordinates (block 2C), elements (block 3C), and
 result groups (block ``-4`` with components in ``-5`` and per-node data in
 ``-1`` records terminated by ``-3``).
 
-Only the blocks needed for the FEA viewer are extracted (``DISP`` and
-``STRESS``); the parser intentionally ignores everything else.
+The engineering result subset includes displacement, stress, reaction/nodal
+force (``FORC``), and strain-energy density (``ENER``).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import TypedDict
 
 import numpy as np
 
 
+class FrdStep(TypedDict):
+    """Metadata for one result block encountered in an FRD file."""
+
+    step: int
+    name: str
+    time: float
+
+
+class FrdResult(TypedDict):
+    """Normalized CalculiX result fields returned by :func:`read_frd`."""
+
+    nodes: np.ndarray
+    node_ids: np.ndarray
+    displacement: np.ndarray
+    stress: np.ndarray
+    von_mises: np.ndarray
+    nodal_force: np.ndarray
+    ener: np.ndarray
+    steps: list[FrdStep]
+
+
 def _to_float(token: str) -> float:
-    """CCX writes scientific values with explicit signs; Python parses them as is."""
+    """Parse the exponent spellings used by Fortran-based CalculiX builds."""
+    normalized = token.strip().replace("D", "E").replace("d", "e")
     try:
-        return float(token)
+        return float(normalized)
     except ValueError:
-        return 0.0
+        # Some fixed-width Fortran writers omit the ``E`` (``1.2-003``).
+        for index in range(len(normalized) - 1, 0, -1):
+            if normalized[index] in "+-" and normalized[index - 1].isdigit():
+                return float(normalized[:index] + "E" + normalized[index:])
+        raise
 
 
-def _parse_data_record(line: str) -> Tuple[int, List[float]]:
+def _parse_data_record(line: str) -> tuple[int, list[float]]:
     """Parse one ``-1 <node_id> <v1> <v2> ...`` data line.
 
     CCX writes FRD in **fixed-column** format (KEY(3) + NID(I10) + values
@@ -46,21 +72,21 @@ def _parse_data_record(line: str) -> Tuple[int, List[float]]:
         except ValueError:
             node_id = -1
         if node_id > 0:
-            values: List[float] = []
+            values: list[float] = []
             offset = 13
-            while offset + 12 <= len(body):
-                chunk = body[offset : offset + 12].strip()
-                if chunk:
-                    values.append(_to_float(chunk))
-                offset += 12
-            # Trailing partial column (some CCX builds write 13-char widths)
-            if offset < len(body):
-                tail_chunk = body[offset:].strip()
-                if tail_chunk:
-                    try:
+            try:
+                while offset + 12 <= len(body):
+                    chunk = body[offset : offset + 12].strip()
+                    if chunk:
+                        values.append(_to_float(chunk))
+                    offset += 12
+                # Trailing partial column (some builds use a partial final field).
+                if offset < len(body):
+                    tail_chunk = body[offset:].strip()
+                    if tail_chunk:
                         values.append(_to_float(tail_chunk))
-                    except Exception:
-                        pass
+            except ValueError:
+                values = []
             if values:
                 return node_id, values
 
@@ -82,9 +108,11 @@ def _parse_data_record(line: str) -> Tuple[int, List[float]]:
     return -1, []
 
 
-def _parse_node_block(lines: List[str], start: int) -> Tuple[Dict[int, Tuple[float, float, float]], int]:
+def _parse_node_block(
+    lines: list[str], start: int
+) -> tuple[dict[int, tuple[float, float, float]], int]:
     """Read a nodal-coordinate block (header ``2C``) returning {nid: (x,y,z)}."""
-    coords: Dict[int, Tuple[float, float, float]] = {}
+    coords: dict[int, tuple[float, float, float]] = {}
     idx = start
     while idx < len(lines):
         line = lines[idx]
@@ -100,8 +128,8 @@ def _parse_node_block(lines: List[str], start: int) -> Tuple[Dict[int, Tuple[flo
 
 
 def _parse_result_block(
-    lines: List[str], start: int, num_components: int
-) -> Tuple[Dict[int, List[float]], int]:
+    lines: list[str], start: int, num_components: int
+) -> tuple[dict[int, list[float]], int]:
     """Read per-node data rows until the closing ``-3`` record.
 
     CCX writes the ``-4`` header with N+1 components when it includes the
@@ -109,7 +137,7 @@ def _parse_result_block(
     so accept any record that yields at least one value and store up to
     ``num_components`` of them.
     """
-    data: Dict[int, List[float]] = {}
+    data: dict[int, list[float]] = {}
     idx = start
     while idx < len(lines):
         line = lines[idx]
@@ -119,12 +147,12 @@ def _parse_result_block(
         if stripped.startswith("-1"):
             nid, values = _parse_data_record(line)
             if nid > 0 and values:
-                data[nid] = values[: max(num_components, len(values))]
+                data[nid] = values[:num_components] if num_components > 0 else values
         idx += 1
     return data, idx
 
 
-def read_frd(path: str | Path) -> Dict[str, object]:
+def read_frd(path: str | Path) -> FrdResult:
     """Parse a CalculiX FRD file and return the displacement and stress fields.
 
     Returns
@@ -136,21 +164,23 @@ def read_frd(path: str | Path) -> Dict[str, object]:
         ``stress``      : (N, 6) array of nodal Cauchy stress in
                           [SXX, SYY, SZZ, SXY, SYZ, SZX] order, when present.
         ``von_mises``   : (N,) nodal Von Mises stress derived from ``stress``.
-        ``steps``       : list of dicts ``{step, name, time}`` recording every
-                          result block encountered.
+        ``nodal_force`` : (N, 3) nodal/reaction force vectors, when present.
+        ``ener``        : (N,) nodal strain-energy density, when present.
+        ``steps``       : metadata for every result block encountered.
     """
     path = Path(path)
     text = path.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
 
-    coords: Dict[int, Tuple[float, float, float]] = {}
-    last_disp: Dict[int, List[float]] = {}
-    last_stress: Dict[int, List[float]] = {}
-    last_ener: Dict[int, List[float]] = {}
-    steps: List[Dict[str, float]] = []
+    coords: dict[int, tuple[float, float, float]] = {}
+    last_disp: dict[int, list[float]] = {}
+    last_stress: dict[int, list[float]] = {}
+    last_force: dict[int, list[float]] = {}
+    last_ener: dict[int, list[float]] = {}
+    steps: list[FrdStep] = []
 
     idx = 0
-    current_block: Optional[str] = None
+    current_block: str | None = None
     current_components: int = 0
     current_time: float = 0.0
     current_step: int = 0
@@ -179,7 +209,7 @@ def read_frd(path: str | Path) -> Dict[str, object]:
 
         if stripped.startswith("-4"):
             tokens = stripped.split()
-            current_block = tokens[1] if len(tokens) >= 2 else ""
+            current_block = tokens[1].upper() if len(tokens) >= 2 else ""
             try:
                 current_components = int(tokens[2]) if len(tokens) >= 3 else 0
             except ValueError:
@@ -197,7 +227,7 @@ def read_frd(path: str | Path) -> Dict[str, object]:
             block_data, idx = _parse_result_block(lines, idx, num_components)
             steps.append(
                 {
-                    "step": float(current_step),
+                    "step": current_step,
                     "name": str(current_block),
                     "time": float(current_time),
                 }
@@ -206,6 +236,8 @@ def read_frd(path: str | Path) -> Dict[str, object]:
                 last_disp = block_data
             elif current_block == "STRESS":
                 last_stress = block_data
+            elif current_block == "FORC":
+                last_force = block_data
             elif current_block == "ENER":
                 last_ener = block_data
             current_block = None
@@ -247,7 +279,7 @@ def read_frd(path: str | Path) -> Dict[str, object]:
                 (sxx - syy) ** 2
                 + (syy - szz) ** 2
                 + (szz - sxx) ** 2
-                + 6.0 * (sxy ** 2 + syz ** 2 + szx ** 2)
+                + 6.0 * (sxy**2 + syz**2 + szx**2)
             )
         )
 
@@ -258,12 +290,20 @@ def read_frd(path: str | Path) -> Dict[str, object]:
             if row:
                 ener[i] = float(row[0])
 
+    nodal_force = np.zeros((n_nodes, 3), dtype=float)
+    if last_force:
+        for i, nid in enumerate(node_ids_sorted):
+            row = last_force.get(nid)
+            if row and len(row) >= 3:
+                nodal_force[i] = row[:3]
+
     return {
         "nodes": nodes,
         "node_ids": node_ids,
         "displacement": displacement,
         "stress": stress,
         "von_mises": von_mises,
+        "nodal_force": nodal_force,
         "ener": ener,
         "steps": steps,
     }

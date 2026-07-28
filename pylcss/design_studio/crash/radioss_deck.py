@@ -107,7 +107,7 @@ class RunRadiossDeckNode(CadQueryNode):
             SolverBackendError,
             run_openradioss_existing_deck,
         )
-        from pylcss.solver_backends.common import as_bool
+        from pylcss.input_values import as_bool
 
         raw = (self.get_property("deck_path") or "").strip()
         deck_path = self._resolve_deck_path(raw, getattr(self, "_project_dir", None))

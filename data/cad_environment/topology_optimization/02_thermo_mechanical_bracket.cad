@@ -99,7 +99,7 @@
         "structural_weight": 0.65,
         "thermal_weight": 0.35,
         "print_ready_mesh": true,
-        "mesh_decimate_ratio": 0.35,
+        "mesh_decimate_ratio": 0.85,
         "surface_recovery_method": "Volume-Preserving SDF (VTK)"
       }
     }

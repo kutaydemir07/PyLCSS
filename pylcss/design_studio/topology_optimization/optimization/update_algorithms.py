@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 """Density update algorithms and passive-volume accounting."""
+
 from __future__ import annotations
 
 from typing import Optional
@@ -51,9 +52,8 @@ def optimality_criteria_update(
         lower_multiplier *= 0.5
 
     updated_active = candidate(upper_multiplier)
-    while (
-        upper_multiplier - lower_multiplier
-        > 1e-8 * (lower_multiplier + upper_multiplier)
+    while upper_multiplier - lower_multiplier > 1e-8 * (
+        lower_multiplier + upper_multiplier
     ):
         midpoint = 0.5 * (lower_multiplier + upper_multiplier)
         updated_active = candidate(midpoint)
@@ -173,8 +173,8 @@ def volume_budget_from_masks(
     passive_outside = (~active) & (~source)
 
     active_count = int(np.sum(active_source))
-    target_source_sum = (
-        float(np.clip(volume_fraction, min_density, 1.0)) * float(source_count)
+    target_source_sum = float(np.clip(volume_fraction, min_density, 1.0)) * float(
+        source_count
     )
     passive_source_sum = float(np.sum(passive[passive_source]))
     passive_outside_sum = float(np.sum(passive[passive_outside]))
@@ -194,18 +194,14 @@ def volume_budget_from_masks(
     minimum_source_sum = passive_source_sum + minimum_active_sum
 
     return {
-        "active_volfrac": float(
-            np.clip(active_volume_fraction, min_density, 1.0)
-        ),
+        "active_volfrac": float(np.clip(active_volume_fraction, min_density, 1.0)),
         "flat_total_target": float(flat_total_target),
         "source_total_target": float(source_total_sum),
         "source_count": float(source_count),
         "active_count": float(active_count),
         "passive_source_sum": float(passive_source_sum),
         "min_source_volfrac": float(minimum_source_sum / float(source_count)),
-        "target_was_clamped": bool(
-            abs(feasible_active_sum - raw_active_sum) > 1e-9
-        ),
+        "target_was_clamped": bool(abs(feasible_active_sum - raw_active_sum) > 1e-9),
     }
 
 

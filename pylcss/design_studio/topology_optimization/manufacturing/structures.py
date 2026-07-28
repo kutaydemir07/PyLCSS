@@ -31,6 +31,13 @@ _MODE_ALIASES = {
     "gyroid lattice": "gyroid",
     "diamond": "diamond",
     "diamond lattice": "diamond",
+    "honeycomb": "honeycomb",
+    "honeycomb lattice": "honeycomb",
+    "cubic": "cubic",
+    "cubic lattice": "cubic",
+    "octet": "octet",
+    "octet truss": "octet",
+    "octet truss lattice": "octet",
 }
 
 
@@ -39,12 +46,12 @@ class ManufacturingStructureOptions:
     """Controls for the explicit optimized manufacturing geometry."""
 
     mode: str = "solid"
-    cell_size_voxels: float = 6.0
+    cell_size_voxels: float = 8.0
     member_thickness_voxels: float = 1.0
     skin_thickness_voxels: float = 0.75
     variable_density: bool = True
-    minimum_relative_density: float = 0.12
-    maximum_relative_density: float = 0.90
+    minimum_relative_density: float = 0.15
+    maximum_relative_density: float = 0.60
     solid_transition_density: float = 0.92
 
     def __post_init__(self) -> None:
@@ -53,7 +60,7 @@ class ManufacturingStructureOptions:
         if mode is None:
             raise ValueError(
                 "Structure mode must be Solid Envelope, Topology-Following Ribs, "
-                "Gyroid Lattice, or Diamond Lattice."
+                "Gyroid, Diamond, Honeycomb, Cubic, or Octet Truss."
             )
         object.__setattr__(self, "mode", mode)
         for name in (
@@ -69,10 +76,29 @@ class ManufacturingStructureOptions:
                 raise ValueError(f"{name} must be finite and non-negative.")
             object.__setattr__(self, name, value)
         object.__setattr__(self, "variable_density", bool(self.variable_density))
-        if self.mode in {"gyroid", "diamond"} and self.cell_size_voxels < 3.0:
+        if self.mode in {
+            "gyroid", "diamond", "honeycomb", "cubic", "octet"
+        } and self.cell_size_voxels < 3.0:
             raise ValueError("A lattice cell must span at least 3 voxels.")
         if self.mode != "solid" and self.member_thickness_voxels <= 0.0:
             raise ValueError("A rib or lattice member thickness must be positive.")
+        if (
+            self.mode in {"gyroid", "diamond", "honeycomb", "cubic", "octet"}
+            and self.cell_size_voxels
+            < 4.0 * self.member_thickness_voxels
+        ):
+            raise ValueError(
+                "Lattice cell size must be at least four times the member "
+                "thickness so the cell openings remain resolved."
+            )
+        if (
+            self.mode in {"gyroid", "diamond", "honeycomb", "cubic", "octet"}
+            and self.skin_thickness_voxels > 0.25 * self.cell_size_voxels
+        ):
+            raise ValueError(
+                "Lattice skin thickness must not exceed one quarter of the "
+                "cell size."
+            )
         if not (
             0.0 < self.minimum_relative_density
             < self.maximum_relative_density
@@ -91,6 +117,9 @@ class ManufacturingStructureOptions:
             "topology_ribs": "Topology-Following Ribs",
             "gyroid": "Gyroid Lattice",
             "diamond": "Diamond Lattice",
+            "honeycomb": "Honeycomb Lattice",
+            "cubic": "Cubic Lattice",
+            "octet": "Octet Truss Lattice",
         }[self.mode]
 
 
@@ -99,7 +128,16 @@ def _boundary_skin(envelope: np.ndarray, thickness: float) -> np.ndarray:
         return np.zeros_like(envelope, dtype=bool)
     from scipy import ndimage as ndi
 
-    inside_distance = ndi.distance_transform_edt(envelope)
+    # Pad with void so a domain that fills the whole array still gets a skin
+    # on all six exterior faces. scipy's EDT otherwise has no explicit
+    # out-of-array background and biases the skin toward one corner.
+    padded = np.pad(
+        np.asarray(envelope, dtype=bool),
+        pad_width=1,
+        mode="constant",
+        constant_values=False,
+    )
+    inside_distance = ndi.distance_transform_edt(padded)[1:-1, 1:-1, 1:-1]
     return envelope & (inside_distance <= max(1.0, float(thickness)))
 
 
@@ -164,12 +202,13 @@ def _tpms_implicit(
     )
 
 
-_TPMS_BAND_LUT: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+_TPMS_BAND_LUT: dict[tuple[str, int], np.ndarray] = {}
 
 
 def _tpms_band_for_relative_density(
     relative_density: np.ndarray,
     mode: str,
+    samples: int = 64,
 ) -> np.ndarray:
     """Map requested cell-relative density to an implicit sheet half-band.
 
@@ -178,8 +217,11 @@ def _tpms_band_for_relative_density(
     occupies approximately ``r`` of a resolved unit cell before skin and
     attachment solids are added.
     """
-    if mode not in _TPMS_BAND_LUT:
-        samples = 64
+    # Calibrate at the actual resolved points per cell. A continuum 64³ lookup
+    # badly overfilled a Diamond sheet sampled on only 6–8 voxels per cell.
+    samples = int(np.clip(round(samples), 3, 64))
+    key = (mode, samples)
+    if key not in _TPMS_BAND_LUT:
         phase = (
             2.0
             * np.pi
@@ -200,15 +242,18 @@ def _tpms_band_for_relative_density(
                 + np.cos(x) * np.sin(y) * np.cos(z)
                 + np.cos(x) * np.cos(y) * np.sin(z)
             )
-        fractions = np.linspace(0.0, 1.0, 513)
-        bands = np.quantile(np.abs(implicit).ravel(), fractions)
-        _TPMS_BAND_LUT[mode] = (fractions, bands)
-    fractions, bands = _TPMS_BAND_LUT[mode]
-    return np.interp(
-        np.clip(np.asarray(relative_density, dtype=float), 0.0, 1.0),
-        fractions,
-        bands,
+        _TPMS_BAND_LUT[key] = np.sort(np.abs(implicit).ravel())
+    bands = _TPMS_BAND_LUT[key]
+    requested = np.clip(
+        np.asarray(relative_density, dtype=float), 0.0, 1.0
     )
+    # Select the first discrete threshold that contains at least the requested
+    # cell fraction. Interpolating repeated quantiles is unreliable on coarse
+    # 6--8 voxel cells and previously collapsed nominal 20--35% sheets to a
+    # few isolated voxels.
+    indices = np.ceil(requested * bands.size).astype(int) - 1
+    indices = np.clip(indices, 0, bands.size - 1)
+    return bands[indices] + 32.0 * np.finfo(float).eps
 
 
 def _periodic_lattice(
@@ -220,18 +265,216 @@ def _periodic_lattice(
 ) -> np.ndarray:
     implicit = _tpms_implicit(shape, mode, cell_size)
 
-    minimum_band = float(
-        np.pi * float(member_thickness) / max(float(cell_size), 1e-9)
-    )
+    # Convert the minimum printable sheet thickness to a cell-relative volume
+    # fraction, then use the same calibrated implicit-field CDF as the target
+    # density. A raw π*t/cell band strongly overfilled Diamond cells (often
+    # >80% solid for a one-voxel wall in an 8-voxel cell).
+    minimum_fraction = float(np.clip(
+        2.0 * float(member_thickness) / max(float(cell_size), 1e-9),
+        0.02,
+        0.80,
+    ))
+    minimum_band = float(_tpms_band_for_relative_density(
+        np.asarray(minimum_fraction), mode, samples=int(round(cell_size))
+    ))
     if relative_density is None:
         band: np.ndarray | float = max(0.12, minimum_band)
     else:
         band = np.maximum(
-            _tpms_band_for_relative_density(relative_density, mode),
+            _tpms_band_for_relative_density(
+                relative_density,
+                mode,
+                samples=int(round(cell_size)),
+            ),
+            # Calibrate against the actual voxel resolution of each cell.
             minimum_band,
         )
     band = np.clip(band, 0.01, float(np.max(np.abs(implicit))) + 1e-9)
     return np.abs(implicit) <= band
+
+
+def _strut_radius_field(
+    member_thickness: float,
+    relative_density: np.ndarray | None,
+) -> np.ndarray | float:
+    radius = max(0.25, 0.5 * float(member_thickness))
+    if relative_density is None:
+        return radius
+    # Strut volume scales approximately with radius squared. This local sizing
+    # is a manufacturing interpretation, not a homogenized unit-cell solve.
+    scale = np.sqrt(
+        np.clip(np.asarray(relative_density, dtype=float), 0.05, 1.0) / 0.35
+    )
+    return radius * np.clip(scale, 0.45, 1.8)
+
+
+def _cubic_or_octet_lattice(
+    shape: tuple[int, int, int],
+    mode: str,
+    cell_size: float,
+    member_thickness: float,
+    relative_density: np.ndarray | None,
+) -> np.ndarray:
+    coordinates = np.moveaxis(
+        np.indices(shape, dtype=float) + 0.5, 0, -1
+    )
+    period = max(float(cell_size), 1e-9)
+    unit = np.mod(coordinates / period, 1.0)
+    radius = _strut_radius_field(member_thickness, relative_density) / period
+
+    if mode == "cubic":
+        distance_to_grid = np.minimum(unit, 1.0 - unit)
+        distance_sq = np.minimum.reduce([
+            distance_to_grid[..., 1] ** 2 + distance_to_grid[..., 2] ** 2,
+            distance_to_grid[..., 0] ** 2 + distance_to_grid[..., 2] ** 2,
+            distance_to_grid[..., 0] ** 2 + distance_to_grid[..., 1] ** 2,
+        ])
+        # A one-voxel member whose centreline lies on a cell boundary otherwise
+        # misses every voxel centre. Include the in-plane voxel footprint.
+        raster_radius = np.asarray(radius) + 0.25 / period
+        return distance_sq <= raster_radius ** 2
+
+    # An octet unit cell connects each cube corner to the four corners of
+    # every face through face-diagonal struts. Repeating this cell produces
+    # the tetrahedral/octahedral truss network.
+    corners = np.asarray([
+        (x, y, z)
+        for x in (0.0, 1.0)
+        for y in (0.0, 1.0)
+        for z in (0.0, 1.0)
+    ])
+    face_centers = np.asarray([
+        (0.0, 0.5, 0.5), (1.0, 0.5, 0.5),
+        (0.5, 0.0, 0.5), (0.5, 1.0, 0.5),
+        (0.5, 0.5, 0.0), (0.5, 0.5, 1.0),
+    ])
+    distance_sq = np.full(shape, np.inf, dtype=float)
+    for center in face_centers:
+        fixed_axis = int(np.argmax(np.abs(center - 0.5)))
+        face_value = center[fixed_axis]
+        for corner in corners:
+            if corner[fixed_axis] != face_value:
+                continue
+            segment = corner - center
+            projection = np.sum((unit - center) * segment, axis=-1)
+            projection /= float(np.dot(segment, segment))
+            projection = np.clip(projection, 0.0, 1.0)
+            delta = unit - (
+                center + projection[..., None] * segment
+            )
+            distance_sq = np.minimum(
+                distance_sq, np.sum(delta * delta, axis=-1)
+            )
+    # A diagonal centreline can cross a voxel without passing close to the
+    # voxel centre. Rasterize the finite member against the voxel's half
+    # diagonal; otherwise a nominal one-voxel octet can collapse to a handful
+    # of isolated samples or even an empty-looking field.
+    raster_radius = np.asarray(radius) + (0.5 / period)
+    return distance_sq <= raster_radius ** 2
+
+
+def _honeycomb_lattice(
+    shape: tuple[int, int, int],
+    cell_size: float,
+    member_thickness: float,
+    relative_density: np.ndarray | None,
+) -> np.ndarray:
+    """Extruded regular-hexagonal walls with cell axes parallel to Z."""
+    x, y, _ = np.indices(shape, dtype=float) + 0.5
+    circumradius = max(1.5, 0.5 * float(cell_size))
+
+    # Map to the nearest flat-top hex center using axial/cube rounding.
+    q = (2.0 / 3.0) * x / circumradius
+    r = (
+        (-1.0 / 3.0) * x
+        + (np.sqrt(3.0) / 3.0) * y
+    ) / circumradius
+    cube_x, cube_z = q, r
+    cube_y = -cube_x - cube_z
+    rx, ry, rz = np.rint(cube_x), np.rint(cube_y), np.rint(cube_z)
+    dx, dy, dz = np.abs(rx - cube_x), np.abs(ry - cube_y), np.abs(rz - cube_z)
+    fix_x = (dx > dy) & (dx > dz)
+    fix_y = (~fix_x) & (dy > dz)
+    fix_z = ~(fix_x | fix_y)
+    rx[fix_x] = -ry[fix_x] - rz[fix_x]
+    ry[fix_y] = -rx[fix_y] - rz[fix_y]
+    rz[fix_z] = -rx[fix_z] - ry[fix_z]
+
+    center_x = circumradius * 1.5 * rx
+    center_y = circumradius * np.sqrt(3.0) * (rz + 0.5 * rx)
+    local_x, local_y = x - center_x, y - center_y
+    inradius = np.sqrt(3.0) * 0.5 * circumradius
+    projections = np.stack([
+        np.abs(np.cos(angle) * local_x + np.sin(angle) * local_y)
+        for angle in (np.pi / 6.0, np.pi / 2.0, 5.0 * np.pi / 6.0)
+    ])
+    distance_to_wall = np.maximum(
+        0.0, inradius - np.max(projections, axis=0)
+    )
+    half_wall = _strut_radius_field(
+        member_thickness, relative_density
+    )
+    return distance_to_wall <= np.asarray(half_wall)
+
+
+def _remove_floating_lattice(
+    envelope: np.ndarray,
+    core: np.ndarray,
+    skin: np.ndarray,
+    member_thickness: float,
+) -> np.ndarray:
+    """Keep lattice members that form a load path to the envelope boundary.
+
+    Sampling an implicit cell family on a coarse voxel grid can create tiny
+    islands between the periodic network and the skin.  A one-member-radius
+    attachment band closes sub-voxel raster gaps, then binary propagation
+    removes any genuinely floating islands.  When skin is disabled, the
+    envelope boundary is used only as the attachment seed and is not added to
+    the returned structure.
+    """
+    from scipy import ndimage as ndi
+
+    envelope = np.asarray(envelope, dtype=bool)
+    core = np.asarray(core, dtype=bool) & envelope
+    skin = np.asarray(skin, dtype=bool) & envelope
+    if not np.any(core):
+        return core
+
+    envelope_boundary = envelope & ~ndi.binary_erosion(
+        envelope,
+        structure=ndi.generate_binary_structure(3, 1),
+        border_value=0,
+    )
+    labels, count = ndi.label(
+        core, structure=ndi.generate_binary_structure(3, 1)
+    )
+    if count <= 1:
+        return core
+
+    # The outer skin is itself connected and provides the intended attachment
+    # between separate periodic wall/strut families. Keep only lattice
+    # components that actually touch it; do not thicken all members merely to
+    # close a rasterization gap.
+    attachment_target = skin if np.any(skin) else envelope_boundary
+    touching = np.unique(labels[attachment_target & (labels > 0)])
+    if touching.size:
+        kept = np.isin(labels, touching)
+        if np.any(skin):
+            return kept
+        kept_labels, kept_count = ndi.label(
+            kept, structure=ndi.generate_binary_structure(3, 1)
+        )
+        if kept_count == 1:
+            return kept
+        sizes = np.bincount(kept_labels.ravel())
+        sizes[0] = 0
+        return kept_labels == int(np.argmax(sizes))
+
+    # A phase can place every centreline between boundary voxel centres. Keep
+    # the largest resolved network instead of returning an empty structure.
+    sizes = np.bincount(labels.ravel())
+    sizes[0] = 0
+    return labels == int(np.argmax(sizes))
 
 
 def build_manufacturing_field(
@@ -264,8 +507,25 @@ def build_manufacturing_field(
         manufactured = envelope
     else:
         scale = max(float(resolution_scale), 1e-9)
-        cell_size = max(3.0, opts.cell_size_voxels * scale)
-        member = max(0.5, opts.member_thickness_voxels * scale)
+        occupied = np.argwhere(envelope)
+        extents = (
+            np.ptp(occupied, axis=0) + 1
+            if len(occupied)
+            else np.asarray(field.shape, dtype=int)
+        )
+        # Avoid a single oversized cell swallowing a thin engineering part.
+        # Two cells across the second-largest envelope dimension is a useful
+        # lower bound for a recognizable, connected 3-D lattice.
+        second_largest = float(np.sort(np.maximum(extents, 1))[-2])
+        largest_useful_cell = max(3.0, 0.5 * second_largest)
+        cell_size = min(
+            max(3.0, opts.cell_size_voxels * scale),
+            largest_useful_cell,
+        )
+        member = min(
+            max(0.75, opts.member_thickness_voxels * scale),
+            0.35 * cell_size,
+        )
         skin = _boundary_skin(envelope, opts.skin_thickness_voxels * scale)
         solid_zone = np.zeros_like(envelope, dtype=bool)
 
@@ -288,12 +548,36 @@ def build_manufacturing_field(
                 )
             else:
                 target_relative_density = None
-            core = envelope & _periodic_lattice(
-                tuple(int(v) for v in field.shape),
-                opts.mode,
-                cell_size,
+            shape = tuple(int(v) for v in field.shape)
+            if opts.mode in {"gyroid", "diamond"}:
+                lattice = _periodic_lattice(
+                    shape,
+                    opts.mode,
+                    cell_size,
+                    member,
+                    relative_density=target_relative_density,
+                )
+            elif opts.mode in {"cubic", "octet"}:
+                lattice = _cubic_or_octet_lattice(
+                    shape,
+                    opts.mode,
+                    cell_size,
+                    member,
+                    target_relative_density,
+                )
+            else:
+                lattice = _honeycomb_lattice(
+                    shape,
+                    cell_size,
+                    member,
+                    target_relative_density,
+                )
+            core = envelope & lattice
+            core = _remove_floating_lattice(
+                envelope,
+                core | solid_zone,
+                skin,
                 member,
-                relative_density=target_relative_density,
             )
 
         manufactured = envelope & (skin | core | solid_zone)
@@ -382,18 +666,18 @@ def structure_options_from_values(
     member_thickness_voxels: Any,
     skin_thickness_voxels: Any,
     variable_density: Any = True,
-    minimum_relative_density: Any = 0.12,
-    maximum_relative_density: Any = 0.90,
+    minimum_relative_density: Any = 0.15,
+    maximum_relative_density: Any = 0.60,
     solid_transition_density: Any = 0.92,
 ) -> ManufacturingStructureOptions:
     """Parse graph-property values with one consistent validation path."""
     return ManufacturingStructureOptions(
         mode=str(mode or "Solid Envelope"),
-        cell_size_voxels=float(cell_size_voxels or 6.0),
+        cell_size_voxels=float(cell_size_voxels or 8.0),
         member_thickness_voxels=float(member_thickness_voxels or 1.0),
         skin_thickness_voxels=float(skin_thickness_voxels or 0.0),
         variable_density=bool(variable_density),
-        minimum_relative_density=float(minimum_relative_density or 0.12),
-        maximum_relative_density=float(maximum_relative_density or 0.90),
+        minimum_relative_density=float(minimum_relative_density or 0.15),
+        maximum_relative_density=float(maximum_relative_density or 0.60),
         solid_transition_density=float(solid_transition_density or 0.92),
     )

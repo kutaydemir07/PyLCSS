@@ -9,15 +9,15 @@ logger = logging.getLogger(__name__)
 
 
 def _target_face_objects(target_wp):
-    """Normalize OCC face and mesh-selection payloads from Select Face nodes."""
+    """Normalize geometry-selection payloads from Select Geometry nodes."""
     if isinstance(target_wp, dict):
-        faces = target_wp.get('faces', None)
-        if faces:
-            return [f for f in faces if f is not None]
+        entities = target_wp.get('entities') or target_wp.get('faces')
+        if entities:
+            return [entity for entity in entities if entity is not None]
         if target_wp.get('mesh_selection') or target_wp.get('node_ids') is not None:
             return [target_wp]
-        face = target_wp.get('face', None)
-        return [face] if face is not None else []
+        entity = target_wp.get('entity') or target_wp.get('face')
+        return [entity] if entity is not None else []
     return target_wp.vals() if hasattr(target_wp, 'vals') else []
 
 
@@ -61,9 +61,9 @@ def _selection_bbox(item):
 
 
 class ConstraintNode(CadQueryNode):
-    """Applies boundary constraints (fixed, roller, pinned, displacement) to a face."""
+    """Apply translational supports or prescribed motion to selected geometry."""
     __identifier__ = 'com.cad.sim.constraint'
-    NODE_NAME = 'FEA Constraint (Face)'
+    NODE_NAME = 'FEA Support'
 
     def __init__(self):
         super().__init__()
@@ -74,8 +74,10 @@ class ConstraintNode(CadQueryNode):
         
         # Constraint type selection
         self.create_property('constraint_type', 'Fixed', widget_type='combo',
-                             items=['Fixed', 'Pinned', 'Roller X', 'Roller Y', 'Roller Z',
-                                    'Symmetry X', 'Symmetry Y', 'Symmetry Z',
+                             items=['Fixed',
+                                    'Block X Translation',
+                                    'Block Y Translation',
+                                    'Block Z Translation',
                                     'Displacement'])
         
         # Displacement values for prescribed BC (used when type is 'Displacement')
@@ -92,7 +94,7 @@ class ConstraintNode(CadQueryNode):
         self.create_property('condition', '', widget_type='text')
 
     def run(self):
-        from pylcss.solver_backends.common import as_bool
+        from pylcss.input_values import as_bool
 
         self.clear_error()
         mesh = self.get_input_value('mesh', None)
@@ -140,6 +142,9 @@ class ConstraintNode(CadQueryNode):
             'Roller X':   {'fixed_dofs': [0],        'displacement': None},  # Normal-X blocked
             'Roller Y':   {'fixed_dofs': [1],        'displacement': None},  # Normal-Y blocked
             'Roller Z':   {'fixed_dofs': [2],        'displacement': None},  # Normal-Z blocked
+            'Block X Translation': {'fixed_dofs': [0], 'displacement': None},
+            'Block Y Translation': {'fixed_dofs': [1], 'displacement': None},
+            'Block Z Translation': {'fixed_dofs': [2], 'displacement': None},
             'Pinned':     {'fixed_dofs': [0, 1, 2],  'displacement': None},  # = Fixed for solids
             'Symmetry X': {'fixed_dofs': [0],        'displacement': None},  # No motion in X
             'Symmetry Y': {'fixed_dofs': [1],        'displacement': None},  # No motion in Y
@@ -152,6 +157,9 @@ class ConstraintNode(CadQueryNode):
         _viz_color_map = {
             'Fixed': '#2979FF',      'Pinned': '#2979FF',
             'Roller X': '#00E5FF',   'Roller Y': '#00E5FF',   'Roller Z': '#00E5FF',
+            'Block X Translation': '#00E5FF',
+            'Block Y Translation': '#00E5FF',
+            'Block Z Translation': '#00E5FF',
             'Symmetry X': '#00E676', 'Symmetry Y': '#00E676', 'Symmetry Z': '#00E676',
             'Displacement': '#FF9100',
         }
@@ -161,7 +169,7 @@ class ConstraintNode(CadQueryNode):
         # If no face input provided, use fallback string condition
         if target_wp is None:
             if not fallback_condition:
-                self.set_error("No target face or condition")
+                self.set_error("Connect selected geometry or enter a coordinate condition.")
                 return None
             return {
                 'type': constraint_type.lower().replace(' ', '_'),
@@ -177,7 +185,7 @@ class ConstraintNode(CadQueryNode):
             face_objs = _target_face_objects(target_wp)
 
             if not face_objs or face_objs[0] is None:
-                self.set_error("No faces found in target face input")
+                self.set_error("The connected geometry selection is empty.")
                 return None
 
             # Build per-face bboxes for the viewer pre-solve overlay
@@ -214,9 +222,9 @@ class ConstraintNode(CadQueryNode):
             return None
 
 class LoadNode(CadQueryNode):
-    """Applies a load to a specific geometric face."""
+    """Apply a total force to selected geometry, or gravity to the whole body."""
     __identifier__ = 'com.cad.sim.load'
-    NODE_NAME = 'FEA Load (Face)'
+    NODE_NAME = 'FEA Force / Gravity'
 
     def __init__(self):
         super().__init__()
@@ -302,7 +310,7 @@ class LoadNode(CadQueryNode):
         # If no face input provided, use fallback string condition
         if target_wp is None:
             if not fallback_condition:
-                self.set_error("No target face or condition")
+                self.set_error("Connect selected geometry or enter a coordinate condition.")
                 return None
             return {
                 'type': 'force',
@@ -316,7 +324,7 @@ class LoadNode(CadQueryNode):
             face_objs = _target_face_objects(target_wp)
 
             if not face_objs or face_objs[0] is None:
-                self.set_error("No faces found in target face input")
+                self.set_error("The connected geometry selection is empty.")
                 return None
 
             force_vec = force_vec.tolist()
@@ -380,6 +388,15 @@ class PressureLoadNode(CadQueryNode):
             return None
         if target_wp is None:
             self.set_error("Connect a selected target face to the pressure-load node.")
+            return None
+        if (
+            isinstance(target_wp, dict)
+            and str(target_wp.get('entity_type') or 'Face').title() != 'Face'
+        ):
+            self.set_error(
+                "Pressure is a surface traction and requires a face selection; "
+                "an edge or vertex has no loaded area."
+            )
             return None
         try:
             pressure = float(pressure)

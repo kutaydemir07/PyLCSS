@@ -1,241 +1,333 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-from scipy.optimize import minimize
+"""Local constrained optimization through :func:`scipy.optimize.minimize`."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
 import numpy as np
-from .base import BaseSolver
-from ..core import OptimizationResult
+from numpy.typing import ArrayLike
+from scipy.optimize import NonlinearConstraint, minimize
+
+from ..evaluator import ModelEvaluator
+from ..models import FloatArray, OptimizationResult
+from .base import BaseSolver, StepCallback
+
+SCIPY_LOCAL_METHODS = ("SLSQP", "COBYLA", "trust-constr")
+
+
+@dataclass
+class _Candidate:
+    solver_x: FloatArray
+    objective: float
+    outputs: dict[str, Any]
+    violation: float
+    feasibility_tolerance: float
+
+    @property
+    def feasible(self) -> bool:
+        return self.violation <= self.feasibility_tolerance
+
+    @property
+    def rank(self) -> tuple[int, float, float]:
+        return (
+            0 if self.feasible else 1,
+            0.0 if self.feasible else self.violation,
+            self.objective,
+        )
+
 
 class ScipySolver(BaseSolver):
-    def solve(self, evaluator, x0, callback):
-        
-        method = self.settings.get('method', 'SLSQP')
-        maxiter = int(self.settings.get('maxiter', 1000))
-        tol = float(self.settings.get('tol', 1e-6))
-        float(self.settings.get('atol', 1e-8))
-        
-        # Constrained methods list
-        constrained_methods = ['SLSQP', 'COBYLA', 'trust-constr']
-        supports_constraints = method in constrained_methods
-        
-        # Safe cap constant
+    """Solve a scalar problem with a supported local SciPy method."""
 
-        # Track best solution
-        best_cost = float('inf')
-        best_x = None
-        best_raw = None
-        best_viol = None
-
-        def obj_wrapper(x):
-            if self.stop_requested: raise StopIteration
-            
-            # --- Evaluate ---
-            # If scaling is on, 'x' here is normalized [0,1].
-            # evaluator.evaluate handles the conversion to physical.
-            cost, raw, viol = evaluator.evaluate(x)
-            
-            # Calculate unpenalized objective
-            unpenalized_obj = 0.0
-            for obj in evaluator.objs:
-                val = raw.get(obj.name, 0.0)
-                sign = 1.0 if obj.minimize else -1.0
-                unpenalized_obj += sign * obj.weight * (val / evaluator.objective_scale)
-            
-            # --- Track Best ---
-            nonlocal best_cost, best_x, best_raw, best_viol
-            if unpenalized_obj < best_cost:
-                best_cost = unpenalized_obj
-                best_x = np.array(x)
-                best_raw = raw
-                best_viol = viol
-
-            # --- Callback ---
-            # Just call the callback directly. Let the worker handle throttling.
-            # Calculate real obj for UI
-            real_obj_val = 0.0
-            for obj in evaluator.objs:
-                val = raw.get(obj.name, 0.0)
-                sign = 1.0 if obj.minimize else -1.0
-                real_obj_val += sign * obj.weight * val
-
-            callback(x, real_obj_val, raw, viol)
-            
-            # --- Return to Solver ---
-            if supports_constraints:
-                # Return unpenalized objective for constrained solvers
-                return unpenalized_obj
-            else:
-                # For unconstrained methods, return full cost
-                return cost
-
-        if evaluator.scaling:
-            x0_use = evaluator.to_normalized(np.array(x0))
-            bounds = []
-            for i, v in enumerate(evaluator.vars):
-                if abs(v.max_val - v.min_val) < 1e-12:
-                    bounds.append((0.0, 0.0))
-                    x0_use[i] = 0.0
-                else:
-                    bounds.append((0.0, 1.0))
-                    x0_use[i] = np.clip(x0_use[i], 0.0, 1.0)
-        else:
-            x0_use = np.array(x0)
-            bounds = [(v.min_val, v.max_val) for v in evaluator.vars]
-
-        cons = []
-        if evaluator.cons and supports_constraints:
-            
-            if method == 'COBYLA':
-                # COBYLA expects separate constraint functions. Use the tightened
-                # (safety back-off) bounds so the result stays strictly inside the
-                # true feasible region.
-                for i, con in enumerate(evaluator.cons):
-                    lo, hi = evaluator.constraint_solve_bounds(i)
-                    def make_con_fun(con_name):
-                        return lambda x: evaluator.evaluate(x)[1].get(con_name, 0.0)
-                    con_fun = make_con_fun(con.name)
-
-                    if np.isfinite(lo):
-                        cons.append({'type': 'ineq', 'fun': lambda x, f=con_fun, m=lo: f(x) - m})
-                    if np.isfinite(hi):
-                        cons.append({'type': 'ineq', 'fun': lambda x, f=con_fun, m=hi: m - f(x)})
-            else:
-                def vectorized_cons(x):
-                    # One evaluate() per call (cached). Residuals use the tightened
-                    # (safety back-off) bounds for guaranteed feasibility.
-                    _, raw, _ = evaluator.evaluate(x)
-
-                    residuals = []
-                    for i, con in enumerate(evaluator.cons):
-                        lo, hi = evaluator.constraint_solve_bounds(i)
-                        val = raw.get(con.name, 0.0)
-                        if np.isfinite(lo):
-                            residuals.append(val - lo)
-                        if np.isfinite(hi):
-                            residuals.append(hi - val)
-                    return np.array(residuals)
-
-                # Register as a single vectorized constraint
-                cons.append({'type': 'ineq', 'fun': vectorized_cons})
-
-        # COBYLA Bound Fix
-        if method == 'COBYLA':
-            for i, (mn, mx) in enumerate(bounds):
-                if mn is not None and mn > -1e19:
-                    cons.append({'type': 'ineq', 'fun': lambda x, i=i, m=mn: x[i] - m})
-                if mx is not None and mx < 1e19:
-                    cons.append({'type': 'ineq', 'fun': lambda x, i=i, m=mx: m - x[i]})
-
-        # --- Solver Options ---
-        options = {'maxiter': maxiter}
-            
-        if method == 'SLSQP':
-            options['ftol'] = tol
-            # Add eps for gradient step size if specified
-            if 'eps' in self.settings:
-                options['eps'] = self.settings['eps']
-            
-        elif method == 'COBYLA':
-            options['rhobeg'] = 0.5  # Allow faster movement across unit hypercube
-            options['disp'] = False
-        elif method == 'trust-constr':
-            # Force a larger finite difference step to avoid delta_grad == 0
-            # and tell it not to approximate the Hessian if it's unstable
-            options['finite_diff_rel_step'] = 1e-4  # Larger step size
-
-        kwargs = {
-            'method': method,
-            'bounds': bounds,
-            'tol': tol, 
-            'options': options
-        }
-        
-        if supports_constraints or method == 'COBYLA':
-            kwargs['constraints'] = cons
-
-        try:
-            res = minimize(obj_wrapper, x0_use, **kwargs)
-            
-            # Select Best Found vs Last Returned
-            # Sometimes the last step of the solver is slightly worse than the best internal step
-            final_x = res.x
-            final_cost, final_raw, final_viol = evaluator.evaluate(final_x)
-            
-            # Calculate unpenalized objective for final point
-            final_unpenalized = 0.0
-            for obj in evaluator.objs:
-                val = final_raw.get(obj.name, 0.0)
-                sign = 1.0 if obj.minimize else -1.0
-                final_unpenalized += sign * obj.weight * (val / evaluator.objective_scale)
-            
-            # If our tracked best is significantly better and valid, use it
-            better_cost = best_cost < (final_unpenalized - 1e-9)
-            valid_track = best_viol is None or best_viol < 1e-6
-            
-            if best_x is not None and better_cost and valid_track:
-                x_phys = evaluator.to_physical(best_x)
-                raw = best_raw
-                viol = best_viol
-                success = res.success # Trust solver's status even if we pick a better point
-                message = getattr(res, 'message', 'Done') + " (Best Tracked)"
-            else:
-                x_phys = evaluator.to_physical(final_x)
-                raw = final_raw
-                viol = final_viol
-                success = res.success
-                message = getattr(res, 'message', str(res.success))
-
-            # Reconstruct Real Objectives
-            real_objectives = {obj.name: raw.get(obj.name, 0.0) for obj in evaluator.objs}
-            constraints_val = {con.name: raw.get(con.name, 0.0) for con in evaluator.cons}
-            
-            # Calculate final real cost for the result object
-            final_real_cost = 0.0
-            for obj in evaluator.objs:
-                val = raw.get(obj.name, 0.0)
-                sign = 1.0 if obj.minimize else -1.0
-                final_real_cost += sign * obj.weight * val
-
-            return OptimizationResult(
-                x=x_phys,
-                cost=final_real_cost,
-                objectives=real_objectives,
-                constraints=constraints_val,
-                max_violation=viol,
-                message=message,
-                success=success
+    def solve(
+        self,
+        evaluator: ModelEvaluator,
+        x0: ArrayLike,
+        callback: StepCallback | None = None,
+    ) -> OptimizationResult:
+        method = str(self.settings.get("method", "SLSQP"))
+        if method not in SCIPY_LOCAL_METHODS:
+            raise ValueError(
+                f"Unsupported local solver {method!r}. Supported methods: "
+                + ", ".join(SCIPY_LOCAL_METHODS)
+                + "."
             )
-            
-        except StopIteration:
-            return self._fallback_result(evaluator, best_x, best_raw, best_viol, "Stopped by user", x0_use)
-        except Exception as e:
-            return self._fallback_result(evaluator, best_x, best_raw, best_viol, f"Solver Failed: {str(e)}", x0_use)
 
-    def _fallback_result(self, evaluator, best_x, best_raw, best_viol, msg, x0_use):
-        # ... (Same as before, just ensure fallback logic handles None correctly)
-        if best_x is not None:
-            x_final = best_x
-            raw = best_raw
-            viol = best_viol
-        else:
-            x_final = x0_use
-            _, raw, viol = evaluator.evaluate(x0_use)
-            
-        x_phys = evaluator.to_physical(x_final)
-        
-        # Calculate real cost
-        real_cost = 0.0
-        for obj in evaluator.objs:
-            val = raw.get(obj.name, 0.0)
-            sign = 1.0 if obj.minimize else -1.0
-            real_cost += sign * obj.weight * val
-            
-        return OptimizationResult(
-            x=x_phys,
-            cost=real_cost,
-            objectives={obj.name: raw.get(obj.name, 0.0) for obj in evaluator.objs},
-            constraints={con.name: raw.get(con.name, 0.0) for con in evaluator.cons},
-            max_violation=viol,
-            message=msg,
-            success=False
+        feasibility_tolerance = self._prepare_evaluator(evaluator)
+        initial_physical = np.asarray(x0, dtype=float)
+        solver_x0, bounds = _solver_coordinates(evaluator, initial_physical)
+        # Freeze automatic objective scales at the documented initial design
+        # before a numerical backend requests derivatives.
+        evaluator.evaluate(solver_x0)
+        constraints = _build_constraints(evaluator, method, bounds)
+        if all(np.isclose(lower, upper) for lower, upper in bounds):
+            _, raw_results, violation = evaluator.evaluate(solver_x0)
+            if not evaluator.is_valid_result(raw_results):
+                return _invalid_result(
+                    evaluator,
+                    solver_x0,
+                    "The fixed design could not be evaluated.",
+                )
+            candidate = _Candidate(
+                solver_x=solver_x0,
+                objective=evaluator.normalized_objective(raw_results),
+                outputs=dict(raw_results),
+                violation=float(violation),
+                feasibility_tolerance=feasibility_tolerance,
+            )
+            return _candidate_result(
+                evaluator,
+                candidate,
+                message="All design variables are fixed.",
+                success=candidate.feasible,
+                converged=True,
+            )
+
+        best: _Candidate | None = None
+
+        def objective_function(x: ArrayLike) -> float:
+            nonlocal best
+            if self.stop_requested:
+                raise StopIteration
+
+            penalized_cost, raw_results, violation = evaluator.evaluate(x)
+            if not evaluator.is_valid_result(raw_results):
+                return penalized_cost
+
+            objective = evaluator.normalized_objective(raw_results)
+            candidate = _Candidate(
+                solver_x=np.asarray(x, dtype=float).copy(),
+                objective=objective,
+                outputs=dict(raw_results),
+                violation=float(violation),
+                feasibility_tolerance=feasibility_tolerance,
+            )
+            if best is None or candidate.rank < best.rank:
+                best = candidate
+            if callback is not None:
+                callback(
+                    candidate.solver_x,
+                    evaluator.displayed_objective(raw_results),
+                    raw_results,
+                    candidate.violation,
+                )
+            return objective
+
+        options: dict[str, Any] = {"maxiter": int(self.settings.get("maxiter", 1000))}
+        tolerance = float(self.settings.get("tol", 1e-6))
+        if method == "SLSQP":
+            options["ftol"] = tolerance
+            if "eps" in self.settings:
+                options["eps"] = float(self.settings["eps"])
+        elif method == "COBYLA":
+            options.update({"rhobeg": 0.5, "disp": False})
+        elif method == "trust-constr":
+            options["finite_diff_rel_step"] = float(
+                self.settings.get("finite_diff_rel_step", 1e-4)
+            )
+
+        backend_result: Any = None
+        failure_message: str | None = None
+        try:
+            backend_result = minimize(
+                objective_function,
+                solver_x0,
+                method=method,
+                bounds=bounds,
+                constraints=constraints,
+                tol=tolerance,
+                options=options,
+            )
+        except StopIteration:
+            failure_message = "Stopped by user."
+        except Exception as exc:
+            failure_message = f"Solver failed with {type(exc).__name__}: {exc}"
+
+        final: _Candidate | None = None
+        backend_x = getattr(backend_result, "x", None)
+        if backend_x is not None:
+            _, raw_results, violation = evaluator.evaluate(backend_x)
+            if evaluator.is_valid_result(raw_results):
+                final = _Candidate(
+                    solver_x=np.asarray(backend_x, dtype=float).copy(),
+                    objective=evaluator.normalized_objective(raw_results),
+                    outputs=dict(raw_results),
+                    violation=float(violation),
+                    feasibility_tolerance=feasibility_tolerance,
+                )
+
+        chosen = final
+        if best is not None and (chosen is None or best.rank < chosen.rank):
+            chosen = best
+        if chosen is None:
+            return _invalid_result(
+                evaluator,
+                solver_x0,
+                failure_message
+                or _backend_message(backend_result, "No valid design was evaluated."),
+            )
+
+        message = failure_message or _backend_message(backend_result, "Done.")
+        if chosen is best and chosen is not final:
+            if message and message[-1] not in ".!?":
+                message += "."
+            message += " Returned the best evaluated design."
+        backend_converged = bool(getattr(backend_result, "success", False))
+        return _candidate_result(
+            evaluator,
+            chosen,
+            message=message,
+            success=(not self.stop_requested and chosen.feasible),
+            converged=backend_converged,
         )
+
+
+def _solver_coordinates(
+    evaluator: ModelEvaluator,
+    initial_physical: FloatArray,
+) -> tuple[FloatArray, list[tuple[float, float]]]:
+    if evaluator.scaling:
+        initial = evaluator.to_normalized(initial_physical)
+        bounds = [
+            (0.0, 0.0)
+            if abs(variable.max_val - variable.min_val) < 1e-12
+            else (0.0, 1.0)
+            for variable in evaluator.vars
+        ]
+    else:
+        initial = initial_physical.copy()
+        bounds = [(variable.min_val, variable.max_val) for variable in evaluator.vars]
+    for index, (lower, upper) in enumerate(bounds):
+        initial[index] = np.clip(initial[index], lower, upper)
+    return initial, bounds
+
+
+def _build_constraints(
+    evaluator: ModelEvaluator,
+    method: str,
+    bounds: list[tuple[float, float]],
+) -> list[Any]:
+    constraints: list[Any] = []
+    residual = _constraint_residual_function(evaluator)
+
+    residual_count = sum(
+        int(np.isfinite(evaluator.constraint_solve_bounds(index)[0]))
+        + int(np.isfinite(evaluator.constraint_solve_bounds(index)[1]))
+        for index in range(len(evaluator.cons))
+    )
+    if residual_count:
+        if method == "trust-constr":
+            constraints.append(
+                NonlinearConstraint(
+                    residual,
+                    np.zeros(residual_count),
+                    np.full(residual_count, np.inf),
+                )
+            )
+        else:
+            constraints.append({"type": "ineq", "fun": residual})
+
+    # Explicit COBYLA bounds work across the SciPy versions supported by PyLCSS.
+    if method == "COBYLA":
+        for index, (lower, upper) in enumerate(bounds):
+            if np.isfinite(lower):
+                constraints.append(
+                    {
+                        "type": "ineq",
+                        "fun": (lambda x, i=index, bound=lower: x[i] - bound),
+                    }
+                )
+            if np.isfinite(upper):
+                constraints.append(
+                    {
+                        "type": "ineq",
+                        "fun": (lambda x, i=index, bound=upper: bound - x[i]),
+                    }
+                )
+    return constraints
+
+
+def _constraint_residual_function(
+    evaluator: ModelEvaluator,
+):
+    def residuals(x: ArrayLike) -> FloatArray:
+        _, raw_results, _ = evaluator.evaluate(x)
+        result: list[float] = []
+        valid = evaluator.is_valid_result(raw_results)
+        for index, constraint in enumerate(evaluator.cons):
+            lower, upper = evaluator.constraint_solve_bounds(index)
+            scale = evaluator.constraint_solver_scale(index)
+            if not valid:
+                if np.isfinite(lower):
+                    result.append(-1e15)
+                if np.isfinite(upper):
+                    result.append(-1e15)
+                continue
+            value = float(raw_results[constraint.name])
+            if np.isfinite(lower):
+                result.append((value - lower) / scale)
+            if np.isfinite(upper):
+                result.append((upper - value) / scale)
+        return np.asarray(result, dtype=float)
+
+    return residuals
+
+
+def _candidate_result(
+    evaluator: ModelEvaluator,
+    candidate: _Candidate,
+    *,
+    message: str,
+    success: bool,
+    converged: bool,
+) -> OptimizationResult:
+    return OptimizationResult(
+        x=evaluator.to_physical(candidate.solver_x),
+        cost=evaluator.displayed_objective(candidate.outputs),
+        objectives={
+            objective.name: candidate.outputs[objective.name]
+            for objective in evaluator.objs
+        },
+        constraints={
+            constraint.name: candidate.outputs[constraint.name]
+            for constraint in evaluator.cons
+        },
+        max_violation=candidate.violation,
+        message=message,
+        success=success,
+        feasibility_tolerance=evaluator.feasibility_tolerance,
+        converged=converged,
+    )
+
+
+def _invalid_result(
+    evaluator: ModelEvaluator,
+    solver_x: FloatArray,
+    message: str,
+) -> OptimizationResult:
+    _, raw_results, violation = evaluator.evaluate(solver_x)
+    error = evaluator.evaluation_error(raw_results)
+    if error:
+        message += f" {error}"
+    return OptimizationResult(
+        x=evaluator.to_physical(solver_x),
+        cost=float("inf"),
+        objectives={},
+        constraints={},
+        max_violation=violation,
+        message=message,
+        success=False,
+        feasibility_tolerance=evaluator.feasibility_tolerance,
+        converged=False,
+    )
+
+
+def _backend_message(result: Any, fallback: str) -> str:
+    return str(getattr(result, "message", fallback))
+
+
+__all__ = ["SCIPY_LOCAL_METHODS", "ScipySolver"]

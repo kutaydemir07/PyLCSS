@@ -13,7 +13,7 @@ from typing import Any
 import cadquery as cq
 
 from pylcss.design_studio.core.base_node import CadQueryNode, resolve_numeric_input
-from pylcss.solver_backends.common import as_bool
+from pylcss.input_values import as_bool
 
 
 _SHAPE_COLOR = (100, 255, 100)

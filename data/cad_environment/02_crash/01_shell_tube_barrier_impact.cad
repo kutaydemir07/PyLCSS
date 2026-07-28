@@ -87,7 +87,7 @@
         "contact_thickness": 0.2,
         "contact_update_interval": 5,
         "mass_scaling_threshold": 0.03,
-        "impactor_mass_kg": 0.0
+        "impactor_mass_kg": 50.0
       }
     }
   },

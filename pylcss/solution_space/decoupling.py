@@ -7,28 +7,50 @@ from __future__ import annotations
 
 import logging
 from itertools import combinations
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import numpy as np
 
-from .multimodal_models import BoxSolutionSpace, DecoupledMultiModalForm
 from .bayesian import good_fraction_lower_bound
-from .monte_carlo import classify_good_bad
+from .contracts import (
+    EvaluatableProblem,
+    FloatArray,
+    IntArray,
+    ProgressCallback,
+    StopCallback,
+)
+from .models import BoxSolutionSpace, DecoupledMultiModalForm, MMSSParameters
+from .sampling import classify_good_bad
 
 logger = logging.getLogger(__name__)
+
+Interval = tuple[float, float]
+IntervalRows = list[list[Interval]]
+DecouplingSpec = dict[str, Any]
+ValidationResult = tuple[float, float, int, int]
 
 
 class DecouplingResolutionMixin:
     """Stage-5 decoupling and extended-problem refinement for MMSS modes."""
 
+    problem: EvaluatableProblem
+    params: MMSSParameters
+    dsl: FloatArray
+    dsu: FloatArray
+    dv_norm: FloatArray
+    reqL: FloatArray
+    reqU: FloatArray
+    parameters: FloatArray
+    ind_parameters: IntArray
+
     def _compute_decoupled_form(
         self,
-        boxes: List[BoxSolutionSpace],
-        callback: Optional[Any] = None,
-        stop_callback: Optional[Any] = None,
+        boxes: list[BoxSolutionSpace],
+        callback: Optional[ProgressCallback] = None,
+        stop_callback: Optional[StopCallback] = None,
     ) -> DecoupledMultiModalForm:
         """Compute the paper's decoupled form from the retained modal boxes."""
-        from .extended import (
+        from .extended_problem import (
             build_extended_layout,
             extended_initial_bounds,
             project_extended_to_modes,
@@ -74,8 +96,12 @@ class DecouplingResolutionMixin:
                 validation=None,
             )
 
-        K = len(selected_boxes)
-        layout = build_extended_layout(K, n_dims_orig, shared_groups)
+        mode_count = len(selected_boxes)
+        layout = build_extended_layout(
+            mode_count,
+            n_dims_orig,
+            shared_groups,
+        )
         if layout.is_trivial():
             return self._make_decoupling_family(
                 selected_boxes,
@@ -94,7 +120,8 @@ class DecouplingResolutionMixin:
                 None,
                 None,
                 "Stage 5 - Decoupling: refining the extended problem "
-                f"(n_z={layout.n_z}, K={K}, {n_groups} common group(s))...",
+                f"(coordinates={layout.coordinate_count}, modes={mode_count}, "
+                f"{n_groups} common group(s))...",
             )
 
         result = run_extended_refinement(
@@ -132,9 +159,7 @@ class DecouplingResolutionMixin:
                 validation=None,
             )
 
-        projected = project_extended_to_modes(
-            result.bounds, layout, selected_boxes
-        )
+        projected = project_extended_to_modes(result.bounds, layout, selected_boxes)
         for k, box in enumerate(projected):
             box.compute_volume(self.dv_norm)
             box.label = box.label or f"Mode {k + 1} (decoupled)"
@@ -192,18 +217,18 @@ class DecouplingResolutionMixin:
 
     def _select_decoupling_spec(
         self,
-        boxes: List[BoxSolutionSpace],
-    ) -> Optional[Dict[str, Any]]:
+        boxes: list[BoxSolutionSpace],
+    ) -> Optional[DecouplingSpec]:
         """Try 1 separated dimension, then 2, and so on."""
-        K = len(boxes)
-        if K < 2:
+        mode_count = len(boxes)
+        if mode_count < 2:
             return None
 
         n_dims = boxes[0].bounds.shape[0]
-        subsets = self._candidate_subsets(K)
+        subsets = self._candidate_subsets(mode_count)
 
         for n_separated in range(1, n_dims + 1):
-            candidates: List[Dict[str, Any]] = []
+            candidates: list[DecouplingSpec] = []
             for indices in subsets:
                 spec = self._decoupling_spec_for_subset(boxes, indices)
                 if spec is None:
@@ -224,39 +249,43 @@ class DecouplingResolutionMixin:
         return None
 
     @staticmethod
-    def _candidate_subsets(K: int) -> List[tuple]:
+    def _candidate_subsets(mode_count: int) -> list[tuple[int, ...]]:
         """Return branch subsets to inspect for decoupling."""
-        if K < 2:
+        if mode_count < 2:
             return []
-        if K <= 10:
+        if mode_count <= 10:
             return [
                 subset
-                for r in range(2, K + 1)
-                for subset in combinations(range(K), r)
+                for subset_size in range(2, mode_count + 1)
+                for subset in combinations(range(mode_count), subset_size)
             ]
 
-        # Avoid combinatorial blow-up for unusually large K. The default Kmax
-        # is small, but keep a bounded fallback for interactive use.
-        order = list(range(K))
+        # Avoid combinatorial blow-up for unusually many modes while keeping
+        # a bounded pairwise fallback for interactive use.
+        order = list(range(mode_count))
         subsets = [tuple(order)]
-        for i in range(min(K, 12)):
-            for j in range(i + 1, min(K, 12)):
+        for i in range(min(mode_count, 12)):
+            for j in range(i + 1, min(mode_count, 12)):
                 subsets.append((order[i], order[j]))
         return subsets
 
     def _decoupling_spec_for_subset(
         self,
-        boxes: List[BoxSolutionSpace],
-        indices: tuple,
-    ) -> Optional[Dict[str, Any]]:
+        boxes: list[BoxSolutionSpace],
+        indices: tuple[int, ...],
+    ) -> Optional[DecouplingSpec]:
         """Classify one mode subset into common and separating dimensions."""
         if len(indices) < 2:
             return None
 
         n_dims = boxes[0].bounds.shape[0]
-        common_dims: List[int] = []
-        separated_dims: List[int] = []
-        rows: List[List[tuple]] = []
+        common_dims: list[int] = []
+        separated_dims: list[int] = []
+        rows: IntervalRows = []
+        minimum_ratio = self.params.min_common_width_ratio
+        legacy_ratio = self.params.phase3_min_common_width_ratio
+        if legacy_ratio is not None:
+            minimum_ratio = legacy_ratio
 
         for j in range(n_dims):
             lows = [float(boxes[i].bounds[j, 0]) for i in indices]
@@ -264,7 +293,12 @@ class DecouplingResolutionMixin:
             inter_lo = max(lows)
             inter_hi = min(highs)
 
-            if inter_hi - inter_lo > 1e-12:
+            design_width = max(float(self.dv_norm[j]), 0.0)
+            minimum_common_width = max(
+                1e-12,
+                float(minimum_ratio) * design_width,
+            )
+            if inter_hi - inter_lo >= minimum_common_width:
                 common_dims.append(j)
                 rows.append([(inter_lo, inter_hi)])
                 continue
@@ -285,9 +319,9 @@ class DecouplingResolutionMixin:
         }
 
     @staticmethod
-    def _merge_intervals(intervals: List[tuple]) -> List[tuple]:
+    def _merge_intervals(intervals: list[Interval]) -> list[Interval]:
         """Merge overlapping one-dimensional intervals."""
-        merged: List[tuple] = []
+        merged: list[Interval] = []
         for lo, hi in sorted(intervals):
             lo = float(lo)
             hi = float(hi)
@@ -301,10 +335,10 @@ class DecouplingResolutionMixin:
 
     def _decoupling_score(
         self,
-        boxes: List[BoxSolutionSpace],
-        indices: tuple,
-        rows: List[List[tuple]],
-        separated_dims: List[int],
+        boxes: list[BoxSolutionSpace],
+        indices: tuple[int, ...],
+        rows: IntervalRows,
+        separated_dims: list[int],
     ) -> float:
         """Score candidates within the same separated-dimension count."""
         if len(separated_dims) == 1:
@@ -313,26 +347,28 @@ class DecouplingResolutionMixin:
 
     def _shared_groups_from_decoupling_spec(
         self,
-        spec: Dict[str, Any],
-    ) -> Dict[int, List[Dict[str, Any]]]:
+        spec: DecouplingSpec,
+    ) -> dict[int, list[dict[str, Any]]]:
         """Build extended shared coordinates for dimensions common to the subset."""
         n_branches = len(spec["indices"])
         all_branches = list(range(n_branches))
-        groups: Dict[int, List[Dict[str, Any]]] = {}
+        groups: dict[int, list[dict[str, Any]]] = {}
         for j in spec["common_dims"]:
             lo, hi = spec["rows"][j][0]
-            groups[j] = [{
-                "branches": all_branches,
-                "bounds": np.array([lo, hi], dtype=float),
-            }]
+            groups[j] = [
+                {
+                    "branches": all_branches,
+                    "bounds": np.array([lo, hi], dtype=float),
+                }
+            ]
         return groups
 
     def _make_decoupling_family(
         self,
-        boxes: List[BoxSolutionSpace],
-        indices: tuple,
-        spec: Dict[str, Any],
-        validation: Optional[tuple] = None,
+        boxes: list[BoxSolutionSpace],
+        indices: tuple[int, ...],
+        spec: DecouplingSpec,
+        validation: Optional[ValidationResult] = None,
     ) -> DecoupledMultiModalForm:
         """Create the user-facing decoupling result."""
         selected_boxes = [boxes[i] for i in indices]
@@ -371,13 +407,13 @@ class DecouplingResolutionMixin:
     # Compatibility for the initial port, which treated decoupling as a third
     # phase instead of Stage 5 of the paper's MMSS algorithm.
 
-    def _interval_rows_volume(self, interval_rows: List[List[tuple]]) -> float:
+    def _interval_rows_volume(self, interval_rows: IntervalRows) -> float:
         """Relative volume of a Cartesian product of per-dimension interval rows."""
         if not interval_rows:
             return 0.0
 
         active = np.asarray(self.dv_norm, dtype=float) > 1e-20
-        rel_widths: List[float] = []
+        rel_widths: list[float] = []
         for j, intervals in enumerate(interval_rows):
             if j >= active.size or not active[j]:
                 continue
@@ -389,16 +425,18 @@ class DecouplingResolutionMixin:
 
     @staticmethod
     def _sample_interval_rows(
-        interval_rows: List[List[tuple]],
+        interval_rows: IntervalRows,
         n: int,
-    ) -> np.ndarray:
+    ) -> FloatArray:
         """Sample uniformly from a Cartesian product of interval rows."""
         dim = len(interval_rows)
         samples = np.zeros((dim, n), dtype=float)
         rng = np.random.default_rng()
 
         for j, intervals in enumerate(interval_rows):
-            clean = [(float(lo), float(hi)) for lo, hi in intervals if float(hi) > float(lo)]
+            clean = [
+                (float(lo), float(hi)) for lo, hi in intervals if float(hi) > float(lo)
+            ]
             if not clean:
                 continue
             widths = np.array([hi - lo for lo, hi in clean], dtype=float)
@@ -414,10 +452,10 @@ class DecouplingResolutionMixin:
 
     def _validate_decoupled_interval_unions(
         self,
-        interval_rows: List[List[tuple]],
+        interval_rows: IntervalRows,
         sample_size: int,
         confidence: float,
-    ) -> tuple:
+    ) -> ValidationResult:
         """Validate a one-separated-variable decoupled interval product."""
         if not interval_rows:
             return 0.0, 0.0, 0, 0

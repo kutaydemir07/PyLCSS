@@ -68,8 +68,10 @@ temp/
 tmp/
 pylcss/generated_models/
 
-# Encryption salt
+# Assistant runtime state (stored in the per-user config directory)
 pylcss/assistant_systems/config/.llm_key
+pylcss/assistant_systems/config/settings.json
+pylcss/assistant_systems/config/llm_memory.json
 
 # Distribution
 dist/

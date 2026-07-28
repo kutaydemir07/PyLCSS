@@ -61,17 +61,17 @@
         "density_cutoff": 0.30,
         "optimizer": "Auto",
         "structure_mode": "Gyroid Lattice",
-        "structure_cell_size_voxels": 6.0,
+        "structure_cell_size_voxels": 8.0,
         "structure_member_thickness_voxels": 1.0,
-        "structure_skin_thickness_voxels": 0.0,
+        "structure_skin_thickness_voxels": 0.75,
         "lattice_variable_density": true,
-        "lattice_min_relative_density": 0.12,
-        "lattice_max_relative_density": 0.88,
+        "lattice_min_relative_density": 0.15,
+        "lattice_max_relative_density": 0.60,
         "lattice_solid_transition_density": 0.92,
         "validate_after_optimize": true,
         "validation_quality": "Standard",
         "print_ready_mesh": true,
-        "mesh_decimate_ratio": 0.40,
+        "mesh_decimate_ratio": 0.75,
         "surface_recovery_method": "Volume-Preserving SDF (VTK)"
       }
     }

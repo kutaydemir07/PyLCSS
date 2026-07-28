@@ -11,6 +11,9 @@ from pylcss.design_studio.core.base_node import CadQueryNode
 # ─────────────────────────────────────────────────────────────────────────────
 
 CRASH_MATERIAL_PRESETS = {
+    # These are numerical starting values for workflow examples, not certified
+    # material cards. Production crash models require coupon/rate calibration
+    # for the actual alloy, temper, thickness, forming history, and failure law.
     # Preset name: {E [MPa], nu, rho [t/mm³], yield [MPa], H [MPa], eps_f,
     #               strain_rate_c [1/s], strain_rate_p}
     # Cowper-Symonds rate hardening: σ_y(ε̇) = σ_y0 · (1 + (ε̇/C)^(1/p)).
@@ -51,14 +54,6 @@ CRASH_MATERIAL_PRESETS = {
         'E': 70300.0, 'nu': 0.33, 'rho': 2.68e-9,
         'yield_strength': 193.0, 'tangent_modulus': 500.0,  'failure_strain': 0.14,
         'strain_rate_c': 6500.0, 'strain_rate_p': 4.0,
-    },
-    # CFRP is treated here as a rate-insensitive elastic + brittle-failure
-    # proxy — composites do not yield like metals; for production crash work
-    # use an orthotropic damage law (LAW25 Tsai-Wu) on a shell section.
-    'CFRP (Quasi-Isotropic, proxy)': {
-        'E': 70000.0, 'nu': 0.30, 'rho': 1.55e-9,
-        'yield_strength': 600.0, 'tangent_modulus': 0.0,    'failure_strain': 0.015,
-        'strain_rate_c': 0.0, 'strain_rate_p': 0.0,
     },
 }
 
@@ -105,7 +100,9 @@ class CrashMaterialNode(CadQueryNode):
         self.create_property('yield_strength',  250.0,    widget_type='float')  # MPa
         self.create_property('tangent_modulus', 2000.0,   widget_type='float')  # MPa
         self.create_property('failure_strain',  0.20,     widget_type='float')  # m/m
-        self.create_property('enable_fracture', True,     widget_type='checkbox')
+        # Element deletion is unsafe without a calibrated failure model, so it
+        # is deliberately opt-in.
+        self.create_property('enable_fracture', False,    widget_type='checkbox')
         # ---------- strain-rate sensitivity ----------
         # Engineering-facing switch only. Cowper-Symonds constants are selected
         # internally from the material preset.

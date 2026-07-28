@@ -6,6 +6,7 @@ The node graph is the engineering model. Supports, loads, joints, operating
 cases, heat sinks, and heat inputs are therefore first-class nodes rather than
 JSON strings embedded in the optimizer inspector.
 """
+
 from __future__ import annotations
 
 import math
@@ -14,7 +15,7 @@ from typing import Any
 import numpy as np
 
 from pylcss.design_studio.core.base_node import CadQueryNode
-from pylcss.solver_backends.common import as_bool
+from pylcss.input_values import as_bool
 
 
 def _flatten(values: Any) -> list[Any]:
@@ -30,11 +31,13 @@ def _flatten(values: Any) -> list[Any]:
 
 def _region_geometries(payload: Any) -> list[Any]:
     if isinstance(payload, dict):
-        faces = payload.get("faces") or payload.get("geometries")
-        if faces:
-            return [face for face in faces if face is not None]
-        face = payload.get("face") or payload.get("geometry")
-        return [face] if face is not None else []
+        entities = (
+            payload.get("entities") or payload.get("faces") or payload.get("geometries")
+        )
+        if entities:
+            return [entity for entity in entities if entity is not None]
+        entity = payload.get("entity") or payload.get("face") or payload.get("geometry")
+        return [entity] if entity is not None else []
     if hasattr(payload, "vals"):
         try:
             return [item for item in payload.vals() if item is not None]
@@ -47,15 +50,15 @@ def _region_payload(node: CadQueryNode, port_name: str) -> list[Any] | None:
     geometries = _region_geometries(node.get_input_value(port_name, None))
     if not geometries:
         node.set_error(
-            f"Connect a Select Face or Select Face (Interactive) node to "
-            f"'{port_name}'."
+            f"Connect a Select Geometry or Select Geometry (Interactive) node "
+            f"to '{port_name}'."
         )
         return None
     return geometries
 
 
 class TopologySupportNode(CadQueryNode):
-    """A selected-face structural support for a topology study."""
+    """A structural support applied to selected topology-study geometry."""
 
     __identifier__ = "com.cad.topopt.support"
     NODE_NAME = "TopOpt Support"
@@ -70,12 +73,9 @@ class TopologySupportNode(CadQueryNode):
             widget_type="combo",
             items=[
                 "Fixed",
-                "Roller X",
-                "Roller Y",
-                "Roller Z",
-                "Symmetry X",
-                "Symmetry Y",
-                "Symmetry Z",
+                "Block X Translation",
+                "Block Y Translation",
+                "Block Z Translation",
             ],
         )
 
@@ -90,6 +90,9 @@ class TopologySupportNode(CadQueryNode):
             "Roller X": [0],
             "Roller Y": [1],
             "Roller Z": [2],
+            "Block X Translation": [0],
+            "Block Y Translation": [1],
+            "Block Z Translation": [2],
             "Symmetry X": [0],
             "Symmetry Y": [1],
             "Symmetry Z": [2],
@@ -97,13 +100,13 @@ class TopologySupportNode(CadQueryNode):
         return {
             "type": "topology_support",
             "support_type": support_type,
-            "fixed_dofs": mapping[support_type],
+            "fixed_dofs": mapping.get(support_type, [0, 1, 2]),
             "geometries": geometries,
         }
 
 
 class TopologyLoadNode(CadQueryNode):
-    """A selected-face resultant force for a topology operating condition."""
+    """A resultant force on selected topology-study geometry."""
 
     __identifier__ = "com.cad.topopt.load"
     NODE_NAME = "TopOpt Force"
@@ -140,6 +143,42 @@ class TopologyLoadNode(CadQueryNode):
             "type": "force",
             "vector": vector,
             "geometries": geometries,
+        }
+
+
+class TopologyNonDesignRegionNode(CadQueryNode):
+    """A closed CAD volume clamped to material or void during optimization."""
+
+    __identifier__ = "com.cad.topopt.non_design_region"
+    NODE_NAME = "TopOpt Non-Design Region"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.add_input("region_shape", color=(100, 255, 100))
+        self.add_output("regions", color=(220, 180, 80))
+        self.create_property(
+            "region_type",
+            "Keep Material",
+            widget_type="combo",
+            items=["Keep Material", "Keep Void"],
+        )
+
+    def run(self) -> dict[str, Any] | None:
+        self.clear_error()
+        geometry = self.get_input_value("region_shape", None)
+        if geometry is None:
+            self.set_error(
+                "Connect a closed CAD solid to 'region_shape'. Use Keep "
+                "Material for attachment pads or Keep Void for exclusion volumes."
+            )
+            return None
+        region_type = str(self.get_property("region_type") or "Keep Material")
+        return {
+            "type": "topology_non_design_region",
+            "region_type": (
+                "void" if region_type.strip().lower() == "keep void" else "solid"
+            ),
+            "geometry": geometry,
         }
 
 
@@ -180,9 +219,7 @@ class TopologyJointNode(CadQueryNode):
         if anchor_a is None or anchor_b is None:
             return None
         try:
-            relative_stiffness = float(
-                self.get_property("relative_stiffness") or 100.0
-            )
+            relative_stiffness = float(self.get_property("relative_stiffness") or 100.0)
         except (TypeError, ValueError):
             self.set_error("Joint stiffness must be numeric.")
             return None
@@ -192,9 +229,7 @@ class TopologyJointNode(CadQueryNode):
         return {
             "type": "topology_joint",
             "name": str(self.get_property("joint_name") or "Joint"),
-            "joint_type": str(
-                self.get_property("joint_type") or "Spherical"
-            ).lower(),
+            "joint_type": str(self.get_property("joint_type") or "Spherical").lower(),
             "axis": str(self.get_property("axis") or "X").lower(),
             "relative_stiffness": relative_stiffness,
             "anchor_a_geometries": anchor_a,
@@ -225,7 +260,9 @@ class TopologyOperatingCaseNode(CadQueryNode):
         loads = _flatten(self.get_input_list("loads"))
         joints = _flatten(self.get_input_list("joints"))
         if not supports:
-            self.set_error("Connect at least one TopOpt Support to this operating case.")
+            self.set_error(
+                "Connect at least one TopOpt Support to this operating case."
+            )
             return None
         if not loads:
             self.set_error("Connect at least one TopOpt Force to this operating case.")
@@ -236,7 +273,9 @@ class TopologyOperatingCaseNode(CadQueryNode):
             self.set_error("Operating-case weight must be numeric.")
             return None
         if not math.isfinite(weight) or weight <= 0.0:
-            self.set_error("Operating-case weight must be finite and greater than zero.")
+            self.set_error(
+                "Operating-case weight must be finite and greater than zero."
+            )
             return None
         return {
             "type": "topology_operating_case",
@@ -245,12 +284,8 @@ class TopologyOperatingCaseNode(CadQueryNode):
             "supports": supports,
             "loads": loads,
             "joints": joints,
-            "replace_supports": as_bool(
-                self.get_property("replace_base_supports")
-            ),
-            "replace_joints": as_bool(
-                self.get_property("replace_global_joints")
-            ),
+            "replace_supports": as_bool(self.get_property("replace_base_supports")),
+            "replace_joints": as_bool(self.get_property("replace_global_joints")),
         }
 
 
@@ -323,6 +358,7 @@ class TopologyHeatLoadNode(CadQueryNode):
 __all__ = [
     "TopologySupportNode",
     "TopologyLoadNode",
+    "TopologyNonDesignRegionNode",
     "TopologyJointNode",
     "TopologyOperatingCaseNode",
     "TopologyThermalSinkNode",

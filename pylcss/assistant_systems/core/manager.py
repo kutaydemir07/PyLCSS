@@ -11,31 +11,33 @@ through the ``agentic_*`` signals.  (The legacy voice / speech-to-text /
 text-to-speech stack was removed.)
 """
 
-import logging
+from __future__ import annotations
+
 import json
-from typing import Optional, TYPE_CHECKING
+import logging
+import threading
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Signal, Qt, Slot
 
-from pylcss.assistant_systems.config import AssistantConfig
-from pylcss.assistant_systems.services.input import MouseController
 from pylcss.assistant_systems.api.dispatcher import CommandDispatcher
-from pylcss.assistant_systems.services.llm import (
-    LLMProvider, get_provider,
-)
-from pylcss.assistant_systems.services.memory import LLMMemory, get_secure_storage
+from pylcss.assistant_systems.config import AssistantConfig, LLMControlConfig
+from pylcss.assistant_systems.services.conversation_memory import LLMMemory
+from pylcss.assistant_systems.services.llm_base import LLMProvider
+from pylcss.assistant_systems.services.llm_registry import get_provider
+from pylcss.assistant_systems.services.secure_storage import get_secure_storage
 
 # Agentic AI components -- PydanticAI native function-calling owns tool dispatch.
 try:
     from pylcss.assistant_systems.tools.registry import create_pylcss_tools
     from pylcss.assistant_systems.services.pydantic_agent import (
-        PydanticAgentRunner, PydanticAgentResult,
+        PydanticAgentRunner,
     )
+
     AGENTIC_AVAILABLE = True
 except ImportError as e:
     AGENTIC_AVAILABLE = False
     PydanticAgentRunner = None
-    PydanticAgentResult = None
     logging.getLogger(__name__).warning("Agentic AI components not available: %s", e)
 
 if TYPE_CHECKING:
@@ -47,11 +49,11 @@ logger = logging.getLogger(__name__)
 # Sensible default models per provider for when the user picked a provider but
 # never selected a specific model.
 _DEFAULT_MODEL_FOR_PROVIDER = {
-    "openai":    "gpt-4o-mini",
+    "openai": "gpt-4o-mini",
     "anthropic": "claude-haiku-4-5-20251001",
-    "google":    "gemini-2.5-flash",
-    "gemini":    "gemini-2.5-flash",
-    "local":     "qwen2.5-7b-instruct",
+    "google": "gemini-2.5-flash",
+    "gemini": "gemini-2.5-flash",
+    "local": "qwen2.5-7b-instruct",
 }
 
 # Path suffixes that the OpenAI client appends automatically; if a user
@@ -63,7 +65,7 @@ _OPENAI_CLIENT_SUFFIXES = (
 )
 
 
-def _normalize_base_url(url: Optional[str]) -> Optional[str]:
+def _normalize_base_url(url: str | None) -> str | None:
     """Strip path segments the OpenAI client appends automatically.
 
     If a user configures ``http://host:1234/v1/chat/completions`` instead of
@@ -97,11 +99,11 @@ class AssistantManager(QObject):
     error_occurred = Signal(str)
 
     # Agentic system signals for thread-safe UI updates
-    agentic_result_received = Signal(dict, str)   # (result_dict, original_text)
-    agentic_error_received = Signal(str)           # error_message
-    agentic_progress = Signal(str)                 # progress_message
+    agentic_result_received = Signal(dict, str)  # (result_dict, original_text)
+    agentic_error_received = Signal(str)  # error_message
+    agentic_progress = Signal(str)  # progress_message
 
-    def __init__(self, main_window: Optional["QMainWindow"] = None):
+    def __init__(self, main_window: QMainWindow | None = None) -> None:
         """
         Initialize the assistant manager.
 
@@ -114,31 +116,38 @@ class AssistantManager(QObject):
         self.config = AssistantConfig.load()
 
         # Agentic signals -> main thread handlers
-        self.agentic_result_received.connect(self._handle_agentic_result, Qt.QueuedConnection)
-        self.agentic_error_received.connect(self._handle_agentic_error, Qt.QueuedConnection)
-        self.agentic_progress.connect(self._handle_agentic_progress, Qt.QueuedConnection)
+        self.agentic_result_received.connect(
+            self._handle_agentic_result, Qt.QueuedConnection
+        )
+        self.agentic_error_received.connect(
+            self._handle_agentic_error, Qt.QueuedConnection
+        )
+        self.agentic_progress.connect(
+            self._handle_agentic_progress, Qt.QueuedConnection
+        )
 
         # Components
-        self._mouse_controller: Optional[MouseController] = None
-        self._command_dispatcher: Optional[CommandDispatcher] = None
+        self._command_dispatcher: CommandDispatcher | None = None
 
         # LLM components -- LLMProvider is the legacy text-only client kept for
         # the settings dialog (provider.list_models()); PydanticAgentRunner
         # owns the real conversation loop.
-        self._llm_provider: Optional[LLMProvider] = None
-        self._llm_memory: Optional[LLMMemory] = None
+        self._llm_provider: LLMProvider | None = None
+        self._llm_memory: LLMMemory | None = None
         self._secure_storage = get_secure_storage()
 
         # Agentic AI components -- single PydanticAgentRunner.
-        self._agent_runner: Optional['PydanticAgentRunner'] = None
-        self._use_agentic_mode: bool = self.config.llm_control.agentic_mode and AGENTIC_AVAILABLE
+        self._agent_runner: PydanticAgentRunner | None = None
+        self._use_agentic_mode: bool = (
+            self.config.llm_control.agentic_mode and AGENTIC_AVAILABLE
+        )
 
         # State
         self._initialized = False
-        self._current_request_text = ""
+        self._request_lock = threading.Lock()
 
     @property
-    def command_dispatcher(self) -> Optional[CommandDispatcher]:
+    def command_dispatcher(self) -> CommandDispatcher | None:
         """Get the command dispatcher instance."""
         return self._command_dispatcher
 
@@ -154,19 +163,12 @@ class AssistantManager(QObject):
 
         success = False
 
-        # Initialize mouse controller (used by the command dispatcher).
-        try:
-            self._mouse_controller = MouseController()
-            success = True
-        except Exception as e:
-            logger.error(f"Failed to initialize mouse controller: {e}")
-            self.error_occurred.emit(f"Mouse control unavailable: {e}")
-
-        # Initialize command dispatcher (the action layer the agent's tools use).
+        # The dispatcher keeps graph tools available even when system-level
+        # desktop input cannot initialize (for example in a headless session).
         self._command_dispatcher = CommandDispatcher(
             main_window=self.main_window,
-            mouse_controller=self._mouse_controller,
         )
+        success = True
 
         # Initialize LLM components.
         try:
@@ -215,7 +217,8 @@ class AssistantManager(QObject):
 
         logger.info(
             "Initializing LLM provider: %s, Key length: %d",
-            provider_name, len(encrypted_key) if encrypted_key else 0,
+            provider_name,
+            len(encrypted_key) if encrypted_key else 0,
         )
 
         if not encrypted_key:
@@ -223,11 +226,12 @@ class AssistantManager(QObject):
             self._llm_provider = None
             return
 
-        # Decrypt the key (fall back to treating it as plaintext for legacy).
         try:
-            api_key = self._secure_storage.decrypt(encrypted_key) or encrypted_key
-        except Exception:
-            api_key = encrypted_key
+            api_key = self._secure_storage.decrypt(encrypted_key)
+        except ValueError as exc:
+            logger.warning("Could not decrypt the %s API key: %s", provider_name, exc)
+            self._llm_provider = None
+            return
 
         if not api_key:
             logger.warning(f"Failed to decrypt API key for {provider_name}")
@@ -248,7 +252,7 @@ class AssistantManager(QObject):
             logger.error(f"Failed to initialize LLM provider {provider_name}: {e}")
             self._llm_provider = None
 
-    def set_llm_provider(self, provider: Optional[LLMProvider]) -> None:
+    def set_llm_provider(self, provider: LLMProvider | None) -> None:
         """Set the LLM provider directly (from UI)."""
         self._llm_provider = provider
         logger.info(f"LLM provider set: {provider.name if provider else 'None'}")
@@ -262,7 +266,9 @@ class AssistantManager(QObject):
             return
 
         if not self._command_dispatcher:
-            logger.warning("Cannot initialize agentic system without command dispatcher")
+            logger.warning(
+                "Cannot initialize agentic system without command dispatcher"
+            )
             return
 
         try:
@@ -273,7 +279,9 @@ class AssistantManager(QObject):
             # the OpenAI wire protocol so they share the "openai"/"local" path.
             cfg = self.config.llm_control
             provider = (cfg.provider or "openai").lower()
-            model = cfg.selected_model or _DEFAULT_MODEL_FOR_PROVIDER.get(provider, "gpt-4o-mini")
+            model = cfg.selected_model or _DEFAULT_MODEL_FOR_PROVIDER.get(
+                provider, "gpt-4o-mini"
+            )
             api_key = self._resolve_api_key(provider, cfg)
             base_url = _normalize_base_url(getattr(cfg, "local_api_url", None) or None)
 
@@ -283,16 +291,21 @@ class AssistantManager(QObject):
                 model=model,
                 api_key=api_key,
                 base_url=base_url,
+                auto_approve_confirmation=cfg.auto_execute,
             )
             logger.info(
                 "PydanticAgentRunner initialized (provider=%s, model=%s, %d tools)",
-                provider, model, len(self._agent_runner.tool_names),
+                provider,
+                model,
+                len(self._agent_runner.tool_names),
             )
         except Exception as e:
-            logger.error(f"Failed to initialize PydanticAgentRunner: {e}", exc_info=True)
+            logger.error(
+                f"Failed to initialize PydanticAgentRunner: {e}", exc_info=True
+            )
             self._agent_runner = None
 
-    def _resolve_api_key(self, provider: str, cfg) -> Optional[str]:
+    def _resolve_api_key(self, provider: str, cfg: LLMControlConfig) -> str | None:
         """Decrypt and return the API key for the active provider."""
         try:
             encrypted = getattr(cfg, f"{provider}_api_key", None)
@@ -313,28 +326,36 @@ class AssistantManager(QObject):
 
             # Determine active tab (0=Modeling, 1=CAD)
             tab_index = 0
-            if hasattr(self.main_window, 'tabs'):
+            if hasattr(self.main_window, "tabs"):
                 tab_index = self.main_window.tabs.currentIndex()
-            elif hasattr(self.main_window, 'tab_widget'):
+            elif hasattr(self.main_window, "tab_widget"):
                 tab_index = self.main_window.tab_widget.currentIndex()
 
             graph = None
             context_type = ""
             if tab_index == 0:  # Modeling
-                if hasattr(self.main_window, 'modeling_widget'):
+                if hasattr(self.main_window, "modeling_widget"):
                     graph = self.main_window.modeling_widget.current_graph
                 context_type = "Modeling"
             elif tab_index == 1:  # CAD
-                if hasattr(self.main_window, 'cad_widget'):
-                    graph = getattr(self.main_window.cad_widget, 'graph', None)
+                if hasattr(self.main_window, "cad_widget"):
+                    graph = getattr(self.main_window.cad_widget, "graph", None)
                 context_type = "CAD"
 
             if not graph:
                 return ""
 
             # Serialize nodes (functional properties only, to save tokens).
-            ignore_starts = ['_', 'error', 'port', 'selected', 'disabled']
-            ignore_exact = ['pos', 'color', 'border_color', 'text_color', 'icon', 'width', 'height']
+            ignore_starts = ["_", "error", "port", "selected", "disabled"]
+            ignore_exact = [
+                "pos",
+                "color",
+                "border_color",
+                "text_color",
+                "icon",
+                "width",
+                "height",
+            ]
             nodes_data = []
             for node in graph.all_nodes():
                 node_data = {"id": node.name(), "type": node.type_, "properties": {}}
@@ -352,17 +373,19 @@ class AssistantManager(QObject):
             for node in graph.all_nodes():
                 for out_port in node.output_ports():
                     for cp in out_port.connected_ports():
-                        connections_data.append({
-                            "from": f"{node.name()}.{out_port.name()}",
-                            "to": f"{cp.node().name()}.{cp.name()}",
-                        })
+                        connections_data.append(
+                            {
+                                "from": f"{node.name()}.{out_port.name()}",
+                                "to": f"{cp.node().name()}.{cp.name()}",
+                            }
+                        )
 
             context = {
                 "environment": context_type,
                 "nodes": nodes_data,
                 "connections": connections_data,
             }
-            return json.dumps(context, separators=(',', ':'))
+            return json.dumps(context, separators=(",", ":"))
         except Exception as e:
             logger.error(f"Context error: {e}")
             return ""
@@ -375,7 +398,11 @@ class AssistantManager(QObject):
         Entry point from the assistant side panel.  Runs the agent on a
         background thread and reports back through the ``agentic_*`` signals.
         """
-        logger.info(f"Assistant request: {text[:100]}...")
+        text = text.strip()
+        if not text:
+            self.error_occurred.emit("Enter a request for the assistant.")
+            return
+        logger.info("Assistant request: %s", text[:100])
 
         if not self._agent_runner:
             # Lazy retry: maybe the provider just changed and the runner
@@ -386,17 +413,24 @@ class AssistantManager(QObject):
             self.error_occurred.emit("LLM not configured. Open LLM Settings.")
             return
 
-        self._current_request_text = text
+        if not self._request_lock.acquire(blocking=False):
+            self.error_occurred.emit(
+                "The assistant is already processing another request."
+            )
+            return
         self.agentic_progress.emit("Calling tools...")
 
-        # Pull graph context on the main thread so we hand the runner a
-        # snapshot the LLM can reason about ("here's what already exists").
         graph_state = self._get_current_graph_context()
-        prompt = self._compose_agent_prompt(text, graph_state)
+        history = (
+            self._llm_memory.get_context_messages(
+                self.config.llm_control.max_memory_messages
+            )
+            if self._llm_memory
+            else []
+        )
+        prompt = self._compose_agent_prompt(text, graph_state, history)
 
-        import threading
-
-        def run_agentic():
+        def run_agentic() -> None:
             try:
                 result = self._agent_runner.run_sync(prompt)
                 ok = result.success
@@ -410,17 +444,39 @@ class AssistantManager(QObject):
             except Exception as e:
                 logger.error(f"Agentic processing failed: {e}", exc_info=True)
                 self.agentic_error_received.emit(str(e))
+            finally:
+                self._request_lock.release()
 
-        threading.Thread(target=run_agentic, daemon=True).start()
-
-    def _compose_agent_prompt(self, user_text: str, graph_state: str) -> str:
-        """Glue the user request + current graph snapshot into one prompt string."""
-        if not graph_state:
-            return user_text
-        return (
-            f"Current graph context (read-only snapshot):\n{graph_state}\n\n"
-            f"User request:\n{user_text}"
+        worker = threading.Thread(
+            target=run_agentic,
+            name="pylcss-assistant-request",
+            daemon=True,
         )
+        try:
+            worker.start()
+        except RuntimeError as exc:
+            self._request_lock.release()
+            self.error_occurred.emit(f"Could not start the assistant: {exc}")
+
+    def _compose_agent_prompt(
+        self,
+        user_text: str,
+        graph_state: str,
+        history: list[dict[str, str]] | None = None,
+    ) -> str:
+        """Compose bounded history, graph state, and the current request."""
+        sections: list[str] = []
+        if history:
+            sections.append(
+                "Recent conversation (context only):\n"
+                + json.dumps(history, ensure_ascii=False, separators=(",", ":"))
+            )
+        if graph_state:
+            sections.append(
+                f"Current graph context (read-only snapshot):\n{graph_state}"
+            )
+        sections.append(f"User request:\n{user_text}")
+        return "\n\n".join(sections)
 
     @Slot(object, str)
     def _handle_agentic_result(self, result: dict, original_text: str) -> None:
@@ -431,6 +487,12 @@ class AssistantManager(QObject):
             logger.info(f"Agent telemetry summary: {telemetry_summary}")
 
         if self._llm_memory:
+            self._llm_memory.add_message(
+                role="user",
+                content=original_text,
+                provider=self.config.llm_control.provider,
+                model=self.config.llm_control.selected_model or "agentic",
+            )
             self._llm_memory.add_message(
                 role="assistant",
                 content=message,

@@ -22,7 +22,7 @@ class AssemblyNode(CadQueryNode):
 
     def run(self):
         self.clear_error()
-        from pylcss.solver_backends.common import as_bool
+        from pylcss.input_values import as_bool
 
         fuse = as_bool(self.get_property('fuse_parts'))
         asm_name = str(self.get_property('assembly_name') or '').strip() or 'Assembly'

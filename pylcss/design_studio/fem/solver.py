@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-"""FEA solver node — runs an external CalculiX (ccx) static linear analysis.
+"""FEA solver node — runs the validated PyLCSS CalculiX static-solid subset.
 
 The previous in-house scikit-fem implementation was removed: it was not
 validated against an industry reference and produced silent correctness
@@ -34,7 +34,7 @@ def _has_nonzero_prescribed_displacement(constraints, tol=1e-15):
 
 
 class SolverNode(CadQueryNode):
-    """Static linear FEA solver — dispatches to CalculiX (ccx)."""
+    """Static solid FEA with linear, geometric, or bilinear plastic response."""
     __identifier__ = 'com.cad.sim.solver'
     NODE_NAME = 'FEA Solver'
 
@@ -76,7 +76,7 @@ class SolverNode(CadQueryNode):
             SolverBackendError,
             run_calculix_static,
         )
-        from pylcss.solver_backends.common import as_bool, flatten_inputs
+        from pylcss.input_values import as_bool, flatten_inputs
 
         mesh = self.get_input_value('mesh', None)
         material = self.get_input_value('material', None)

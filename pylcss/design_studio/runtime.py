@@ -3,7 +3,7 @@
 """Headless CAD-graph evaluator exposed to system-modeling function blocks.
 
 The compiled code of a sysmod ``CustomBlockNode`` sees this module bound to the
-name ``cad`` (see :mod:`pylcss.system_modeling.model_builder`).  A function
+name ``cad`` (see :mod:`pylcss.system_modeling.compiler`).  A function
 block can then write::
 
     r = cad.fea("front_panel.cad", thickness=t, fillet_r=ro)
@@ -89,6 +89,10 @@ _OVERRIDEABLE_PROPERTIES = {
     "com.cad.sim.load": (
         "force_x", "force_y", "force_z", "gravity_accel",
     ),
+    "com.cad.topopt.load": ("force_x", "force_y", "force_z"),
+    "com.cad.topopt.joint": ("relative_stiffness",),
+    "com.cad.topopt.operating_case": ("weight",),
+    "com.cad.topopt.heat_load": ("total_heat", "weight"),
     "com.cad.sim.pressure_load": ("pressure",),
     "com.cad.sim.impact": (
         "velocity_x", "velocity_y", "velocity_z", "node_tolerance",
@@ -116,6 +120,10 @@ _OVERRIDE_GROUPS = {
     "com.cad.sim.mesh": "Mesh",
     "com.cad.sim.constraint": "Boundary condition",
     "com.cad.sim.load": "Load",
+    "com.cad.topopt.load": "Topology load",
+    "com.cad.topopt.joint": "Topology joint",
+    "com.cad.topopt.operating_case": "Operating case",
+    "com.cad.topopt.heat_load": "Thermal load",
     "com.cad.sim.pressure_load": "Load",
     "com.cad.sim.impact": "Impact",
     "com.cad.sim.crash_solver": "Crash solver",
@@ -130,6 +138,12 @@ _PROPERTY_LABELS = {
     "yield_strength": "Yield strength",
     "tangent_modulus": "Tangent modulus",
     "failure_strain": "Failure strain",
+    "force_x": "Force X",
+    "force_y": "Force Y",
+    "force_z": "Force Z",
+    "relative_stiffness": "Relative joint stiffness",
+    "total_heat": "Total heat input",
+    "weight": "Case weight",
     "element_size": "Element size",
     "refinement_size": "Refinement size",
     "shell_thickness": "Shell thickness",
@@ -268,12 +282,33 @@ def _standardize(kind: str, raw: Mapping[str, Any]) -> Dict[str, Any]:
         std["volume"]        = float(raw.get("volume", 0.0))
         std["mass"]          = float(raw.get("mass", 0.0))
         std["peak_disp"]     = float(raw.get("peak_displacement", 0.0))
+        reaction = np.asarray(
+            raw.get("reaction_force", np.zeros(3)), dtype=float
+        ).reshape(-1)
+        std["reaction_force"] = tuple(float(v) for v in reaction[:3])
+        std["reaction_magnitude"] = float(
+            raw.get("reaction_magnitude", np.linalg.norm(reaction))
+        )
 
     elif kind == "crash":
         std["max_stress"]      = float(raw.get("peak_stress", 0.0))
         std["peak_disp"]       = float(raw.get("peak_displacement", 0.0))
         std["absorbed_energy"] = float(raw.get("absorbed_energy", 0.0))
+        std["absorbed_energy_kj"] = float(
+            raw.get(
+                "absorbed_energy_kj",
+                float(raw.get("absorbed_energy", 0.0)) / 1.0e6,
+            )
+        )
         std["n_failed"]        = int(raw.get("n_failed", 0))
+        if raw.get("energy_balance_max_error") is not None:
+            std["energy_balance_max_error"] = float(
+                raw["energy_balance_max_error"]
+            )
+        if raw.get("mass_balance_max_error") is not None:
+            std["mass_balance_max_error"] = float(
+                raw["mass_balance_max_error"]
+            )
 
     elif kind == "topopt":
         density = raw.get("density", None)
@@ -297,8 +332,18 @@ def _standardize(kind: str, raw: Mapping[str, Any]) -> Dict[str, Any]:
         std["thermal_compliance"] = float(
             raw.get("thermal_compliance") or 0.0
         )
-        std["mass"] = float(raw.get("mass") or 0.0)
-        std["volume"] = float(raw.get("volume") or 0.0)
+        std["mass"] = float(
+            raw.get("recovered_design_mass", raw.get("mass")) or 0.0
+        )
+        std["volume"] = float(
+            raw.get("recovered_design_volume", raw.get("volume")) or 0.0
+        )
+        std["density_equivalent_mass"] = float(
+            raw.get("density_equivalent_mass", raw.get("mass")) or 0.0
+        )
+        std["density_equivalent_volume"] = float(
+            raw.get("density_equivalent_volume", raw.get("volume")) or 0.0
+        )
         std["total_volume"] = float(raw.get("total_volume") or 0.0)
 
     return std
@@ -455,37 +500,46 @@ def _evaluate(
     )
 
     _ensure_qapp()
-    graph = _load_graph(abs_path)
+    graph = None
+    try:
+        graph = _load_graph(abs_path)
 
-    _set_count, available_names = _apply_exposed_inputs(graph, dict(canonical_inputs))
-    requested = {k for k, _ in canonical_inputs}
-    if not requested.issubset(available_names):
-        missing = sorted(requested - available_names)
-        raise KeyError(
-            f"CAD graph {abs_path!r} has no exposed parameters named {missing}. "
-            f"Available: {sorted(available_names)}"
+        _set_count, available_names = _apply_exposed_inputs(
+            graph, dict(canonical_inputs)
         )
-    _apply_property_overrides(graph, dict(canonical_settings))
+        requested = {k for k, _ in canonical_inputs}
+        if not requested.issubset(available_names):
+            missing = sorted(requested - available_names)
+            raise KeyError(
+                f"CAD graph {abs_path!r} has no exposed parameters named "
+                f"{missing}. Available: {sorted(available_names)}"
+            )
+        _apply_property_overrides(graph, dict(canonical_settings))
 
-    from pylcss.design_studio.engine import execute_graph
-    execute_graph(graph)
+        from pylcss.design_studio.engine import execute_graph
+        execute_graph(graph)
 
-    terminal_result = _find_terminal_result(graph, terminal_id)
-    if terminal_result is None:
-        expected = (
-            "', '".join(terminal_id)
-            if isinstance(terminal_id, (list, tuple))
-            else str(terminal_id)
-        )
-        raise RuntimeError(
-            f"CAD graph {abs_path!r} produced no result for terminal node "
-            f"'{expected}'. Add the expected solver/optimisation node to the graph."
-        )
+        terminal_result = _find_terminal_result(graph, terminal_id)
+        if terminal_result is None:
+            expected = (
+                "', '".join(terminal_id)
+                if isinstance(terminal_id, (list, tuple))
+                else str(terminal_id)
+            )
+            raise RuntimeError(
+                f"CAD graph {abs_path!r} produced no result for terminal node "
+                f"'{expected}'. Add the expected solver/optimisation node to "
+                "the graph."
+            )
 
-    wrapped = CadResult(kind, terminal_result)
-    with _cache_lock:
-        _cache[cache_key] = wrapped
-    return wrapped
+        # CadResult copies the result mapping and retains any solver arrays, so
+        # the temporary Qt graph can be destroyed immediately after evaluation.
+        wrapped = CadResult(kind, terminal_result)
+        with _cache_lock:
+            _cache[cache_key] = wrapped
+        return wrapped
+    finally:
+        _dispose_graph(graph)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -511,9 +565,55 @@ def _load_graph(abs_path: str):
     graph.clear_session()
     graph.deserialize_session(session_data)
     project_dir = str(Path(abs_path).resolve().parent)
-    for node in graph.all_nodes():
+    loaded_nodes = list(graph.all_nodes())
+    for node in loaded_nodes:
         node._project_dir = project_dir
+
+    # Hand-authored example files use readable saved keys (for example
+    # ``force`` and ``topopt``). NodeGraphQt assigns fresh pointer-like runtime
+    # ids when deserialising those keys, so keep the project key on each node.
+    # Function-block and AI overrides must remain stable across every load.
+    saved_nodes = list((session_data.get("nodes", {}) or {}).items())
+    unmatched = set(range(len(loaded_nodes)))
+    for saved_index, (saved_id, saved_data) in enumerate(saved_nodes):
+        saved_name = str(saved_data.get("name") or "")
+        matches = [
+            idx for idx in unmatched
+            if str(loaded_nodes[idx].name()) == saved_name
+        ]
+        if len(matches) == 1:
+            loaded_index = matches[0]
+        elif saved_index in unmatched:
+            loaded_index = saved_index
+        else:
+            continue
+        loaded_nodes[loaded_index]._pylcss_saved_node_id = str(saved_id)
+        unmatched.discard(loaded_index)
     return graph
+
+
+def _dispose_graph(graph) -> None:
+    """Destroy a temporary NodeGraph while QApplication is still alive."""
+    if graph is None:
+        return
+    try:
+        graph.clear_session()
+    except Exception:
+        logger.debug("cad runtime: graph session cleanup failed", exc_info=True)
+    try:
+        widget = graph.widget
+        widget.close()
+        widget.deleteLater()
+    except Exception:
+        logger.debug("cad runtime: graph widget cleanup failed", exc_info=True)
+    try:
+        from qtpy.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+    except Exception:
+        logger.debug("cad runtime: Qt cleanup events failed", exc_info=True)
 
 
 def _apply_exposed_inputs(graph, inputs: Mapping[str, float]) -> tuple[int, set]:
@@ -576,6 +676,9 @@ def _apply_property_overrides(graph, settings: Mapping[str, float]) -> int:
         node_name = node.name() if hasattr(node, "name") else ""
         nodes_by_name.setdefault(str(node_name), []).append(node)
         nodes_by_id[str(getattr(node, "id", ""))] = node
+        saved_node_id = getattr(node, "_pylcss_saved_node_id", None)
+        if saved_node_id:
+            nodes_by_id[str(saved_node_id)] = node
 
     applied = 0
     for key, numeric_value in settings.items():
@@ -641,10 +744,10 @@ def _is_code_part_node(node) -> bool:
 
 def _mark_node_dirty(node) -> None:
     # Force re-execution: bust the engine's per-node dirty-state cache.
-    setattr(node, "_last_result", None)
-    setattr(node, "_last_input_hash", None)
-    setattr(node, "_dirty", True)
-    setattr(node, "_force_execute", True)
+    node._last_result = None
+    node._last_input_hash = None
+    node._dirty = True
+    node._force_execute = True
 
 
 _PARAM_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -709,7 +812,7 @@ def _apply_code_part_inputs(node, inputs: Mapping[str, float], available: set) -
         else:
             _mark_node_dirty(node)
             if getattr(node, "__identifier__", "") == "com.cad.freecad_part":
-                setattr(node, "_parameter_override_pending", True)
+                node._parameter_override_pending = True
             applied += 1
 
     if not node.has_property("parameters"):

@@ -230,7 +230,7 @@ class ExportStlNode(CadQueryNode):
         """
         import numpy as np
         from types import SimpleNamespace
-        from pylcss.design_studio.nodes.modeling import _mesh_boundary_face_data
+        from pylcss.design_studio.nodes.selection import _mesh_boundary_face_data
         
         # mesh.p is (3, N_vertices), mesh.t is (4, N_tets)
         pts = mesh.p  # (3, N)
@@ -373,7 +373,7 @@ class ExportStlNode(CadQueryNode):
                 f.write(header[:80])
                 f.write(struct.pack('<I', n_triangles))
 
-                for face, normal in zip(faces, normals):
+                for face, normal in zip(faces, normals, strict=True):
                     v0, v1, v2 = vertices[face[0]], vertices[face[1]], vertices[face[2]]
                     f.write(struct.pack('<3f', *normal))
                     f.write(struct.pack('<3f', *v0))

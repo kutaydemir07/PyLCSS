@@ -76,7 +76,7 @@
         "density_cutoff": 0.50,
         "structure_mode": "Solid Envelope",
         "print_ready_mesh": true,
-        "mesh_decimate_ratio": 0.35,
+        "mesh_decimate_ratio": 0.85,
         "surface_recovery_method": "Volume-Preserving SDF (VTK)",
         "visualization": "Recovered Shape"
       }

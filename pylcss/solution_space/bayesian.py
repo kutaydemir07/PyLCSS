@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from numbers import Integral
+
 from scipy.stats import beta as _beta
 
 
@@ -15,6 +17,18 @@ def good_fraction_lower_bound(m: int, N: int, confidence: float = 0.95) -> float
     Solves ``P(a > a_l | m, N) = confidence`` using the Beta posterior with
     uniform prior. Returns 0.0 when ``N == 0``.
     """
-    if N <= 0:
+    if not isinstance(m, Integral) or isinstance(m, bool):
+        raise TypeError("m must be an integer")
+    if not isinstance(N, Integral) or isinstance(N, bool):
+        raise TypeError("N must be an integer")
+    m = int(m)
+    N = int(N)
+    if N < 0:
+        raise ValueError("N must not be negative")
+    if m < 0 or m > N:
+        raise ValueError("m must satisfy 0 <= m <= N")
+    if not 0.0 < confidence < 1.0:
+        raise ValueError("confidence must be between 0 and 1")
+    if N == 0:
         return 0.0
     return float(_beta.ppf(1.0 - confidence, m + 1, N - m + 1))

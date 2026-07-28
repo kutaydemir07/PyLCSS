@@ -284,7 +284,7 @@ def run_topopt_validation(
         SolverBackendError,
         run_calculix_static,
     )
-    from pylcss.solver_backends.common import as_bool
+    from pylcss.input_values import as_bool
 
     field = _extract_density_field(topo_payload)
     missing = []

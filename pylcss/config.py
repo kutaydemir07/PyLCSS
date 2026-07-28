@@ -49,8 +49,13 @@ class OptimizationConfig:
     """Configuration for optimization solvers."""
     
     # Default solver settings
-    DEFAULT_TOLERANCE: float = 1e-4  # Relaxed for noisy black-box models (was 1e-6)
-    DEFAULT_MAX_ITERATIONS: int = 5000  # Increased for global solvers (was 100)
+    # Shared termination/feasibility target. Keeping one default prevents a
+    # backend from accepting a point that the application then labels invalid.
+    DEFAULT_TOLERANCE: float = 1e-6
+    DEFAULT_MAX_ITERATIONS: int = 1000
+    DEFAULT_NEVERGRAD_BUDGET: int = 5000
+    DEFAULT_DE_GENERATIONS: int = 200
+    DEFAULT_MULTI_START_ITERATIONS: int = 1000
     DEFAULT_PENALTY_WEIGHT: float = 1e6  # Scaled for typical engineering costs (was 1000.0)
     
     # Constraint violation threshold
@@ -268,65 +273,65 @@ def setup_logging(level: int = DEFAULT_LOG_LEVEL,
 SOLVER_DESCRIPTIONS = {
     'SLSQP': {
         'name': 'Sequential Least Squares Programming',
-        'description': 'Fast gradient-based optimizer for smooth, differentiable problems',
+        'description': 'Local gradient-based optimizer for smooth continuous problems',
         'best_for': 'Continuous variables with smooth objective/constraints',
         'supports_constraints': True,
         'speed': 'Fast',
         'robustness': 'Medium',
-        'when_to_use': 'Use when your model is smooth and gradients exist. Best for quick iterations.'
+        'when_to_use': 'A good first local method when finite-difference gradients are meaningful. Check convergence from more than one start when local minima are possible.'
     },
     'COBYLA': {
         'name': 'Constrained Optimization BY Linear Approximation',
-        'description': 'Derivative-free optimizer using linear approximations',
-        'best_for': 'Non-smooth or noisy objectives with constraints',
+        'description': 'Local derivative-free optimizer using linear approximations',
+        'best_for': 'Modest-size continuous problems without reliable derivatives',
         'supports_constraints': True,
         'speed': 'Medium',
-        'robustness': 'High',
-        'when_to_use': 'Use when derivatives are unavailable or unreliable. Handles noise well.'
+        'robustness': 'Medium',
+        'when_to_use': 'Use when derivatives are unavailable. It is not a noise filter or global optimizer; verify feasibility and repeat from other starts.'
     },
     'trust-constr': {
         'name': 'Trust Region Constrained',
-        'description': 'Modern interior-point method with robust constraint handling',
-        'best_for': 'Complex constrained problems requiring high accuracy',
+        'description': 'Local trust-region method for smooth constrained problems',
+        'best_for': 'Smooth constrained problems requiring tighter convergence control',
         'supports_constraints': True,
         'speed': 'Slow',
-        'robustness': 'Very High',
-        'when_to_use': 'Use when SLSQP fails or when you need strict constraint satisfaction.'
+        'robustness': 'Medium',
+        'when_to_use': 'Try when SLSQP struggles on a smooth problem. Finite-difference derivatives can still be costly or unreliable; verify final feasibility.'
     },
     'Nevergrad': {
         'name': 'Nevergrad (NGOpt)',
-        'description': 'Gradient-free meta-optimizer combining multiple strategies',
-        'best_for': 'Black-box, noisy, or discrete problems',
+        'description': 'Gradient-free meta-optimizer selecting among black-box strategies',
+        'best_for': 'Bounded continuous black-box problems with an evaluation budget',
         'supports_constraints': True,
         'speed': 'Slow',
-        'robustness': 'Very High',
-        'when_to_use': 'Use for difficult problems where other methods fail. Best for global search.'
+        'robustness': 'Medium',
+        'when_to_use': 'Use when local derivatives are not dependable. PyLCSS variables are continuous; this tab does not currently model categorical choices.'
     },
     'Differential Evolution': {
         'name': 'Differential Evolution',
-        'description': 'Population-based evolutionary global optimizer',
-        'best_for': 'Multi-Modal landscapes requiring global search',
+        'description': 'Population-based stochastic search over finite bounds',
+        'best_for': 'Bounded multi-modal continuous landscapes',
         'supports_constraints': True,
         'speed': 'Very Slow',
-        'robustness': 'Very High',
-        'when_to_use': 'Use when solution space has many local minima. Guaranteed exploration.'
+        'robustness': 'Medium',
+        'when_to_use': 'Use for bounded problems with suspected local minima. It offers no global-optimum guarantee; budget enough generations and repeat with another seed.'
     },
     'NSGA-II': {
         'name': 'Non-dominated Sorting Genetic Algorithm II',
-        'description': 'Multi-objective evolutionary optimizer producing Pareto-optimal fronts',
+        'description': 'Multi-objective evolutionary search approximating a non-dominated front',
         'best_for': 'Multi-objective problems with 2-5 conflicting objectives',
         'supports_constraints': True,
         'speed': 'Slow',
-        'robustness': 'Very High',
-        'when_to_use': 'Use when you have multiple competing objectives and need the full trade-off front.'
+        'robustness': 'Medium',
+        'when_to_use': 'Use with at least two competing objectives when you need sampled trade-offs. The returned front is an approximation and should be rerun for stability.'
     },
     'Multi-Start': {
         'name': 'Multi-Start Global Search',
-        'description': 'Runs a local optimizer from multiple random starting points (LHS)',
-        'best_for': 'Multi-Modal problems where global optimum is desired',
+        'description': 'Runs a local optimizer from Latin-hypercube starting points',
+        'best_for': 'Checking bounded continuous problems for multiple local optima',
         'supports_constraints': True,
         'speed': 'Medium',
-        'robustness': 'High',
-        'when_to_use': 'Use when you suspect multiple local minima but want to use a fast local solver.'
+        'robustness': 'Medium',
+        'when_to_use': 'Use when you suspect multiple local minima but want local-solver efficiency. More starts improve coverage but do not prove global optimality.'
     }
 }

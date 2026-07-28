@@ -1,5 +1,5 @@
 # PyLCSS Third-Party Notices
-Document Version: 1.7 Last Updated: May 24, 2026
+Document Version: 1.8 Last Updated: July 27, 2026
 
 This document outlines the third-party libraries and components used in PyLCSS, along with their respective licenses. PyLCSS is committed to respecting the intellectual property of all contributors and provides this information in accordance with open-source licensing requirements.
 
@@ -41,6 +41,12 @@ PyLCSS can launch native solver executables as separate external processes. Thes
 - **Source**: [https://ngsolve.org/](https://ngsolve.org/)
 - **Version**: 6.2.2506+
 - **Note**: PyLCSS uses netgen-mesher for automatic 3D tetrahedral mesh generation. Users have the right to replace this library with their own version.
+
+### py7zr
+- **Copyright**: © 2019-2026, Hiroshi Miura
+- **License**: LGPL-2.1-or-later
+- **Source**: [https://github.com/miurahr/py7zr](https://github.com/miurahr/py7zr)
+- **Note**: Pure-Python 7z reader used by `scripts/install_solvers.py` when extracting optional third-party archives. Users may replace the installed wheel.
 
 ## 2. MIT Licensed Software
 
@@ -140,12 +146,6 @@ QtAwesome bundles several third-party icon fonts. These assets are governed by t
 - **License**: MIT
 - **Source**: [https://github.com/pydantic/pydantic-ai](https://github.com/pydantic/pydantic-ai)
 - **Note**: Minimal distribution of Pydantic AI used with OpenAI, Anthropic, and Google provider extras for the PyLCSS assistant system.
-
-### py7zr
-- **Copyright**: © 2019-2026, Hiroshi Miura
-- **License**: LGPL-2.1-or-later, used as the Python interface only.
-- **Source**: [https://github.com/miurahr/py7zr](https://github.com/miurahr/py7zr)
-- **Note**: Pure-Python 7z reader used as a fallback by `scripts/install_solvers.py` when extracting third-party archives. PyLCSS imports it from the venv; users may replace the wheel freely.
 
 ### MIT License Text
 ```text
@@ -263,20 +263,6 @@ h5py serves as a Pythonic interface to the HDF5 library. The distribution includ
 - **License**: BSD 3-Clause
 - **Source**: [https://github.com/WoLpH/numpy-stl](https://github.com/WoLpH/numpy-stl)
 
-### pypardiso
-- **Copyright**: Copyright (c) 2016, Adrian Haas and ETH Zurich
-- **License**: BSD 3-Clause
-- **Source**: [https://github.com/haasad/PyPardiso](https://github.com/haasad/PyPardiso)
-- **Version**: 0.4.7
-- **Note**: Python interface to Intel MKL Pardiso for sparse linear solves.
-
-### crackle-codec
-- **Copyright**: Copyright (c) 2022,2023 William Silversmith
-- **License**: BSD 3-Clause
-- **Source**: [https://github.com/seung-lab/crackle](https://github.com/seung-lab/crackle)
-- **Version**: 0.42.0
-- **Note**: Dense 3D segmentation compression codec used by the kimimaro skeletonization dependency stack.
-
 ### BSD 3-Clause License Text
 ```text
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
@@ -293,13 +279,6 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 ## 5. GPL/AGPL Licensed Software
 
 The following components are copyleft-licensed. If these packages are bundled or distributed with PyLCSS, distributors must satisfy the applicable GPL or AGPL obligations.
-
-### kimimaro
-- **Copyright**: Jingpeng Wu, William Silversmith, and contributors
-- **License**: GPL-3.0-or-later
-- **Source**: [https://github.com/seung-lab/kimimaro](https://github.com/seung-lab/kimimaro)
-- **Version**: 5.8.1
-- **Note**: TEASAR-style skeletonization dependency for dense labeled 3D volumes.
 
 ### TetGen C++ core (via tetgen)
 - **Copyright**: TetGen authors and contributors
@@ -341,9 +320,6 @@ The following versions are explicitly verified for license compliance. Deviating
 | fast-simplification | 0.1.13 | MIT | Optional quadric decimation backend for recovered TopOpt STL surfaces. |
 | pyMOTO | 2.0.1 | MIT | Topology-optimization framework used by the voxel TopOpt solver. |
 | tetgen | 0.8.4 | MIT wrapper / AGPL core | Python wrapper is MIT; bundled TetGen C++ source is AGPL-3.0-or-later or commercial. |
-| pypardiso | 0.4.7 | BSD 3-Clause | Sparse linear solver interface for MKL Pardiso. |
-| kimimaro | 5.8.1 | GPL-3.0-or-later | Skeletonization dependency; review distribution obligations before bundling. |
-| crackle-codec | 0.42.0 | BSD 3-Clause | Runtime dependency in the kimimaro stack. |
 
 ---
 

@@ -58,7 +58,7 @@
         "overhang_build_axis": "+Y",
         "max_member_size_voxels": 5.0,
         "print_ready_mesh": true,
-        "mesh_decimate_ratio": 0.35,
+        "mesh_decimate_ratio": 0.85,
         "visualization": "Recovered Shape",
         "surface_recovery_method": "Volume-Preserving SDF (VTK)"
       }

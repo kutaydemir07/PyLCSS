@@ -63,7 +63,7 @@
         "validate_after_optimize": false,
         "validation_quality": "Mesh Convergence",
         "print_ready_mesh": true,
-        "mesh_decimate_ratio": 0.35,
+        "mesh_decimate_ratio": 0.85,
         "visualization": "Recovered Shape",
         "surface_recovery_method": "Volume-Preserving SDF (VTK)"
       }

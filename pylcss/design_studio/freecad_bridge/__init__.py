@@ -1,58 +1,68 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""
-PyLCSS <-> FreeCAD bridge.
+"""FreeCAD subprocess integration and BREP document synchronization.
 
-This package launches FreeCAD as a *subprocess* (NOT embedded) because
-FreeCAD owns its own QApplication on PySide2 while PyLCSS runs PySide6 --
-the two cannot coexist in one process.
-
-The flow we support:
-
-  1. A ``com.cad.freecad_part`` node owns a ``.FCStd`` file under
-     ``<repo>/data_freecad/<node_id>.FCStd``.
-  2. Double-clicking the node opens FreeCAD on that file via
-     :class:`FreeCadLauncher`.  A start-up macro is injected so that
-     every save automatically exports a sibling ``.brep`` + ``.json``
-     describing the document's part body + named selections.
-  3. A :class:`FCStdWatcher` (QFileSystemWatcher under the hood) notices
-     the save, the ``.brep`` is re-read into PyLCSS's viewer, and any
-     named faces / FEM constraint definitions are translated into the
-     existing ``com.cad.sim.*`` node graph.
-
-This POC focuses on steps 1 and 2; step 3's BREP reader and FEM
-translator land in follow-up modules under the same package.
+FreeCAD owns a PySide2 application while PyLCSS uses PySide6, so the bridge
+keeps FreeCAD in a separate process and exchanges files instead of embedding
+its Python runtime.
 """
 
-from pylcss.design_studio.freecad_bridge.paths import (
-    find_freecad_executable,
-    find_freecad_cmd,
-    find_freecad_python,
-    freecad_data_dir,
-    is_freecad_installed,
-)
-from pylcss.design_studio.freecad_bridge.launcher import FreeCadLauncher
-from pylcss.design_studio.freecad_bridge.watcher import FCStdWatcher
-from pylcss.design_studio.freecad_bridge.brep_reader import (
-    FreeCadImportedShape,
-    read_brep_from_fcstd,
-)
-from pylcss.design_studio.freecad_bridge.param_writer import (
-    collect_param_values_from_node,
-    write_parameters_to_fcstd,
-)
+from __future__ import annotations
+
+from pylcss.design_studio._lazy_imports import load_attribute, public_names
 
 __all__ = [
-    "find_freecad_executable",
+    "FCStdWatcher",
+    "FreeCadImportedShape",
+    "FreeCadLauncher",
+    "collect_param_values_from_node",
     "find_freecad_cmd",
+    "find_freecad_executable",
     "find_freecad_python",
     "freecad_data_dir",
     "is_freecad_installed",
-    "FreeCadLauncher",
-    "FCStdWatcher",
-    "FreeCadImportedShape",
     "read_brep_from_fcstd",
-    "collect_param_values_from_node",
     "write_parameters_to_fcstd",
 ]
+
+_PATHS = "pylcss.design_studio.freecad_bridge.paths"
+_LAZY_EXPORTS = {
+    "FCStdWatcher": (
+        "pylcss.design_studio.freecad_bridge.watcher",
+        "FCStdWatcher",
+    ),
+    "FreeCadImportedShape": (
+        "pylcss.design_studio.freecad_bridge.brep_reader",
+        "FreeCadImportedShape",
+    ),
+    "FreeCadLauncher": (
+        "pylcss.design_studio.freecad_bridge.launcher",
+        "FreeCadLauncher",
+    ),
+    "collect_param_values_from_node": (
+        "pylcss.design_studio.freecad_bridge.param_writer",
+        "collect_param_values_from_node",
+    ),
+    "find_freecad_cmd": (_PATHS, "find_freecad_cmd"),
+    "find_freecad_executable": (_PATHS, "find_freecad_executable"),
+    "find_freecad_python": (_PATHS, "find_freecad_python"),
+    "freecad_data_dir": (_PATHS, "freecad_data_dir"),
+    "is_freecad_installed": (_PATHS, "is_freecad_installed"),
+    "read_brep_from_fcstd": (
+        "pylcss.design_studio.freecad_bridge.brep_reader",
+        "read_brep_from_fcstd",
+    ),
+    "write_parameters_to_fcstd": (
+        "pylcss.design_studio.freecad_bridge.param_writer",
+        "write_parameters_to_fcstd",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    return load_attribute(name, _LAZY_EXPORTS, globals())
+
+
+def __dir__() -> list[str]:
+    return public_names(_LAZY_EXPORTS, globals())

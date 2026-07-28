@@ -92,7 +92,7 @@ def industrial_topopt_defaults(
         'print_ready_mesh': False,
         'surface_recovery_method': 'Volume-Preserving SDF (VTK)',
         'structure_mode': 'Solid Envelope',
-        'structure_cell_size_voxels': 6.0,
+        'structure_cell_size_voxels': 8.0,
         'structure_member_thickness_voxels': 1.0,
         'structure_skin_thickness_voxels': 0.75,
         **quality_settings,
@@ -124,7 +124,6 @@ def industrial_topopt_defaults(
             optimizer='MMA',
             max_iter=max(int(settings['max_iter']), 120),
         )
-
     if manufacturing in ('Additive', 'Additive + Symmetric'):
         settings.update(
             overhang_build_axis='+Y',

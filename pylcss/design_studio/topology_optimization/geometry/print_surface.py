@@ -1,11 +1,13 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-"""Print-oriented signed-distance surface extraction.
+"""Print-oriented continuous-field surface extraction.
 
-The pipeline converts the thresholded material field to a signed-distance
-function, smooths the implicit boundary, recalibrates the zero level to retain
-the voxel material volume, and extracts it with VTK Flying Edges.
+The preferred pipeline retains the interpolated optimizer field, smooths its
+implicit boundary, recalibrates the zero level to retain material volume, and
+extracts it with VTK Flying Edges. A binary-mask SDF helper remains available
+for callers that do not have a continuous field.
 """
+
 from __future__ import annotations
 
 import logging
@@ -27,7 +29,9 @@ def volume_preserving_signed_distance(
 
     mask = np.asarray(material_mask, dtype=bool)
     if mask.ndim != 3 or not np.any(mask) or np.all(mask):
-        raise ValueError("Signed-distance recovery needs both material and void voxels.")
+        raise ValueError(
+            "Signed-distance recovery needs both material and void voxels."
+        )
     sampling = tuple(float(v) for v in np.asarray(spacing, dtype=float)[:3])
     outside = ndi.distance_transform_edt(~mask, sampling=sampling)
     inside = ndi.distance_transform_edt(mask, sampling=sampling)
@@ -45,6 +49,44 @@ def volume_preserving_signed_distance(
     iso_offset = float(np.partition(flat, kth)[kth])
     sdf -= iso_offset
     return sdf, iso_offset
+
+
+def volume_preserving_level_field(
+    signed_field: np.ndarray,
+    material_mask: np.ndarray,
+    *,
+    smoothing_sigma: float = 0.35,
+) -> tuple[np.ndarray, float]:
+    """Fair a continuous topology level field without discarding sub-voxel data.
+
+    ``signed_field`` is negative in material and positive in void.  The prior
+    recovery path thresholded this smooth field to a Boolean mask before
+    building an SDF, which reintroduced voxel terraces.  This variant retains
+    the optimizer's interpolated density boundary and shifts the zero level
+    after smoothing so the thresholded material count is unchanged.
+    """
+    from scipy import ndimage as ndi
+
+    field = np.asarray(signed_field, dtype=float)
+    mask = np.asarray(material_mask, dtype=bool)
+    if field.ndim != 3 or mask.shape != field.shape:
+        raise ValueError("Level field and material mask must be matching 3-D arrays.")
+    if not np.any(mask) or np.all(mask):
+        raise ValueError("Level-field recovery needs both material and void voxels.")
+    if not np.all(np.isfinite(field)):
+        raise ValueError("Level field must contain only finite values.")
+
+    smooth = (
+        ndi.gaussian_filter(field, sigma=float(smoothing_sigma), mode="nearest")
+        if smoothing_sigma > 0.0
+        else field.copy()
+    )
+    target_count = int(np.count_nonzero(mask))
+    flat = smooth.ravel()
+    kth = min(max(target_count - 1, 0), flat.size - 1)
+    iso_offset = float(np.partition(flat, kth)[kth])
+    smooth -= iso_offset
+    return smooth, iso_offset
 
 
 def extract_flying_edges_surface(
@@ -125,13 +167,19 @@ def extract_flying_edges_surface(
         normals.SplittingOff()
         normals.Update()
         poly = normals.GetOutput()
-        if poly is None or poly.GetNumberOfPoints() == 0 or poly.GetNumberOfPolys() == 0:
+        if (
+            poly is None
+            or poly.GetNumberOfPoints() == 0
+            or poly.GetNumberOfPolys() == 0
+        ):
             return None
 
         vertices = np.asarray(vtk_to_numpy(poly.GetPoints().GetData()), dtype=float)
         raw_faces = np.asarray(vtk_to_numpy(poly.GetPolys().GetData()), dtype=np.int64)
         if raw_faces.size % 4 != 0:
-            logger.warning("VTK returned non-triangular cells after triangle filtering.")
+            logger.warning(
+                "VTK returned non-triangular cells after triangle filtering."
+            )
             return None
         packed = raw_faces.reshape((-1, 4))
         if not np.all(packed[:, 0] == 3):
@@ -140,7 +188,9 @@ def extract_flying_edges_surface(
         return {
             "vertices": vertices,
             "faces": faces,
-            "surface_backend": "VTK Flying Edges + volume-preserving SDF",
+            "surface_backend": (
+                "VTK Flying Edges + volume-preserving continuous field"
+            ),
         }
     except Exception:
         logger.exception("VTK print-surface extraction failed")

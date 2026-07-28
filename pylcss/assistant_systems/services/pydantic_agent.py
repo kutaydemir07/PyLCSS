@@ -1,48 +1,19 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""
-PydanticAI runner -- the modern path for the assistant.
-
-The legacy orchestrator generates JSON plans by *prompt-engineering* the LLM
-to emit tool-call dicts which we then parse and execute.  That worked, but:
-
-- small / local models hallucinate tool names and miss required parameters;
-- there's no auto-recovery on schema mismatch;
-- every provider needs its own custom JSON-extract heuristics.
-
-This module replaces that with `pydantic_ai.Agent`, which:
-
-- speaks the **native** function-calling protocol on every supported provider
-  (OpenAI, Anthropic, Google, plus any OpenAI-compatible local server like
-  LM Studio / Ollama / vLLM);
-- enforces strict-mode JSON schemas, so the LLM literally cannot produce
-  invalid tool args;
-- raises `ModelRetry` and lets the LLM auto-correct its arguments;
-- lets us reuse every existing legacy `Tool` without rewriting handlers
-  (see `tools/pydantic_adapter.py`).
-
-Usage from the manager
-----------------------
-    runner = PydanticAgentRunner.from_legacy_registry(
-        registry, provider="local", model="qwen2.5-14b-instruct",
-        base_url="http://localhost:1234/v1",
-    )
-    answer = runner.run_sync("Add a width design variable from 10 to 100 mm.")
-
-The legacy orchestrator stays untouched; this is opt-in via the manager.
-"""
+"""PydanticAI-backed execution loop for the PyLCSS assistant."""
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any
+from collections.abc import Callable, Sequence
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, DeferredToolRequests
 
-from pylcss.assistant_systems.tools.registry import ToolRegistry
-from pylcss.assistant_systems.tools.pydantic_adapter import wrap_legacy_tool
+from pylcss.assistant_systems.tools.pydantic_adapter import build_pydantic_tool
+from pylcss.assistant_systems.tools.tool_types import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -51,17 +22,6 @@ logger = logging.getLogger(__name__)
 # tool's description in the JSON schema sent with the request, so we don't
 # need to repeat tool names here.  Tone + safety + scope guidance only.
 #
-# Design notes
-# ------------
-# Older revisions of this prompt said "One step at a time: small, validated
-# tool calls beat one giant plan", which biased the LLM toward emitting a
-# single tool call per turn even when the user clearly asked for a
-# multi-step task (e.g. "create a 100x50 plate with a 10mm hole and run
-# FEA"). PydanticAI + pydantic-ai-slim[openai] natively support **parallel
-# tool calls in one turn**, so the right guidance is the opposite:
-# decompose the request, call every tool that's safely orderable up front,
-# and only serialise when a tool's input depends on a previous tool's
-# output.
 _DEFAULT_SYSTEM_PROMPT = """\
 You are the PyLCSS engineering assistant. You control a parametric CAD +
 FEA + optimization desktop tool by calling its tools.
@@ -70,10 +30,10 @@ How to act:
 - Read the whole user request, then **decompose it into every tool call
   needed to satisfy it**. Do not stop after one tool when the user asked
   for more.
-- **Issue parallel tool calls in the same turn whenever they are
-  independent** (e.g. creating several sketches, adding several design
-  variables, switching tab + saving). Only serialise when a tool needs
-  another tool's output.
+- Treat tools as sequential because they share the active window and graph.
+  Do not assume that two UI or graph mutations can safely run in parallel.
+- Prefer one complete graph-creation call over many partial mutations. When
+  a later call depends on an earlier result, inspect that result first.
 - Prefer calling a tool over describing what you would do.
 - If a tool reports an error, read the message, correct the inputs, and
   retry. Do not abandon the request after one failure.
@@ -84,21 +44,20 @@ How to act:
   rehearsal of what you would do.
 
 CAD pipeline rules (this is the most common workload):
-- Geometry is **CadQuery Python code** inside one or more
-  `com.cad.code_part` nodes. There are no primitive box/cylinder/fillet
-  nodes -- write the CadQuery (`cq.Workplane('XY').box(L,W,H).faces('>Z').workplane().hole(d)` etc.).
-- Every dimension the user might tune later MUST be exposed via the
-  `parameters` property (`name=value` lines), never hard-coded in `code`.
-- For multi-part designs, prefer **several smaller `com.cad.code_part`
-  nodes wired into a `com.cad.assembly`** over one giant code blob -- it
-  keeps each part independently parametric and lets you edit one part
-  later without rewriting the rest.
-- A typical multi-step turn: `verify_cad_graph_json` -> if clean call
-  `create_cad_geometry` -> then `execute_cad`. Use parallel tool calls
-  for the verify + create steps when you have nothing to learn between
-  them.
+- Prefer the GUI-native `com.cad.geometry.*` nodes for boxes, cylinders,
+  tubes, cylindrical shells, booleans, holes, fillets, transforms, and
+  linear patterns. Their engineering dimensions remain understandable
+  in the Inspector.
+- Use `com.cad.code_part` only for geometry that native nodes cannot
+  express. Expose every tuneable code-part dimension through its
+  `parameters` property (`name=value` lines).
+- Before changing an existing graph, inspect it with
+  `get_design_studio_state`. Validate complex new graph JSON before
+  creating it.
 - After modifying geometry, call `execute_cad` so the 3-D viewport
   refreshes -- otherwise the user sees stale results.
+- If several solver terminals exist, pass the exact `terminal_node` to
+  `execute_cad`; never run unrelated FEA, crash, or topology workflows.
 """
 
 
@@ -106,31 +65,23 @@ CAD pipeline rules (this is the most common workload):
 class PydanticAgentResult:
     """Outcome of one ``run`` call -- mirrors the shape the legacy
     orchestrator emits so the manager can consume both transparently."""
+
     output: str
-    tool_calls: List[Dict[str, Any]]
+    tool_calls: list[dict[str, Any]]
     success: bool
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class PydanticAgentRunner:
-    """Thin wrapper around ``pydantic_ai.Agent`` that maps onto PyLCSS's
-    legacy ``ToolRegistry`` and supports OpenAI / OpenAI-compatible local
-    servers.
-
-    Anthropic and Google provider plumbing is left as a TODO -- they slot in
-    by swapping the model factory below; the rest of the runner is provider
-    agnostic.
-    """
+    """Run validated PyLCSS tools through a provider-agnostic agent."""
 
     def __init__(
         self,
         agent: Agent,
-        tool_handlers: Dict[str, Callable[..., Any]],
-        system_prompt: str = _DEFAULT_SYSTEM_PROMPT,
+        tool_handlers: dict[str, Callable[..., Any]],
     ) -> None:
         self._agent = agent
         self._tool_handlers = tool_handlers
-        self._system_prompt = system_prompt
 
     # ------------------------------------------------------------------
     # Construction
@@ -141,10 +92,11 @@ class PydanticAgentRunner:
         registry: ToolRegistry,
         provider: str = "openai",
         model: str = "gpt-4o-mini",
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        system_prompt: Optional[str] = None,
-        tool_filter: Optional[Sequence[str]] = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        system_prompt: str | None = None,
+        tool_filter: Sequence[str] | None = None,
+        auto_approve_confirmation: bool = False,
     ) -> "PydanticAgentRunner":
         """Build a runner from the existing tool registry.
 
@@ -173,7 +125,8 @@ class PydanticAgentRunner:
         """
         legacy_tools = list(registry.all_tools)
         if tool_filter is not None:
-            legacy_tools = [t for t in legacy_tools if t.name in set(tool_filter)]
+            requested_tools = set(tool_filter)
+            legacy_tools = [t for t in legacy_tools if t.name in requested_tools]
         if not legacy_tools:
             raise RuntimeError(
                 "No tools to register with PydanticAgentRunner. "
@@ -185,28 +138,30 @@ class PydanticAgentRunner:
         # wire protocol is identical.
         chat_model = _build_chat_model(provider, model, api_key, base_url)
 
-        # Pydantic-ai builds tool schemas from each callable's Pydantic
-        # ``BaseModel`` automatically.  We register every tool by hand below
-        # via ``agent.tool_plain``.
-        agent = Agent(
-            chat_model,
-            system_prompt=system_prompt or _DEFAULT_SYSTEM_PROMPT,
-        )
-
-        handlers: Dict[str, Callable[..., Any]] = {}
+        pydantic_tools = []
+        handlers: dict[str, Callable[..., Any]] = {}
         for tool in legacy_tools:
             try:
-                args_model, call = wrap_legacy_tool(tool)
+                registered_tool, call = build_pydantic_tool(
+                    tool,
+                    auto_approve_confirmation=auto_approve_confirmation,
+                )
             except Exception as exc:
                 logger.warning("Skipping tool %r: adapter failed (%s)", tool.name, exc)
                 continue
-            # tool_plain registers a no-context tool: the LLM sees a JSON
-            # schema derived from the args_model, and pydantic-ai validates
-            # the LLM's call against it before invoking ``call``.
-            agent.tool_plain(call)
+            pydantic_tools.append(registered_tool)
             handlers[tool.name] = call
 
-        return cls(agent, handlers, system_prompt or _DEFAULT_SYSTEM_PROMPT)
+        if not pydantic_tools:
+            raise RuntimeError("No valid tools could be registered with PydanticAI")
+
+        agent = Agent(
+            chat_model,
+            system_prompt=system_prompt or _DEFAULT_SYSTEM_PROMPT,
+            tools=pydantic_tools,
+        )
+
+        return cls(agent, handlers)
 
     # ------------------------------------------------------------------
     # Execution
@@ -232,6 +187,20 @@ class PydanticAgentRunner:
 
         tool_calls = _extract_tool_calls(run)
         output = getattr(run, "output", None) or getattr(run, "data", None) or ""
+        if isinstance(output, DeferredToolRequests):
+            action_names = [
+                call.tool_name for call in output.approvals if call.tool_name
+            ]
+            requested = ", ".join(action_names) or "the requested action"
+            return PydanticAgentResult(
+                output="",
+                tool_calls=tool_calls,
+                success=False,
+                error=(
+                    f"Confirmation required for {requested}. "
+                    "Enable auto-execute in Assistant Settings to allow it."
+                ),
+            )
         return PydanticAgentResult(
             output=str(output),
             tool_calls=tool_calls,
@@ -240,7 +209,7 @@ class PydanticAgentRunner:
         )
 
     @property
-    def tool_names(self) -> List[str]:
+    def tool_names(self) -> list[str]:
         return sorted(self._tool_handlers.keys())
 
 
@@ -254,7 +223,7 @@ def _classify_run_error(exc: BaseException) -> str:
     returns an actionable message instead of a raw Python traceback line.
     """
     # Walk the full cause chain looking for known connection-error types.
-    current: Optional[BaseException] = exc
+    current: BaseException | None = exc
     while current is not None:
         name = type(current).__name__
         msg = str(current).lower()
@@ -264,7 +233,11 @@ def _classify_run_error(exc: BaseException) -> str:
                 "Please make sure your local LLM server (e.g. LM Studio, Ollama, vLLM) "
                 "is running and that the base URL in the assistant settings is correct."
             )
-        if name in ("AuthenticationError", "PermissionDeniedError") or "api key" in msg or "unauthorized" in msg:
+        if (
+            name in ("AuthenticationError", "PermissionDeniedError")
+            or "api key" in msg
+            or "unauthorized" in msg
+        ):
             return (
                 "Authentication failed. "
                 "Please check that the API key in the assistant settings is correct."
@@ -282,8 +255,11 @@ def _classify_run_error(exc: BaseException) -> str:
 
 
 def _build_chat_model(
-    provider: str, model: str, api_key: Optional[str], base_url: Optional[str],
-):
+    provider: str,
+    model: str,
+    api_key: str | None,
+    base_url: str | None,
+) -> Any:
     """Return a pydantic-ai ChatModel for the given provider.
 
     All four providers PyLCSS supports (OpenAI, local OpenAI-compatible,
@@ -302,12 +278,17 @@ def _build_chat_model(
             # non-empty string, so default to a placeholder.
             base_url = base_url or "http://localhost:1234/v1"
             api_key = api_key or "lm-studio"
-        prov = OpenAIProvider(api_key=api_key or "", base_url=base_url) if (api_key or base_url) else OpenAIProvider()
+        prov = (
+            OpenAIProvider(api_key=api_key or "", base_url=base_url)
+            if (api_key or base_url)
+            else OpenAIProvider()
+        )
         return OpenAIChatModel(model, provider=prov)
 
     if provider == "anthropic":
         from pydantic_ai.models.anthropic import AnthropicModel
         from pydantic_ai.providers.anthropic import AnthropicProvider
+
         prov = AnthropicProvider(api_key=api_key) if api_key else AnthropicProvider()
         return AnthropicModel(model, provider=prov)
 
@@ -316,20 +297,21 @@ def _build_chat_model(
         # via Vertex; the API-key path is what end-users typically have.
         from pydantic_ai.models.google import GoogleModel
         from pydantic_ai.providers.google import GoogleProvider
+
         prov = GoogleProvider(api_key=api_key) if api_key else GoogleProvider()
         return GoogleModel(model, provider=prov)
 
     raise ValueError(f"Unknown provider {provider!r}")
 
 
-def _extract_tool_calls(run: Any) -> List[Dict[str, Any]]:
+def _extract_tool_calls(run: Any) -> list[dict[str, Any]]:
     """Pull a flat list of tool invocations out of a pydantic-ai run result.
 
     The shape of ``run.all_messages()`` evolved across pydantic-ai 1.x
     minor versions -- this helper is intentionally permissive so a minor
     bump doesn't break the manager.
     """
-    calls: List[Dict[str, Any]] = []
+    calls: list[dict[str, Any]] = []
     try:
         messages = run.all_messages()
     except Exception:
@@ -338,9 +320,14 @@ def _extract_tool_calls(run: Any) -> List[Dict[str, Any]]:
         for part in getattr(msg, "parts", ()) or ():
             # ToolCallPart is the canonical name in 1.x.
             if part.__class__.__name__ in ("ToolCallPart", "ToolCall"):
-                calls.append({
-                    "name": getattr(part, "tool_name", None) or getattr(part, "name", None),
-                    "args": getattr(part, "args", None) or getattr(part, "args_dict", None) or {},
-                    "tool_call_id": getattr(part, "tool_call_id", None),
-                })
+                calls.append(
+                    {
+                        "name": getattr(part, "tool_name", None)
+                        or getattr(part, "name", None),
+                        "args": getattr(part, "args", None)
+                        or getattr(part, "args_dict", None)
+                        or {},
+                        "tool_call_id": getattr(part, "tool_call_id", None),
+                    }
+                )
     return calls

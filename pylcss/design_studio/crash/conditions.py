@@ -72,9 +72,17 @@ class ImpactConditionNode(CadQueryNode):
         face_list = []
         if face_data is not None:
             if isinstance(face_data, dict):
-                flist = face_data.get('faces', [])
-                if not flist and face_data.get('face') is not None:
-                    flist = [face_data['face']]
+                if str(face_data.get('entity_type') or 'Face').title() != 'Face':
+                    self.set_error(
+                        "An impact wall needs a selected face to define its "
+                        "plane and normal; edge/vertex selections are not valid."
+                    )
+                    return None
+                flist = face_data.get('entities') or face_data.get('faces') or []
+                if not flist:
+                    entity = face_data.get('entity') or face_data.get('face')
+                    if entity is not None:
+                        flist = [entity]
                 face_list = flist
             elif hasattr(face_data, 'vals'):
                 face_list = face_data.vals()

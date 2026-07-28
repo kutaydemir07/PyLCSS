@@ -24,9 +24,11 @@ _SUPPORT_TO_DOFS: Dict[str, List[int]] = {
 class JointDefinition:
     """Penalty coupling between two solid-body anchor locations.
 
-    Voxel solids expose translational DOFs only.  Consequently fixed, pin,
-    revolute, and spherical joints all enforce coincident translations; a
-    prismatic joint releases translation along its declared axis.
+    Voxel solids expose translational nodal DOFs. Joint centre translations
+    are coupled, while bearing-spider directions encode the released rotation:
+    revolute spiders retain radial/axial stiffness but release tangential
+    motion, spherical spiders retain radial stiffness, and prismatic spiders
+    release motion along the declared axis.
     """
 
     name: str = "Joint"
@@ -85,6 +87,12 @@ class LoadCase:
     replace_supports: bool = False
     joints: List[JointDefinition] = field(default_factory=list)
     replace_joints: bool = False
+    # Separate assembly hardware inferred from coaxial cylindrical joint
+    # anchors. It is displayed/exported with the recovered assembly but is not
+    # part of the SIMP design variables or material-volume constraint.
+    joint_pin_cylinders: List[
+        Tuple[str, float, float, float, float, float, float]
+    ] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.name = str(self.name or "Load case")
@@ -164,6 +172,12 @@ class VoxelBC:
     # (axis, center_a, center_b, axis_min, axis_max, radius), all fractional.
     solid_cylinders: List[Tuple[str, float, float, float, float, float]] = field(default_factory=list)
     void_cylinders:  List[Tuple[str, float, float, float, float, float]] = field(default_factory=list)
+    # Explicit pin/shaft hardware for graph joints. These cylinders are kept
+    # out of passive-solid masks so they cannot alter the topology objective or
+    # material budget. Shape recovery and STEP export add them after bore cuts.
+    joint_pin_cylinders: List[
+        Tuple[str, float, float, float, float, float, float]
+    ] = field(default_factory=list)
     # Legacy single-LC fields — used only when load_cases is empty.
     point_forces: List[Tuple[float, float, float, float, float, float]] = field(default_factory=list)
     box_forces:   List[Tuple[float, float, float, float, float, float, float, float, float]] = field(default_factory=list)
@@ -405,8 +419,11 @@ def _parse_region_cylinders(
         if not isinstance(center, (list, tuple)):
             center = [0.5, 0.5]
 
-        def _interval(name: str) -> Tuple[float, float]:
-            raw = region.get(name, [0.0, 1.0])
+        def _interval(
+            name: str,
+            source: Dict[str, Any] = region,
+        ) -> Tuple[float, float]:
+            raw = source.get(name, [0.0, 1.0])
             if isinstance(raw, (list, tuple)) and len(raw) >= 2:
                 return float(raw[0]), float(raw[1])
             return 0.0, 1.0

@@ -7,6 +7,7 @@ positive phase and void occupies the negative phase. A smooth Heaviside map is
 used only as an ersatz-material interface for finite-element analysis; the
 evolving optimization variable remains the signed level-set field.
 """
+
 from __future__ import annotations
 
 from typing import Optional
@@ -105,10 +106,7 @@ def initialize_level_set(
     if len(shape) != 3 or min(int(value) for value in shape) < 1:
         raise ValueError("A 3-D positive grid shape is required for level-set setup.")
     active = np.asarray(active_mask, dtype=bool).reshape(shape)
-    axes = [
-        (np.arange(size, dtype=float) + 0.5) / float(size)
-        for size in shape
-    ]
+    axes = [(np.arange(size, dtype=float) + 0.5) / float(size) for size in shape]
     xx, yy, zz = np.meshgrid(*axes, indexing="ij")
     seed = (
         0.10 * np.cos(2.0 * np.pi * xx)

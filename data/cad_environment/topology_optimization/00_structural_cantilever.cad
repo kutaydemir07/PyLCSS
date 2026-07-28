@@ -15,6 +15,42 @@
       "pos": [-500.0, -300.0],
       "custom": {"preset": "Steel (Structural)", "youngs_modulus": 210000.0, "poissons_ratio": 0.3, "density": 7.85e-09, "thermal_conductivity": 45.0, "yield_strength": 355.0, "tangent_modulus": 0.0}
     },
+    "root-pad": {
+      "type_": "com.cad.geometry.box.BoxNode",
+      "name": "Root Interface Pad 6 x 30 x 12 mm",
+      "pos": [-760.0, -320.0],
+      "custom": {"length_x": 6.0, "width_y": 30.0, "height_z": 12.0, "centered": true}
+    },
+    "position-root-pad": {
+      "type_": "com.cad.geometry.transform.TransformNode",
+      "name": "Position Root Interface Pad",
+      "pos": [-520.0, -430.0],
+      "custom": {"translate_x": -42.0, "translate_y": 0.0, "translate_z": 0.0, "rotation_axis": "Z", "rotation_angle_deg": 0.0}
+    },
+    "root-nondesign": {
+      "type_": "com.cad.topopt.non_design_region.TopologyNonDesignRegionNode",
+      "name": "Preserve Root Load Introduction",
+      "pos": [-240.0, -430.0],
+      "custom": {"region_type": "Keep Material"}
+    },
+    "tip-pad": {
+      "type_": "com.cad.geometry.box.BoxNode",
+      "name": "Tip Interface Pad 6 x 30 x 12 mm",
+      "pos": [-760.0, 300.0],
+      "custom": {"length_x": 6.0, "width_y": 30.0, "height_z": 12.0, "centered": true}
+    },
+    "position-tip-pad": {
+      "type_": "com.cad.geometry.transform.TransformNode",
+      "name": "Position Tip Interface Pad",
+      "pos": [-520.0, 310.0],
+      "custom": {"translate_x": 42.0, "translate_y": 0.0, "translate_z": 0.0, "rotation_axis": "Z", "rotation_angle_deg": 0.0}
+    },
+    "tip-nondesign": {
+      "type_": "com.cad.topopt.non_design_region.TopologyNonDesignRegionNode",
+      "name": "Preserve Tip Load Introduction",
+      "pos": [-240.0, 310.0],
+      "custom": {"region_type": "Keep Material"}
+    },
     "fixed-face": {
       "type_": "com.cad.select_face.SelectFaceNode",
       "name": "Select Fixed End",
@@ -58,7 +94,7 @@
         "symmetry": "Z",
         "visualization": "Recovered Shape",
         "print_ready_mesh": true,
-        "mesh_decimate_ratio": 0.35,
+        "mesh_decimate_ratio": 0.85,
         "surface_recovery_method": "Volume-Preserving SDF (VTK)",
         "structure_mode": "Solid Envelope"
       }
@@ -69,6 +105,12 @@
     {"out": ["domain", "shape"], "in": ["loaded-face", "shape"]},
     {"out": ["domain", "shape"], "in": ["topopt", "design_domain"]},
     {"out": ["material", "material"], "in": ["topopt", "material"]},
+    {"out": ["root-pad", "shape"], "in": ["position-root-pad", "shape"]},
+    {"out": ["position-root-pad", "shape"], "in": ["root-nondesign", "region_shape"]},
+    {"out": ["root-nondesign", "regions"], "in": ["topopt", "non_design_regions"]},
+    {"out": ["tip-pad", "shape"], "in": ["position-tip-pad", "shape"]},
+    {"out": ["position-tip-pad", "shape"], "in": ["tip-nondesign", "region_shape"]},
+    {"out": ["tip-nondesign", "regions"], "in": ["topopt", "non_design_regions"]},
     {"out": ["fixed-face", "workplane"], "in": ["support", "target_region"]},
     {"out": ["loaded-face", "workplane"], "in": ["force", "target_region"]},
     {"out": ["support", "supports"], "in": ["topopt", "supports"]},
