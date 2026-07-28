@@ -1,33 +1,81 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-"""pylcss.design_studio.fem — FEM simulation nodes package."""
 
-from pylcss.design_studio.fem._helpers import (
-    MATERIAL_DATABASE,
-    suppress_output,
-    OCCGeometry,
-)
+"""Finite-element meshing, boundary-condition, and solver nodes.
 
-from pylcss.design_studio.fem.materials          import MaterialNode
-from pylcss.design_studio.fem.mesh               import MeshNode
-from pylcss.design_studio.fem.boundary_conditions import (
-    ConstraintNode, LoadNode, PressureLoadNode,
-)
-from pylcss.design_studio.fem.solver              import SolverNode
-from pylcss.design_studio.topology_optimization import (
-    TopologyOptVoxelNode,
-    TopologyOptVoxelSolver,
-    TopologyOptVoxelProblem,
-    VoxelBC,
-)
-from pylcss.design_studio.fem.remesh              import RemeshNode
+Topology names remain available here for backward compatibility. New code
+should import them from :mod:`pylcss.design_studio.topology_optimization`.
+"""
+
+from __future__ import annotations
+
+from pylcss.design_studio._lazy_imports import load_attribute, public_names
 
 __all__ = [
-    'MATERIAL_DATABASE', 'suppress_output', 'OCCGeometry',
-    'MaterialNode', 'MeshNode',
-    'ConstraintNode', 'LoadNode', 'PressureLoadNode',
-    'SolverNode',
-    'TopologyOptVoxelNode', 'TopologyOptVoxelSolver',
-    'TopologyOptVoxelProblem', 'VoxelBC',
-    'RemeshNode',
+    "ConstraintNode",
+    "LoadNode",
+    "MATERIAL_DATABASE",
+    "MaterialNode",
+    "MeshNode",
+    "OCCGeometry",
+    "PressureLoadNode",
+    "RemeshNode",
+    "SolverNode",
+    "TopologyOptVoxelNode",
+    "TopologyOptVoxelProblem",
+    "TopologyOptVoxelSolver",
+    "VoxelBC",
+    "suppress_output",
 ]
+
+_LAZY_EXPORTS = {
+    "ConstraintNode": (
+        "pylcss.design_studio.fem.boundary_conditions",
+        "ConstraintNode",
+    ),
+    "LoadNode": (
+        "pylcss.design_studio.fem.boundary_conditions",
+        "LoadNode",
+    ),
+    "MATERIAL_DATABASE": (
+        "pylcss.design_studio.fem._helpers",
+        "MATERIAL_DATABASE",
+    ),
+    "MaterialNode": ("pylcss.design_studio.fem.materials", "MaterialNode"),
+    "MeshNode": ("pylcss.design_studio.fem.mesh", "MeshNode"),
+    "OCCGeometry": ("pylcss.design_studio.fem._helpers", "OCCGeometry"),
+    "PressureLoadNode": (
+        "pylcss.design_studio.fem.boundary_conditions",
+        "PressureLoadNode",
+    ),
+    "RemeshNode": ("pylcss.design_studio.fem.remesh", "RemeshNode"),
+    "SolverNode": ("pylcss.design_studio.fem.solver", "SolverNode"),
+    "TopologyOptVoxelNode": (
+        "pylcss.design_studio.topology_optimization",
+        "TopologyOptVoxelNode",
+    ),
+    "TopologyOptVoxelProblem": (
+        "pylcss.design_studio.topology_optimization",
+        "TopologyOptVoxelProblem",
+    ),
+    "TopologyOptVoxelSolver": (
+        "pylcss.design_studio.topology_optimization",
+        "TopologyOptVoxelSolver",
+    ),
+    "VoxelBC": (
+        "pylcss.design_studio.topology_optimization",
+        "VoxelBC",
+    ),
+    "suppress_output": (
+        "pylcss.design_studio.fem._helpers",
+        "suppress_output",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    return load_attribute(name, _LAZY_EXPORTS, globals())
+
+
+def __dir__() -> list[str]:
+    return public_names(_LAZY_EXPORTS, globals())

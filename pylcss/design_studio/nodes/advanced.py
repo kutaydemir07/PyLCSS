@@ -27,7 +27,8 @@ def _resolve_data_path(filepath: str, project_dir: str | None = None) -> str:
     Saved projects historically stored absolute paths (e.g. the shipped
     sample .cad files), which break the moment another machine clones
     the repo. New saves prefer repo-relative paths like
-    ``data/cantilever.stl``. This resolver lets both work: tries the
+    ``data/cad_environment/cantilever.stl``. This resolver lets both work:
+    tries the
     path as given first (absolute and cwd-relative), then the directory that
     owns the saved project, and finally the PyLCSS repo root (parent of the
     pylcss package).
@@ -243,7 +244,15 @@ class SurfaceAreaNode(CadQueryNode):
                 self.set_error("No input shape")
                 return None
 
-            if isinstance(shape, cq.Workplane):
+            if isinstance(shape, cq.Assembly):
+                compound = shape.toCompound()
+                solids = list(compound.Solids())
+                occ_shape = (
+                    cq.Compound.makeCompound(solids).wrapped
+                    if solids
+                    else compound.wrapped
+                )
+            elif isinstance(shape, cq.Workplane):
                 occ_shape = shape.val().wrapped
             else:
                 occ_shape = shape.wrapped if hasattr(shape, "wrapped") else shape

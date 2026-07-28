@@ -7,7 +7,7 @@ translate the already-built PyLCSS mesh/material/load dictionaries into solver
 input artifacts and, where practical, launch the external executable.
 """
 
-from pylcss.solver_backends.common import ExternalRunConfig, SolverBackendError
+from pylcss.solver_backends.base import ExternalRunConfig, SolverBackendError
 from pylcss.solver_backends.calculix import (
     run_calculix_static,
 )

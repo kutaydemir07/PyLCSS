@@ -3,6 +3,12 @@
 # WCCM-ECCOMAS 2026 — Computing Multi-Modal Solution Spaces for Non-Convex Feasible Regions in Robust Design
 # Authors: Kutay Demir, Detlef Gerhard, Ruhr-Universität Bochum
 
-from .lhs_initialization import LHSInitializationMixin
-from .deflation_based_optimization import DeflationOptimizationMixin
 from .clustering import SeedClusteringMixin
+from .deflation import DeflationOptimizationMixin
+from .starts import LHSInitializationMixin
+
+__all__ = [
+    "DeflationOptimizationMixin",
+    "LHSInitializationMixin",
+    "SeedClusteringMixin",
+]

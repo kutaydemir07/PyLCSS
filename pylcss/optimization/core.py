@@ -1,35 +1,11 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-from dataclasses import dataclass
-from typing import Dict
-import numpy as np
+"""Backward-compatible imports for the former ``optimization.core`` module.
 
-@dataclass
-class Variable:
-    name: str
-    min_val: float
-    max_val: float
-    value: float = 0.0
+New code should import domain types from :mod:`pylcss.optimization.models`.
+"""
 
-@dataclass
-class Objective:
-    name: str
-    weight: float = 1.0
-    minimize: bool = True  # True=Min, False=Max
+from .models import Constraint, Objective, OptimizationResult, Variable
 
-@dataclass
-class Constraint:
-    name: str
-    min_val: float = float('-inf')
-    max_val: float = float('inf')
-
-@dataclass
-class OptimizationResult:
-    x: np.ndarray
-    cost: float
-    objectives: Dict[str, float]
-    constraints: Dict[str, float]
-    max_violation: float
-    message: str
-    success: bool
+__all__ = ["Constraint", "Objective", "OptimizationResult", "Variable"]

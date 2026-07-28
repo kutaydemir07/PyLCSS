@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Kutay Demir.
+# Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 # PyLCSS - Professional Low-Code System Solutions
 # .gitignore file
 
@@ -66,8 +68,10 @@ temp/
 tmp/
 pylcss/generated_models/
 
-# Encryption salt
+# Assistant runtime state (stored in the per-user config directory)
 pylcss/assistant_systems/config/.llm_key
+pylcss/assistant_systems/config/settings.json
+pylcss/assistant_systems/config/llm_memory.json
 
 # Distribution
 dist/
@@ -81,4 +85,10 @@ external_solvers/
 # Downloaded benchmark decks (e.g. the ~30 MB Neon HPC zip).  Fetched by
 # `python scripts/install_solvers.py --with-neon` and reproducible from the
 # upstream URL, so we don't commit them.
-data/benchmarks/neon/
+data/cad_environment/benchmarks/neon/
+
+# Generated experiment and solver outputs
+experiments/active_learning/results/
+experiments/crash_validation/results/
+output/
+data/Active Learning Demo Results.json

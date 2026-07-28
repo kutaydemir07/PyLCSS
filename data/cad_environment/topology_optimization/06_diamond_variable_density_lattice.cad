@@ -1,0 +1,85 @@
+{
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "graph": {"layout_direction": 0, "acyclic": true, "pipe_collision": false, "pipe_slicing": true, "pipe_style": 1, "accept_connection_types": "{}", "reject_connection_types": "{}"},
+  "nodes": {
+    "domain": {
+      "type_": "com.cad.geometry.box.BoxNode",
+      "name": "Diamond Lattice Design Space",
+      "pos": [-760.0, -40.0],
+      "custom": {"length_x": 84.0, "width_y": 54.0, "height_z": 24.0, "centered": true}
+    },
+    "material": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "name": "Titanium Ti-6Al-4V",
+      "pos": [-500.0, -300.0],
+      "custom": {"preset": "Titanium Ti-6Al-4V", "youngs_modulus": 113800.0, "poissons_ratio": 0.34, "density": 4.43e-09, "thermal_conductivity": 6.7, "yield_strength": 880.0, "tangent_modulus": 0.0}
+    },
+    "fixed-face": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "name": "Select Fixed End",
+      "pos": [-500.0, -100.0],
+      "custom": {"selector_type": "Direction", "direction": "<X"}
+    },
+    "loaded-face": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "name": "Select Service End",
+      "pos": [-500.0, 100.0],
+      "custom": {"selector_type": "Direction", "direction": ">X"}
+    },
+    "support": {
+      "type_": "com.cad.topopt.support.TopologySupportNode",
+      "name": "Fixed Attachment",
+      "pos": [-240.0, -100.0],
+      "custom": {"support_type": "Fixed"}
+    },
+    "force": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "name": "Service Load",
+      "pos": [-240.0, 100.0],
+      "custom": {"force_x": 0.0, "force_y": -3500.0, "force_z": 0.0}
+    },
+    "topopt": {
+      "type_": "com.cad.sim.topopt_voxel.TopologyOptVoxelNode",
+      "name": "Diamond Variable-Density Lattice",
+      "pos": [100.0, 0.0],
+      "custom": {
+        "workflow_mode": "Guided",
+        "design_goal": "Lightweight Stiffness",
+        "physics_mode": "Structural",
+        "manufacturing_process": "Additive",
+        "advanced_settings_visible": false,
+        "volfrac": 0.42,
+        "optimizer": "Auto",
+        "max_iter": 40,
+        "tol": 0.010,
+        "convergence_patience": 4,
+        "density_cutoff": 0.25,
+        "structure_mode": "Diamond Lattice",
+        "structure_cell_size_voxels": 8.0,
+        "structure_member_thickness_voxels": 1.25,
+        "structure_skin_thickness_voxels": 0.75,
+        "lattice_variable_density": true,
+        "lattice_min_relative_density": 0.15,
+        "lattice_max_relative_density": 0.60,
+        "lattice_solid_transition_density": 0.92,
+        "validate_after_optimize": true,
+        "validation_quality": "Standard",
+        "print_ready_mesh": true,
+        "mesh_decimate_ratio": 0.75,
+        "visualization": "Recovered Shape",
+        "surface_recovery_method": "Volume-Preserving SDF (VTK)"
+      }
+    }
+  },
+  "connections": [
+    {"out": ["domain", "shape"], "in": ["fixed-face", "shape"]},
+    {"out": ["domain", "shape"], "in": ["loaded-face", "shape"]},
+    {"out": ["domain", "shape"], "in": ["topopt", "design_domain"]},
+    {"out": ["material", "material"], "in": ["topopt", "material"]},
+    {"out": ["fixed-face", "workplane"], "in": ["support", "target_region"]},
+    {"out": ["loaded-face", "workplane"], "in": ["force", "target_region"]},
+    {"out": ["support", "supports"], "in": ["topopt", "supports"]},
+    {"out": ["force", "loads"], "in": ["topopt", "loads"]}
+  ]
+}

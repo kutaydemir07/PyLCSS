@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from pylcss.design_studio.fem._helpers import MATERIAL_DATABASE
-from pylcss.solver_backends.calculix import _material_block, _step_header
+from pylcss.solver_backends.calculix_deck import _material_block, _step_header
 from pylcss.solver_backends.common import SolverBackendError
 
 
@@ -45,7 +45,7 @@ def test_plastic_nonlinearity_emits_explicit_material_law():
 def test_plastic_nonlinearity_requires_positive_yield_strength():
     elastic_only = {**MATERIAL, "yield_strength": 0.0}
 
-    with pytest.raises(SolverBackendError, match="yield_strength"):
+    with pytest.raises(SolverBackendError, match="yield strength"):
         _material_block(elastic_only, include_plasticity=True)
 
 
@@ -55,7 +55,12 @@ def test_every_material_preset_has_positive_thermal_conductivity():
 
 
 def test_fea_solution_space_references_a_versioned_cad_example():
-    model_path = REPO_ROOT / "data" / "FEA Plate Solution Space.json"
+    model_path = (
+        REPO_ROOT
+        / "data"
+        / "modeling_environment"
+        / "FEA Plate Solution Space.json"
+    )
     model = json.loads(model_path.read_text(encoding="utf-8"))
     serialized = json.dumps(model)
     relative_cad_path = (

@@ -1,0 +1,186 @@
+{
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "graph": {"layout_direction": 0, "acyclic": true, "pipe_collision": false, "pipe_slicing": true, "pipe_style": 1, "accept_connection_types": "{}", "reject_connection_types": "{}"},
+  "nodes": {
+    "base-plate": {
+      "type_": "com.cad.geometry.box.BoxNode",
+      "name": "Bottom Mounting Plate 110 x 50 x 10 mm",
+      "pos": [-1740.0, -420.0],
+      "custom": {"length_x": 110.0, "width_y": 50.0, "height_z": 10.0, "centered": true}
+    },
+    "mount-hole-a": {
+      "type_": "com.cad.geometry.through_hole.ThroughHoleNode",
+      "name": "Left Mounting Hole - 10 mm",
+      "pos": [-1500.0, -460.0],
+      "custom": {"diameter": 10.0, "axis": "Z", "center_x": -42.0, "center_y": 0.0, "center_z": 0.0}
+    },
+    "mount-hole-b": {
+      "type_": "com.cad.geometry.through_hole.ThroughHoleNode",
+      "name": "Right Mounting Hole - 10 mm",
+      "pos": [-1260.0, -460.0],
+      "custom": {"diameter": 10.0, "axis": "Z", "center_x": 42.0, "center_y": 0.0, "center_z": 0.0}
+    },
+    "web-envelope": {
+      "type_": "com.cad.geometry.box.BoxNode",
+      "name": "Design Envelope for Load-Carrying Ribs",
+      "pos": [-1740.0, -160.0],
+      "custom": {"length_x": 80.0, "width_y": 18.0, "height_z": 45.0, "centered": true}
+    },
+    "position-web": {
+      "type_": "com.cad.geometry.transform.TransformNode",
+      "name": "Position Design Envelope above Plate",
+      "pos": [-1500.0, -160.0],
+      "custom": {"translate_x": 0.0, "translate_y": 0.0, "translate_z": 26.5, "rotation_axis": "Z", "rotation_angle_deg": 0.0}
+    },
+    "boss-blank": {
+      "type_": "com.cad.geometry.box.BoxNode",
+      "name": "Preserved Upper Bearing Boss 38 x 26 x 26 mm",
+      "pos": [-1740.0, 100.0],
+      "custom": {"length_x": 38.0, "width_y": 26.0, "height_z": 26.0, "centered": true}
+    },
+    "position-boss": {
+      "type_": "com.cad.geometry.transform.TransformNode",
+      "name": "Position Bearing Boss at 47 mm",
+      "pos": [-1500.0, 100.0],
+      "custom": {"translate_x": 0.0, "translate_y": 0.0, "translate_z": 47.0, "rotation_axis": "Z", "rotation_angle_deg": 0.0}
+    },
+    "boss-bore": {
+      "type_": "com.cad.geometry.through_hole.ThroughHoleNode",
+      "name": "Bearing Bore - 16 mm Through Y",
+      "pos": [-1260.0, 100.0],
+      "custom": {"diameter": 16.0, "axis": "Y", "center_x": 0.0, "center_y": 0.0, "center_z": 47.0}
+    },
+    "fuse-base-web": {
+      "type_": "com.cad.geometry.boolean.BooleanNode",
+      "name": "Join Plate and Design Envelope",
+      "pos": [-1000.0, -260.0],
+      "custom": {"operation": "Union"}
+    },
+    "fuse-bracket": {
+      "type_": "com.cad.geometry.boolean.BooleanNode",
+      "name": "Join Preserved Boss to Bracket",
+      "pos": [-760.0, -120.0],
+      "custom": {"operation": "Union"}
+    },
+    "final-bore": {
+      "type_": "com.cad.geometry.through_hole.ThroughHoleNode",
+      "name": "Cut Bearing Bore through Complete Bracket",
+      "pos": [-520.0, -120.0],
+      "custom": {"diameter": 16.0, "axis": "Y", "center_x": 0.0, "center_y": 0.0, "center_z": 47.0}
+    },
+    "bore-void": {
+      "type_": "com.cad.geometry.cylinder.CylinderNode",
+      "name": "Bore Keep-Void Cylinder",
+      "pos": [-1000.0, 180.0],
+      "custom": {"diameter": 16.0, "length": 34.0, "axis": "Y", "centered": true}
+    },
+    "position-bore-void": {
+      "type_": "com.cad.geometry.transform.TransformNode",
+      "name": "Position Bore Keep-Void",
+      "pos": [-760.0, 180.0],
+      "custom": {"translate_x": 0.0, "translate_y": 0.0, "translate_z": 47.0, "rotation_axis": "Z", "rotation_angle_deg": 0.0}
+    },
+    "keep-base": {
+      "type_": "com.cad.topopt.non_design_region.TopologyNonDesignRegionNode",
+      "name": "Drilled Bottom Plate - Keep Material",
+      "pos": [-500.0, -420.0],
+      "custom": {"region_type": "Keep Material"}
+    },
+    "keep-boss": {
+      "type_": "com.cad.topopt.non_design_region.TopologyNonDesignRegionNode",
+      "name": "Bearing Boss and Bore Sleeve - Keep Material",
+      "pos": [-500.0, -240.0],
+      "custom": {"region_type": "Keep Material"}
+    },
+    "keep-bore": {
+      "type_": "com.cad.topopt.non_design_region.TopologyNonDesignRegionNode",
+      "name": "Bearing Bore - Keep Void",
+      "pos": [-500.0, -60.0],
+      "custom": {"region_type": "Keep Void"}
+    },
+    "material": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "name": "Aluminum 7075-T6",
+      "pos": [-500.0, 220.0],
+      "custom": {"preset": "Aluminum 7075-T6", "youngs_modulus": 71700.0, "poissons_ratio": 0.33, "density": 2.81e-09, "thermal_conductivity": 130.0, "yield_strength": 503.0, "tangent_modulus": 0.0}
+    },
+    "fixed-face": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "name": "Select Bottom Mounting Surface",
+      "pos": [-220.0, -420.0],
+      "custom": {"selector_type": "NearestToPoint", "near_x": 0.0, "near_y": 0.0, "near_z": -5.0}
+    },
+    "loaded-face": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "name": "Select Inner Bearing Surface",
+      "pos": [-220.0, -160.0],
+      "custom": {"selector_type": "NearestToPoint", "near_x": 0.0, "near_y": 0.0, "near_z": 47.0}
+    },
+    "support": {
+      "type_": "com.cad.topopt.support.TopologySupportNode",
+      "name": "Bolted Base Idealization",
+      "pos": [60.0, -420.0],
+      "custom": {"support_type": "Fixed"}
+    },
+    "force": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "name": "Bearing Service Load - 1 kN Side / 2.5 kN Down",
+      "pos": [60.0, -160.0],
+      "custom": {"force_x": 1000.0, "force_y": 0.0, "force_z": -2500.0}
+    },
+    "topopt": {
+      "type_": "com.cad.sim.topopt_voxel.TopologyOptVoxelNode",
+      "name": "Bore-Supported Bracket with Organic Ribs",
+      "pos": [420.0, -120.0],
+      "custom": {
+        "workflow_mode": "Guided",
+        "design_goal": "Lightweight Stiffness",
+        "physics_mode": "Structural",
+        "formulation": "Density (SIMP)",
+        "manufacturing_process": "None",
+        "advanced_settings_visible": false,
+        "volfrac": 0.72,
+        "optimizer": "Auto",
+        "max_iter": 60,
+        "tol": 0.006,
+        "convergence_patience": 5,
+        "density_cutoff": 0.42,
+        "structure_mode": "Solid Envelope",
+        "validate_after_optimize": true,
+        "validation_quality": "Standard",
+        "print_ready_mesh": true,
+        "mesh_decimate_ratio": 1.0,
+        "surface_recovery_method": "Volume-Preserving SDF (VTK)",
+        "visualization": "Recovered Shape"
+      }
+    }
+  },
+  "connections": [
+    {"out": ["base-plate", "shape"], "in": ["mount-hole-a", "shape"]},
+    {"out": ["mount-hole-a", "shape"], "in": ["mount-hole-b", "shape"]},
+    {"out": ["web-envelope", "shape"], "in": ["position-web", "shape"]},
+    {"out": ["boss-blank", "shape"], "in": ["position-boss", "shape"]},
+    {"out": ["position-boss", "shape"], "in": ["boss-bore", "shape"]},
+    {"out": ["mount-hole-b", "shape"], "in": ["fuse-base-web", "base"]},
+    {"out": ["position-web", "shape"], "in": ["fuse-base-web", "tool"]},
+    {"out": ["fuse-base-web", "shape"], "in": ["fuse-bracket", "base"]},
+    {"out": ["position-boss", "shape"], "in": ["fuse-bracket", "tool"]},
+    {"out": ["fuse-bracket", "shape"], "in": ["final-bore", "shape"]},
+    {"out": ["bore-void", "shape"], "in": ["position-bore-void", "shape"]},
+    {"out": ["mount-hole-b", "shape"], "in": ["keep-base", "region_shape"]},
+    {"out": ["boss-bore", "shape"], "in": ["keep-boss", "region_shape"]},
+    {"out": ["position-bore-void", "shape"], "in": ["keep-bore", "region_shape"]},
+    {"out": ["final-bore", "shape"], "in": ["fixed-face", "shape"]},
+    {"out": ["final-bore", "shape"], "in": ["loaded-face", "shape"]},
+    {"out": ["final-bore", "shape"], "in": ["topopt", "design_domain"]},
+    {"out": ["material", "material"], "in": ["topopt", "material"]},
+    {"out": ["fixed-face", "workplane"], "in": ["support", "target_region"]},
+    {"out": ["loaded-face", "workplane"], "in": ["force", "target_region"]},
+    {"out": ["support", "supports"], "in": ["topopt", "supports"]},
+    {"out": ["force", "loads"], "in": ["topopt", "loads"]},
+    {"out": ["keep-base", "regions"], "in": ["topopt", "non_design_regions"]},
+    {"out": ["keep-boss", "regions"], "in": ["topopt", "non_design_regions"]},
+    {"out": ["keep-bore", "regions"], "in": ["topopt", "non_design_regions"]}
+  ]
+}

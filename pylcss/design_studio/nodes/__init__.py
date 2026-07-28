@@ -1,104 +1,134 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""
-CAD Nodes — code-first authoring + the FEA / crash / optimisation surface.
+"""CAD authoring, selection, analysis, I/O, and engineering nodes.
 
-PyLCSS is code-first: parametric geometry is authored in a
-:class:`CadQueryCodeNode` (one readable CadQuery script per part / assembly),
-or imported via STEP / STL.  The hand-placed primitive / sketch / 3-D-op /
-transform / pattern nodes have been removed.
-
-Active node modules:
-    nodes/
-    ├── code_part.py    # CadQueryCodeNode — primary authoring node
-    ├── analysis.py     # MassPropertiesNode, BoundingBoxNode
-    ├── assembly.py     # AssemblyNode (combine multiple shapes)
-    ├── values.py       # NumberNode, VariableNode
-    ├── io.py           # ExportStepNode, ExportStlNode
-    ├── advanced.py     # ImportStep/Stl + MathExpression/MeasureDistance/SurfaceArea
-    ├── modeling.py     # SelectFaceNode + InteractiveSelectFaceNode
-
-Simulation packages live beside nodes:
-    design_studio/fem/                   # FEA simulation package
-    design_studio/crash/                 # Crash simulation package
-    design_studio/topology_optimization/ # Topology optimization package
+This module is a compatibility facade. Implementations stay grouped by
+responsibility in the sibling modules and are imported only when requested.
 """
 
-# Core base classes
-from pylcss.design_studio.core.base_node import (
-    CadQueryNode, is_numeric, is_shape,
-    resolve_numeric_input, resolve_shape_input,
-)
+from __future__ import annotations
 
-# Geometry — code-first.
-from pylcss.design_studio.nodes.code_part import CadQueryCodeNode
-
-# Geometry — interactive (FreeCAD GUI subprocess + BREP round-trip).
-from pylcss.design_studio.nodes.freecad_part import FreeCadPartNode
-
-# Face / surface selection — needed for boundary-condition wiring.
-from pylcss.design_studio.nodes.modeling import (
-    SelectFaceNode, InteractiveSelectFaceNode,
-)
-
-# Assembly aggregator.
-from pylcss.design_studio.nodes.assembly import AssemblyNode
-
-# Analysis utilities.
-from pylcss.design_studio.nodes.analysis import MassPropertiesNode, BoundingBoxNode
-
-# FEM / simulation.
-from pylcss.design_studio.fem import (
-    MaterialNode, MeshNode, ConstraintNode, LoadNode, PressureLoadNode,
-    SolverNode, TopologyOptVoxelNode,
-    RemeshNode,
-)
-
-# Crash / impact.
-from pylcss.design_studio.crash import (
-    CrashMaterialNode, ImpactConditionNode, CrashSolverNode, RunRadiossDeckNode,
-)
-
-# IO + parameter scalars + advanced (import / math / measurement).
-from pylcss.design_studio.nodes.io import ExportStepNode, ExportStlNode
-from pylcss.design_studio.nodes.values import NumberNode, VariableNode
-from pylcss.design_studio.nodes.advanced import (
-    ImportStepNode, ImportStlNode,
-    MathExpressionNode, MeasureDistanceNode, SurfaceAreaNode,
-)
+from pylcss.design_studio._lazy_imports import load_attribute, public_names
 
 __all__ = [
-    # Core
-    "CadQueryNode",
-    "is_numeric", "is_shape", "resolve_numeric_input", "resolve_shape_input",
-
-    # Code-first geometry
-    "CadQueryCodeNode",
-
-    # Interactive geometry (FreeCAD)
-    "FreeCadPartNode",
-
-    # Selection + assembly
-    "SelectFaceNode", "InteractiveSelectFaceNode",
     "AssemblyNode",
-
-    # Analysis
-    "MassPropertiesNode", "BoundingBoxNode",
-    "MathExpressionNode", "MeasureDistanceNode", "SurfaceAreaNode",
-
-    # FEM
-    "MaterialNode", "MeshNode",
-    "ConstraintNode", "LoadNode", "PressureLoadNode",
-    "SolverNode", "TopologyOptVoxelNode",
+    "BooleanNode",
+    "BoundingBoxNode",
+    "BoxNode",
+    "CadQueryCodeNode",
+    "CadQueryNode",
+    "ConstraintNode",
+    "CrashMaterialNode",
+    "CrashSolverNode",
+    "CylinderNode",
+    "CylindricalShellNode",
+    "ExportStepNode",
+    "ExportStlNode",
+    "FilletNode",
+    "FreeCadPartNode",
+    "ImpactConditionNode",
+    "ImportStepNode",
+    "ImportStlNode",
+    "InteractiveSelectFaceNode",
+    "LinearPatternNode",
+    "LoadNode",
+    "MassPropertiesNode",
+    "MaterialNode",
+    "MathExpressionNode",
+    "MeasureDistanceNode",
+    "MeshNode",
+    "NumberNode",
+    "PressureLoadNode",
     "RemeshNode",
-
-    # Crash / impact
-    "CrashMaterialNode", "ImpactConditionNode", "CrashSolverNode",
     "RunRadiossDeckNode",
-
-    # IO + parameter scalars + geometry import
-    "ImportStepNode", "ImportStlNode",
-    "ExportStepNode", "ExportStlNode",
-    "NumberNode", "VariableNode",
+    "SelectFaceNode",
+    "SolverNode",
+    "SurfaceAreaNode",
+    "ThroughHoleNode",
+    "TopologyOptVoxelNode",
+    "TransformNode",
+    "TubeNode",
+    "VariableNode",
+    "is_numeric",
+    "is_shape",
+    "resolve_numeric_input",
+    "resolve_shape_input",
 ]
+
+_BASE = "pylcss.design_studio.core.base_node"
+_PARAMETRIC = "pylcss.design_studio.nodes.parametric"
+_ADVANCED = "pylcss.design_studio.nodes.advanced"
+_FEM = "pylcss.design_studio.fem"
+_CRASH = "pylcss.design_studio.crash"
+
+_LAZY_EXPORTS = {
+    "AssemblyNode": ("pylcss.design_studio.nodes.assembly", "AssemblyNode"),
+    "BooleanNode": (_PARAMETRIC, "BooleanNode"),
+    "BoundingBoxNode": (
+        "pylcss.design_studio.nodes.analysis",
+        "BoundingBoxNode",
+    ),
+    "BoxNode": (_PARAMETRIC, "BoxNode"),
+    "CadQueryCodeNode": (
+        "pylcss.design_studio.nodes.code_part",
+        "CadQueryCodeNode",
+    ),
+    "CadQueryNode": (_BASE, "CadQueryNode"),
+    "ConstraintNode": (_FEM, "ConstraintNode"),
+    "CrashMaterialNode": (_CRASH, "CrashMaterialNode"),
+    "CrashSolverNode": (_CRASH, "CrashSolverNode"),
+    "CylinderNode": (_PARAMETRIC, "CylinderNode"),
+    "CylindricalShellNode": (_PARAMETRIC, "CylindricalShellNode"),
+    "ExportStepNode": ("pylcss.design_studio.nodes.io", "ExportStepNode"),
+    "ExportStlNode": ("pylcss.design_studio.nodes.io", "ExportStlNode"),
+    "FilletNode": (_PARAMETRIC, "FilletNode"),
+    "FreeCadPartNode": (
+        "pylcss.design_studio.nodes.freecad_part",
+        "FreeCadPartNode",
+    ),
+    "ImpactConditionNode": (_CRASH, "ImpactConditionNode"),
+    "ImportStepNode": (_ADVANCED, "ImportStepNode"),
+    "ImportStlNode": (_ADVANCED, "ImportStlNode"),
+    "InteractiveSelectFaceNode": (
+        "pylcss.design_studio.nodes.selection",
+        "InteractiveSelectFaceNode",
+    ),
+    "LinearPatternNode": (_PARAMETRIC, "LinearPatternNode"),
+    "LoadNode": (_FEM, "LoadNode"),
+    "MassPropertiesNode": (
+        "pylcss.design_studio.nodes.analysis",
+        "MassPropertiesNode",
+    ),
+    "MaterialNode": (_FEM, "MaterialNode"),
+    "MathExpressionNode": (_ADVANCED, "MathExpressionNode"),
+    "MeasureDistanceNode": (_ADVANCED, "MeasureDistanceNode"),
+    "MeshNode": (_FEM, "MeshNode"),
+    "NumberNode": ("pylcss.design_studio.nodes.values", "NumberNode"),
+    "PressureLoadNode": (_FEM, "PressureLoadNode"),
+    "RemeshNode": (_FEM, "RemeshNode"),
+    "RunRadiossDeckNode": (_CRASH, "RunRadiossDeckNode"),
+    "SelectFaceNode": (
+        "pylcss.design_studio.nodes.selection",
+        "SelectFaceNode",
+    ),
+    "SolverNode": (_FEM, "SolverNode"),
+    "SurfaceAreaNode": (_ADVANCED, "SurfaceAreaNode"),
+    "ThroughHoleNode": (_PARAMETRIC, "ThroughHoleNode"),
+    "TopologyOptVoxelNode": (_FEM, "TopologyOptVoxelNode"),
+    "TransformNode": (_PARAMETRIC, "TransformNode"),
+    "TubeNode": (_PARAMETRIC, "TubeNode"),
+    "VariableNode": ("pylcss.design_studio.nodes.values", "VariableNode"),
+    "is_numeric": (_BASE, "is_numeric"),
+    "is_shape": (_BASE, "is_shape"),
+    "resolve_numeric_input": (_BASE, "resolve_numeric_input"),
+    "resolve_shape_input": (_BASE, "resolve_shape_input"),
+}
+
+
+def __getattr__(name: str) -> object:
+    return load_attribute(name, _LAZY_EXPORTS, globals())
+
+
+def __dir__() -> list[str]:
+    return public_names(_LAZY_EXPORTS, globals())

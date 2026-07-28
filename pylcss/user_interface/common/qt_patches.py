@@ -1,63 +1,76 @@
 # Copyright (c) 2026 Kutay Demir.
-# Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
+# Licensed under the PolyForm Shield License 1.0.0. See LICENSE.
+"""Narrow compatibility patches for Qt and NodeGraphQt."""
 
-"""
-Qt and NodeGraphQt patches for PyLCSS.
-
-This module contains patches to fix compatibility issues and bugs in
-third-party libraries, particularly NodeGraphQt pipe drawing crashes.
-"""
+from __future__ import annotations
 
 import os
-os.environ['QT_API'] = 'pyside6'
-
-# --- NEW: Monkey Patch to prevent 'NoneType' crash in Pipe Drawing ---
-# This fixes the crash when a port is deleted/renamed while dragging or connecting.
-try:
-    from NodeGraphQt.qgraphics.pipe import PipeItem
-    
-    # Store original method
-    _original_draw_horizontal = PipeItem._draw_path_horizontal
-
-    def _safe_draw_horizontal(self, start_port, pos1, pos2, path):
-        """
-        Safe version of _draw_path_horizontal that checks for port validity.
-
-        Prevents crashes when ports are deleted during drawing operations.
-        """
-        # Check if start_port and its node still exist
-        if not start_port or not start_port.node:
-            return
-        # Proceed with original logic
-        _original_draw_horizontal(self, start_port, pos1, pos2, path)
-
-    # Apply patch
-    PipeItem._draw_path_horizontal = _safe_draw_horizontal
-except (ImportError, AttributeError):
-    pass # NodeGraphQt might not be installed yet
-# ----------------------------------------------------------------------
-
-
-
 
 from PySide6.QtWidgets import QTableWidgetItem
 
+__all__ = [
+    "NumericTableWidgetItem",
+    "install_node_removal_patch",
+    "install_nodegraph_patches",
+]
+
+os.environ.setdefault("QT_API", "pyside6")
+
+
+def install_nodegraph_patches() -> bool:
+    """Install the idempotent guard for deleted ports during pipe drawing."""
+    try:
+        from NodeGraphQt.qgraphics.pipe import PipeItem
+    except (ImportError, AttributeError):
+        return False
+
+    original = getattr(PipeItem, "_draw_path_horizontal", None)
+    if original is None:
+        return False
+    if getattr(original, "_pylcss_safe_pipe_patch", False):
+        return True
+
+    def safe_draw_horizontal(self, start_port, pos1, pos2, path):
+        if start_port is None or getattr(start_port, "node", None) is None:
+            return None
+        return original(self, start_port, pos1, pos2, path)
+
+    safe_draw_horizontal._pylcss_safe_pipe_patch = True
+    PipeItem._draw_path_horizontal = safe_draw_horizontal
+    return True
+
+
+def install_node_removal_patch() -> bool:
+    """Keep node views alive for the lifetime of NodeGraphQt undo commands."""
+    try:
+        from NodeGraphQt.base.commands import NodesRemovedCmd
+    except (ImportError, AttributeError):
+        return False
+
+    original = getattr(NodesRemovedCmd, "__init__", None)
+    if original is None:
+        return False
+    if getattr(original, "_pylcss_node_removal_patch", False):
+        return True
+
+    def safe_init(self, graph, nodes, emit_signal=True):
+        original(self, graph, nodes, emit_signal)
+        self.node_views = [node.view for node in nodes]
+
+    safe_init._pylcss_node_removal_patch = True
+    NodesRemovedCmd.__init__ = safe_init
+    return True
+
+
 class NumericTableWidgetItem(QTableWidgetItem):
-    """
-    A TableWidgetItem that sorts numerically instead of lexicographically.
-    Handles floats, negatives, and scientific notation correctly.
-    """
-    def __lt__(self, other):
+    """Table item that sorts numeric values numerically."""
+
+    def __lt__(self, other: QTableWidgetItem) -> bool:
         try:
-            # Try converting to float for comparison
-            # This respects negative values (-10.0 < -5.0)
             return float(self.text()) < float(other.text())
-        except ValueError:
-            # Fallback to default string sorting if not a number
+        except (TypeError, ValueError):
             return super().__lt__(other)
 
 
-
-
-
-
+install_nodegraph_patches()
+install_node_removal_patch()

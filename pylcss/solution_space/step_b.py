@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 
 
-def modification_step_b(
+def expand_box(
     bounds: np.ndarray,
     dsl: np.ndarray,
     dsu: np.ndarray,
@@ -26,8 +26,26 @@ def modification_step_b(
     Returns:
         (n_dims, 2) extended box.
     """
+    bounds = np.asarray(bounds, dtype=float)
+    dsl = np.asarray(dsl, dtype=float)
+    dsu = np.asarray(dsu, dtype=float)
+    if bounds.ndim != 2 or bounds.shape[1] != 2:
+        raise ValueError("bounds must have shape (n_dimensions, 2)")
+    if dsl.shape != (bounds.shape[0],) or dsu.shape != dsl.shape:
+        raise ValueError("design-space bounds must match the box dimensions")
+    if not all(np.all(np.isfinite(array)) for array in (bounds, dsl, dsu)):
+        raise ValueError("box and design-space bounds must be finite")
+    if np.any(bounds[:, 0] > bounds[:, 1]) or np.any(dsl > dsu):
+        raise ValueError("box and design-space intervals must be ordered")
+    if growth_rate < 0.0:
+        raise ValueError("growth_rate must not be negative")
+
     width = dsu - dsl
     expansion = growth_rate * width
     new_low = np.maximum(dsl, bounds[:, 0] - expansion)
     new_up = np.minimum(dsu, bounds[:, 1] + expansion)
     return np.column_stack((new_low, new_up))
+
+
+# Compatibility with the paper-oriented name used before PyLCSS 2.2.
+modification_step_b = expand_box

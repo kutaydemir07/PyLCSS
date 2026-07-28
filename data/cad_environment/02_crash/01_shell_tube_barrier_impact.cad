@@ -1,0 +1,100 @@
+{
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "tube-shell": {
+      "type_": "com.cad.geometry.cylindrical_shell.CylindricalShellNode",
+      "name": "Aluminum Tube Midsurface",
+      "pos": [-850.0, -80.0],
+      "custom": {
+        "diameter": 60.0,
+        "length": 120.0,
+        "axis": "X",
+        "centered": true
+      }
+    },
+    "mesh": {
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "name": "Crash Shell Mesh",
+      "pos": [-590.0, -80.0],
+      "custom": {
+        "mesh_type": "Shell",
+        "element_size": 4.0,
+        "refinement_size": 2.0,
+        "shell_thickness": 2.0,
+        "shell_nip": 5
+      }
+    },
+    "material": {
+      "type_": "com.cad.sim.crash_material.CrashMaterialNode",
+      "name": "Aluminum 5052-H32",
+      "pos": [-340.0, 180.0],
+      "custom": {
+        "preset": "Aluminum 5052-H32 (Crush)",
+        "youngs_modulus": 70300.0,
+        "poissons_ratio": 0.33,
+        "density": 2.68e-09,
+        "yield_strength": 193.0,
+        "tangent_modulus": 500.0,
+        "failure_strain": 0.14,
+        "enable_fracture": false,
+        "strain_rate_sensitive": true
+      }
+    },
+    "impact": {
+      "type_": "com.cad.sim.impact.ImpactConditionNode",
+      "name": "45 km/h Fixed-Barrier Impact",
+      "pos": [-340.0, -90.0],
+      "custom": {
+        "velocity_x": 12.5,
+        "velocity_y": 0.0,
+        "velocity_z": 0.0,
+        "application_scope": "Moving body + fixed wall",
+        "node_tolerance": 2.0,
+        "wall_friction": 0.0,
+        "wall_gap_mm": 0.5
+      }
+    },
+    "solver": {
+      "type_": "com.cad.sim.crash_solver.CrashSolverNode",
+      "name": "OpenRadioss Shell Impact",
+      "pos": [-50.0, -20.0],
+      "custom": {
+        "deck_only": false,
+        "external_timeout_s": 1800.0,
+        "end_time": 5.0,
+        "n_frames": 50,
+        "visualization": "Von Mises Stress",
+        "disp_scale": 1.0,
+        "solver_backend": "OpenRadioss",
+        "run_external_solver": true,
+        "time_steps": 50000,
+        "enable_mass_scaling": true,
+        "damping_alpha": 0.0,
+        "damping_beta": 0.0,
+        "enable_corotation": true,
+        "enable_contact": true,
+        "contact_stiffness": 0.1,
+        "contact_thickness": 0.2,
+        "contact_update_interval": 5,
+        "mass_scaling_threshold": 0.03,
+        "impactor_mass_kg": 50.0
+      }
+    }
+  },
+  "connections": [
+    {"out": ["tube-shell", "shape"], "in": ["mesh", "shape"]},
+    {"out": ["mesh", "mesh"], "in": ["solver", "mesh"]},
+    {"out": ["material", "crash_material"], "in": ["solver", "crash_material"]},
+    {"out": ["impact", "impact"], "in": ["solver", "impact"]}
+  ]
+}

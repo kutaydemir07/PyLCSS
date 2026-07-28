@@ -22,7 +22,7 @@ from pylcss.user_interface.system_modeling.design_studio_bridge_dialog import (
 from pylcss.user_interface.system_modeling.system_modeling_widget import (
     ModelingWidget,
 )
-from pylcss.system_modeling.graph_input_output import (
+from pylcss.user_interface.system_modeling.actions import (
     load_graph_from_file,
     save_graph_to_file,
 )

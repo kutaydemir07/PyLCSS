@@ -1,392 +1,353 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""Graph execution engine with dirty-state caching and simulation control."""
+"""Dependency-aware graph execution with caching and preview filtering."""
+
+from __future__ import annotations
+
 from collections import deque
+from collections.abc import Iterable, Mapping
 import hashlib
+import inspect
+import logging
 import pickle
+from pylcss.design_studio.core.contracts import (
+    CancelCallback,
+    GraphLike,
+    NodeLike,
+    NodeResult,
+)
+from pylcss.design_studio.core.graph import (
+    PREVIEW_SAFE_IDENTIFIERS,
+    SIMULATION_NODE_IDENTIFIERS,
+    build_execution_plan as _build_execution_plan,
+    filter_for_preview as _filter_for_preview,
+    input_ports as _input_ports,
+    node_name as _node_name,
+    source_nodes as _source_nodes,
+)
+
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "GraphExecutionCancelled",
+    "PREVIEW_SAFE_IDENTIFIERS",
+    "SIMULATION_NODE_IDENTIFIERS",
+    "execute_graph",
+]
 
 
 class GraphExecutionCancelled(RuntimeError):
     """Raised when a graph worker stops between safe node boundaries."""
 
-    def __init__(self, results=None):
+    def __init__(
+        self,
+        results: Mapping[NodeLike, NodeResult] | None = None,
+    ) -> None:
+        """Capture results completed before cancellation."""
         super().__init__("Graph execution cancelled by the user.")
         self.results = dict(results or {})
 
-# Node identifiers for simulation nodes (skip during auto-update)
-SIMULATION_NODE_IDENTIFIERS = {
-    'com.cad.sim.material',
-    'com.cad.sim.mesh',
-    'com.cad.sim.remesh',
-    'com.cad.sim.constraint',
-    'com.cad.sim.load',
-    'com.cad.sim.pressure_load',
-    'com.cad.sim.solver',
-    'com.cad.sim.topopt_voxel',
-    # Crash / Impact nodes
-    'com.cad.sim.crash_material',
-    'com.cad.sim.impact',
-    'com.cad.sim.crash_solver',
-    # Standalone decks can launch Starter + Engine without any graph inputs,
-    # so omitting this identifier makes project-open/auto-preview execute them.
-    'com.cad.sim.radioss_deck',
-}
-
-def _hash_value(value):
-    """Create a hash of a value for change detection."""
-    try:
-        data = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
-        return hashlib.md5(data).hexdigest()
-    except Exception:
-        return hashlib.md5(repr(value).encode("utf-8", errors="replace")).hexdigest()
-
 
 _NON_EXECUTION_PROPERTIES = {
-    # Viewer/post-processing settings update cached results directly and must
-    # not invalidate an expensive engineering solve.
-    'visualization', 'deformation_scale', 'disp_scale', 'density_cutoff',
-    'advanced_settings_visible', 'cad_export_filename',
-    'cad_reconstruction_method',
-    # Hidden compatibility-only properties retained for old .cad sessions.
-    'solver_backend', 'moment_x', 'moment_y', 'moment_z',
-    'damping_alpha', 'damping_beta', 'enable_corotation', 'enable_contact',
-    'contact_stiffness', 'contact_thickness', 'contact_update_interval',
-    'mass_scaling_threshold', 'bc_preset', 'quality_preset',
+    # Viewer settings update cached results without changing the solve.
+    "visualization",
+    "deformation_scale",
+    "disp_scale",
+    "density_cutoff",
+    "advanced_settings_visible",
+    "cad_export_filename",
+    "cad_reconstruction_method",
+    # Compatibility-only properties retained for old project files.
+    "solver_backend",
+    "moment_x",
+    "moment_y",
+    "moment_z",
+    "damping_alpha",
+    "damping_beta",
+    "enable_corotation",
+    "enable_contact",
+    "contact_stiffness",
+    "contact_thickness",
+    "contact_update_interval",
+    "mass_scaling_threshold",
+    "bc_preset",
+    "quality_preset",
     # Internal UI/error bookkeeping.
-    'error_state', 'error_message',
+    "error_state",
+    "error_message",
 }
 
 
-def _execution_properties(node):
-    """Return only custom properties that can affect ``node.run()``."""
+def _hash_value(value: object) -> str:
+    """Create a compact, process-local digest for change detection."""
     try:
-        props = node.properties()
-        custom = dict(props.get('custom', {}) or {})
+        data = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
     except Exception:
+        data = repr(value).encode("utf-8", errors="replace")
+    return hashlib.blake2b(data, digest_size=16).hexdigest()
+
+
+def _execution_properties(node: NodeLike) -> dict[str, object]:
+    """Return custom properties that can affect ``node.run()``."""
+    properties = getattr(node, "properties", None)
+    if not callable(properties):
+        return {}
+    try:
+        raw_properties = properties()
+    except Exception:
+        logger.debug("Could not read node properties", exc_info=True)
+        return {}
+    if not isinstance(raw_properties, Mapping):
+        return {}
+    custom = raw_properties.get("custom", {})
+    if not isinstance(custom, Mapping):
         return {}
     return {
-        key: value for key, value in custom.items()
+        str(key): value
+        for key, value in custom.items()
         if key not in _NON_EXECUTION_PROPERTIES
     }
 
-def _is_simulation_node(node):
-    """Check if a node is a simulation node that should be skipped during auto-update."""
-    identifier = getattr(node, '__identifier__', '')
-    return identifier in SIMULATION_NODE_IDENTIFIERS
+
+def _set_execution_state(
+    node: NodeLike,
+    *,
+    result: NodeResult,
+    input_hash: str | None,
+    dirty: bool,
+    force_execute: bool = False,
+) -> None:
+    """Update dynamic cache fields in one documented place."""
+    node._last_result = result  # type: ignore[attr-defined]
+    node._last_input_hash = input_hash  # type: ignore[attr-defined]
+    node._dirty = dirty  # type: ignore[attr-defined]
+    node._force_execute = force_execute  # type: ignore[attr-defined]
 
 
-def _connected_upstream_nodes(node):
-    """Yield nodes connected to any input port."""
-    if not hasattr(node, 'input_ports'):
+def _set_node_error(node: NodeLike, message: str) -> None:
+    setter = getattr(node, "set_error", None)
+    if not callable(setter):
         return
-    inputs = node.input_ports()
-    if isinstance(inputs, dict):
-        inputs = list(inputs.values())
-    for inp in inputs:
-        if not hasattr(inp, 'connected_ports'):
-            continue
-        for cp in inp.connected_ports():
-            try:
-                yield cp.node()
-            except Exception:
-                continue
+    try:
+        setter(message)
+    except Exception:
+        logger.exception("Could not set error state on %s", _node_name(node))
 
 
-# Light-weight nodes that should still run during preview/skip-simulation
-# updates even when their upstream is a simulation node (e.g. Remesh).  Without
-# this carve-out, picking faces on an STL → Remesh → InteractiveSelectFace
-# pipeline never refreshes the picker's _last_result after the user clicks
-# Done, and the BC overlay shows the previous (or empty) selection.
-#
-# Mesh / Remesh are preview-safe so that selecting a Mesh node (or any node
-# while a Mesh node is present) computes and shows the mesh in the viewer
-# instead of falling back to the upstream CAD solid.  They remain "simulation
-# nodes" for every other purpose; the hash-based cache in execute_graph means
-# they only re-mesh when the shape or element size actually changes, so the
-# fast CAD preview is not re-meshed on unrelated edits.
-PREVIEW_SAFE_IDENTIFIERS = {
-    'com.cad.select_face',
-    'com.cad.select_face_interactive',
-    'com.cad.sim.mesh',
-    'com.cad.sim.remesh',
-}
+def _clear_node_error(node: NodeLike) -> None:
+    clear = getattr(node, "clear_error", None)
+    if not callable(clear):
+        return
+    try:
+        clear()
+    except Exception:
+        logger.debug(
+            "Could not clear error state on %s",
+            _node_name(node),
+            exc_info=True,
+        )
 
 
-def _is_preview_safe(node):
-    return getattr(node, '__identifier__', '') in PREVIEW_SAFE_IDENTIFIERS
+def _reported_node_error(node: NodeLike) -> str | None:
+    has_error = getattr(node, "has_error", None)
+    if not callable(has_error):
+        return None
+    try:
+        if not has_error():
+            return None
+    except Exception:
+        logger.debug(
+            "Could not inspect error state on %s",
+            _node_name(node),
+            exc_info=True,
+        )
+        return None
+
+    get_error = getattr(node, "get_error", None)
+    if callable(get_error):
+        try:
+            return str(get_error() or "Node reported an execution error.")
+        except Exception:
+            pass
+    return "Node reported an execution error."
 
 
-def _filter_for_preview(nodes):
-    """Skip simulation nodes and all downstream consumers during preview.
-
-    Previously preview mode removed only the simulation nodes themselves.  That
-    left Export STEP / STL and other downstream nodes in the execution list;
-    their input resolvers could then call heavy upstream TopOpt/FEA nodes
-    directly, bypassing the worker's progress callback and confusing the GUI.
-
-    Face-selector nodes are exempt from the downstream-of-simulation rule:
-    they only read cached mesh patches and are essential for refreshing the
-    picker's _last_result after the user picks faces on a remeshed surface.
-
-    Preview-safe simulation nodes (Mesh / Remesh) are also exempt from the
-    initial block so the mesh itself is generated and rendered during preview;
-    their heavy downstream consumers (Solver, Constraint, Load, …) stay blocked
-    because those are simulation nodes that are not preview-safe.
-    """
-    blocked = {n for n in nodes
-               if _is_simulation_node(n) and not _is_preview_safe(n)}
-    changed = True
-    while changed:
-        changed = False
-        for node in nodes:
-            if node in blocked:
-                continue
-            if _is_preview_safe(node):
-                continue
-            if any(upstream in blocked for upstream in _connected_upstream_nodes(node)):
-                blocked.add(node)
-                changed = True
-    return [n for n in nodes if n not in blocked]
-
-
-def _invalidate_downstream_cache(node, reverse_dependencies):
-    """Clear cached results for nodes affected by an upstream execution failure."""
+def _invalidate_downstream_cache(
+    node: NodeLike,
+    reverse_dependencies: Mapping[NodeLike, set[NodeLike]],
+) -> None:
+    """Clear cached results affected by an upstream execution failure."""
     pending = deque(reverse_dependencies.get(node, ()))
-    visited = set()
-
+    visited: set[NodeLike] = set()
     while pending:
         downstream = pending.popleft()
         if downstream in visited:
             continue
         visited.add(downstream)
-
-        setattr(downstream, '_last_result', None)
-        setattr(downstream, '_last_input_hash', None)
-        setattr(downstream, '_dirty', True)
-        setattr(downstream, '_force_execute', False)
-
-        if hasattr(downstream, 'clear_error'):
-            try:
-                downstream.clear_error()
-            except Exception:
-                pass
-
+        _set_execution_state(
+            downstream,
+            result=None,
+            input_hash=None,
+            dirty=True,
+        )
+        _clear_node_error(downstream)
         pending.extend(reverse_dependencies.get(downstream, ()))
 
-def execute_graph(graph_or_nodes, skip_simulation=False, **kwargs):
-    """
-    Execute nodes in topological order with deep hash-based dirty checks.
-    
-    Args:
-        graph_or_nodes: NodeGraph object or list of nodes
-        skip_simulation: If True, skip FEA/TopOpt nodes (for auto-update mode)
-        **kwargs: Additional arguments passed to node.run() if supported (e.g. progress_callback)
-    
-    Returns:
-        dict: Results from executed nodes
-    """
-    # Handle both Graph object and List of nodes
-    if hasattr(graph_or_nodes, 'all_nodes'):
-        nodes = list(graph_or_nodes.all_nodes())
-    else:
-        nodes = list(graph_or_nodes)
 
-    # Filter out simulation nodes and their downstream consumers if
-    # skip_simulation is True.
-    if skip_simulation:
-        nodes_to_execute = _filter_for_preview(nodes)
-    else:
-        nodes_to_execute = nodes
-
-    deps = {n: set() for n in nodes_to_execute}
-    rev = {n: set() for n in nodes_to_execute}
-
-    for n in nodes_to_execute:
-        if not hasattr(n, 'input_ports'):
+def _input_signature(node: NodeLike) -> list[tuple[int, str, int]]:
+    """Describe upstream result revisions for cache invalidation."""
+    signature: list[tuple[int, str, int]] = []
+    for input_port in _input_ports(node):
+        connected_ports = getattr(input_port, "connected_ports", None)
+        if not callable(connected_ports):
             continue
+        for output_port in connected_ports():
+            upstream = output_port.node()
+            signature.append(
+                (
+                    id(upstream),
+                    str(output_port.name()),
+                    int(getattr(upstream, "_result_revision", 0)),
+                )
+            )
+    signature.sort(key=lambda value: (value[0], value[1]))
+    return signature
 
-        inputs = n.input_ports()
-        if isinstance(inputs, dict):
-            inputs = list(inputs.values())
 
-        for inp in inputs:
-            if not hasattr(inp, 'connected_ports'):
-                continue
+def _accepted_run_kwargs(
+    node: NodeLike,
+    execution_kwargs: Mapping[str, object],
+) -> dict[str, object]:
+    """Select keyword arguments supported by a node's ``run`` method."""
+    try:
+        parameters = inspect.signature(node.run).parameters
+    except (TypeError, ValueError):
+        return {}
+    if any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    ):
+        return dict(execution_kwargs)
+    return {
+        key: value
+        for key, value in execution_kwargs.items()
+        if key in parameters
+    }
 
-            for cp in inp.connected_ports():
-                dep_node = cp.node()
-                # Only add dependency if it's in our execution list
-                if dep_node in deps:
-                    deps[n].add(dep_node)
-                    rev[dep_node].add(n)
 
-    dependencies = {node: set(upstream) for node, upstream in deps.items()}
+def execute_graph(
+    graph_or_nodes: GraphLike | Iterable[NodeLike],
+    skip_simulation: bool = False,
+    **kwargs: object,
+) -> dict[NodeLike, NodeResult]:
+    """Execute a graph in dependency order.
 
-    # 2. Topological Sort (Kahn's Algorithm)
-    remaining_deps = {node: set(upstream) for node, upstream in deps.items()}
-    ready = deque([n for n, d in remaining_deps.items() if not d])
-    order = []
+    Results are cached against upstream revisions and execution-relevant node
+    properties. Independent failures are collected; dependent nodes are
+    skipped and invalidated. A single aggregated ``RuntimeError`` is raised
+    after every runnable branch has completed.
+    """
+    nodes = _source_nodes(graph_or_nodes)
+    if skip_simulation:
+        nodes = _filter_for_preview(nodes)
+    plan = _build_execution_plan(nodes)
 
-    while ready:
-        n = ready.popleft()
-        order.append(n)
-        for m in list(rev.get(n, [])):
-            remaining_deps[m].discard(n)
-            if not remaining_deps[m]:
-                ready.append(m)
+    raw_cancel_callback = kwargs.pop("cancel_callback", None)
+    cancel_callback: CancelCallback | None = (
+        raw_cancel_callback if callable(raw_cancel_callback) else None
+    )
+    kwargs.setdefault("preview", bool(skip_simulation))
 
-    # A cyclic engineering graph has no valid execution order.  Running it in
-    # insertion order made connected input resolvers recurse unpredictably and
-    # could launch solvers with stale inputs.
-    if len(order) != len(nodes_to_execute):
-        cyclic = [n for n in nodes_to_execute if remaining_deps.get(n)]
-        names = []
-        for node in cyclic[:10]:
-            try:
-                names.append(node.name() if callable(node.name) else str(node.name))
-            except Exception:
-                names.append(node.__class__.__name__)
-        suffix = "" if len(cyclic) <= 10 else f" and {len(cyclic) - 10} more"
-        raise RuntimeError(
-            "Graph contains a dependency cycle involving: "
-            + ", ".join(names)
-            + suffix
-            + ". Remove the feedback connection before running."
-        )
+    results: dict[NodeLike, NodeResult] = {}
+    failed_nodes: set[NodeLike] = set()
+    errors: list[tuple[str, str]] = []
 
-    # 3. Execution with Deep Hash-Based Caching
-    cancel_callback = kwargs.pop('cancel_callback', None)
-    kwargs.setdefault('preview', bool(skip_simulation))
-    results = {}
-    failed_nodes = set()
-    errors = []
-
-    for n in order:
-        if callable(cancel_callback) and cancel_callback():
+    for node in plan.order:
+        if cancel_callback is not None and cancel_callback():
             raise GraphExecutionCancelled(results)
 
-        failed_upstream = [up for up in dependencies.get(n, ()) if up in failed_nodes]
+        failed_upstream = [
+            upstream
+            for upstream in plan.dependencies[node]
+            if upstream in failed_nodes
+        ]
         if failed_upstream:
-            upstream_names = []
-            for upstream in failed_upstream:
-                try:
-                    upstream_names.append(
-                        upstream.name() if callable(upstream.name) else str(upstream.name)
-                    )
-                except Exception:
-                    upstream_names.append(upstream.__class__.__name__)
-            message = "Skipped because upstream failed: " + ", ".join(upstream_names)
-            setattr(n, '_last_result', None)
-            setattr(n, '_last_input_hash', None)
-            setattr(n, '_dirty', True)
-            setattr(n, '_force_execute', False)
-            if hasattr(n, 'set_error'):
-                n.set_error(message)
-            failed_nodes.add(n)
+            message = "Skipped because upstream failed: " + ", ".join(
+                _node_name(upstream) for upstream in failed_upstream
+            )
+            _set_execution_state(
+                node,
+                result=None,
+                input_hash=None,
+                dirty=True,
+            )
+            _set_node_error(node, message)
+            failed_nodes.add(node)
             continue
 
-        # Collect current input values for hashing
-        input_signature = []
-        if hasattr(n, 'input_ports'):
-            inputs = n.input_ports()
-            if isinstance(inputs, dict):
-                inputs = list(inputs.values())
-
-            for inp in inputs:
-                if hasattr(inp, 'connected_ports'):
-                    for cp in inp.connected_ports():
-                        upstream_node = cp.node()
-                        input_signature.append((
-                            id(upstream_node),
-                            cp.name(),
-                            int(getattr(upstream_node, '_result_revision', 0)),
-                        ))
-
-        input_signature.sort(key=lambda value: (value[0], value[1]))
-        current_input_hash = _hash_value((
-            input_signature,
-            _execution_properties(n),
-            bool(skip_simulation),
-        ))
-
-        # Check if node needs execution
-        last_input_hash = getattr(n, '_last_input_hash', None)
-        has_cached_result = hasattr(n, '_last_result')
-        cached_result = getattr(n, '_last_result', None)
-
-        can_skip = (current_input_hash == last_input_hash and
-                   has_cached_result and
-                   not getattr(n, '_dirty', False) and
-                   not getattr(n, '_force_execute', False))
-
+        current_input_hash = _hash_value(
+            (
+                _input_signature(node),
+                _execution_properties(node),
+                bool(skip_simulation),
+            )
+        )
+        cached_result = getattr(node, "_last_result", None)
+        can_skip = (
+            current_input_hash
+            == getattr(node, "_last_input_hash", None)
+            and hasattr(node, "_last_result")
+            and cached_result is not None
+            and not getattr(node, "_dirty", False)
+            and not getattr(node, "_force_execute", False)
+        )
         if can_skip:
-            results[n] = cached_result
+            results[node] = cached_result
             continue
 
-        # Execute the node
         try:
-            # Clear only stale errors *before* running.  Several nodes report
-            # validation/backend failures by calling set_error() and returning
-            # None instead of raising.  Clearing after run used to erase those
-            # fresh errors and made the GUI report "Computation complete".
-            if hasattr(n, 'clear_error'):
-                n.clear_error()
+            _clear_node_error(node)
+            run_kwargs = _accepted_run_kwargs(node, kwargs)
+            result = node.run(**run_kwargs) if run_kwargs else node.run()
+            reported_error = _reported_node_error(node)
+            if reported_error is not None:
+                raise RuntimeError(reported_error)
 
-            # Check if run() accepts kwargs (e.g., progress_callback)
-            import inspect
-            sig = inspect.signature(n.run)
-            valid_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
-            
-            if valid_kwargs:
-                res = n.run(**valid_kwargs)
-            else:
-                res = n.run()
+            _set_execution_state(
+                node,
+                result=result,
+                input_hash=current_input_hash,
+                dirty=False,
+            )
+            node._result_revision = (  # type: ignore[attr-defined]
+                int(getattr(node, "_result_revision", 0)) + 1
+            )
+            results[node] = result
+        except Exception as exc:
+            _set_execution_state(
+                node,
+                result=None,
+                input_hash=None,
+                dirty=True,
+            )
+            _invalidate_downstream_cache(
+                node,
+                plan.reverse_dependencies,
+            )
+            _set_node_error(node, str(exc))
+            errors.append((_node_name(node), str(exc)))
+            failed_nodes.add(node)
 
-            node_has_error = False
-            if hasattr(n, 'has_error'):
-                try:
-                    node_has_error = bool(n.has_error())
-                except Exception:
-                    node_has_error = False
-            if node_has_error:
-                message = None
-                if hasattr(n, 'get_error'):
-                    try:
-                        message = n.get_error()
-                    except Exception:
-                        message = None
-                raise RuntimeError(message or "Node execution failed.")
-
-            setattr(n, '_last_result', res)
-            setattr(n, '_last_input_hash', current_input_hash)
-            setattr(n, '_result_revision', int(getattr(n, '_result_revision', 0)) + 1)
-            setattr(n, '_dirty', False)
-            setattr(n, '_force_execute', False)
-            results[n] = res
-        except Exception as e:
-            setattr(n, '_last_result', None)
-            setattr(n, '_last_input_hash', None)
-            setattr(n, '_dirty', True)
-            setattr(n, '_force_execute', False)
-            _invalidate_downstream_cache(n, rev)
-            if hasattr(n, 'set_error'):
-                n.set_error(str(e))
-            node_name = getattr(n, 'name', None)
-            if callable(node_name):
-                node_name = node_name()
-            if not node_name:
-                node_name = getattr(n, 'NODE_NAME', None) or n.__class__.__name__
-            errors.append((str(node_name), str(e)))
-            failed_nodes.add(n)
-
-    if callable(cancel_callback) and cancel_callback():
+    if cancel_callback is not None and cancel_callback():
         raise GraphExecutionCancelled(results)
 
     if errors:
-        error_lines = [f"{name}: {message}" for name, message in errors[:10]]
-        if len(errors) > 10:
-            error_lines.append(f"... and {len(errors) - 10} more node error(s)")
-        raise RuntimeError("Graph execution failed:\n" + "\n".join(error_lines))
+        details = "; ".join(
+            f"{name}: {message}" for name, message in errors[:8]
+        )
+        if len(errors) > 8:
+            details += f"; and {len(errors) - 8} more"
+        raise RuntimeError(f"Graph execution failed. {details}")
 
     return results

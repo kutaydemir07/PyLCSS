@@ -71,7 +71,7 @@ DEFAULT_RESULTS_DIR = DEFAULT_DATASET_PATH.parent
 PARAMETER_NAMES = ("pressure_mpa", "thickness_mm", "hole_radius_mm")
 OUTPUT_NAMES = ("max_stress_mpa", "peak_displacement_mm")
 BOUNDS = ((15.0, 160.0), (6.0, 14.0), (12.0, 28.0))
-PRESSURE_KEY = "0x00d::pressure"
+PRESSURE_KEY = "0x21d8149d390::pressure"
 YIELD_STRENGTH_MPA = 250.0
 
 DEFAULT_POOL_SIZE = 80

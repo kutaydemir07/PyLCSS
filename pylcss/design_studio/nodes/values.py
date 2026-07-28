@@ -9,8 +9,19 @@ from pylcss.design_studio.core.base_node import CadQueryNode
 def _finite_value_node_result(node):
     """Resolve the visible text field without silently masking invalid text."""
     raw = node.get_property('value_input')
+    legacy = node.get_property('value')
     if raw is None or str(raw).strip() == '':
-        raw = node.get_property('value')
+        raw = legacy
+    elif str(raw).strip() in {'10', '10.0'} and legacy is not None:
+        try:
+            legacy_value = float(legacy)
+        except (TypeError, ValueError):
+            legacy_value = 10.0
+        if legacy_value != 10.0:
+            # Old sessions stored Number values only in ``value``.  The newer
+            # inline editor contributes its default ``value_input='10.0'``
+            # during deserialization, which otherwise masks the saved value.
+            raw = legacy
     try:
         value = float(raw)
     except (TypeError, ValueError):
@@ -21,6 +32,7 @@ def _finite_value_node_result(node):
         return None
     node.clear_error()
     return value
+
 
 class NumberNode(CadQueryNode):
     """Provides a numeric value."""
@@ -42,6 +54,7 @@ class NumberNode(CadQueryNode):
 
     def run(self):
         return _finite_value_node_result(self)
+
 
 class VariableNode(CadQueryNode):
     """Defines a named variable that can be used elsewhere."""

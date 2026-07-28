@@ -1,229 +1,137 @@
 # Copyright (c) 2026 Kutay Demir.
-# Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-"""
-Data import/export for optimization, sensitivity, and surrogate workflows.
-Supports: CSV, JSON, HDF5, MAT (MATLAB), Excel, Pickle
-"""
+# Licensed under the PolyForm Shield License 1.0.0. See LICENSE.
+"""Data export for optimization, sensitivity, and surrogate workflows."""
 
-import json
+from __future__ import annotations
+
 import logging
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import numpy as np
+from numpy.typing import ArrayLike
+
+from pylcss.io_manager._atomic import PathLike, atomic_output_path
+from pylcss.io_manager._reports import ReportFormat, ReportSection, write_report
+from pylcss.io_manager.project_io import atomic_json_dump
+
+__all__ = ["DataExporter"]
 
 logger = logging.getLogger(__name__)
 
 
+def _numpy_json_default(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable.")
 
 
 class DataExporter:
-    """Export data to various formats."""
+    """Atomically export tabular, scientific, and report data."""
 
     @staticmethod
     def to_csv(
-        filepath: str,
-        data: np.ndarray,
-        columns: Optional[List[str]] = None,
+        filepath: PathLike,
+        data: ArrayLike,
+        columns: Sequence[str] | None = None,
         delimiter: str = ",",
         index: bool = False,
     ) -> None:
         """Export data to CSV."""
         import pandas as pd
 
-        if columns:
-            df = pd.DataFrame(data, columns=columns)
-        else:
-            df = pd.DataFrame(data)
-
-        df.to_csv(filepath, sep=delimiter, index=index)
-        logger.info(f"Exported CSV: {data.shape[0]} rows to {filepath}")
+        frame = pd.DataFrame(data, columns=columns)
+        with atomic_output_path(filepath) as temporary:
+            frame.to_csv(temporary, sep=delimiter, index=index)
+        logger.info("Exported CSV with %d rows to %s", len(frame.index), filepath)
 
     @staticmethod
-    def to_json(filepath: str, data: Any, indent: int = 2) -> None:
-        """Export to JSON with numpy serialization support."""
-
-        class NumpyEncoder(json.JSONEncoder):
-            def default(self, obj):
-                if isinstance(obj, np.ndarray):
-                    return obj.tolist()
-                if isinstance(obj, (np.integer,)):
-                    return int(obj)
-                if isinstance(obj, (np.floating,)):
-                    return float(obj)
-                if isinstance(obj, np.bool_):
-                    return bool(obj)
-                return super().default(obj)
-
-        with open(filepath, "w") as f:
-            json.dump(data, f, indent=indent, cls=NumpyEncoder)
-        logger.info(f"Exported JSON: {filepath}")
+    def to_json(filepath: PathLike, data: Any, indent: int = 2) -> None:
+        """Export standards-compliant JSON with NumPy scalar and array support."""
+        atomic_json_dump(
+            data,
+            filepath,
+            indent=indent,
+            default=_numpy_json_default,
+            allow_nan=False,
+        )
+        logger.info("Exported JSON to %s", filepath)
 
     @staticmethod
     def to_hdf5(
-        filepath: str,
-        datasets: Dict[str, np.ndarray],
-        attrs: Optional[Dict] = None,
-        compression: str = "gzip",
+        filepath: PathLike,
+        datasets: Mapping[str, ArrayLike],
+        attrs: Mapping[str, Any] | None = None,
+        compression: str | None = "gzip",
     ) -> None:
-        """Export to HDF5 with compression."""
+        """Export datasets and file attributes to HDF5."""
         try:
             import h5py
-        except ImportError:
-            raise ImportError("h5py required for HDF5 export")
+        except ImportError as exc:
+            raise ImportError("h5py is required for HDF5 export.") from exc
 
-        with h5py.File(filepath, "w") as f:
-            if attrs:
-                for k, v in attrs.items():
-                    f.attrs[k] = v
-            for name, data in datasets.items():
-                data = np.asarray(data)
-                f.create_dataset(name, data=data, compression=compression)
+        with atomic_output_path(filepath) as temporary:
+            with h5py.File(temporary, "w") as handle:
+                for key, value in (attrs or {}).items():
+                    handle.attrs[key] = value
+                for name, data in datasets.items():
+                    array = np.asarray(data)
+                    options = {}
+                    if compression is not None and array.ndim > 0 and array.size > 0:
+                        options["compression"] = compression
+                    handle.create_dataset(name, data=array, **options)
 
-        logger.info(f"Exported HDF5: {len(datasets)} datasets to {filepath}")
+        logger.info("Exported %d HDF5 datasets to %s", len(datasets), filepath)
 
     @staticmethod
-    def to_mat(filepath: str, data: Dict) -> None:
-        """Export to MATLAB .mat file."""
+    def to_mat(filepath: PathLike, data: Mapping[str, Any]) -> None:
+        """Export values to a MATLAB .mat file."""
         from scipy.io import savemat
-        # Ensure all values are numpy arrays
-        clean_data = {}
-        for k, v in data.items():
-            if isinstance(v, (list, tuple)):
-                clean_data[k] = np.array(v)
-            else:
-                clean_data[k] = v
-        savemat(filepath, clean_data)
-        logger.info(f"Exported MAT: {filepath}")
+
+        clean_data = {
+            key: np.asarray(value) if isinstance(value, (list, tuple)) else value
+            for key, value in data.items()
+        }
+        with atomic_output_path(filepath) as temporary:
+            savemat(temporary, clean_data, appendmat=False)
+        logger.info("Exported MATLAB data to %s", filepath)
 
     @staticmethod
     def to_excel(
-        filepath: str,
-        sheets: Dict[str, np.ndarray],
-        columns: Optional[Dict[str, List[str]]] = None,
+        filepath: PathLike,
+        sheets: Mapping[str, ArrayLike],
+        columns: Mapping[str, Sequence[str]] | None = None,
     ) -> None:
-        """Export to Excel with multiple sheets."""
+        """Export one or more worksheets to an Excel workbook."""
         import pandas as pd
 
-        with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
-            for name, data in sheets.items():
-                cols = columns.get(name) if columns else None
-                df = pd.DataFrame(data, columns=cols)
-                df.to_excel(writer, sheet_name=name, index=False)
+        with atomic_output_path(filepath) as temporary:
+            with pd.ExcelWriter(temporary, engine="openpyxl") as writer:
+                for name, data in sheets.items():
+                    sheet_columns = columns.get(name) if columns is not None else None
+                    frame = pd.DataFrame(data, columns=sheet_columns)
+                    frame.to_excel(writer, sheet_name=name, index=False)
 
-        logger.info(f"Exported Excel: {list(sheets.keys())} sheets to {filepath}")
+        logger.info("Exported %d Excel sheets to %s", len(sheets), filepath)
 
     @staticmethod
-    def to_pickle(filepath: str, data: Any, compress: int = 3) -> None:
-        """Export to pickle (for surrogate models, etc.)."""
+    def to_pickle(filepath: PathLike, data: Any, compress: int = 3) -> None:
+        """Export Python-only data with joblib compression."""
         import joblib
-        joblib.dump(data, filepath, compress=compress)
-        logger.info(f"Exported pickle: {filepath}")
+
+        with atomic_output_path(filepath) as temporary:
+            joblib.dump(data, temporary, compress=compress)
+        logger.info("Exported joblib data to %s", filepath)
 
     @staticmethod
     def results_to_report(
-        filepath: str,
+        filepath: PathLike,
         title: str,
-        sections: List[Dict],
-        format: str = "html",
+        sections: Sequence[ReportSection],
+        format: ReportFormat = "html",
     ) -> None:
-        """
-        Export results as formatted report.
-        
-        Args:
-            filepath: output path
-            title: report title
-            sections: list of dicts with 'heading', 'text', 'table', 'image' keys
-            format: 'html' or 'md'
-        """
-        if format == "html":
-            DataExporter._write_html_report(filepath, title, sections)
-        elif format == "md":
-            DataExporter._write_md_report(filepath, title, sections)
-        else:
-            raise ValueError(f"Unknown report format: {format}")
-
-    @staticmethod
-    def _write_html_report(filepath: str, title: str, sections: List[Dict]) -> None:
-        """Generate HTML report."""
-        html = [
-            "<!DOCTYPE html><html><head>",
-            f"<title>{title}</title>",
-            "<style>",
-            "body { font-family: 'Segoe UI', sans-serif; margin: 40px; background: #1e1f22; color: #e0e0e0; }",
-            "h1 { color: #d29922; border-bottom: 2px solid #d29922; padding-bottom: 10px; }",
-            "h2 { color: #d29922; }",
-            "table { border-collapse: collapse; width: 100%; margin: 20px 0; }",
-            "th, td { border: 1px solid #444; padding: 8px; text-align: left; }",
-            "th { background: #2b2d30; color: #d29922; }",
-            "tr:nth-child(even) { background: #2b2d30; }",
-            ".metric { display: inline-block; margin: 10px; padding: 15px; background: #2b2d30;",
-            "  border-radius: 8px; border-left: 4px solid #d29922; }",
-            ".metric-value { font-size: 24px; font-weight: bold; color: #d29922; }",
-            ".metric-label { font-size: 12px; color: #888; }",
-            "img { max-width: 100%; border-radius: 4px; }",
-            "</style></head><body>",
-            f"<h1>{title}</h1>",
-            f"<p>Generated by pylcss</p>",
-        ]
-
-        for section in sections:
-            if "heading" in section:
-                html.append(f"<h2>{section['heading']}</h2>")
-            if "text" in section:
-                html.append(f"<p>{section['text']}</p>")
-            if "metrics" in section:
-                for name, value in section["metrics"].items():
-                    html.append(
-                        f'<div class="metric"><div class="metric-value">{value}</div>'
-                        f'<div class="metric-label">{name}</div></div>'
-                    )
-            if "table" in section:
-                table = section["table"]
-                html.append("<table>")
-                if "headers" in table:
-                    html.append("<tr>" + "".join(f"<th>{h}</th>" for h in table["headers"]) + "</tr>")
-                for row in table.get("rows", []):
-                    html.append("<tr>" + "".join(f"<td>{v}</td>" for v in row) + "</tr>")
-                html.append("</table>")
-            if "image" in section:
-                import base64
-                with open(section["image"], "rb") as img_f:
-                    img_data = base64.b64encode(img_f.read()).decode()
-                ext = Path(section["image"]).suffix.lstrip(".")
-                html.append(f'<img src="data:image/{ext};base64,{img_data}" />')
-
-        html.append("</body></html>")
-
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write("\n".join(html))
-        logger.info(f"Exported HTML report: {filepath}")
-
-    @staticmethod
-    def _write_md_report(filepath: str, title: str, sections: List[Dict]) -> None:
-        """Generate Markdown report."""
-        lines = [f"# {title}", "", f"*Generated by pylcss*", ""]
-
-        for section in sections:
-            if "heading" in section:
-                lines.append(f"## {section['heading']}")
-                lines.append("")
-            if "text" in section:
-                lines.append(section["text"])
-                lines.append("")
-            if "metrics" in section:
-                for name, value in section["metrics"].items():
-                    lines.append(f"- **{name}**: {value}")
-                lines.append("")
-            if "table" in section:
-                table = section["table"]
-                if "headers" in table:
-                    lines.append("| " + " | ".join(str(h) for h in table["headers"]) + " |")
-                    lines.append("| " + " | ".join("---" for _ in table["headers"]) + " |")
-                for row in table.get("rows", []):
-                    lines.append("| " + " | ".join(str(v) for v in row) + " |")
-                lines.append("")
-
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
-        logger.info(f"Exported Markdown report: {filepath}")
+        """Export an escaped HTML or Markdown report."""
+        write_report(filepath, title, sections, format)
+        logger.info("Exported %s report to %s", format, filepath)

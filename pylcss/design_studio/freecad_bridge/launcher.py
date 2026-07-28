@@ -39,6 +39,7 @@ from pylcss.design_studio.freecad_bridge.paths import (
     find_freecad_executable,
     freecad_data_dir,
 )
+from pylcss.process_utils import headless_subprocess_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +259,7 @@ def _seed_empty_fcstd(target: Path) -> bool:
             [cmd, script_handle],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=30,
+            **headless_subprocess_kwargs(),
         )
         if proc.returncode != 0 or not target.exists():
             logger.warning(

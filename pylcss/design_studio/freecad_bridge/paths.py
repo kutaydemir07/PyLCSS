@@ -19,7 +19,7 @@ import platform
 from pathlib import Path
 from typing import Optional
 
-from pylcss.solver_backends.common import resolve_executable
+from pylcss.solver_backends.execution import resolve_executable
 
 logger = logging.getLogger(__name__)
 

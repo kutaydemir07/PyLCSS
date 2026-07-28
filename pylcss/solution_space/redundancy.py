@@ -6,11 +6,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
 import numpy as np
 
-from .multimodal_models import BoxSolutionSpace
+from .contracts import FloatArray, ProgressCallback
+from .models import BoxSolutionSpace
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +25,13 @@ class RedundancyResolutionMixin:
     its largest-volume member.
     """
 
+    dv_norm: FloatArray
+
     def _resolve_redundant_solution_spaces(
         self,
-        boxes: List[BoxSolutionSpace],
-        callback: Optional[Any] = None,
-    ) -> List[BoxSolutionSpace]:
+        boxes: list[BoxSolutionSpace],
+        callback: Optional[ProgressCallback] = None,
+    ) -> list[BoxSolutionSpace]:
         """Resolve overlap-induced redundancy between expanded boxes."""
         if len(boxes) <= 1:
             return list(boxes)
@@ -46,9 +49,9 @@ class RedundancyResolutionMixin:
 
     def _remove_redundant_boxes(
         self,
-        boxes: List[BoxSolutionSpace],
-        callback: Optional[Any] = None,
-    ) -> List[BoxSolutionSpace]:
+        boxes: list[BoxSolutionSpace],
+        callback: Optional[ProgressCallback] = None,
+    ) -> list[BoxSolutionSpace]:
         """Keep only the largest box per connected intersection component."""
         K = len(boxes)
         if K <= 1:
@@ -78,11 +81,11 @@ class RedundancyResolutionMixin:
                 if root_i != root_j:
                     parent[root_i] = root_j
 
-        components: Dict[int, List[int]] = {}
+        components: dict[int, list[int]] = {}
         for i in range(K):
             components.setdefault(find(i), []).append(i)
 
-        kept: List[BoxSolutionSpace] = []
+        kept: list[BoxSolutionSpace] = []
         for members in components.values():
             members.sort(key=lambda idx: boxes[idx].volume, reverse=True)
             winner = boxes[members[0]]

@@ -77,7 +77,13 @@ from pylcss.design_studio.runtime import (  # noqa: E402
 )
 
 
-DEFAULT_CAD = REPO_ROOT / "data" / "Crashbox_AluminumImpact.cad"
+DEFAULT_CAD = (
+    REPO_ROOT
+    / "data"
+    / "cad_environment"
+    / "02_crash"
+    / "01_shell_tube_barrier_impact.cad"
+)
 DEFAULT_OUTPUT = REPO_ROOT / "experiments" / "crash_validation" / "results"
 
 

@@ -1,0 +1,201 @@
+{
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "length": {
+      "type_": "com.cad.number.NumberNode",
+      "name": "Bracket Length",
+      "pos": [-1040.0, -300.0],
+      "custom": {
+        "value_input": "120.0",
+        "value": 120.0,
+        "exposed_name": "bracket_length"
+      }
+    },
+    "width": {
+      "type_": "com.cad.number.NumberNode",
+      "name": "Bracket Width",
+      "pos": [-1040.0, -170.0],
+      "custom": {
+        "value_input": "60.0",
+        "value": 60.0,
+        "exposed_name": "bracket_width"
+      }
+    },
+    "height": {
+      "type_": "com.cad.number.NumberNode",
+      "name": "Bracket Thickness",
+      "pos": [-1040.0, -40.0],
+      "custom": {
+        "value_input": "12.0",
+        "value": 12.0,
+        "exposed_name": "bracket_thickness"
+      }
+    },
+    "blank": {
+      "type_": "com.cad.geometry.box.BoxNode",
+      "name": "Bracket Base Plate",
+      "pos": [-760.0, -170.0],
+      "custom": {
+        "length_x": 120.0,
+        "width_y": 60.0,
+        "height_z": 12.0,
+        "centered": true
+      }
+    },
+    "upright": {
+      "type_": "com.cad.geometry.box.BoxNode",
+      "name": "Bracket Upright",
+      "pos": [-760.0, 120.0],
+      "custom": {
+        "length_x": 120.0,
+        "width_y": 12.0,
+        "height_z": 60.0,
+        "centered": true
+      }
+    },
+    "upright-position": {
+      "type_": "com.cad.geometry.transform.TransformNode",
+      "name": "Position Upright at Base Edge",
+      "pos": [-500.0, 120.0],
+      "custom": {
+        "translate_x": 0.0,
+        "translate_y": 24.0,
+        "translate_z": 24.0,
+        "rotation_axis": "Z",
+        "rotation_angle_deg": 0.0
+      }
+    },
+    "bracket-union": {
+      "type_": "com.cad.geometry.boolean.BooleanNode",
+      "name": "Union Base and Upright",
+      "pos": [-240.0, 20.0],
+      "custom": {
+        "operation": "Union"
+      }
+    },
+    "center-hole": {
+      "type_": "com.cad.geometry.through_hole.ThroughHoleNode",
+      "name": "Upright Pivot Bore",
+      "pos": [280.0, -80.0],
+      "custom": {
+        "diameter": 28.0,
+        "axis": "Y",
+        "center_x": 0.0,
+        "center_y": 24.0,
+        "center_z": 25.0
+      }
+    },
+    "fillet": {
+      "type_": "com.cad.geometry.fillet.FilletNode",
+      "name": "Bend and Edge Fillets",
+      "pos": [20.0, -80.0],
+      "custom": {"radius": 3.0, "edges": "Parallel X"}
+    },
+    "mount-hole-left": {
+      "type_": "com.cad.geometry.through_hole.ThroughHoleNode",
+      "name": "Left Mounting Hole",
+      "pos": [540.0, -80.0],
+      "custom": {
+        "diameter": 12.0,
+        "axis": "Z",
+        "center_x": -35.0,
+        "center_y": -15.0,
+        "center_z": 0.0
+      }
+    },
+    "mount-hole-right": {
+      "type_": "com.cad.geometry.through_hole.ThroughHoleNode",
+      "name": "Right Mounting Hole",
+      "pos": [800.0, -80.0],
+      "custom": {
+        "diameter": 12.0,
+        "axis": "Z",
+        "center_x": 35.0,
+        "center_y": -15.0,
+        "center_z": 0.0
+      }
+    },
+    "pin": {
+      "type_": "com.cad.geometry.cylinder.CylinderNode",
+      "name": "Mounting Bolt",
+      "pos": [280.0, 170.0],
+      "custom": {
+        "diameter": 10.0,
+        "length": 20.0,
+        "axis": "Z",
+        "centered": true
+      }
+    },
+    "pin-offset": {
+      "type_": "com.cad.geometry.transform.TransformNode",
+      "name": "Position First Bolt",
+      "pos": [540.0, 170.0],
+      "custom": {
+        "translate_x": -35.0,
+        "translate_y": -15.0,
+        "translate_z": 0.0,
+        "rotation_axis": "Z",
+        "rotation_angle_deg": 0.0
+      }
+    },
+    "pin-pattern": {
+      "type_": "com.cad.geometry.linear_pattern.LinearPatternNode",
+      "name": "Two-Bolt Pattern",
+      "pos": [800.0, 170.0],
+      "custom": {"count": 2, "spacing": 70.0, "axis": "X", "fuse": false}
+    },
+    "assembly": {
+      "type_": "com.cad.assembly.assembly.AssemblyNode",
+      "name": "Bracket and Pins",
+      "pos": [1060.0, 30.0],
+      "custom": {"assembly_name": "Parametric L-Bracket Assembly", "fuse_parts": false}
+    },
+    "mass": {
+      "type_": "com.cad.analysis.mass_properties.MassPropertiesNode",
+      "name": "Steel Mass Properties",
+      "pos": [1320.0, -120.0],
+      "custom": {"density": 7.85e-09}
+    },
+    "bounds": {
+      "type_": "com.cad.analysis.bounding_box.BoundingBoxNode",
+      "name": "Envelope Dimensions",
+      "pos": [1320.0, 20.0],
+      "custom": {}
+    },
+    "area": {
+      "type_": "com.cad.SurfaceAreaNode",
+      "name": "Manufacturing Surface Area",
+      "pos": [1320.0, 160.0],
+      "custom": {}
+    }
+  },
+  "connections": [
+    {"out": ["length", "value"], "in": ["blank", "length"]},
+    {"out": ["width", "value"], "in": ["blank", "width"]},
+    {"out": ["height", "value"], "in": ["blank", "height"]},
+    {"out": ["upright", "shape"], "in": ["upright-position", "shape"]},
+    {"out": ["blank", "shape"], "in": ["bracket-union", "base"]},
+    {"out": ["upright-position", "shape"], "in": ["bracket-union", "tool"]},
+    {"out": ["bracket-union", "shape"], "in": ["fillet", "shape"]},
+    {"out": ["fillet", "shape"], "in": ["center-hole", "shape"]},
+    {"out": ["center-hole", "shape"], "in": ["mount-hole-left", "shape"]},
+    {"out": ["mount-hole-left", "shape"], "in": ["mount-hole-right", "shape"]},
+    {"out": ["pin", "shape"], "in": ["pin-offset", "shape"]},
+    {"out": ["pin-offset", "shape"], "in": ["pin-pattern", "shape"]},
+    {"out": ["mount-hole-right", "shape"], "in": ["assembly", "part_1"]},
+    {"out": ["pin-pattern", "shape"], "in": ["assembly", "part_2"]},
+    {"out": ["assembly", "assembly"], "in": ["mass", "shape"]},
+    {"out": ["assembly", "assembly"], "in": ["bounds", "shape"]},
+    {"out": ["assembly", "assembly"], "in": ["area", "shape_in"]}
+  ]
+}

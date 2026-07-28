@@ -1,114 +1,136 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-from PySide6 import QtCore
-from .core import Variable, Objective, Constraint
-from .evaluator import ModelEvaluator
-from .solvers.factory import get_solver
+"""Qt worker that runs an optimization without blocking the application UI."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+import logging
 import time
+from typing import Any
+
+from PySide6 import QtCore
+
+from .configuration import parse_optimization_setup
+from .evaluator import ModelEvaluator
+from .parsing import parse_boolean
+from .solvers.base import BaseSolver
+from .solvers.factory import get_solver
+
+logger = logging.getLogger(__name__)
+
 
 class OptimizationWorker(QtCore.QThread):
-    # Consolidate signals to reduce overhead
-    progress = QtCore.Signal(dict) # Emit a dictionary of current state
-    finished = QtCore.Signal(object) # Emit OptimizationResult
+    """Execute a validated optimization problem on a Qt worker thread."""
+
+    progress = QtCore.Signal(dict)
+    finished = QtCore.Signal(object)
     error = QtCore.Signal(str)
 
-    def __init__(self, model_func, setup_data: dict, solver_settings: dict):
+    def __init__(
+        self,
+        model_func: Callable[..., Mapping[str, Any]],
+        setup_data: Mapping[str, Any],
+        solver_settings: Mapping[str, Any],
+    ) -> None:
         super().__init__()
         self.model_func = model_func
-        self.setup = setup_data
-        self.settings = solver_settings
-        self.solver = None
+        self.setup = dict(setup_data)
+        self.settings = dict(solver_settings)
+        self.solver: BaseSolver | None = None
 
-    def run(self):
+    def run(self) -> None:
         try:
-            # Helper to map dictionary keys to Dataclass fields
-            def map_variable(v):
-                return Variable(
-                    name=v['name'],
-                    min_val=float(v.get('min_val', v.get('min', 0.0))),
-                    max_val=float(v.get('max_val', v.get('max', 1.0))),
-                    value=float(v.get('value', 0.0))
-                )
+            setup = parse_optimization_setup(self.setup, self.settings)
+            method = str(self.settings.get("method") or "SLSQP")
+            self.settings["method"] = method
 
-            def map_objective(o):
-                return Objective(
-                    name=o['name'],
-                    weight=float(o.get('weight', 1.0)),
-                    minimize=bool(o.get('minimize', True))
-                )
-
-            def map_constraint(c):
-                # Handle req_min/req_max legacy keys
-                min_v = c.get('min_val', c.get('min', c.get('req_min', float('-inf'))))
-                max_v = c.get('max_val', c.get('max', c.get('req_max', float('inf'))))
-                return Constraint(
-                    name=c['name'],
-                    min_val=float(min_v) if min_v is not None else float('-inf'),
-                    max_val=float(max_v) if max_v is not None else float('inf')
-                )
-
-            # 1. Setup Evaluator
-            # Extract parameters if available
-            parameters = self.setup.get('parameters', {})
-            
             evaluator = ModelEvaluator(
                 self.model_func,
-                [map_variable(v) for v in self.setup['variables']],
-                [map_objective(o) for o in self.setup['objectives']],
-                [map_constraint(c) for c in self.setup['constraints']],
-                parameters=parameters,
-                scaling=self.settings.get('scaling', True),
-                penalty_weight=self.settings.get('penalty_weight', 1e6),
-                objective_scale=self.settings.get('objective_scale', 1.0),
-                constraint_margin=self.settings.get('constraint_margin', 0.0)
+                setup.variables,
+                setup.objectives,
+                setup.constraints,
+                parameters=setup.parameters,
+                scaling=parse_boolean(
+                    self.settings.get("scaling", True),
+                    "Variable scaling",
+                ),
+                scaling_mode=str(self.settings.get("scaling_mode", "auto")),
+                penalty_weight=float(self.settings.get("penalty_weight", 1e6)),
+                objective_scale=float(self.settings.get("objective_scale", 1.0)),
+                constraint_margin=float(self.settings.get("constraint_margin", 0.0)),
+                feasibility_tolerance=float(
+                    self.settings.get("feasibility_tol", self.settings.get("tol", 1e-6))
+                ),
             )
+            solver_initial = (
+                evaluator.to_normalized(setup.initial_design)
+                if evaluator.scaling
+                else setup.initial_design
+            )
+            _, initial_outputs, _ = evaluator.evaluate(solver_initial)
+            if not evaluator.is_valid_result(initial_outputs):
+                detail = (
+                    evaluator.evaluation_error(initial_outputs)
+                    or "unknown evaluation error"
+                )
+                raise ValueError(
+                    f"The system model is invalid at the initial design: {detail}"
+                )
 
-            # 2. Get Solver Strategy
-            self.solver = get_solver(self.settings['method'], self.settings)
+            self.solver = get_solver(method, self.settings)
+            if self.isInterruptionRequested():
+                self.solver.stop()
 
-            # 3. Define Throttled Callback (Limit to 20Hz)
             last_emit_time = 0.0
-            eval_count = 0  # <--- NEW: Track actual evaluations
-            
-            def on_step(x, cost, raw_res, violation):
-                nonlocal last_emit_time, eval_count
-                eval_count += 1  # <--- NEW: Increment count
-                current_time = time.time()
-                # Limit updates to ~20Hz (50ms) to prevent GUI freezing
-                if current_time - last_emit_time >= 0.05:
-                    self.progress.emit({
-                        'iteration': eval_count,  # <--- NEW: Send real count
-                        'x': evaluator.to_physical(x),
-                        'cost': cost,
-                        'raw': raw_res,
-                        'violation': violation
-                    })
-                    last_emit_time = current_time
 
-            # 4. Execute
-            x0 = self.setup['x0']
-                
-            result = self.solver.solve(evaluator, x0, on_step)
-            
-            # Emit final progress to ensure UI is up to date with the final result
-            # Note: result.x is already physical, so we don't use evaluator.to_physical
-            raw_combined = {**result.objectives, **result.constraints}
-            self.progress.emit({
-                'iteration': eval_count,  # <--- NEW: Send final count
-                'x': result.x,
-                'cost': result.cost,
-                'raw': raw_combined,
-                'violation': result.max_violation
-            })
-            
+            def on_step(
+                solver_x: Any,
+                cost: float,
+                raw_results: Mapping[str, float],
+                violation: float,
+            ) -> None:
+                nonlocal last_emit_time
+                now = time.monotonic()
+                if now - last_emit_time < 0.05:
+                    return
+                self.progress.emit(
+                    {
+                        "iteration": evaluator.evaluation_count,
+                        "x": evaluator.to_physical(solver_x),
+                        "cost": float(cost),
+                        "raw": dict(raw_results),
+                        "violation": float(violation),
+                    }
+                )
+                last_emit_time = now
+
+            result = self.solver.solve(
+                evaluator,
+                setup.initial_design,
+                on_step,
+            )
+            result.feasibility_tolerance = evaluator.feasibility_tolerance
+            self.progress.emit(
+                {
+                    "iteration": evaluator.evaluation_count,
+                    "x": result.x,
+                    "cost": result.cost,
+                    "raw": {**result.objectives, **result.constraints},
+                    "violation": result.max_violation,
+                }
+            )
             self.finished.emit(result)
+        except Exception as exc:
+            logger.exception("Optimization worker failed.")
+            self.error.emit(str(exc))
 
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            self.error.emit(str(e))
-
-    def stop(self):
-        if self.solver:
+    def stop(self) -> None:
+        """Request cancellation without terminating the QThread forcibly."""
+        self.requestInterruption()
+        if self.solver is not None:
             self.solver.stop()
+
+
+__all__ = ["OptimizationWorker"]

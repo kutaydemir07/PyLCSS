@@ -4,72 +4,24 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any
 
-import numpy as np
-
-from pylcss.solver_backends.common import (
-    ExternalRunConfig,
-    SolverBackendError,
-    dict_geometries,
-    id_lines,
-    load_vector,
+from pylcss.solver_backends.base import ExternalRunConfig, SolverBackendError
+from pylcss.solver_backends.calculix_deck import (
+    _build_input_deck,
+)
+from pylcss.solver_backends.calculix_results import (
+    _ingest_frd_into_result,
+)
+from pylcss.solver_backends.execution import (
     make_work_dir,
-    mesh_to_tet4,
-    mesh_to_tet10,
-    nodes_matching_condition,
-    nodes_matching_geometries,
     resolve_executable,
     run_process,
     tail,
-    tet10_connectivity,
-    tet_face_sets_for_geometries,
 )
-from pylcss.solver_backends.frd_reader import read_frd
-
-
-logger = logging.getLogger(__name__)
-
-
-def _surface_area_weights_from_mesh_selection(geometries: List[Any]) -> dict[int, float]:
-    """Return tributary nodal areas from mesh-selection surface triangles."""
-    weights: dict[int, float] = {}
-    for geom in geometries or []:
-        if not isinstance(geom, dict):
-            continue
-        node_ids = geom.get("surface_node_ids")
-        vertices = geom.get("surface_vertices")
-        triangles = geom.get("surface_triangles")
-        if node_ids is None or vertices is None or triangles is None:
-            continue
-        try:
-            node_ids_arr = np.asarray(node_ids, dtype=int).reshape(-1)
-            verts = np.asarray(vertices, dtype=float)
-            tris = np.asarray(triangles, dtype=int)
-        except Exception:
-            continue
-        if (
-            verts.ndim != 2 or verts.shape[1] < 3
-            or tris.ndim != 2 or tris.shape[1] < 3
-            or node_ids_arr.size != verts.shape[0]
-        ):
-            continue
-        for tri in tris[:, :3]:
-            if np.any(tri < 0) or np.any(tri >= len(verts)):
-                continue
-            a, b, c = (int(v) for v in tri)
-            pa, pb, pc = verts[a, :3], verts[b, :3], verts[c, :3]
-            area = 0.5 * float(np.linalg.norm(np.cross(pb - pa, pc - pa)))
-            if area <= 1e-16:
-                continue
-            share = area / 3.0
-            for local_idx in (a, b, c):
-                weights[int(node_ids_arr[local_idx])] = (
-                    weights.get(int(node_ids_arr[local_idx]), 0.0) + share
-                )
-    return weights
+from pylcss.solver_backends.validation import validate_isotropic_material
+from pylcss.solver_backends.validation import record_list
 
 
 def _collect_calculix_failure_context(
@@ -81,7 +33,7 @@ def _collect_calculix_failure_context(
     surfaces them.  Also detects the Windows 0xC0000135 / -1073741515 case
     where the .exe failed to load because of a missing DLL.
     """
-    parts: List[str] = []
+    parts: list[str] = []
     parts.append(f"Exit code: {returncode} (0x{(returncode & 0xFFFFFFFF):08X})")
     parts.append(f"Executable: {executable}")
 
@@ -101,7 +53,7 @@ def _collect_calculix_failure_context(
             continue
         try:
             content = path.read_text(encoding="utf-8", errors="replace")
-        except Exception:
+        except OSError:
             continue
         content = content.strip()
         if not content:
@@ -128,434 +80,11 @@ def resolve_calculix_executable(override: str | None = None) -> str | None:
     )
 
 
-def _build_sets_and_step(
-    mesh: Any,
-    constraints: List[dict],
-    loads: List[dict],
-    warnings: List[str],
-) -> Tuple[List[str], List[str]]:
-    """Build CalculiX node sets, surface sets, and step records."""
-    model_lines: List[str] = []
-    step_lines: List[str] = ["*STEP", "*STATIC"]
-
-    boundary_lines: List[str] = []
-    for idx, constraint in enumerate(constraints, start=1):
-        geoms = dict_geometries(constraint)
-        condition = str(constraint.get("condition", "") or "").strip()
-        if geoms:
-            node_ids = nodes_matching_geometries(mesh, geoms) + 1
-        elif condition:
-            node_ids = nodes_matching_condition(
-                mesh, condition, warnings, label=f"Constraint {idx}"
-            ) + 1
-        else:
-            warnings.append(f"Constraint {idx} has no selected face geometry or condition.")
-            continue
-        if len(node_ids) == 0:
-            warnings.append(f"Constraint {idx} did not match any mesh nodes.")
-            continue
-
-        set_name = f"BC_{idx}"
-        model_lines.append(f"*NSET, NSET={set_name}")
-        model_lines.extend(id_lines(node_ids))
-
-        fixed_dofs = constraint.get("fixed_dofs", [0, 1, 2])
-        disp = constraint.get("displacement", None)
-        for dof_idx in fixed_dofs:
-            value = 0.0 if disp is None else float(disp[int(dof_idx)])
-            ccx_dof = int(dof_idx) + 1
-            boundary_lines.append(f"{set_name}, {ccx_dof}, {ccx_dof}, {value:.12g}")
-
-    if boundary_lines:
-        step_lines.append("*BOUNDARY")
-        step_lines.extend(boundary_lines)
-    else:
-        warnings.append("No boundary constraints were exported to the CalculiX deck.")
-
-    cload_lines: List[str] = []
-    dload_lines: List[str] = []
-    for idx, load in enumerate(loads, start=1):
-        ltype = load.get("type", "force")
-        if ltype == "force":
-            geoms = dict_geometries(load)
-            condition = str(load.get("condition", "") or "").strip()
-            if geoms:
-                node_ids = nodes_matching_geometries(mesh, geoms) + 1
-            elif condition:
-                node_ids = nodes_matching_condition(
-                    mesh, condition, warnings, label=f"Force load {idx}"
-                ) + 1
-            else:
-                warnings.append(f"Force load {idx} has no selected face geometry or condition.")
-                continue
-            if len(node_ids) == 0:
-                warnings.append(f"Force load {idx} did not match any mesh nodes.")
-                continue
-            force = load_vector(load)
-            area_weights = _surface_area_weights_from_mesh_selection(geoms)
-            if area_weights:
-                total_area = float(sum(area_weights.values()))
-                valid_nodes = set(int(v) for v in (node_ids - 1).tolist())
-                if total_area > 1e-16:
-                    for node_idx0, area in sorted(area_weights.items()):
-                        if node_idx0 not in valid_nodes:
-                            continue
-                        nodal_force = force * (float(area) / total_area)
-                        for dof_idx, value in enumerate(nodal_force, start=1):
-                            if abs(float(value)) > 1e-16:
-                                cload_lines.append(
-                                    f"{int(node_idx0) + 1}, {dof_idx}, {float(value):.12g}"
-                                )
-                    warnings.append(
-                        f"Force load {idx} distributed by tributary surface area "
-                        f"over {len(area_weights)} selected mesh nodes."
-                    )
-                    continue
-            nodal_force = force / max(len(node_ids), 1)
-            for node_id in node_ids:
-                for dof_idx, value in enumerate(nodal_force, start=1):
-                    if abs(float(value)) > 1e-16:
-                        cload_lines.append(f"{int(node_id)}, {dof_idx}, {float(value):.12g}")
-        elif ltype == "gravity":
-            direction = load.get("direction", "-Y")
-            dir_map = {
-                "-X": (-1.0, 0.0, 0.0),
-                "+X": (1.0, 0.0, 0.0),
-                "-Y": (0.0, -1.0, 0.0),
-                "+Y": (0.0, 1.0, 0.0),
-                "-Z": (0.0, 0.0, -1.0),
-                "+Z": (0.0, 0.0, 1.0),
-            }
-            dx, dy, dz = dir_map.get(direction, (0.0, -1.0, 0.0))
-            dload_lines.append(
-                f"EALL, GRAV, {float(load.get('accel', 9810.0)):.12g}, {dx:.1f}, {dy:.1f}, {dz:.1f}"
-            )
-        elif ltype == "pressure":
-            geoms = dict_geometries(load)
-            if not geoms:
-                warnings.append(
-                    f"Pressure load {idx} has no selected face geometry; skipped."
-                )
-                continue
-            faces = tet_face_sets_for_geometries(mesh, geoms)
-            if not faces:
-                warnings.append(
-                    f"Pressure load {idx}: no external tet faces matched the selected geometry. "
-                    "Check that the selected face is a boundary of the mesh."
-                )
-                continue
-            set_name = f"PRESS_{idx}"
-            model_lines.append(f"*SURFACE, NAME={set_name}, TYPE=ELEMENT")
-            for elem_id, face_id in faces:
-                model_lines.append(f"{int(elem_id)}, S{int(face_id)}")
-            pressure = float(load.get("pressure", load.get("magnitude", 0.0)))
-            dload_lines.append(f"{set_name}, P, {pressure:.12g}")
-        else:
-            warnings.append(f"Unsupported CalculiX load type: {ltype}")
-
-    if cload_lines:
-        step_lines.append("*CLOAD")
-        step_lines.extend(cload_lines)
-    if dload_lines:
-        step_lines.append("*DLOAD")
-        step_lines.extend(dload_lines)
-    if not cload_lines and not dload_lines:
-        warnings.append("No external loads were exported to the CalculiX deck.")
-
-    step_lines.extend(
-        [
-            "*NODE FILE",
-            "U, RF",
-            "*EL FILE",
-            "S, E, ENER",
-            "*END STEP",
-        ]
-    )
-    return model_lines, step_lines
-
-
-def _material_block(material: dict, *, include_plasticity: bool = False) -> List[str]:
-    """Write the material model selected explicitly by the solver study.
-
-    Yield strength remains available as an allowable in a linear study.  When
-    ``include_plasticity`` is true, it instead defines this bilinear
-    isotropic-hardening *PLASTIC table:
-
-        σ_y at εp = 0      → ``yield_strength``
-        σ_y at εp = ``ε*`` → ``yield_strength + tangent_modulus · ε*``
-
-    where ``ε* = 0.10`` is a representative plastic-strain anchor.  When
-    ``include_plasticity`` is false, only the elastic law is emitted,
-    irrespective of the allowable yield-strength value.
-    """
-    e   = float(material.get("E", 210000.0))
-    nu  = float(material.get("nu", material.get("poissons_ratio", 0.3)))
-    rho = float(material.get("rho", material.get("density", 7.85e-9)))
-    sigma_y = float(material.get("yield_strength", 0.0) or 0.0)
-    et      = float(material.get("tangent_modulus", 0.0) or 0.0)
-
-    lines: List[str] = [
-        "*MATERIAL, NAME=MAT1",
-        "*ELASTIC",
-        f"{e:.12g}, {nu:.12g}",
-        "*DENSITY",
-        f"{rho:.12g}",
-    ]
-    if include_plasticity:
-        if sigma_y <= 0.0:
-            raise SolverBackendError(
-                "Nonlinear (Plastic) requires Material.yield_strength greater than zero."
-            )
-        eps_anchor = 0.10
-        sigma_anchor = sigma_y + et * eps_anchor
-        lines.extend(
-            [
-                "*PLASTIC, HARDENING=ISOTROPIC",
-                f"{sigma_y:.12g}, 0.0",
-                f"{sigma_anchor:.12g}, {eps_anchor:.6g}",
-            ]
-        )
-    lines.append("*SOLID SECTION, ELSET=EALL, MATERIAL=MAT1")
-    lines.append("")
-    return lines
-
-
-def _step_header(analysis_type: str) -> List[str]:
-    """Return the *STEP / *STATIC header lines for the requested analysis.
-
-    ``analysis_type``:
-      - ``'Linear'``                 → ``*STEP`` + bare ``*STATIC``
-      - ``'Nonlinear (Geometric)'``  → ``*STEP, NLGEOM`` + incremented ``*STATIC``
-      - ``'Nonlinear (Plastic)'``    → same as Geometric (CalculiX auto-enables
-                                       NLGEOM when *PLASTIC is present, but
-                                       writing it explicitly keeps intent
-                                       readable in the deck)
-    """
-    if analysis_type == "Linear":
-        return ["*STEP", "*STATIC"]
-    # Incremented static — 10 increments by default, with adaptive sub-stepping
-    # on convergence trouble.  Init/total/min/max increment lengths follow the
-    # *STATIC card spec: initial_inc, total_step, min_inc, max_inc.
-    return [
-        "*STEP, NLGEOM, INC=200",
-        "*STATIC",
-        "0.1, 1.0, 1e-5, 1.0",
-    ]
-
-
-def _build_input_deck(
-    mesh: Any,
-    material: dict,
-    constraints: List[dict],
-    loads: List[dict],
-    warnings: List[str],
-    analysis_type: str = "Linear",
-) -> str:
-    """Create a CalculiX/Abaqus-style input deck.
-
-    ``analysis_type`` explicitly selects linear, geometric-nonlinear, or
-    plastic-nonlinear static behavior.  Merely defining a yield strength must
-    not change the constitutive model.
-    """
-    # A 10-row connectivity is a quadratic (C3D10) mesh — emit it verbatim;
-    # anything else is treated as linear C3D4 (mesh_to_tet4 downgrades higher
-    # orders to their corner nodes, preserving the prior behaviour).
-    quadratic = tet10_connectivity(mesh) is not None
-    if quadratic:
-        points, tets = mesh_to_tet10(mesh, warnings)
-        elem_type = "C3D10"
-    else:
-        points, tets = mesh_to_tet4(mesh, warnings)
-        elem_type = "C3D4"
-    step_header = _step_header(analysis_type)
-    # Note: _build_sets_and_step prepends a hard-coded ``*STEP``/``*STATIC``;
-    # we override it below by replacing the leading two entries with the
-    # analysis-specific header.
-    model_lines, step_lines = _build_sets_and_step(mesh, constraints, loads, warnings)
-    if step_lines[:2] == ["*STEP", "*STATIC"]:
-        step_lines = step_header + step_lines[2:]
-
-    lines: List[str] = [
-        "*HEADING",
-        f"PyLCSS CalculiX deck ({analysis_type})",
-        "*NODE",
-    ]
-    for idx, xyz in enumerate(points, start=1):
-        lines.append(f"{idx}, {xyz[0]:.12g}, {xyz[1]:.12g}, {xyz[2]:.12g}")
-
-    lines.append(f"*ELEMENT, TYPE={elem_type}, ELSET=EALL")
-    for idx, conn in enumerate(tets, start=1):
-        node_ids = ", ".join(str(int(v) + 1) for v in conn)
-        lines.append(f"{idx}, {node_ids}")
-
-    lines.extend(
-        _material_block(
-            material,
-            include_plasticity=analysis_type == "Nonlinear (Plastic)",
-        )
-    )
-    lines.extend(model_lines)
-    lines.extend(step_lines)
-    return "\n".join(lines) + "\n"
-
-
-def _resolve_deformation_scale(requested: Any, auto_scale: float, warnings: List[str]) -> float:
-    """Resolve the visual-only deformation scale selected in the solver node."""
-    if requested is None:
-        return auto_scale
-    if isinstance(requested, str):
-        text = requested.strip().lower()
-        if not text or text == "auto":
-            return auto_scale
-        text = text.rstrip("x").strip()
-    else:
-        text = requested
-    try:
-        value = float(text)
-    except (TypeError, ValueError):
-        warnings.append(f"Invalid deformation scale {requested!r}; using Auto.")
-        return auto_scale
-    if value <= 0.0:
-        warnings.append(f"Deformation scale must be positive, got {value:g}; using Auto.")
-        return auto_scale
-    return value
-
-
-
-def _ingest_frd_into_result(
-    mesh: Any,
-    frd_path: Path,
-    visualization_mode: str,
-    warnings: List[str],
-    deformation_scale: Any = "Auto",
-    analysis_type: str = "Linear",
-) -> dict:
-    """Read CalculiX ``.frd`` output and shape it into the viewer's result dict.
-
-    The deck writes mesh nodes in order with 1-based ids (``i`` → ``i+1``).
-    CCX's FRD preserves those ids, so we scatter the parsed displacement and
-    stress back into the mesh's original ``[0..n_points-1]`` slot by
-    ``id - 1``.  This is robust even if CCX drops or re-orders nodes.
-    """
-    parsed = read_frd(frd_path)
-
-    n_points = int(np.asarray(mesh.p).shape[1])
-    frd_node_ids = np.asarray(parsed["node_ids"], dtype=int)
-    disp_xyz_frd = np.asarray(parsed["displacement"], dtype=float)
-    vm_frd = np.asarray(parsed["von_mises"], dtype=float)
-    stress_tensor_frd = np.asarray(parsed.get("stress", np.zeros((0, 6))), dtype=float)
-    ener_frd = np.asarray(parsed.get("ener", np.zeros(0)), dtype=float)
-    n_frd = frd_node_ids.size
-
-    if n_frd != n_points:
-        warnings.append(
-            f"CalculiX FRD reports {n_frd} nodes; PyLCSS source mesh has "
-            f"{n_points}.  Scattering by node id; any missing ids will render "
-            "with zero displacement / zero stress."
-        )
-
-    # Scatter by id (CCX writes 1-based ids; mesh array is 0-based).
-    disp_xyz = np.zeros((n_points, 3), dtype=float)
-    vm = np.zeros(n_points, dtype=float)
-    stress_tensor = np.zeros((n_points, 6), dtype=float)
-    ener_nodal = np.zeros(n_points, dtype=float)
-    if n_frd > 0:
-        mesh_idx = frd_node_ids - 1
-        valid = (mesh_idx >= 0) & (mesh_idx < n_points)
-        if not valid.all():
-            n_invalid = int((~valid).sum())
-            warnings.append(
-                f"{n_invalid} FRD node id(s) fall outside the source-mesh range; ignored."
-            )
-        idx_in = mesh_idx[valid]
-        valid_src = np.where(valid)[0]
-        if disp_xyz_frd.shape[0] >= valid.size:
-            disp_xyz[idx_in] = disp_xyz_frd[valid_src]
-        if vm_frd.size >= valid.size:
-            vm[idx_in] = vm_frd[valid_src]
-        if stress_tensor_frd.shape[0] >= valid.size:
-            stress_tensor[idx_in] = stress_tensor_frd[valid_src]
-        if ener_frd.size >= valid.size:
-            ener_nodal[idx_in] = ener_frd[valid_src]
-
-    # Viewer expects flat (3*N,) reshaping to (3, N) with order='F'.
-    flat_disp = np.zeros(3 * n_points, dtype=float)
-    flat_disp[0::3] = disp_xyz[:, 0]
-    flat_disp[1::3] = disp_xyz[:, 1]
-    flat_disp[2::3] = disp_xyz[:, 2]
-
-    max_disp = float(np.max(np.linalg.norm(disp_xyz, axis=1))) if disp_xyz.size else 0.0
-    peak_vm = float(np.max(vm)) if vm.size else 0.0
-
-    # Tet element volumes (used to integrate the nodal ENER density into the
-    # total elastic strain energy and to project ENER back per-element for SIMP).
-    quadratic_conn = tet10_connectivity(mesh)
-    energy_conn = (quadratic_conn.T if quadratic_conn is not None
-                   else np.asarray(mesh.t).T[:, :4]).astype(int)
-    tets = energy_conn[:, :4]
-    coords = np.asarray(mesh.p).T
-    v0 = coords[tets[:, 0]]
-    edges = np.stack(
-        [coords[tets[:, 1]] - v0, coords[tets[:, 2]] - v0, coords[tets[:, 3]] - v0],
-        axis=-1,
-    )
-    elem_vol = np.abs(np.linalg.det(edges)) / 6.0
-
-    # Average every element node (4 for C3D4, 10 for C3D10).
-    elem_ener = (ener_nodal[energy_conn].mean(axis=1) if ener_nodal.size
-                 else np.zeros(tets.shape[0]))
-
-    # Total elastic strain energy ≈ Σ_e (ENER_e × V_e); compliance = 2 × SE for
-    # linear elasticity (C = u·f = u·K·u = 2·SE).
-    total_strain_energy = float(np.sum(elem_ener * elem_vol))
-    # The 2*SE identity is valid only for a linear elastic load path.
-    compliance = (2.0 * total_strain_energy
-                  if analysis_type == "Linear" else None)
-
-    logger.debug(
-        "FEA Solver (external): FRD ingest frd_nodes=%d, mesh_nodes=%d, "
-        "max|u|=%.4e, peak VM=%.4e, compliance=%.4e",
-        n_frd, n_points, max_disp, peak_vm, compliance if compliance is not None else float("nan"),
-    )
-
-    # Auto deformation scale so deformed shape is visible without misleading.
-    bbox = np.ptp(np.asarray(mesh.p), axis=1)
-    char_len = max(float(np.max(bbox)), 1e-9)
-    auto_scale = (0.05 * char_len / max_disp) if max_disp > 1e-9 else 1.0
-    auto_scale = float(np.clip(auto_scale, 1.0, 200.0))
-    resolved_scale = _resolve_deformation_scale(deformation_scale, auto_scale, warnings)
-
-    total_volume = float(np.sum(elem_vol))
-
-    return {
-        "type": "fea",
-        "backend": "CalculiX",
-        "mesh": mesh,
-        "displacement": flat_disp,
-        "stress": vm,
-        "stress_tensor": stress_tensor,
-        "ener_nodal": ener_nodal,
-        "element_ener": elem_ener,
-        "element_volumes": elem_vol,
-        "strain_energy": total_strain_energy,
-        "compliance": compliance,
-        "volume": total_volume,
-        "peak_displacement": max_disp,
-        "peak_stress_nodal": peak_vm,
-        "stress_location": "nodal_extrapolated",
-        "auto_deformation_scale": auto_scale,
-        "deformation_scale": resolved_scale,
-        "visualization_mode": visualization_mode,
-        "frd_file": str(frd_path),
-        "frd_steps": parsed.get("steps", []),
-    }
-
-
 def run_calculix_static(
     mesh: Any,
     material: dict,
-    constraints: List[dict],
-    loads: List[dict],
+    constraints: list[dict],
+    loads: list[dict],
     config: ExternalRunConfig,
     visualization_mode: str = "Von Mises Stress",
     analysis_type: str = "Linear",
@@ -567,29 +96,40 @@ def run_calculix_static(
     or ``'Nonlinear (Plastic)'``.  Plasticity is enabled only by the explicit
     nonlinear-plastic selection.
     """
-    warnings: List[str] = []
-    allowed_analysis = {
-        "Linear", "Nonlinear (Geometric)", "Nonlinear (Plastic)"
-    }
+    warnings: list[str] = []
+    allowed_analysis = {"Linear", "Nonlinear (Geometric)", "Nonlinear (Plastic)"}
     if analysis_type not in allowed_analysis:
-        raise SolverBackendError(f"Unsupported CalculiX analysis type: {analysis_type!r}.")
-    sigma_y = float(material.get("yield_strength", 0.0) or 0.0)
-    if analysis_type == "Nonlinear (Plastic)" and sigma_y <= 0.0:
         raise SolverBackendError(
-            "Nonlinear (Plastic) requires Material.yield_strength greater than zero."
+            f"Unsupported CalculiX analysis type: {analysis_type!r}."
         )
+    validate_isotropic_material(
+        material,
+        require_yield=analysis_type == "Nonlinear (Plastic)",
+    )
+    constraints = record_list(constraints, label="Constraints")
+    loads = record_list(loads, label="Loads")
     effective_analysis_type = analysis_type
 
+    job_name = config.validated_job_name(default="pylcss_calculix")
+    timeout_s = config.validated_timeout() if config.run_solver else config.timeout_s
     work_dir = make_work_dir("pylcss_calculix_", config.work_dir)
-    job_name = config.job_name or "pylcss_calculix"
     inp_path = work_dir / f"{job_name}.inp"
-    inp_path.write_text(
-        _build_input_deck(
-            mesh, material, constraints, loads, warnings,
-            analysis_type=effective_analysis_type,
-        ),
-        encoding="utf-8",
-    )
+    try:
+        inp_path.write_text(
+            _build_input_deck(
+                mesh,
+                material,
+                constraints,
+                loads,
+                warnings,
+                analysis_type=effective_analysis_type,
+            ),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        raise SolverBackendError(
+            f"Could not write CalculiX input deck {inp_path}: {exc}"
+        ) from exc
 
     executable = resolve_calculix_executable(config.executable)
 
@@ -607,7 +147,7 @@ def run_calculix_static(
             proc = run_process(
                 [executable, job_name],
                 cwd=work_dir,
-                timeout_s=config.timeout_s,
+                timeout_s=timeout_s,
                 extra_path_dirs=(exe_dir,),
                 cancel_callback=config.cancel_callback,
             )
@@ -616,7 +156,9 @@ def run_calculix_static(
                 # CCX writes its own diagnostics to .sta / .dat even when stdout
                 # is empty (which it always is when the .exe fails to load due
                 # to a missing DLL).  Capture those for the user.
-                aux = _collect_calculix_failure_context(work_dir, job_name, proc.returncode, executable)
+                aux = _collect_calculix_failure_context(
+                    work_dir, job_name, proc.returncode, executable
+                )
                 raise SolverBackendError(
                     "CalculiX failed. Last solver output:\n"
                     + (solver_log or "(stdout was empty)\n")
@@ -633,15 +175,21 @@ def run_calculix_static(
             else:
                 try:
                     result_payload = _ingest_frd_into_result(
-                        mesh, frd_path, visualization_mode, warnings,
+                        mesh,
+                        frd_path,
+                        visualization_mode,
+                        warnings,
                         deformation_scale=deformation_scale,
                         analysis_type=effective_analysis_type,
+                        constraints=constraints,
                     )
                     rho = float(material.get("rho", material.get("density", 0.0)))
                     if rho > 0.0 and "volume" in result_payload:
                         result_payload["mass"] = float(result_payload["volume"] * rho)
                 except Exception as exc:
-                    raise SolverBackendError(f"CalculiX FRD ingest failed: {exc}") from exc
+                    raise SolverBackendError(
+                        f"CalculiX FRD ingest failed: {exc}"
+                    ) from exc
 
     output = {
         "type": result_payload.get("type", "external_solver"),

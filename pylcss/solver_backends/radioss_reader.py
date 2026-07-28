@@ -9,26 +9,31 @@ ingest the resulting ``.vtk`` files via meshio (already a PyLCSS dependency).
 
 The animation frames are turned into the dict shape consumed by the crash
 viewer, including displacement, stress, plastic strain, erosion/failure,
-velocity, acceleration, energy, topology, and physical time.
+velocity, energy, topology, and physical time.
 """
 
 from __future__ import annotations
 
+import logging
+import math
 import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any
+from collections.abc import Callable
 
 import numpy as np
 
-from pylcss.solver_backends.common import resolve_executable
+from pylcss.process_utils import headless_subprocess_kwargs
+from pylcss.solver_backends.execution import resolve_executable
+from pylcss.solver_backends.validation import integer, positive_float
 
+
+logger = logging.getLogger(__name__)
 
 _ANIM_FILE_RE = re.compile(r"A(\d{3,4})$", re.IGNORECASE)
-_VTK_TIME_RE = re.compile(
-    r"(?mi)^TIME\s+1\s+1\s+\w+\s*\r?\n\s*([-+0-9.eE]+)"
-)
+_VTK_TIME_RE = re.compile(r"(?mi)^TIME\s+1\s+1\s+\w+\s*\r?\n\s*([-+0-9.eE]+)")
 
 
 class RadiossAnimationMesh:
@@ -40,7 +45,11 @@ class RadiossAnimationMesh:
     code and result export.
     """
 
-    def __init__(self, points, cell_blocks):
+    def __init__(
+        self,
+        points: Any,
+        cell_blocks: list[tuple[str, Any]],
+    ) -> None:
         pts = np.asarray(points, dtype=float)
         if pts.ndim != 2 or pts.shape[1] < 3:
             raise ValueError(f"Animation points must be (N, 3), got {pts.shape!r}.")
@@ -54,8 +63,15 @@ class RadiossAnimationMesh:
         # Compatibility view for exporters and older viewer paths.  Prefer the
         # deformable solid/shell topology over rigid-wall or line cells.
         priority = (
-            "tetra", "tetra10", "hexahedron", "wedge", "pyramid",
-            "triangle", "quad", "line", "vertex",
+            "tetra",
+            "tetra10",
+            "hexahedron",
+            "wedge",
+            "pyramid",
+            "triangle",
+            "quad",
+            "line",
+            "vertex",
         )
         primary_type = None
         primary_blocks = []
@@ -69,7 +85,7 @@ class RadiossAnimationMesh:
         if primary_blocks:
             primary = np.concatenate(primary_blocks, axis=0)
             self.t = np.ascontiguousarray(primary.T)
-            offsets = []
+            offsets: list[int] = []
             offset = 0
             for kind, data in self.cell_blocks:
                 if kind == primary_type:
@@ -81,12 +97,12 @@ class RadiossAnimationMesh:
             self.primary_cell_indices = np.empty(0, dtype=int)
 
     @classmethod
-    def from_meshio(cls, mesh):
+    def from_meshio(cls, mesh: Any) -> RadiossAnimationMesh:
         blocks = [(block.type, block.data) for block in (mesh.cells or [])]
         return cls(mesh.points, blocks)
 
 
-def _read_vtk_time(path: Path) -> Optional[float]:
+def _read_vtk_time(path: Path) -> float | None:
     """Read the physical animation time written in VTK FIELD metadata."""
     try:
         with path.open("r", encoding="utf-8", errors="replace") as stream:
@@ -97,33 +113,32 @@ def _read_vtk_time(path: Path) -> Optional[float]:
     if not match:
         return None
     try:
-        return float(match.group(1))
+        value = float(match.group(1))
     except ValueError:
         return None
+    return value if math.isfinite(value) else None
 
 
-def find_animation_files(work_dir: str | Path, job_name: str) -> List[Path]:
+def find_animation_files(work_dir: str | Path, job_name: str) -> list[Path]:
     """Return the ``<job>A001``... animation files sorted by frame index."""
     work_dir = Path(work_dir)
-    candidates: List[Tuple[int, Path]] = []
-    for child in work_dir.iterdir():
-        if not child.is_file():
-            continue
-        if not child.name.startswith(job_name):
-            continue
-        match = _ANIM_FILE_RE.search(child.name)
-        if not match:
-            continue
-        try:
-            idx = int(match.group(1))
-        except ValueError:
-            continue
-        candidates.append((idx, child))
+    if not work_dir.is_dir() or not job_name:
+        return []
+    candidates: list[tuple[int, Path]] = []
+    try:
+        children = list(work_dir.iterdir())
+    except OSError:
+        return []
+    for child in children:
+        if child.is_file() and child.name.startswith(job_name):
+            match = _ANIM_FILE_RE.search(child.name)
+            if match:
+                candidates.append((int(match.group(1)), child))
     candidates.sort(key=lambda item: item[0])
     return [path for _, path in candidates]
 
 
-def resolve_anim_to_vtk(explicit: Optional[str] = None) -> Optional[str]:
+def resolve_anim_to_vtk(explicit: str | None = None) -> str | None:
     """Locate an ``anim_to_vtk`` converter binary if installed."""
     return resolve_executable(
         explicit,
@@ -153,9 +168,7 @@ def _normalise_anim_vtk(text: str) -> str:
     """
     lines = text.splitlines()
     try:
-        i_cells = next(
-            i for i, ln in enumerate(lines) if ln.startswith("CELLS ")
-        )
+        i_cells = next(i for i, ln in enumerate(lines) if ln.startswith("CELLS "))
     except StopIteration:
         return text
     try:
@@ -164,10 +177,7 @@ def _normalise_anim_vtk(text: str) -> str:
     except (ValueError, IndexError):
         return text
     try:
-        i_types = next(
-            i for i, ln in enumerate(lines)
-            if ln.startswith("CELL_TYPES ")
-        )
+        i_types = next(i for i, ln in enumerate(lines) if ln.startswith("CELL_TYPES "))
     except StopIteration:
         return text
 
@@ -187,7 +197,11 @@ def _normalise_anim_vtk(text: str) -> str:
             total += len(row.split())
             continue
         parts = row.split()
-        if cell_type == 5 and len(parts) >= 4 and int(parts[0]) > 3:
+        try:
+            node_count = int(parts[0]) if parts else 0
+        except ValueError:
+            node_count = 0
+        if cell_type == 5 and len(parts) >= 4 and node_count > 3:
             # Drop the trailing duplicated node and reset the leading count.
             keep = parts[1:4]
             row = "3 " + " ".join(keep)
@@ -205,11 +219,11 @@ def _normalise_anim_vtk(text: str) -> str:
 
 
 def convert_anim_files(
-    anim_files: List[Path],
+    anim_files: list[Path],
     converter: str,
     timeout_s: float = 600.0,
-    max_workers: Optional[int] = None,
-) -> List[Path]:
+    max_workers: int | None = None,
+) -> list[Path]:
     """Run ``anim_to_vtk`` for each animation file in parallel.
 
     Each invocation is an independent process — ``ThreadPoolExecutor`` lets
@@ -222,71 +236,84 @@ def convert_anim_files(
     """
     import concurrent.futures as cf
 
+    timeout_s = positive_float(timeout_s, label="Animation conversion timeout")
     if max_workers is None:
         max_workers = min(os.cpu_count() or 4, 8)
+    max_workers = integer(
+        max_workers,
+        label="Animation conversion worker count",
+        minimum=1,
+    )
 
     n = len(anim_files)
     if n == 0:
         return []
-    print(f"OpenRadioss: converting {n} animation file(s) via anim_to_vtk "
-          f"(parallelism={max_workers})...")
+    logger.info(
+        "Converting %d OpenRadioss animation file(s) with %d worker(s)",
+        n,
+        max_workers,
+    )
 
-    def _convert_one(anim: Path) -> Path:
+    def _convert_one(anim: Path) -> Path | None:
         # The OpenRadioss ``anim_to_vtk`` tool writes the converted VTK ASCII
         # to STDOUT (not to a file), so we must capture stdout and write it
         # to ``<anim>.vtk`` ourselves.  Earlier versions of this function
         # piped stdout to a dropped pipe, which is why the conversion appeared
         # to succeed (exit 0) but produced no .vtk files.
-        out_path = anim.with_name(anim.name + ".vtk")
+        output_path = anim.with_name(anim.name + ".vtk")
         try:
             if (
-                out_path.is_file()
-                and out_path.stat().st_mtime_ns >= anim.stat().st_mtime_ns
+                output_path.is_file()
+                and output_path.stat().st_mtime_ns >= anim.stat().st_mtime_ns
             ):
-                return anim
+                return output_path
         except OSError:
             pass
         try:
             proc = subprocess.run(
                 [converter, str(anim)],
                 cwd=str(anim.parent),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 text=True,
                 timeout=timeout_s,
                 check=False,
+                **headless_subprocess_kwargs(),
             )
-        except subprocess.TimeoutExpired:
-            return anim
-        if proc.returncode == 0 and proc.stdout:
-            try:
-                out_path.write_text(_normalise_anim_vtk(proc.stdout),
-                                    encoding="utf-8")
-            except OSError:
-                pass
-        return anim
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            logger.warning("Could not convert %s: %s", anim.name, exc)
+            return None
+        if proc.returncode != 0 or not proc.stdout:
+            logger.warning(
+                "anim_to_vtk failed for %s (exit=%d): %s",
+                anim.name,
+                proc.returncode,
+                (proc.stderr or "").strip(),
+            )
+            return None
+        try:
+            output_path.write_text(
+                _normalise_anim_vtk(proc.stdout),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logger.warning("Could not write %s: %s", output_path, exc)
+            return None
+        return output_path
 
     done = 0
+    vtk_paths: list[Path] = []
     with cf.ThreadPoolExecutor(max_workers=max_workers) as pool:
-        for _ in pool.map(_convert_one, anim_files):
+        for output_path in pool.map(_convert_one, anim_files):
             done += 1
+            if output_path is not None:
+                vtk_paths.append(output_path)
             # Coarse progress so the user sees movement on long batches.
             if done == 1 or done == n or done % max(1, n // 10) == 0:
-                print(f"  converted {done}/{n}")
-
-    # Collect everything the converter dropped next to its inputs.
-    vtk_paths: List[Path] = []
-    seen: set = set()
-    for anim in anim_files:
-        for pattern in (anim.name + "*.vtk", anim.stem + "*.vtk"):
-            for produced in sorted(anim.parent.glob(pattern)):
-                if produced.is_file() and produced not in seen:
-                    vtk_paths.append(produced)
-                    seen.add(produced)
+                logger.info("Converted %d/%d OpenRadioss frame(s)", done, n)
     return vtk_paths
 
 
-def _von_mises_from_tensor(arr: np.ndarray) -> Optional[np.ndarray]:
+def _von_mises_from_tensor(arr: np.ndarray) -> np.ndarray | None:
     """Return Von Mises stress from common tensor layouts."""
     arr = np.asarray(arr, dtype=float)
     if arr.ndim == 3 and arr.shape[1] >= 3 and arr.shape[2] >= 3:
@@ -307,14 +334,16 @@ def _von_mises_from_tensor(arr: np.ndarray) -> Optional[np.ndarray]:
             (sxx - syy) ** 2
             + (syy - szz) ** 2
             + (szz - sxx) ** 2
-            + 6.0 * (sxy ** 2 + syz ** 2 + szx ** 2)
+            + 6.0 * (sxy**2 + syz**2 + szx**2)
         )
     )
 
 
-
-
-def _extract_cell_scalar(mesh, name_matches, reducer: str = "max") -> Optional[np.ndarray]:
+def _extract_cell_scalar(
+    mesh: Any,
+    name_matches: Callable[[str], bool],
+    reducer: str = "max",
+) -> np.ndarray | None:
     """Return one scalar per meshio cell across all matching result fields."""
     blocks = list(getattr(mesh, "cells", []) or [])
     cell_data = getattr(mesh, "cell_data", {}) or {}
@@ -322,16 +351,20 @@ def _extract_cell_scalar(mesh, name_matches, reducer: str = "max") -> Optional[n
         return None
     block_sizes = [int(block.data.shape[0]) for block in blocks]
     total = sum(block_sizes)
-    combined = None
+    combined: np.ndarray | None = None
 
     for name, values_by_block in cell_data.items():
         if not name_matches(str(name).lower()):
             continue
-        candidate = np.zeros(total, dtype=float)
+        candidate: np.ndarray = np.zeros(total, dtype=float)
         offset = 0
         valid_field = False
         for block_index, n_cells in enumerate(block_sizes):
-            values = values_by_block[block_index] if block_index < len(values_by_block) else None
+            values = (
+                values_by_block[block_index]
+                if block_index < len(values_by_block)
+                else None
+            )
             if values is not None:
                 arr = np.asarray(values, dtype=float)
                 if arr.size:
@@ -351,7 +384,11 @@ def _extract_cell_scalar(mesh, name_matches, reducer: str = "max") -> Optional[n
     return combined
 
 
-def _cell_scalar_to_points(mesh, values, reducer: str = "average") -> Optional[np.ndarray]:
+def _cell_scalar_to_points(
+    mesh: Any,
+    values: Any,
+    reducer: str = "average",
+) -> np.ndarray | None:
     """Project block-aligned cell scalars onto their incident VTK points."""
     if values is None or mesh.points is None:
         return None
@@ -360,10 +397,10 @@ def _cell_scalar_to_points(mesh, values, reducer: str = "average") -> Optional[n
     if n_points <= 0 or values.size == 0:
         return None
 
-    out = np.zeros(n_points, dtype=float)
-    counts = np.zeros(n_points, dtype=float)
+    out: np.ndarray = np.zeros(n_points, dtype=float)
+    counts: np.ndarray = np.zeros(n_points, dtype=float)
     offset = 0
-    for block in (mesh.cells or []):
+    for block in mesh.cells or []:
         conn = np.asarray(block.data, dtype=int)
         n_cells = int(conn.shape[0]) if conn.ndim == 2 else 0
         block_values = values[offset : offset + n_cells]
@@ -387,7 +424,7 @@ def _cell_scalar_to_points(mesh, values, reducer: str = "average") -> Optional[n
 # Override the legacy solid-first implementation above. OpenRadioss writes
 # parallel 2D/3D arrays with zeros in the irrelevant field; combining both is
 # required for shell and mixed-element decks.
-def _cell_vm_to_point_vm(mesh) -> Optional[np.ndarray]:
+def _cell_vm_to_point_vm(mesh: Any) -> np.ndarray | None:
     vm_cell = _extract_cell_scalar(
         mesh,
         lambda name: "von" in name or "vonmis" in name,
@@ -411,20 +448,23 @@ def _cell_vm_to_point_vm(mesh) -> Optional[np.ndarray]:
     return None
 
 
-def _vtk_point_data(mesh) -> Tuple[
-    Optional[np.ndarray],     # disp (N, 3)
-    Optional[np.ndarray],     # vm   (N,)
-    Optional[np.ndarray],     # node_ids (N,) 1-based
-    Optional[np.ndarray],     # velocity (N, 3)
-    Optional[np.ndarray],     # acceleration (N, 3)
-    Optional[np.ndarray],     # cell internal energy density per element (N_elem,)
-    Optional[np.ndarray],     # equivalent plastic strain per point (N,)
-    Optional[np.ndarray],     # failed flag per point (N,)
-    Optional[np.ndarray],     # element ids (N_elem,) 1-based, 0 for generated cells
-    Optional[np.ndarray],     # equivalent plastic strain per cell (N_elem,)
-    Optional[np.ndarray],     # failed flag per cell (N_elem,)
+def _vtk_point_data(
+    mesh: Any,
+) -> tuple[
+    np.ndarray | None,  # disp (N, 3)
+    np.ndarray | None,  # vm   (N,)
+    np.ndarray | None,  # node_ids (N,) 1-based
+    np.ndarray | None,  # velocity (N, 3)
+    np.ndarray | None,  # acceleration (N, 3)
+    np.ndarray | None,  # cell internal energy density per element (N_elem,)
+    np.ndarray | None,  # equivalent plastic strain per point (N,)
+    np.ndarray | None,  # failed flag per point (N,)
+    np.ndarray | None,  # element ids (N_elem,) 1-based, 0 for generated cells
+    np.ndarray | None,  # equivalent plastic strain per cell (N_elem,)
+    np.ndarray | None,  # failed flag per cell (N_elem,)
 ]:
-    """Extract displacement, Von Mises, velocity, acceleration, and energy.
+    """Extract displacement (N,3), Von Mises (N,), velocity (N,3), and cell
+    internal energy density (N_elem,) from a meshio object.
 
     OpenRadioss's ``anim_to_vtk`` writes displacement under names that vary by
     release ("Displacement", "DISP", "DEPLACEMENT"); velocity is "VEL" /
@@ -432,11 +472,11 @@ def _vtk_point_data(mesh) -> Tuple[
     density is in cell_data under "Energy", "ENER", or "Internal_Energy".
     We probe the common spellings.
     """
-    disp: Optional[np.ndarray] = None
-    vm: Optional[np.ndarray] = None
-    node_ids: Optional[np.ndarray] = None
-    vel: Optional[np.ndarray] = None
-    acc: Optional[np.ndarray] = None
+    disp: np.ndarray | None = None
+    vm: np.ndarray | None = None
+    node_ids: np.ndarray | None = None
+    vel: np.ndarray | None = None
+    acc: np.ndarray | None = None
 
     point_data = getattr(mesh, "point_data", {}) or {}
     for key in point_data:
@@ -455,9 +495,7 @@ def _vtk_point_data(mesh) -> Tuple[
                 vel = arr[:, :3]
             elif arr.ndim == 1 and arr.size % 3 == 0:
                 vel = arr.reshape((-1, 3))
-        if acc is None and (
-            kl == "acc" or "accel" in kl or "acceler" in kl
-        ):
+        if acc is None and (kl == "acc" or "accel" in kl or "acceler" in kl):
             arr = np.asarray(point_data[key], dtype=float)
             if arr.ndim == 2 and arr.shape[1] >= 3:
                 acc = arr[:, :3]
@@ -480,7 +518,7 @@ def _vtk_point_data(mesh) -> Tuple[
                         (sxx - syy) ** 2
                         + (syy - szz) ** 2
                         + (szz - sxx) ** 2
-                        + 6.0 * (sxy ** 2 + syz ** 2 + szx ** 2)
+                        + 6.0 * (sxy**2 + syz**2 + szx**2)
                     )
                 )
     if vm is None:
@@ -510,12 +548,21 @@ def _vtk_point_data(mesh) -> Tuple[
     if element_ids is not None:
         element_ids = np.asarray(element_ids, dtype=int)
     return (
-        disp, vm, node_ids, vel, acc, ener_cell, eps_point, failed_point,
-        element_ids, eps_cell, failed_cell,
+        disp,
+        vm,
+        node_ids,
+        vel,
+        acc,
+        ener_cell,
+        eps_point,
+        failed_point,
+        element_ids,
+        eps_cell,
+        failed_cell,
     )
 
 
-def _extract_cell_ener(mesh) -> Optional[np.ndarray]:
+def _extract_cell_ener(mesh: Any) -> np.ndarray | None:
     """Return per-element internal-energy density (one scalar per solid cell).
 
     OpenRadioss tags 2D vs 3D fields in cell_data — for tet meshes the 3D
@@ -548,7 +595,7 @@ def _extract_cell_ener(mesh) -> Optional[np.ndarray]:
             continue
         # Concatenate all cell types preserving the meshio cell-block order
         # so indices line up with mesh.cells.
-        out_blocks: List[np.ndarray] = []
+        out_blocks: list[np.ndarray] = []
         for block in mesh.cells:
             vals = by_type.get(block.type)
             if vals is None:
@@ -563,15 +610,13 @@ def _extract_cell_ener(mesh) -> Optional[np.ndarray]:
     return None
 
 
-
-
 def read_animation_frames(
     work_dir: str | Path,
     job_name: str,
-    converter: Optional[str] = None,
+    converter: str | None = None,
     timeout_s: float = 600.0,
-    end_time: Optional[float] = None,
-) -> Tuple[List[Dict[str, object]], List[str]]:
+    end_time: float | None = None,
+) -> tuple[list[dict[str, object]], list[str]]:
     """Build a list of viewer-ready crash frames from OpenRadioss output.
 
     Returns
@@ -582,8 +627,13 @@ def read_animation_frames(
         Human-readable diagnostics suitable for the result dict's
         ``warnings`` array.
     """
-    warnings: List[str] = []
+    warnings: list[str] = []
     work_dir = Path(work_dir)
+    if not work_dir.is_dir():
+        warnings.append(f"OpenRadioss work directory does not exist: {work_dir}")
+        return [], warnings
+    if end_time is not None:
+        end_time = positive_float(end_time, label="Simulation end time")
     anim_files = find_animation_files(work_dir, job_name)
     if not anim_files:
         warnings.append(
@@ -602,7 +652,7 @@ def read_animation_frames(
         return [], warnings
 
     try:
-        import meshio  # noqa: WPS433 — runtime import keeps PyLCSS startup fast.
+        import meshio
     except Exception as exc:  # pragma: no cover - meshio is a hard dep.
         warnings.append(f"meshio import failed: {exc}; cannot ingest VTK frames.")
         return [], warnings
@@ -615,7 +665,7 @@ def read_animation_frames(
         )
         return [], warnings
 
-    frames: List[Dict[str, object]] = []
+    frames: list[dict[str, object]] = []
     n_anim = max(len(anim_files), 1)
     max_disp_seen = 0.0
     max_vm_seen = 0.0
@@ -630,24 +680,60 @@ def read_animation_frames(
             try:
                 viewer_mesh = RadiossAnimationMesh.from_meshio(mesh)
             except Exception as exc:
-                warnings.append(f"Failed to build playback mesh from {vtk_path.name}: {exc}")
+                warnings.append(
+                    f"Failed to build playback mesh from {vtk_path.name}: {exc}"
+                )
 
         (
-            disp, vm, node_ids, vel, acc, ener_cell, eps_point, failed_point,
-            element_ids, eps_cell, failed_cell,
+            disp,
+            vm,
+            node_ids,
+            vel,
+            acc,
+            ener_cell,
+            eps_point,
+            failed_point,
+            element_ids,
+            eps_cell,
+            failed_cell,
         ) = _vtk_point_data(mesh)
         vm_cell = _extract_cell_scalar(
             mesh,
             lambda name: "von" in name or "vonmis" in name,
             reducer="max",
         )
+        invalid_fields = [
+            name
+            for name, values in (
+                ("points", mesh.points),
+                ("displacement", disp),
+                ("stress", vm),
+                ("cell stress", vm_cell),
+                ("velocity", vel),
+                ("acceleration", acc),
+                ("internal energy", ener_cell),
+                ("plastic strain", eps_point),
+                ("failure status", failed_point),
+                ("cell plastic strain", eps_cell),
+                ("cell failure status", failed_cell),
+            )
+            if values is not None
+            and not np.all(np.isfinite(np.asarray(values, dtype=float)))
+        ]
+        if invalid_fields:
+            warnings.append(
+                f"Skipped {vtk_path.name}: non-finite "
+                + ", ".join(invalid_fields)
+                + " values."
+            )
+            continue
         n_points = int(mesh.points.shape[0]) if mesh.points is not None else 0
         if disp is None:
             disp = np.zeros((n_points, 3), dtype=float)
         if vm is None:
             vm = np.zeros(n_points, dtype=float)
         # Flatten to the viewer's [3*N] layout (per-node X,Y,Z grouped).
-        flat_disp = np.zeros(3 * n_points, dtype=float)
+        flat_disp: np.ndarray = np.zeros(3 * n_points, dtype=float)
         flat_disp[0::3] = disp[:, 0]
         flat_disp[1::3] = disp[:, 1]
         flat_disp[2::3] = disp[:, 2]
@@ -666,35 +752,59 @@ def read_animation_frames(
                 "mesh": viewer_mesh,
                 "displacement": flat_disp,
                 "stress_vm": np.asarray(vm, dtype=float),
-                "stress_vm_cell": (np.asarray(vm_cell, dtype=float)
-                                   if vm_cell is not None else None),
-                "velocity": (np.asarray(vel, dtype=float) if vel is not None
-                              else np.zeros((n_points, 3), dtype=float)),
-                "acceleration": (
-                    np.asarray(acc, dtype=float) if acc is not None
+                "stress_vm_cell": (
+                    np.asarray(vm_cell, dtype=float) if vm_cell is not None else None
+                ),
+                "velocity": (
+                    np.asarray(vel, dtype=float)
+                    if vel is not None
                     else np.zeros((n_points, 3), dtype=float)
                 ),
-                "ener_cell": (np.asarray(ener_cell, dtype=float) if ener_cell is not None
-                               else None),
+                "acceleration": (
+                    np.asarray(acc, dtype=float)
+                    if acc is not None
+                    else np.zeros((n_points, 3), dtype=float)
+                ),
+                "ener_cell": (
+                    np.asarray(ener_cell, dtype=float)
+                    if ener_cell is not None
+                    else None
+                ),
                 "node_ids": node_ids,
                 "element_ids": element_ids,
-                "eps_p": (np.asarray(eps_point, dtype=float) if eps_point is not None
-                          else np.zeros(n_points, dtype=float)),
-                "failed": (np.asarray(failed_point, dtype=float) if failed_point is not None
-                           else np.zeros(n_points, dtype=float)),
-                "eps_p_cell": (np.asarray(eps_cell, dtype=float) if eps_cell is not None
-                               else None),
-                "failed_cell": (np.asarray(failed_cell, dtype=float) if failed_cell is not None
-                                else None),
+                "eps_p": (
+                    np.asarray(eps_point, dtype=float)
+                    if eps_point is not None
+                    else np.zeros(n_points, dtype=float)
+                ),
+                "failed": (
+                    np.asarray(failed_point, dtype=float)
+                    if failed_point is not None
+                    else np.zeros(n_points, dtype=float)
+                ),
+                "eps_p_cell": (
+                    np.asarray(eps_cell, dtype=float) if eps_cell is not None else None
+                ),
+                "failed_cell": (
+                    np.asarray(failed_cell, dtype=float)
+                    if failed_cell is not None
+                    else None
+                ),
                 "time": float(physical_time),
                 "time_is_normalized": time_is_normalized,
             }
         )
-        max_disp_seen = max(max_disp_seen, float(np.max(np.abs(disp))) if disp.size else 0.0)
+        max_disp_seen = max(
+            max_disp_seen, float(np.max(np.abs(disp))) if disp.size else 0.0
+        )
         max_vm_seen = max(max_vm_seen, float(np.max(vm)) if vm.size else 0.0)
-    print(f"OpenRadioss frames: parsed {len(frames)} VTK files, "
-          f"global max |u| = {max_disp_seen:.4e} mm, "
-          f"global max |VM| raw = {max_vm_seen:.4e}")
+    frames.sort(key=lambda frame: float(str(frame.get("time", 0.0))))
+    logger.info(
+        "Parsed %d OpenRadioss VTK frame(s); max |u|=%.4e mm, max |VM|=%.4e",
+        len(frames),
+        max_disp_seen,
+        max_vm_seen,
+    )
     if max_disp_seen < 1e-6 and max_vm_seen < 1e-6:
         warnings.append(
             "All animation frames carry essentially zero displacement and stress.  "

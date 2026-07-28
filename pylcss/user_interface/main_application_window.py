@@ -1,43 +1,46 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""
-Main application window for PyLCSS.
+"""Main application window and cross-feature UI orchestration."""
 
-This module contains the MainWindow class which serves as the primary
-interface for the application, providing tabs for modeling, solution
-space analysis, optimization, and surrogate training.
-"""
+from __future__ import annotations
 
-from PySide6 import QtWidgets, QtCore, QtGui
-import qtawesome as qta
-
-from pylcss.user_interface.system_modeling import ModelingWidget
-from pylcss.system_modeling.system_model import SystemModel
-from pylcss.system_modeling.model_merge import validate_merge_connections
-from pylcss.system_modeling.graph_validation import validate_graph
-from pylcss.user_interface.solution_space import SolutionSpaceWidget
-from pylcss.user_interface.optimization import OptimizationWidget
-from pylcss.user_interface.common import apply_professional_theme
-
-# --- NEW IMPORTS ---
-from pylcss.user_interface.surrogate import SurrogateTrainingWidget
-from pylcss.user_interface.sensitivity import SensitivityAnalysisWidget
-from pylcss.user_interface.help import HelpWidget
-
-# --- NEW IMPORT ---
-from pylcss.user_interface.cad import ProfessionalCadApp  # Import the widget
-
-# --- AI ASSISTANT IMPORTS ---
-from pylcss.assistant_systems import AssistantManager, AssistantConfig
-
-# --- I/O & MATH IMPORTS ---
-import os
-import logging
-import re
 import html
+import logging
+from collections.abc import Callable, Sequence
+from pathlib import Path
+from typing import Any
+
+import qtawesome as qta
+from PySide6 import QtCore, QtGui, QtWidgets
+
+from pylcss.assistant_systems import AssistantConfig, AssistantManager
+from pylcss.system_modeling.model import SystemModel
+from pylcss.user_interface.cad import ProfessionalCadApp
+from pylcss.user_interface.help import HelpWidget
+from pylcss.user_interface.optimization import OptimizationWidget
+from pylcss.user_interface.project_files import (
+    save_project_manifest,
+    sanitize_project_name,
+    validate_project_folder,
+)
+from pylcss.user_interface.sensitivity import SensitivityAnalysisWidget
+from pylcss.user_interface.solution_space import SolutionSpaceWidget
+from pylcss.user_interface.surrogate import SurrogateTrainingWidget
+from pylcss.user_interface.system_modeling import ModelingWidget
+from pylcss.user_interface.system_modeling.merge_dialog import (
+    validate_merge_connections,
+)
+from pylcss.user_interface.common import (
+    THEMES,
+    apply_theme,
+    current_theme,
+    retheme_node_graph,
+    retheme_widget_styles,
+)
 
 logger = logging.getLogger(__name__)
+
 
 class MainWindow(QtWidgets.QMainWindow):
     """
@@ -56,40 +59,58 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         """
         Initialize the main application window with all components.
-        
+
         Sets up the window title, size, theme, and creates all tab widgets
         for the different application modules.
         """
-        super(MainWindow, self).__init__()
+        super().__init__()
 
         # Window setup
         self.setWindowTitle("PyLCSS")
-        
-        # Use absolute path for icon to support running from any directory
-        import os
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        icon_path = os.path.join(base_dir, "icon.png")
-        self.setWindowIcon(QtGui.QIcon(icon_path))
-        
-        self.resize(1600, 900)
-        self.setMinimumSize(1024, 768) # Ensure window can be resized smaller than default
 
-        # Apply Modern Professional Theme
-        apply_professional_theme()
+        # Use absolute path for icon to support running from any directory
+        icon_path = Path(__file__).with_name("icon.png")
+        self.setWindowIcon(QtGui.QIcon(str(icon_path)))
+
+        self.resize(1600, 900)
+        self.setMinimumSize(
+            1024, 768
+        )  # Ensure window can be resized smaller than default
 
         # Menu Bar
         self.menu_bar = self.menuBar()
         self.file_menu = self.menu_bar.addMenu("File")
-        
+
         self.action_save_project = QtGui.QAction("Save Project", self)
         self.action_save_project.setShortcut("Ctrl+S")
+        self.action_save_project.setToolTip(
+            "Save the complete application project, including Design Studio "
+            "graphs and cached engineering results."
+        )
         self.action_save_project.triggered.connect(self.save_project)
         self.file_menu.addAction(self.action_save_project)
-        
+
         self.action_load_project = QtGui.QAction("Load Project", self)
         self.action_load_project.setShortcut("Ctrl+O")
+        self.action_load_project.setToolTip("Load a complete PyLCSS project folder.")
         self.action_load_project.triggered.connect(self.load_project)
         self.file_menu.addAction(self.action_load_project)
+
+        self.view_menu = self.menu_bar.addMenu("View")
+        theme_menu = self.view_menu.addMenu("Theme")
+        self._theme_action_group = QtGui.QActionGroup(self)
+        self._theme_action_group.setExclusive(True)
+        self._theme_actions = {}
+        for theme_name, label in (("dark", "Dark"), ("light", "Light")):
+            action = QtGui.QAction(label, self)
+            action.setCheckable(True)
+            action.setData(theme_name)
+            action.triggered.connect(
+                lambda checked=False, name=theme_name: self._set_theme(name)
+            )
+            self._theme_action_group.addAction(action)
+            theme_menu.addAction(action)
+            self._theme_actions[theme_name] = action
 
         self._project_io_busy = False
         self._project_io_dialog = None
@@ -102,7 +123,9 @@ class MainWindow(QtWidgets.QMainWindow):
         # Tabs setup
         self.tabs: QtWidgets.QTabWidget = QtWidgets.QTabWidget()
         self.tabs.setMovable(False)  # Prevent tab reordering
-        self.tabs.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.tabs.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
+        )
 
         self.content_widget = QtWidgets.QWidget()
         self.content_layout = QtWidgets.QHBoxLayout(self.content_widget)
@@ -114,56 +137,179 @@ class MainWindow(QtWidgets.QMainWindow):
         # 1. Modeling Tab
         self.modeling_widget: ModelingWidget = ModelingWidget()
         self.modeling_widget.build_requested.connect(self.transfer_model)
-        tab_index = self.tabs.addTab(self.modeling_widget, qta.icon('fa5s.project-diagram'), "  Modeling Environment")
-        self.tabs.setTabToolTip(tab_index, "Visual node-based system modeling environment. Create and connect computational nodes to define mathematical relationships between design variables and system outputs.")
+        tab_index = self.tabs.addTab(
+            self.modeling_widget,
+            qta.icon("fa5s.project-diagram"),
+            "  Modeling Environment",
+        )
+        self.tabs.setTabToolTip(
+            tab_index,
+            "Visual node-based system modeling environment. Create and connect computational nodes to define mathematical relationships between design variables and system outputs.",
+        )
 
         # --- ADD NEW TAB HERE ---
         # 2. Design Studio Tab
         self.cad_widget = ProfessionalCadApp()
-        tab_index = self.tabs.addTab(self.cad_widget, qta.icon('fa5s.cube'), "  Design Studio")
-        self.tabs.setTabToolTip(tab_index, "Parametric CAD modeling, simulation setup, and 3D result visualization.")
+        tab_index = self.tabs.addTab(
+            self.cad_widget, qta.icon("fa5s.cube"), "  Design Studio"
+        )
+        self.tabs.setTabToolTip(
+            tab_index,
+            "Parametric CAD modeling, simulation setup, and 3D result visualization.",
+        )
         self.cad_widget.modeling_export_requested.connect(
             self._create_modeling_function_from_study
         )
 
         # 3. Surrogate Training Tab (NEW)
         # Pass modeling_widget to it so it can access the graph nodes
-        self.surrogate_widget: SurrogateTrainingWidget = SurrogateTrainingWidget(modeling_widget=self.modeling_widget)
-        tab_index = self.tabs.addTab(self.surrogate_widget, qta.icon('fa5s.brain'), "  Surrogate Training")
-        self.tabs.setTabToolTip(tab_index, "Train machine learning surrogate models to replace expensive computational models. Supports MLP, Random Forest, Gradient Boosting, Gaussian Process, and deep neural networks.")
-        
+        self.surrogate_widget: SurrogateTrainingWidget = SurrogateTrainingWidget(
+            modeling_widget=self.modeling_widget
+        )
+        tab_index = self.tabs.addTab(
+            self.surrogate_widget, qta.icon("fa5s.brain"), "  Surrogate Training"
+        )
+        self.tabs.setTabToolTip(
+            tab_index,
+            "Train machine learning surrogate models to replace expensive computational models. Supports MLP, Random Forest, Gradient Boosting, Gaussian Process, and deep neural networks.",
+        )
+
         # 4. Solution Space Tab
         self.sol_space_widget: SolutionSpaceWidget = SolutionSpaceWidget()
-        tab_index = self.tabs.addTab(self.sol_space_widget, qta.icon('fa5s.chart-area'), "  Solution Space")
-        self.tabs.setTabToolTip(tab_index, "Explore and visualize the design space through Monte Carlo sampling. Analyze feasibility regions, constraint boundaries, and solution distributions.")
-        
+        tab_index = self.tabs.addTab(
+            self.sol_space_widget, qta.icon("fa5s.chart-area"), "  Solution Space"
+        )
+        self.tabs.setTabToolTip(
+            tab_index,
+            "Explore and visualize the design space through Monte Carlo sampling. Analyze feasibility regions, constraint boundaries, and solution distributions.",
+        )
+
         # 5. Optimization Tab
         self.optimization_widget: OptimizationWidget = OptimizationWidget()
-        tab_index = self.tabs.addTab(self.optimization_widget, qta.icon('fa5s.rocket'), "  Optimization")
-        self.tabs.setTabToolTip(tab_index, "Perform single and multi-objective optimization using various algorithms (SLSQP, NSGA-II, etc.). Includes real-time convergence plotting and constraint analysis.")
-        
+        tab_index = self.tabs.addTab(
+            self.optimization_widget, qta.icon("fa5s.rocket"), "  Optimization"
+        )
+        self.tabs.setTabToolTip(
+            tab_index,
+            "Perform single and multi-objective optimization using various algorithms (SLSQP, NSGA-II, etc.). Includes real-time convergence plotting and constraint analysis.",
+        )
+
         # 6. Sensitivity Analysis Tab (NEW)
-        self.sensitivity_widget: SensitivityAnalysisWidget = SensitivityAnalysisWidget(optimization_widget=self.optimization_widget)
-        tab_index = self.tabs.addTab(self.sensitivity_widget, qta.icon('fa5s.chart-bar'), "  Sensitivity Analysis")
-        self.tabs.setTabToolTip(tab_index, "Conduct global sensitivity analysis using Sobol indices to identify which design variables have the most influence on system outputs.")
-        
+        self.sensitivity_widget: SensitivityAnalysisWidget = SensitivityAnalysisWidget(
+            optimization_widget=self.optimization_widget
+        )
+        tab_index = self.tabs.addTab(
+            self.sensitivity_widget,
+            qta.icon("fa5s.chart-bar"),
+            "  Sensitivity Analysis",
+        )
+        self.tabs.setTabToolTip(
+            tab_index,
+            "Conduct global sensitivity analysis using Sobol indices to identify which design variables have the most influence on system outputs.",
+        )
+
         # 7. Help Tab (NEW)
         self.help_widget: HelpWidget = HelpWidget()
-        tab_index = self.tabs.addTab(self.help_widget, qta.icon('fa5s.question-circle'), "  Help")
-        self.tabs.setTabToolTip(tab_index, "Documentation, tutorials, and information about PyLCSS features, system requirements, and usage guidelines.")
-        
+        tab_index = self.tabs.addTab(
+            self.help_widget, qta.icon("fa5s.question-circle"), "  Help"
+        )
+        self.tabs.setTabToolTip(
+            tab_index,
+            "Documentation, tutorials, and information about PyLCSS features, system requirements, and usage guidelines.",
+        )
+        self._tab_icon_names = (
+            "fa5s.project-diagram",
+            "fa5s.cube",
+            "fa5s.brain",
+            "fa5s.chart-area",
+            "fa5s.rocket",
+            "fa5s.chart-bar",
+            "fa5s.question-circle",
+        )
+
         # Connect tab change to refresh nodes automatically when switching to this tab
         self.tabs.currentChanged.connect(self.on_tab_changed)
 
         # Style the TabWidget specifically for main navigation
         self.tabs.setIconSize(QtCore.QSize(20, 20))
-        
+
         # --- ASSISTANT CONTROL SETUP ---
         self._setup_assistant_systems()
+        self._set_theme(current_theme(), persist=False)
+
+    def _set_theme(self, theme_name: str, *, persist: bool = True) -> None:
+        """Apply a complete application theme, including non-Qt canvases."""
+        theme_name = apply_theme(theme_name, persist=persist)
+        for name, action in self._theme_actions.items():
+            action.setChecked(name == theme_name)
+
+        palette = THEMES[theme_name]
+        for index, icon_name in enumerate(self._tab_icon_names):
+            self.tabs.setTabIcon(index, qta.icon(icon_name, color=palette["text_main"]))
+        graphs = [getattr(self.cad_widget, "graph", None)]
+        current_system_graph = getattr(self.modeling_widget, "current_graph", None)
+        if current_system_graph is not None:
+            graphs.append(current_system_graph)
+        manager = getattr(self.modeling_widget, "system_manager", None)
+        for system in getattr(manager, "systems", []) if manager else []:
+            graph = (
+                system.get("graph")
+                if isinstance(system, dict)
+                else getattr(system, "graph", None)
+            )
+            if graph is not None:
+                graphs.append(graph)
+        for graph in graphs:
+            if graph is None:
+                continue
+            retheme_node_graph(graph, theme_name)
+
+        themed_components = (
+            ("system modeling", self.modeling_widget),
+            ("Design Studio", self.cad_widget),
+            ("help", self.help_widget),
+            ("optimization plots", self.optimization_widget.plots_widget),
+            ("sensitivity", self.sensitivity_widget),
+            ("surrogate training", self.surrogate_widget),
+        )
+        for label, component in themed_components:
+            try:
+                component.apply_theme(theme_name)
+            except Exception:
+                logger.warning(
+                    "Could not apply the %s theme to %s.",
+                    theme_name,
+                    label,
+                    exc_info=True,
+                )
+        try:
+            self.assistant_toggle_btn.setIcon(
+                qta.icon("fa5s.robot", color=palette["text_main"])
+            )
+            self.assistant_settings_btn.setIcon(
+                qta.icon("fa5s.cog", color=palette["text_main"])
+            )
+            self._apply_assistant_document_theme(theme_name)
+        except Exception:
+            logger.warning("Could not retheme the assistant panel.", exc_info=True)
+        retheme_widget_styles(self, theme_name)
+
+    def _apply_assistant_document_theme(self, theme_name: str) -> None:
+        if not hasattr(self, "assistant_log"):
+            return
+        palette = THEMES[str(theme_name).lower()]
+        user_color = "#0969da" if theme_name == "light" else "#a8c7ff"
+        self.assistant_log.document().setDefaultStyleSheet(
+            f".message {{ color: {palette['text_main']}; }}"
+            f".assistant {{ color: {palette['primary']}; }}"
+            f".user {{ color: {user_color}; }}"
+            f".error {{ color: {palette['danger']}; }}"
+        )
 
     @QtCore.Slot(str)
     def _create_modeling_function_from_study(self, project_path: str) -> None:
-        """Run the Design Studio bridge and reveal the created system graph."""
+        """Create a managed Modeling Environment node from a CAD study."""
+
         node = self.modeling_widget.import_design_studio_study(project_path)
         if node is None:
             return
@@ -171,14 +317,21 @@ class MainWindow(QtWidgets.QMainWindow):
         if modeling_index >= 0:
             self.tabs.setCurrentIndex(modeling_index)
         self.statusBar().showMessage(
-            f"Created Modeling Environment function: {node.name()}", 8000
+            f"Created Modeling Environment function: {node.name()}",
+            8000,
         )
 
     def _set_project_io_enabled(self, enabled: bool) -> None:
         self.action_save_project.setEnabled(enabled)
         self.action_load_project.setEnabled(enabled)
 
-    def _run_project_steps(self, title: str, steps, success_message: str, error_title: str) -> None:
+    def _run_project_steps(
+        self,
+        title: str,
+        steps: Sequence[tuple[str, Callable[[], Any]]],
+        success_message: str,
+        error_title: str,
+    ) -> None:
         if self._project_io_busy:
             QtWidgets.QMessageBox.information(
                 self,
@@ -201,7 +354,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._project_io_dialog = dialog
         self.statusBar().showMessage(title)
 
-        state = {'index': 0, 'cancelled': False}
+        state = {"index": 0, "cancelled": False}
 
         def finish(success: bool, message: str = "") -> None:
             self._project_io_busy = False
@@ -219,11 +372,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtWidgets.QMessageBox.critical(self, error_title, message)
 
         def run_next_step() -> None:
-            if state['cancelled']:
+            if state["cancelled"]:
                 finish(False, f"{title} cancelled.")
                 return
 
-            index = state['index']
+            index = state["index"]
             if index >= len(steps):
                 finish(True)
                 return
@@ -236,42 +389,49 @@ class MainWindow(QtWidgets.QMainWindow):
             try:
                 func()
             except Exception as exc:
+                logger.exception("Project step failed: %s", label)
                 finish(False, str(exc))
                 return
 
-            state['index'] += 1
+            state["index"] += 1
             if self._project_io_dialog is not None:
-                self._project_io_dialog.setValue(state['index'])
+                self._project_io_dialog.setValue(state["index"])
             QtCore.QTimer.singleShot(0, run_next_step)
 
-        dialog.canceled.connect(lambda: state.__setitem__('cancelled', True))
+        dialog.canceled.connect(lambda: state.__setitem__("cancelled", True))
         QtCore.QTimer.singleShot(0, run_next_step)
 
-    def _collect_active_tasks(self):
-        tasks = []
+    def _collect_active_tasks(self) -> list[str]:
+        tasks: list[str] = []
 
-        if hasattr(self.cad_widget, '_execution_is_active') and self.cad_widget._execution_is_active():
+        if (
+            hasattr(self.cad_widget, "_execution_is_active")
+            and self.cad_widget._execution_is_active()
+        ):
             tasks.append("CAD computation")
 
-        optimization_worker = getattr(self.optimization_widget, 'worker', None)
+        optimization_worker = getattr(self.optimization_widget, "worker", None)
         if optimization_worker is not None and optimization_worker.isRunning():
             tasks.append("optimization")
 
-        if hasattr(self.sol_space_widget, 'has_active_background_tasks') and self.sol_space_widget.has_active_background_tasks():
+        if (
+            hasattr(self.sol_space_widget, "has_active_background_tasks")
+            and self.sol_space_widget.has_active_background_tasks()
+        ):
             tasks.append("solution-space analysis")
 
-        sensitivity_worker = getattr(self.sensitivity_widget, 'worker', None)
+        sensitivity_worker = getattr(self.sensitivity_widget, "worker", None)
         if sensitivity_worker is not None and sensitivity_worker.isRunning():
             tasks.append("sensitivity analysis")
 
-        refresh_worker = getattr(self.sensitivity_widget, 'refresh_worker', None)
+        refresh_worker = getattr(self.sensitivity_widget, "refresh_worker", None)
         if refresh_worker is not None and refresh_worker.isRunning():
             tasks.append("sensitivity refresh")
 
         for attr_name, label in (
-            ('gen_worker', 'surrogate data generation'),
-            ('worker', 'surrogate training'),
-            ('adaptive_worker', 'adaptive surrogate training'),
+            ("gen_worker", "surrogate data generation"),
+            ("worker", "surrogate training"),
+            ("adaptive_worker", "adaptive surrogate training"),
         ):
             thread = getattr(self.surrogate_widget, attr_name, None)
             if thread is not None and thread.isRunning():
@@ -307,7 +467,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.assistant_manager.status_changed.connect(self._on_assistant_status)
         self.assistant_manager.error_occurred.connect(self._on_assistant_error)
         self.assistant_manager.agentic_progress.connect(self._on_assistant_progress)
-        self.assistant_manager.agentic_result_received.connect(self._on_assistant_agentic_result)
+        self.assistant_manager.agentic_result_received.connect(
+            self._on_assistant_agentic_result
+        )
         self.assistant_manager.agentic_error_received.connect(self._on_assistant_error)
 
         # Initialize in background to not block startup
@@ -316,7 +478,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _setup_assistant_panel(self) -> None:
         """Create the floating assistant button and fixed side panel."""
         self.assistant_toggle_btn = QtWidgets.QToolButton(self.central_widget)
-        self.assistant_toggle_btn.setIcon(qta.icon('fa5s.robot', color='#dce8ff'))
+        self.assistant_toggle_btn.setIcon(qta.icon("fa5s.robot", color="#dce8ff"))
         self.assistant_toggle_btn.setToolTip("AI Assistant")
         self.assistant_toggle_btn.setFixedSize(38, 34)
         self.assistant_toggle_btn.setCursor(QtCore.Qt.PointingHandCursor)
@@ -375,11 +537,11 @@ class MainWindow(QtWidgets.QMainWindow):
         header.addWidget(title)
         header.addStretch()
 
-        settings_btn = QtWidgets.QToolButton()
-        settings_btn.setIcon(qta.icon('fa5s.cog', color='#dce4f2'))
-        settings_btn.setToolTip("Assistant settings")
-        settings_btn.clicked.connect(self._open_llm_settings)
-        header.addWidget(settings_btn)
+        self.assistant_settings_btn = QtWidgets.QToolButton()
+        self.assistant_settings_btn.setIcon(qta.icon("fa5s.cog", color="#dce4f2"))
+        self.assistant_settings_btn.setToolTip("Assistant settings")
+        self.assistant_settings_btn.clicked.connect(self._open_llm_settings)
+        header.addWidget(self.assistant_settings_btn)
 
         close_btn = QtWidgets.QToolButton()
         close_btn.setText("X")
@@ -414,7 +576,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._position_assistant_panel()
 
     def _set_assistant_panel_visible(self, visible: bool) -> None:
-        if not hasattr(self, 'assistant_panel'):
+        if not hasattr(self, "assistant_panel"):
             return
         if visible:
             self.assistant_panel.setVisible(True)
@@ -429,16 +591,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self._position_assistant_panel()
 
     def _position_assistant_panel(self) -> None:
-        if not hasattr(self, 'assistant_toggle_btn'):
+        if not hasattr(self, "assistant_toggle_btn"):
             return
 
         margin = 12
         self.assistant_toggle_btn.move(
-            max(margin, self.central_widget.width() - self.assistant_toggle_btn.width() - margin),
+            max(
+                margin,
+                self.central_widget.width()
+                - self.assistant_toggle_btn.width()
+                - margin,
+            ),
             margin,
         )
 
-        if not hasattr(self, 'assistant_panel') or not self.assistant_panel.isVisible():
+        if not hasattr(self, "assistant_panel") or not self.assistant_panel.isVisible():
             self.assistant_toggle_btn.raise_()
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
@@ -448,15 +615,17 @@ class MainWindow(QtWidgets.QMainWindow):
     def _toggle_assistant_panel(self) -> None:
         self._set_assistant_panel_visible(not self.assistant_panel.isVisible())
 
-    def _append_assistant_message(self, speaker: str, message: str, error: bool = False) -> None:
-        if not hasattr(self, 'assistant_log'):
+    def _append_assistant_message(
+        self, speaker: str, message: str, error: bool = False
+    ) -> None:
+        if not hasattr(self, "assistant_log"):
             return
-        color = '#ff9d9d' if error else ('#a8c7ff' if speaker == 'You' else '#dce4f2')
+        css_class = "error" if error else ("user" if speaker == "You" else "assistant")
         safe_speaker = html.escape(speaker)
-        safe_message = html.escape(str(message)).replace('\n', '<br>')
+        safe_message = html.escape(str(message)).replace("\n", "<br>")
         self.assistant_log.append(
-            f'<p><b style="color:{color};">{safe_speaker}:</b> '
-            f'<span style="color:#eef3ff;">{safe_message}</span></p>'
+            f'<p><b class="{css_class}">{safe_speaker}:</b> '
+            f'<span class="message">{safe_message}</span></p>'
         )
 
     def _send_assistant_text(self) -> None:
@@ -474,7 +643,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.assistant_manager.process_agentic_request(message)
 
     def _on_assistant_status(self, status: str) -> None:
-        if hasattr(self, 'assistant_status_label'):
+        if hasattr(self, "assistant_status_label"):
             self.assistant_status_label.setText(status)
 
     def _on_assistant_progress(self, message: str) -> None:
@@ -482,24 +651,25 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_assistant_agentic_result(self, result: dict, _original_text: str) -> None:
         message = result.get("message", "Completed.")
-        self._append_assistant_message("Assistant", message, error=not result.get("success", False))
+        self._append_assistant_message(
+            "Assistant", message, error=not result.get("success", False)
+        )
         self._on_assistant_status("Ready")
 
     def _on_assistant_error(self, message: str) -> None:
         self._append_assistant_message("Assistant", message, error=True)
-        if hasattr(self, 'assistant_status_label'):
+        if hasattr(self, "assistant_status_label"):
             self.assistant_status_label.setText("Error")
 
-    
     def _open_llm_settings(self) -> None:
         """Open the LLM configuration dialog."""
         from pylcss.user_interface.assistant import LLMConfigDialog
+
         dialog = LLMConfigDialog(self)
         if dialog.exec():
             # Reload manager's provider after settings change
             self.assistant_manager.update_config(AssistantConfig.load())
             self.statusBar().showMessage("LLM settings updated", 3000)
-
 
     def on_tab_changed(self, index: int) -> None:
         """Refresh node list when switching to Surrogate Tab and outputs for Sensitivity Tab."""
@@ -510,84 +680,88 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sensitivity_widget.refresh_outputs()
 
     def transfer_model(self) -> None:
-        """
-        Transfer compiled models from modeling widget to analysis widgets.
+        """Build one executable model and forward it to the analysis tabs."""
 
-        This method retrieves compiled code from the modeling environment,
-        handles model merging for multiple systems, and loads the resulting
-        models into the solution space and optimization widgets.
-        """
-        # Validate the graph before building
-        if not validate_graph(self.modeling_widget):
-            return  # Validation failed, don't build
-        
-        models = self.modeling_widget.get_compiled_code()
-        if models:
-            if len(models) > 1:
-                # Show merge validation dialog
-                if not validate_merge_connections(models, self):
-                    return  # User cancelled
-
-                # Create merged SystemModel
-                try:
-                    product_name = self.modeling_widget.system_manager.product_name.text().strip()
-                    if not product_name:
-                        product_name = "Product"
-                    merged = SystemModel.from_models(models, product_name)
-                    # Transfer the merged SystemModel
-                    self.sol_space_widget.load_models([merged])
-                    self.optimization_widget.load_models([merged])
-                except Exception as e:
-                    QtWidgets.QMessageBox.critical(self, "Build Error", f"Could not create merged model:\n{e}")
-                    # Fallback: create individual SystemModels
-                    system_models = []
-                    for model in models:
-                        try:
-                            system_models.append(SystemModel.from_code_string(
-                                model['name'], model['code'], model['inputs'], model['outputs']
-                            ))
-                        except Exception as e2:
-                            QtWidgets.QMessageBox.warning(self, "Build Warning", f"Could not create SystemModel for {model['name']}:\n{e2}")
-                    if system_models:
-                        self.sol_space_widget.load_models(system_models)
-                        self.optimization_widget.load_models(system_models)
-            else:
-                # Single model - create SystemModel
-                model = models[0]
-                try:
-                    system_model = SystemModel.from_code_string(
-                        model['name'], model['code'], model['inputs'], model['outputs']
-                    )
-                    self.sol_space_widget.load_models([system_model])
-                    self.optimization_widget.load_models([system_model])
-                except Exception as e:
-                    QtWidgets.QMessageBox.critical(self, "Build Error", f"Could not create SystemModel:\n{e}")
-                    # Fallback to old method
-                    self.sol_space_widget.load_models(models)
-                    self.optimization_widget.load_models(models)
-            # Switch to Solution Space tab (Index 3)
-            self.tabs.setCurrentIndex(3)
-
-    def save_project(self):
-        """Save the entire project to a folder."""
-        if self._project_io_busy:
-            QtWidgets.QMessageBox.information(self, "Project Operation In Progress", "Wait for the current project operation to finish first.")
+        if not self.modeling_widget.validate_graph():
             return
 
-        parent_folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Parent Folder for Project")
+        models = self.modeling_widget.get_compiled_code()
+        if not models:
+            return
+        if len(models) > 1 and not validate_merge_connections(models, self):
+            return
+
+        product_name = (
+            self.modeling_widget.system_manager.product_name.text().strip() or "Product"
+        )
+        try:
+            system_model = SystemModel.from_models(models, product_name)
+            self.sol_space_widget.load_models([system_model])
+            self.optimization_widget.load_models([system_model])
+            if self.sol_space_widget.problem is None:
+                raise RuntimeError("Solution Space rejected the built model.")
+            if self.optimization_widget.problem is None:
+                raise RuntimeError("Optimization rejected the built model.")
+        except Exception as exc:
+            logger.exception("Could not transport the built system model")
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Build Error",
+                f"Could not transport the built model:\n{exc}",
+            )
+            return
+
+        self.tabs.setCurrentWidget(self.sol_space_widget)
+
+    def save_project(self) -> None:
+        """Save the entire project to a folder."""
+        if self._project_io_busy:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Project Operation In Progress",
+                "Wait for the current project operation to finish first.",
+            )
+            return
+
+        parent_folder = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Select Parent Folder for Project"
+        )
         if not parent_folder:
             return
 
-        product_name = self.modeling_widget.system_manager.product_name.text().strip() or "New_Project"
-        safe_name = re.sub(r'[<>:"/\\|?*]', '_', product_name)
-        folder_path = os.path.join(parent_folder, safe_name)
+        product_name = self.modeling_widget.system_manager.product_name.text().strip()
+        safe_name = sanitize_project_name(product_name)
+        folder_path = str(Path(parent_folder) / safe_name)
 
         steps = [
-            ("Saving modeling graph...", lambda: self.modeling_widget.save_graph_to_file(folder_path)),
-            ("Saving surrogate settings...", lambda: self.surrogate_widget.save_to_folder(folder_path)),
-            ("Saving solution-space data...", lambda: self.sol_space_widget.save_to_folder(folder_path)),
-            ("Saving optimization settings...", lambda: self.optimization_widget.save_to_folder(folder_path)),
-            ("Saving sensitivity settings...", lambda: self.sensitivity_widget.save_to_folder(folder_path)),
+            (
+                "Saving modeling graph...",
+                lambda: self.modeling_widget.save_graph_to_file(folder_path),
+            ),
+            (
+                "Saving Design Studio workflows and results...",
+                lambda: self.cad_widget.save_to_folder(folder_path),
+            ),
+            (
+                "Saving surrogate settings...",
+                lambda: self.surrogate_widget.save_to_folder(folder_path),
+            ),
+            (
+                "Saving solution-space data...",
+                lambda: self.sol_space_widget.save_to_folder(folder_path),
+            ),
+            (
+                "Saving optimization settings...",
+                lambda: self.optimization_widget.save_to_folder(folder_path),
+            ),
+            (
+                "Saving sensitivity settings...",
+                lambda: self.sensitivity_widget.save_to_folder(folder_path),
+            ),
+            (
+                "Writing project manifest...",
+                lambda: self._save_project_manifest(folder_path),
+            ),
         ]
         self._run_project_steps(
             "Saving project...",
@@ -596,14 +770,29 @@ class MainWindow(QtWidgets.QMainWindow):
             "Save Error",
         )
 
-    def load_project(self):
+    def load_project(self) -> None:
         """Load the entire project from a folder."""
         if self._project_io_busy:
-            QtWidgets.QMessageBox.information(self, "Project Operation In Progress", "Wait for the current project operation to finish first.")
+            QtWidgets.QMessageBox.information(
+                self,
+                "Project Operation In Progress",
+                "Wait for the current project operation to finish first.",
+            )
             return
 
-        folder_path = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Project Folder to Load")
+        folder_path = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Select Project Folder to Load"
+        )
         if not folder_path:
+            return
+        try:
+            self._validate_project_folder(folder_path)
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Invalid Project Folder",
+                str(exc),
+            )
             return
 
         def transfer_solution_space_problem() -> None:
@@ -614,12 +803,31 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.optimization_widget.system_code = self.sol_space_widget.system_code
 
         steps = [
-            ("Loading modeling graph...", lambda: self.modeling_widget.load_graph_from_file(folder_path)),
-            ("Loading surrogate settings...", lambda: self.surrogate_widget.load_from_folder(folder_path)),
-            ("Loading solution-space data...", lambda: self.sol_space_widget.load_from_folder(folder_path)),
+            (
+                "Loading modeling graph...",
+                lambda: self.modeling_widget.load_graph_from_file(folder_path),
+            ),
+            (
+                "Loading Design Studio workflows and results...",
+                lambda: self.cad_widget.load_from_folder(folder_path),
+            ),
+            (
+                "Loading surrogate settings...",
+                lambda: self.surrogate_widget.load_from_folder(folder_path),
+            ),
+            (
+                "Loading solution-space data...",
+                lambda: self.sol_space_widget.load_from_folder(folder_path),
+            ),
             ("Syncing optimization problem...", transfer_solution_space_problem),
-            ("Loading optimization settings...", lambda: self.optimization_widget.load_from_folder(folder_path)),
-            ("Loading sensitivity settings...", lambda: self.sensitivity_widget.load_from_folder(folder_path)),
+            (
+                "Loading optimization settings...",
+                lambda: self.optimization_widget.load_from_folder(folder_path),
+            ),
+            (
+                "Loading sensitivity settings...",
+                lambda: self.sensitivity_widget.load_from_folder(folder_path),
+            ),
         ]
         self._run_project_steps(
             "Loading project...",
@@ -628,3 +836,12 @@ class MainWindow(QtWidgets.QMainWindow):
             "Load Error",
         )
 
+    @staticmethod
+    def _save_project_manifest(folder_path: str | Path) -> None:
+        """Compatibility wrapper for older callers of the window helper."""
+        save_project_manifest(folder_path)
+
+    @staticmethod
+    def _validate_project_folder(folder_path: str | Path) -> None:
+        """Compatibility wrapper for older callers of the window helper."""
+        validate_project_folder(folder_path)

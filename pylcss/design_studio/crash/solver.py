@@ -103,7 +103,7 @@ class CrashSolverNode(CadQueryNode):
             SolverBackendError,
             run_openradioss_crash,
         )
-        from pylcss.solver_backends.common import as_bool, flatten_inputs
+        from pylcss.input_values import as_bool, flatten_inputs
 
         mesh = self.get_input_value('mesh', None)
         material = self.get_input_value('crash_material', None)

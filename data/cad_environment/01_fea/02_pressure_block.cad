@@ -1,0 +1,101 @@
+{
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "block": {
+      "type_": "com.cad.geometry.box.BoxNode",
+      "name": "Pressure Test Block",
+      "pos": [-850.0, -80.0],
+      "custom": {
+        "length_x": 80.0,
+        "width_y": 80.0,
+        "height_z": 16.0,
+        "centered": true
+      }
+    },
+    "base-face": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "name": "Select Supported Base",
+      "pos": [-600.0, -220.0],
+      "custom": {"selector_type": "Direction", "direction": "<Z"}
+    },
+    "pressure-face": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "name": "Select Pressure Face",
+      "pos": [-600.0, 20.0],
+      "custom": {"selector_type": "Direction", "direction": ">Z"}
+    },
+    "mesh": {
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "name": "Quadratic Pressure Mesh",
+      "pos": [-600.0, 190.0],
+      "custom": {
+        "mesh_type": "Tet10",
+        "element_size": 6.0,
+        "refinement_size": 3.0
+      }
+    },
+    "material": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "name": "Aluminum 6061-T6",
+      "pos": [-330.0, 210.0],
+      "custom": {
+        "preset": "Aluminum 6061-T6",
+        "youngs_modulus": 68900.0,
+        "poissons_ratio": 0.33,
+        "density": 2.70e-09,
+        "thermal_conductivity": 167.0,
+        "yield_strength": 276.0,
+        "tangent_modulus": 0.0
+      }
+    },
+    "constraint": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "name": "Fixed Base",
+      "pos": [-330.0, -220.0],
+      "custom": {"constraint_type": "Fixed"}
+    },
+    "pressure": {
+      "type_": "com.cad.sim.pressure_load.PressureLoadNode",
+      "name": "2 MPa Surface Pressure",
+      "pos": [-330.0, 20.0],
+      "custom": {"pressure": 2.0, "direction": "Inward"}
+    },
+    "solver": {
+      "type_": "com.cad.sim.solver.SolverNode",
+      "name": "CalculiX Pressure Verification",
+      "pos": [0.0, -20.0],
+      "custom": {
+        "deck_only": false,
+        "external_timeout_s": 3600.0,
+        "visualization": "Von Mises Stress",
+        "deformation_scale": "Auto",
+        "analysis_type": "Linear",
+        "solver_backend": "CalculiX",
+        "run_external_solver": true
+      }
+    }
+  },
+  "connections": [
+    {"out": ["block", "shape"], "in": ["base-face", "shape"]},
+    {"out": ["block", "shape"], "in": ["pressure-face", "shape"]},
+    {"out": ["block", "shape"], "in": ["mesh", "shape"]},
+    {"out": ["base-face", "workplane"], "in": ["constraint", "target_face"]},
+    {"out": ["pressure-face", "workplane"], "in": ["pressure", "target_face"]},
+    {"out": ["mesh", "mesh"], "in": ["constraint", "mesh"]},
+    {"out": ["mesh", "mesh"], "in": ["pressure", "mesh"]},
+    {"out": ["mesh", "mesh"], "in": ["solver", "mesh"]},
+    {"out": ["material", "material"], "in": ["solver", "material"]},
+    {"out": ["constraint", "constraints"], "in": ["solver", "constraints"]},
+    {"out": ["pressure", "loads"], "in": ["solver", "loads"]}
+  ]
+}

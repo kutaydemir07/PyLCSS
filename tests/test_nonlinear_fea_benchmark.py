@@ -72,3 +72,8 @@ def test_benchmark_cad_enables_real_plastic_nonlinearity():
     assert solver["custom"]["analysis_type"] == "Nonlinear (Plastic)"
     assert material["custom"]["yield_strength"] == 250.0
     assert material["custom"]["tangent_modulus"] > 0.0
+
+    pressure_node_id, pressure_property = BENCHMARK.PRESSURE_KEY.rsplit("::", 1)
+    pressure_node = session["nodes"][pressure_node_id]
+    assert pressure_node["type_"] == "com.cad.sim.pressure_load.PressureLoadNode"
+    assert pressure_property in pressure_node["custom"]

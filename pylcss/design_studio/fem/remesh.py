@@ -1,76 +1,105 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 """FEM remesh node — surface mesh to volumetric mesh via Netgen (post-TopOpt)."""
+
+from __future__ import annotations
+
 import os
 import tempfile
 import logging
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import skfem
+from numpy.typing import ArrayLike
 
 from pylcss.design_studio.core.base_node import CadQueryNode
 from pylcss.design_studio.fem._helpers import suppress_output, OCCGeometry
+from pylcss.design_studio.fem.quality import (
+    MeshLike,
+    MeshQualityReport,
+    attach_mesh_quality,
+)
+
+if TYPE_CHECKING:
+    import trimesh
 
 logger = logging.getLogger(__name__)
+
 
 class RemeshNode(CadQueryNode):
     """
     Remesh Node - Converts surface mesh (from TopOpt) to volumetric tetrahedral mesh.
-    
+
     This node bridges TopOpt → ShapeOpt workflow by taking the recovered shape
     (surface triangles) and creating a new volumetric mesh suitable for FEA.
     """
-    __identifier__ = 'com.cad.sim.remesh'
-    NODE_NAME = 'Remesh Surface'
 
-    def __init__(self):
+    __identifier__ = "com.cad.sim.remesh"
+    NODE_NAME = "Remesh Surface"
+
+    def __init__(self) -> None:
         super().__init__()
         # Input: TopOpt result containing recovered_shape
-        self.add_input('topopt_result', color=(200, 100, 200))
-        
-        # Output: Volumetric mesh
-        self.add_output('mesh', color=(200, 100, 200))
-        self.add_output('shape', color=(100, 255, 100))  # CadQuery solid for visualization
-        
-        # Mesh quality settings
-        self.create_property('element_size', 3.0, widget_type='float')
-        self.create_property('mesh_quality', 'Medium', widget_type='combo',
-                             items=['Coarse', 'Medium', 'Fine', 'Very Fine'])
-        
-        # Surface repair options
-        self.create_property('repair_surface', True, widget_type='bool')
-        self.create_property('close_holes', True, widget_type='bool')
-        self.create_property('max_surface_faces', 2000, widget_type='int')
-        self.create_property('allow_voxel_fallback', False, widget_type='bool')
+        self.add_input("topopt_result", color=(200, 100, 200))
 
-    def run(self):
+        # Output: Volumetric mesh
+        self.add_output("mesh", color=(200, 100, 200))
+        self.add_output(
+            "shape", color=(100, 255, 100)
+        )  # CadQuery solid for visualization
+
+        # Mesh quality settings
+        self.create_property("element_size", 3.0, widget_type="float")
+        self.create_property(
+            "mesh_quality",
+            "Medium",
+            widget_type="combo",
+            items=["Coarse", "Medium", "Fine", "Very Fine"],
+        )
+
+        # Surface repair options
+        self.create_property("repair_surface", True, widget_type="bool")
+        self.create_property("close_holes", True, widget_type="bool")
+        self.create_property("max_surface_faces", 2000, widget_type="int")
+        self.create_property("allow_voxel_fallback", False, widget_type="bool")
+
+    def run(self) -> dict[str, Any] | None:
         """Convert recovered shape to volumetric mesh."""
-        from pylcss.solver_backends.common import as_bool
+        from pylcss.input_values import as_bool
 
         self.clear_error()
-        topopt_result = self.get_input_value('topopt_result', None)
-        
+        topopt_result = self.get_input_value("topopt_result", None)
+
         if topopt_result is None:
             logger.warning("RemeshNode: No TopOpt result provided")
-            self.set_error("Connect a recovered surface or imported STL/OBJ mesh to Remesh Surface.")
+            self.set_error(
+                "Connect a recovered surface or imported STL/OBJ mesh to Remesh Surface."
+            )
             return None
-        
+
         # Extract recovered shape from the full TopOpt result, while also
         # accepting a recovered_shape dict connected directly from the green
         # output port.  The node graph UI makes both connections plausible.
         recovered_shape = None
         if isinstance(topopt_result, dict):
-            recovered_shape = topopt_result.get('recovered_shape', None)
-            if recovered_shape is None and 'vertices' in topopt_result and 'faces' in topopt_result:
+            recovered_shape = topopt_result.get("recovered_shape", None)
+            if (
+                recovered_shape is None
+                and "vertices" in topopt_result
+                and "faces" in topopt_result
+            ):
                 recovered_shape = topopt_result
-        
+
         if recovered_shape is None:
-            self.set_error("Connect a TopOpt result, recovered_shape surface, or imported STL/OBJ mesh.")
+            self.set_error(
+                "Connect a TopOpt result, recovered_shape surface, or imported STL/OBJ mesh."
+            )
             return None
-        
-        vertices = recovered_shape.get('vertices', None)
-        faces = recovered_shape.get('faces', None)
-        
+
+        vertices = recovered_shape.get("vertices", None)
+        faces = recovered_shape.get("faces", None)
+
         if vertices is None or faces is None:
             logger.warning("RemeshNode: Invalid recovered_shape format")
             self.set_error("The connected surface has no vertices or triangle faces.")
@@ -82,30 +111,32 @@ class RemeshNode(CadQueryNode):
         if prepared is not None:
             vertices = np.asarray(prepared.vertices, dtype=float)
             faces = np.asarray(prepared.faces, dtype=int)
-        
-        logger.info(f"RemeshNode: Processing surface with {len(vertices)} vertices, {len(faces)} faces")
-        
+
+        logger.info(
+            f"RemeshNode: Processing surface with {len(vertices)} vertices, {len(faces)} faces"
+        )
+
         try:
-            element_size = float(self.get_property('element_size'))
+            element_size = float(self.get_property("element_size"))
         except (TypeError, ValueError):
             self.set_error("Remesh element size must be numeric.")
             return None
         if not np.isfinite(element_size) or element_size <= 0.0:
             self.set_error("Remesh element size must be finite and greater than zero.")
             return None
-        quality = self.get_property('mesh_quality')
-        
+        quality = self.get_property("mesh_quality")
+
         # Adjust element size based on quality setting
         quality_multipliers = {
-            'Coarse': 2.0,
-            'Medium': 1.0,
-            'Fine': 0.5,
-            'Very Fine': 0.25
+            "Coarse": 2.0,
+            "Medium": 1.0,
+            "Fine": 0.5,
+            "Very Fine": 0.25,
         }
         effective_size = element_size * quality_multipliers.get(quality, 1.0)
-        
+
         try:
-            requested_faces = int(self.get_property('max_surface_faces') or 0)
+            requested_faces = int(self.get_property("max_surface_faces") or 0)
             if requested_faces > 0:
                 tetgen_face_caps = []
                 for cap in (
@@ -135,16 +166,20 @@ class RemeshNode(CadQueryNode):
                     effective_size,
                 )
                 if mesh is not None:
+                    quality_report = self._quality_report(mesh)
+                    if quality_report is None:
+                        continue
                     logger.info(
                         "RemeshNode: Created TetGen surface-conforming volume mesh with %d elements",
                         mesh.nelements,
                     )
                     return {
-                        'mesh': mesh,
-                        'shape': None,
-                        'type': 'remesh',
-                        'source': 'tetgen_surface',
-                        'surface_faces': int(len(tetgen_surface.faces)),
+                        "mesh": mesh,
+                        "shape": None,
+                        "type": "remesh",
+                        "source": "tetgen_surface",
+                        "surface_faces": int(len(tetgen_surface.faces)),
+                        "mesh_quality": quality_report,
                     }
 
             # Method 2: mesh the STL surface directly with Netgen.  This avoids
@@ -156,42 +191,60 @@ class RemeshNode(CadQueryNode):
             )
 
             if mesh is not None:
+                quality_report = self._quality_report(mesh)
+                if quality_report is None:
+                    mesh = None
+            if mesh is not None:
                 logger.info(
                     "RemeshNode: Created STL-derived volumetric mesh with %d elements",
                     mesh.nelements,
                 )
                 return {
-                    'mesh': mesh,
-                    'shape': solid,
-                    'type': 'remesh',
-                    'source': 'stl_surface',
+                    "mesh": mesh,
+                    "shape": solid,
+                    "type": "remesh",
+                    "source": "stl_surface",
+                    "mesh_quality": quality_report,
                 }
 
-            if as_bool(self.get_property('allow_voxel_fallback')):
+            if as_bool(self.get_property("allow_voxel_fallback")):
                 mesh = self._remesh_via_voxel_fill(vertices, faces, effective_size)
+                if mesh is not None:
+                    quality_report = self._quality_report(mesh)
+                    if quality_report is None:
+                        mesh = None
                 if mesh is not None:
                     logger.info(
                         "RemeshNode: Created opt-in voxel-filled fallback volume mesh with %d elements",
                         mesh.nelements,
                     )
                     return {
-                        'mesh': mesh,
-                        'shape': None,
-                        'type': 'remesh',
-                        'source': 'voxel_fill_surface',
+                        "mesh": mesh,
+                        "shape": None,
+                        "type": "remesh",
+                        "source": "voxel_fill_surface",
+                        "mesh_quality": quality_report,
                     }
 
             # Method 3: Create solid from surface mesh and mesh with Netgen.
             mesh, solid = self._remesh_via_solid(vertices, faces, effective_size)
-            
+
             if mesh is not None:
-                logger.info(f"RemeshNode: Created volumetric mesh with {mesh.nelements} elements")
+                quality_report = self._quality_report(mesh)
+                if quality_report is None:
+                    mesh = None
+            if mesh is not None:
+                logger.info(
+                    f"RemeshNode: Created volumetric mesh with {mesh.nelements} elements"
+                )
                 return {
-                    'mesh': mesh,
-                    'shape': solid,
-                    'type': 'remesh'
+                    "mesh": mesh,
+                    "shape": solid,
+                    "type": "remesh",
+                    "source": "sewn_cad_surface",
+                    "mesh_quality": quality_report,
                 }
-            
+
             # Do not fall back to scipy Delaunay for TopOpt surfaces.  That
             # method fills the convex hull and then guesses which tetrahedra
             # are inside from nearest-face normals; on organic marching-cubes
@@ -205,34 +258,61 @@ class RemeshNode(CadQueryNode):
                 "RemeshNode: surface-conforming remesh failed; voxel fallback "
                 "is disabled for FEA-grade workflows."
             )
-            
+
         except Exception as e:
             logger.error(f"RemeshNode: Meshing failed: {e}")
             self.set_error(f"Remesh Surface failed: {e}")
-        
+
         return None
 
-    def _prepare_surface_for_remesh(self, vertices, faces, target_faces=None):
+    @staticmethod
+    def _quality_report(mesh: MeshLike) -> MeshQualityReport | None:
+        """Attach a report and reject meshes with collapsed elements."""
+        try:
+            report = attach_mesh_quality(mesh)
+        except Exception as exc:
+            logger.warning("RemeshNode: mesh-quality assessment failed: %s", exc)
+            return None
+        logger.info(
+            "Remesh quality: min=%.4f, p05=%.4f, mean=%.4f; %s",
+            report["min_mean_ratio"],
+            report["p05_mean_ratio"],
+            report["mean_mean_ratio"],
+            report["assessment"],
+        )
+        return report if report["solver_ready"] else None
+
+    def _prepare_surface_for_remesh(
+        self,
+        vertices: ArrayLike,
+        faces: ArrayLike,
+        target_faces: int | None = None,
+    ) -> trimesh.Trimesh | None:
         """Repair and cap dense topology surfaces before volume meshing."""
         try:
             import trimesh
 
             verts = np.asarray(vertices, dtype=float)
             tris = np.asarray(faces, dtype=int)
-            if verts.ndim != 2 or verts.shape[1] < 3 or tris.ndim != 2 or tris.shape[1] < 3:
+            if (
+                verts.ndim != 2
+                or verts.shape[1] < 3
+                or tris.ndim != 2
+                or tris.shape[1] < 3
+            ):
                 return None
             if len(verts) < 4 or len(tris) < 4:
                 return None
 
-            from pylcss.solver_backends.common import as_bool
+            from pylcss.input_values import as_bool
 
             surface = trimesh.Trimesh(
                 vertices=verts[:, :3],
                 faces=tris[:, :3],
-                process=as_bool(self.get_property('repair_surface')),
+                process=as_bool(self.get_property("repair_surface")),
             )
             self._cleanup_surface(surface)
-            if as_bool(self.get_property('close_holes')):
+            if as_bool(self.get_property("close_holes")):
                 try:
                     trimesh.repair.fill_holes(surface)
                 except Exception:
@@ -243,8 +323,9 @@ class RemeshNode(CadQueryNode):
                 pass
 
             face_limit = int(
-                self.get_property('max_surface_faces') if target_faces is None else target_faces
-                or 0
+                self.get_property("max_surface_faces")
+                if target_faces is None
+                else target_faces or 0
             )
             if face_limit > 0 and len(surface.faces) > face_limit:
                 base_volume = 0.0
@@ -269,7 +350,7 @@ class RemeshNode(CadQueryNode):
 
                 accepted = None
                 best = None
-                best_error = float('inf')
+                best_error = float("inf")
                 for candidate_cap in candidate_caps:
                     try:
                         simplified = surface.simplify_quadric_decimation(
@@ -278,7 +359,7 @@ class RemeshNode(CadQueryNode):
                         if simplified is None or len(simplified.faces) < 4:
                             continue
                         self._cleanup_surface(simplified)
-                        if as_bool(self.get_property('close_holes')):
+                        if as_bool(self.get_property("close_holes")):
                             try:
                                 trimesh.repair.fill_holes(simplified)
                             except Exception:
@@ -290,7 +371,10 @@ class RemeshNode(CadQueryNode):
 
                         volume_error = 0.0
                         if base_volume > 1e-9 and simplified.is_watertight:
-                            volume_error = abs(abs(float(simplified.volume)) - base_volume) / base_volume
+                            volume_error = (
+                                abs(abs(float(simplified.volume)) - base_volume)
+                                / base_volume
+                            )
                         if volume_error < best_error:
                             best = simplified
                             best_error = volume_error
@@ -328,13 +412,17 @@ class RemeshNode(CadQueryNode):
                         face_limit,
                         100.0 * best_error,
                     )
-            return surface if len(surface.vertices) >= 4 and len(surface.faces) >= 4 else None
+            return (
+                surface
+                if len(surface.vertices) >= 4 and len(surface.faces) >= 4
+                else None
+            )
         except Exception as exc:
             logger.warning("RemeshNode: surface preparation failed: %s", exc)
             return None
 
     @staticmethod
-    def _cleanup_surface(surface):
+    def _cleanup_surface(surface: trimesh.Trimesh) -> None:
         try:
             surface.remove_unreferenced_vertices()
             surface.merge_vertices()
@@ -343,14 +431,19 @@ class RemeshNode(CadQueryNode):
         except Exception:
             pass
 
-    def _remesh_via_tetgen_surface(self, vertices, faces, element_size):
+    def _remesh_via_tetgen_surface(
+        self,
+        vertices: ArrayLike,
+        faces: ArrayLike,
+        element_size: float,
+    ) -> skfem.MeshTet | None:
         """Generate a true tetrahedral body mesh from a closed triangle surface."""
         try:
             import tetgen
             import trimesh
             from skfem import MeshTet
 
-            from pylcss.solver_backends.common import as_bool
+            from pylcss.input_values import as_bool
 
             surface = trimesh.Trimesh(
                 vertices=np.asarray(vertices, dtype=float)[:, :3],
@@ -358,7 +451,7 @@ class RemeshNode(CadQueryNode):
                 process=True,
             )
             self._cleanup_surface(surface)
-            if as_bool(self.get_property('close_holes')):
+            if as_bool(self.get_property("close_holes")):
                 try:
                     trimesh.repair.fill_holes(surface)
                 except Exception:
@@ -426,12 +519,19 @@ class RemeshNode(CadQueryNode):
                     last_error = exc
             if nodes is None or elements is None:
                 if last_error is not None:
-                    logger.warning("RemeshNode: TetGen quality meshing failed: %s", last_error)
+                    logger.warning(
+                        "RemeshNode: TetGen quality meshing failed: %s", last_error
+                    )
                 return None
 
             pts = np.asarray(nodes, dtype=float)
             tet_arr = np.asarray(elements, dtype=int)
-            if pts.ndim != 2 or pts.shape[1] < 3 or tet_arr.ndim != 2 or tet_arr.shape[1] < 4:
+            if (
+                pts.ndim != 2
+                or pts.shape[1] < 3
+                or tet_arr.ndim != 2
+                or tet_arr.shape[1] < 4
+            ):
                 return None
             keep = np.ones(len(tet_arr), dtype=bool)
             for idx, row in enumerate(tet_arr):
@@ -453,7 +553,12 @@ class RemeshNode(CadQueryNode):
             logger.warning("RemeshNode: TetGen remesh failed: %s", exc)
             return None
 
-    def _remesh_via_stl_geometry(self, vertices, faces, element_size):
+    def _remesh_via_stl_geometry(
+        self,
+        vertices: ArrayLike,
+        faces: ArrayLike,
+        element_size: float,
+    ) -> tuple[skfem.MeshTet | None, None]:
         """Volume-mesh a closed STL-like triangle surface using Netgen-STL.
 
         This is the preferred path for topology-optimization output and imported
@@ -470,20 +575,25 @@ class RemeshNode(CadQueryNode):
 
             verts = np.asarray(vertices, dtype=float)
             tris = np.asarray(faces, dtype=int)
-            if verts.ndim != 2 or verts.shape[1] < 3 or tris.ndim != 2 or tris.shape[1] < 3:
+            if (
+                verts.ndim != 2
+                or verts.shape[1] < 3
+                or tris.ndim != 2
+                or tris.shape[1] < 3
+            ):
                 return None, None
             if len(verts) < 4 or len(tris) < 4:
                 return None, None
 
-            from pylcss.solver_backends.common import as_bool
+            from pylcss.input_values import as_bool
 
             surface = trimesh.Trimesh(
                 vertices=verts[:, :3],
                 faces=tris[:, :3],
-                process=as_bool(self.get_property('repair_surface')),
+                process=as_bool(self.get_property("repair_surface")),
             )
             self._cleanup_surface(surface)
-            if as_bool(self.get_property('close_holes')):
+            if as_bool(self.get_property("close_holes")):
                 try:
                     trimesh.repair.fill_holes(surface)
                 except Exception:
@@ -501,15 +611,15 @@ class RemeshNode(CadQueryNode):
                     "volume meshing may fail."
                 )
 
-            with tempfile.NamedTemporaryFile(suffix='.stl', delete=False) as stl_file:
+            with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as stl_file:
                 stl_path = stl_file.name
-            msh_path = stl_path + '.msh'
-            surface.export(stl_path, file_type='stl')
+            msh_path = stl_path + ".msh"
+            surface.export(stl_path, file_type="stl")
 
             with suppress_output():
                 geo = STLGeometry(stl_path)
                 ngmesh = geo.GenerateMesh(maxh=float(element_size))
-                ngmesh.Export(msh_path, 'Gmsh2 Format')
+                ngmesh.Export(msh_path, "Gmsh2 Format")
 
             mesh = skfem.MeshTet.load(msh_path)
             return mesh, None
@@ -524,7 +634,12 @@ class RemeshNode(CadQueryNode):
                 except OSError:
                     pass
 
-    def _remesh_via_voxel_fill(self, vertices, faces, element_size):
+    def _remesh_via_voxel_fill(
+        self,
+        vertices: ArrayLike,
+        faces: ArrayLike,
+        element_size: float,
+    ) -> skfem.MeshTet | None:
         """Fallback volume mesh by voxel-filling a watertight STL surface.
 
         This is intentionally a validation fallback: it gives CalculiX and
@@ -565,7 +680,7 @@ class RemeshNode(CadQueryNode):
                 np.arange(counts[0], dtype=int),
                 np.arange(counts[1], dtype=int),
                 np.arange(counts[2], dtype=int),
-                indexing='ij',
+                indexing="ij",
             )
             indices = np.column_stack([ix.ravel(), iy.ravel(), iz.ravel()])
             centers = mins + (indices.astype(float) + 0.5) * cell
@@ -573,18 +688,22 @@ class RemeshNode(CadQueryNode):
                 inside = surface.contains(centers)
             except Exception:
                 from trimesh.proximity import signed_distance
+
                 inside = signed_distance(surface, centers) >= 0.0
             active = indices[np.asarray(inside, dtype=bool)]
             if active.size == 0:
                 from trimesh.proximity import signed_distance
-                active = indices[signed_distance(surface, centers) >= -0.15 * float(np.mean(cell))]
+
+                active = indices[
+                    signed_distance(surface, centers) >= -0.15 * float(np.mean(cell))
+                ]
             if active.size == 0:
                 return None
 
             node_ids = {}
             points = []
 
-            def point_id(i, j, k):
+            def point_id(i: int, j: int, k: int) -> int:
                 key = (int(i), int(j), int(k))
                 existing = node_ids.get(key)
                 if existing is not None:
@@ -595,8 +714,14 @@ class RemeshNode(CadQueryNode):
                 return node_ids[key]
 
             local_corners = (
-                (0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0),
-                (0, 0, 1), (1, 0, 1), (0, 1, 1), (1, 1, 1),
+                (0, 0, 0),
+                (1, 0, 0),
+                (0, 1, 0),
+                (1, 1, 0),
+                (0, 0, 1),
+                (1, 0, 1),
+                (0, 1, 1),
+                (1, 1, 1),
             )
             local_tets = (
                 (0, 1, 3, 7),
@@ -608,7 +733,9 @@ class RemeshNode(CadQueryNode):
             )
             tets = []
             for i, j, k in active:
-                corners = [point_id(i + dx, j + dy, k + dz) for dx, dy, dz in local_corners]
+                corners = [
+                    point_id(i + dx, j + dy, k + dz) for dx, dy, dz in local_corners
+                ]
                 for tet in local_tets:
                     tets.append([corners[idx] for idx in tet])
 
@@ -626,8 +753,13 @@ class RemeshNode(CadQueryNode):
         except Exception as exc:
             logger.warning("RemeshNode: voxel-fill fallback failed: %s", exc)
             return None
-    
-    def _remesh_via_solid(self, vertices, faces, element_size):
+
+    def _remesh_via_solid(
+        self,
+        vertices: ArrayLike,
+        faces: ArrayLike,
+        element_size: float,
+    ) -> tuple[skfem.MeshTet | None, object | None]:
         """Create volumetric mesh by first creating a solid from surface.
 
         .. warning::
@@ -668,41 +800,53 @@ class RemeshNode(CadQueryNode):
                 "Laplacian smoothing + decimation (pyvista/trimesh) is strongly recommended "
                 "before B-Rep conversion."
             )
-            
+
         mesh = None
         solid = None
-        
+
         # Helper to create solid from faces
         try:
             import cadquery as cq
-            from OCP.BRepBuilderAPI import BRepBuilderAPI_Sewing, BRepBuilderAPI_MakeSolid
+            from OCP.BRepBuilderAPI import (
+                BRepBuilderAPI_Sewing,
+                BRepBuilderAPI_MakeSolid,
+            )
             from OCP.gp import gp_Pnt
-            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakePolygon, BRepBuilderAPI_MakeFace
+            from OCP.BRepBuilderAPI import (
+                BRepBuilderAPI_MakePolygon,
+                BRepBuilderAPI_MakeFace,
+            )
             from OCP.ShapeFix import ShapeFix_Solid, ShapeFix_Shell
-            
+
             logger.info("RemeshNode: Attempting surface sewing to create solid...")
-            
+
             # Build shell from triangular faces
             sew = BRepBuilderAPI_Sewing(1e-4)  # Tighter tolerance
-            
+
             for face in faces:
                 try:
                     # Get triangle vertices
-                    pts = [gp_Pnt(float(vertices[idx, 0]), 
-                                  float(vertices[idx, 1]), 
-                                  float(vertices[idx, 2])) for idx in face]
-                    
+                    pts = [
+                        gp_Pnt(
+                            float(vertices[idx, 0]),
+                            float(vertices[idx, 1]),
+                            float(vertices[idx, 2]),
+                        )
+                        for idx in face
+                    ]
+
                     # Create triangular face
                     poly = BRepBuilderAPI_MakePolygon(pts[0], pts[1], pts[2], True)
-                    if not poly.IsDone(): continue
-                        
+                    if not poly.IsDone():
+                        continue
+
                     wire = poly.Wire()
                     face_builder = BRepBuilderAPI_MakeFace(wire, True)
                     if face_builder.IsDone():
                         sew.Add(face_builder.Face())
                 except Exception:
                     continue
-            
+
             sew.Perform()
             sewed_shape = sew.SewedShape()
 
@@ -732,40 +876,42 @@ class RemeshNode(CadQueryNode):
             fixer = ShapeFix_Shell(topods.Shell(shell_shape))
             fixer.Perform()
             shell = fixer.Shell()
-            
+
             # Make solid
             solid_builder = BRepBuilderAPI_MakeSolid()
             solid_builder.Add(shell)
-            
+
             if solid_builder.IsDone():
                 occ_solid = solid_builder.Solid()
-                
+
                 # Fix solid orientation/volume
                 fixer_sol = ShapeFix_Solid(occ_solid)
                 fixer_sol.Perform()
                 occ_solid = fixer_sol.Solid()
-                
+
                 solid = cq.Workplane().add(cq.Shape(occ_solid))
-                
+
                 # Mesh with Netgen if available
                 if OCCGeometry is not None:
                     try:
                         geo = OCCGeometry(occ_solid)
                         ngmesh = geo.GenerateMesh(maxh=element_size)
-                        
+
                         # Export/Import cycle for skfem
-                        with tempfile.NamedTemporaryFile(suffix='.msh', delete=False) as f:
-                            ngmesh.Export(f.name, 'Gmsh2 Format')
+                        with tempfile.NamedTemporaryFile(
+                            suffix=".msh", delete=False
+                        ) as f:
+                            ngmesh.Export(f.name, "Gmsh2 Format")
                             f.close()
                             mesh = skfem.MeshTet.load(f.name)
                             os.unlink(f.name)
-                            
+
                     except Exception as e:
                         logger.warning(f"RemeshNode: Netgen meshing failed: {e}")
             else:
                 logger.warning("RemeshNode: Failed to close shell into solid")
-                
+
         except Exception as e:
             logger.warning(f"RemeshNode: Solid creation failed: {e}")
-        
+
         return mesh, solid

@@ -6,32 +6,36 @@
 
 from __future__ import annotations
 
-from typing import Callable, Optional
-
-import numpy as np
+from typing import Optional
 
 from .bayesian import good_fraction_lower_bound
-from .monte_carlo import sample_and_classify
+from .contracts import (
+    EvaluatableProblem,
+    FloatArray,
+    ProgressCallback,
+    StopCallback,
+)
+from .sampling import sample_and_classify
 from .phase1 import BoxState
-from .step_a import modification_step_a
+from .step_a import trim_box
 
 
-def phase2_iter(
+def run_phase_two(
     state: BoxState,
-    problem,
-    dv_norm: np.ndarray,
-    dv_norm_l: np.ndarray,
-    reqL: np.ndarray,
-    reqU: np.ndarray,
-    parameters: Optional[np.ndarray],
-    ind_parameters: np.ndarray,
+    problem: EvaluatableProblem,
+    dv_norm: FloatArray,
+    dv_norm_l: FloatArray,
+    reqL: FloatArray,
+    reqU: FloatArray,
+    parameters: Optional[FloatArray],
+    ind_parameters: FloatArray,
     sample_size: int,
     target_good_fraction: float,
     confidence: float,
-    weight: np.ndarray,
+    weight: FloatArray,
     phase2_max_iterations: int = 100,
-    stop_callback: Optional[Callable] = None,
-    callback: Optional[Callable] = None,
+    stop_callback: Optional[StopCallback] = None,
+    callback: Optional[ProgressCallback] = None,
     label: str = "",
 ) -> None:
     """Phase-II loop. Updates ``state`` in place.
@@ -47,8 +51,16 @@ def phase2_iter(
             return
 
         good, m, bad, x_samp, viol, y = sample_and_classify(
-            problem, state.bounds, parameters, reqL, reqU,
-            dv_norm, dv_norm_l, ind_parameters, sample_size, n_dims,
+            problem,
+            state.bounds,
+            parameters,
+            reqL,
+            reqU,
+            dv_norm,
+            dv_norm_l,
+            ind_parameters,
+            sample_size,
+            n_dims,
         )
         N = good.size
         good_frac = (m / N) if N else 0.0
@@ -71,20 +83,24 @@ def phase2_iter(
 
         if callback and (it == 1 or it % 5 == 0):
             callback(
-                None, None,
+                None,
+                None,
                 f"  {label} Phase 2 iter {it}: a={good_frac:.4f} a_l={lower:.4f}",
             )
 
         if lower >= target_good_fraction:
             if callback:
                 callback(
-                    None, None,
+                    None,
+                    None,
                     f"  {label} Phase 2 target met at iter {it}: a_l={lower:.4f}",
                 )
             state.phase2_target_reached = True
             return
 
         if good.any() and bad.any():
-            state.bounds, _ = modification_step_a(
-                state.bounds, x_samp, good, bad, weight
-            )
+            state.bounds, _ = trim_box(state.bounds, x_samp, good, bad, weight)
+        elif not good.any():
+            if callback:
+                callback(None, None, f"  {label} Phase 2 stopped: no feasible samples.")
+            return

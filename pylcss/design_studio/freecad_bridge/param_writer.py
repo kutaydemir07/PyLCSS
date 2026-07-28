@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Dict, Mapping
 
 from pylcss.design_studio.freecad_bridge.paths import find_freecad_cmd
+from pylcss.process_utils import headless_subprocess_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +177,7 @@ def write_parameters_to_fcstd(
             capture_output=True, text=True,
             encoding="utf-8", errors="replace",
             timeout=timeout_s,
+            **headless_subprocess_kwargs(),
         )
         if proc.returncode != 0:
             logger.warning(
