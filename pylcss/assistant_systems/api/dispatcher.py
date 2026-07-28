@@ -352,6 +352,8 @@ class CommandDispatcher:
                 handler(data)
             elif command == "train_surrogate_node":
                 handler(data)
+            elif command == "adaptive_training":
+                handler(data)
             elif command == "connect_nodes":
                 handler(data)
             elif command == "set_property":
@@ -1372,15 +1374,25 @@ class CommandDispatcher:
             QMetaObject.invokeMethod(widget.btn_stop, "click", Qt.QueuedConnection)
             logger.info("Assistant: Stopping training")
     
-    def _adaptive_training(self) -> None:
-        """Start adaptive/active learning training."""
+    def _adaptive_training(self, data: Optional[Dict[str, Any]] = None) -> None:
+        """Start adaptive training with optional acquisition/budget settings."""
         if not self.main_window or not hasattr(self.main_window, 'surrogate_widget'):
             return
         widget = self.main_window.surrogate_widget
-        if hasattr(widget, 'btn_adaptive'):
+        if hasattr(widget, 'start_adaptive_training'):
+            params = data.get("params", data) if isinstance(data, dict) else {}
+            allowed = {
+                'strategy', 'n_rounds', 'batch_size', 'n_candidates',
+                'explore_floor', 'min_dist', 'random_state', 'gp_restarts',
+            }
+            settings = {key: value for key, value in params.items() if key in allowed}
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: widget.start_adaptive_training(settings))
+            logger.info("Assistant: Starting adaptive training with settings %s", settings)
+        elif hasattr(widget, 'btn_adaptive'):
             from PySide6.QtCore import QMetaObject, Qt
             QMetaObject.invokeMethod(widget.btn_adaptive, "click", Qt.QueuedConnection)
-            logger.info("Assistant: Starting adaptive training")
+            logger.info("Assistant: Starting adaptive training with GUI defaults")
     
     # --- Optimization Handlers ---
     

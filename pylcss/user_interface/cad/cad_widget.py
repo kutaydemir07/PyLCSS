@@ -1612,6 +1612,7 @@ class PropertiesPanel(QtWidgets.QWidget):
                               "deck_path", "engine_path", "engine_executable_path", "starter_path",
                               "work_dir", "timeout_s", "stress_scale_to_mpa")),
         ("Visualization",   ("visualization", "deformation_scale", "disp_scale", "n_frames")),
+        ("Crash Measurement", ("history_samples", "acceleration_cfc", "force_cfc")),
         ("Solver",          ("end_time", "time_steps", "damping", "enable_", "contact_", "mass_scaling", "iterations",
                              "convergence_tol", "move_limit", "min_density", "penal", "filter_radius",
                              "update_scheme", "filter_type",
@@ -1624,7 +1625,8 @@ class PropertiesPanel(QtWidgets.QWidget):
         ("Material",        ("preset", "E", "nu", "rho", "density", "poissons_ratio", "yield_strength",
                              "tangent_modulus", "failure_strain", "enable_fracture",
                              # Crash-only: engineering-facing rate sensitivity.
-                             "strain_rate_")),
+                             "strain_rate_", "validation_status", "material_lot_id",
+                             "validation_report_path", "validated_rate_")),
         ("Mesh",            ("mesh_type", "element_size", "max_size", "min_size", "order")),
         ("Impact",          ("velocity_", "application_scope", "node_tolerance", "wall_", "impactor_mass_kg")),
         ("Geometry",        ("box_", "length", "width", "depth", "height", "radius", "thickness",
@@ -1692,6 +1694,15 @@ class PropertiesPanel(QtWidgets.QWidget):
             "'Auto' scales so the peak motion is ~5 % of the bounding box.",
         'disp_scale': "Multiplier on the displayed displacement (visual only).",
         'n_frames': "Number of animation frames recorded for playback.",
+        'history_samples':
+            "Number of high-rate OpenRadioss T-file samples used for force, "
+            "energy, mass and crash-pulse histories. Independent of animation frames.",
+        'acceleration_cfc':
+            "SAE J211 / ISO 6487 compatible post-processing Channel Frequency "
+            "Class for the crash pulse. CFC 60 is the occupant-pulse default.",
+        'force_cfc':
+            "Post-processing Channel Frequency Class for rigid-wall force. "
+            "CFC 600 preserves short structural force peaks.",
         'end_time': "Simulation duration. For crash: milliseconds.",
         'time_steps':
             "Crash only: when mass scaling is enabled, the OpenRadioss target\n"
@@ -1719,9 +1730,20 @@ class PropertiesPanel(QtWidgets.QWidget):
         'youngs_modulus':   "Young's modulus E (MPa in the standard mm/t/s unit system).",
         'poissons_ratio':   "Poisson's ratio Î½ (typical 0.27–0.34 for metals).",
         'density':          "Mass density ρ (tonne/mm³ — 7.85e-9 for steel).",
-        'yield_strength':   "Initial yield stress Ïƒ_y (MPa).  Non-zero triggers *PLASTIC in CalculiX.",
+        'thermal_conductivity': "Thermal conductivity used by thermal and thermo-mechanical studies.",
+        'yield_strength':
+            "Initial yield stress (MPa). Linear studies use it as an allowable; "
+            "the plastic law is active only when Analysis Type is Nonlinear (Plastic).",
         'tangent_modulus':  "Bilinear hardening slope after yield (MPa).  Set to 0 for perfectly plastic.",
         'failure_strain':   "Equivalent plastic strain at element deletion (crash only).",
+        'validation_status':
+            "A preset is not validation. Mark validated only when the exact "
+            "material lot/thickness/rate range has a traceable coupon dossier.",
+        'material_lot_id': "Heat/coil/batch identifier used by the simulated test specimens.",
+        'validation_report_path':
+            "Path to the approved coupon/dynamic material validation dossier.",
+        'validated_rate_min_per_s': "Lowest strain rate covered by the material validation [1/s].",
+        'validated_rate_max_per_s': "Highest strain rate covered by the material validation [1/s].",
         'exposed_name':
             "Name this Number/Variable becomes when the .cad file is called from\n"
             "the system-modeling tab via cad.fea(...)/cad.crash(...)/cad.topopt(...).\n"
@@ -3329,10 +3351,44 @@ class ResultsPanel(QtWidgets.QWidget):
                 crash_rows.append(("Absorbed / internal energy", self._fmt(data['absorbed_energy'], "N·mm")))
             if 'n_failed' in data:
                 crash_rows.append(("Failed elements", str(data['n_failed'])))
+            if data.get('peak_force') is not None:
+                crash_rows.append(("Peak crushing force", self._fmt(data['peak_force'], "kN")))
+            if data.get('mean_force') is not None:
+                crash_rows.append(("Mean crushing force", self._fmt(data['mean_force'], "kN")))
+            if data.get('crush_force_efficiency') is not None:
+                crash_rows.append((
+                    "Crush force efficiency",
+                    f"{float(data['crush_force_efficiency']):.3f}",
+                ))
+            if data.get('specific_energy_absorption') is not None:
+                crash_rows.append((
+                    "Specific energy absorption",
+                    self._fmt(data['specific_energy_absorption'], "kJ/kg"),
+                ))
+            if data.get('crush_distance') is not None:
+                crash_rows.append(("Useful crush distance", self._fmt(data['crush_distance'], "mm")))
+            if data.get('peak_acceleration_g') is not None:
+                crash_rows.append(("Peak crash pulse", self._fmt(data['peak_acceleration_g'], "g")))
+            if data.get('delta_v') is not None:
+                crash_rows.append(("Pulse delta-v", self._fmt(data['delta_v'], "m/s")))
             if 'frames' in data and data['frames']:
                 crash_rows.append(("Animation frames", str(len(data['frames']))))
-            if 'energy_balance_max_error' in data:
+            if data.get('energy_balance_max_error') is not None:
                 crash_rows.append(("Energy balance error", f"{float(data['energy_balance_max_error']) * 100:.1f}%"))
+            if data.get('quality_status'):
+                crash_rows.append(("Qualification status", str(data['quality_status']).upper()))
+            if data.get('numerical_status'):
+                crash_rows.append(("Numerical quality", str(data['numerical_status']).upper()))
+            if data.get('physical_validation_status'):
+                crash_rows.append((
+                    "Material / physical validation",
+                    str(data['physical_validation_status']).upper(),
+                ))
+            if data.get('ml_eligible') is not None:
+                crash_rows.append((
+                    "Eligible as ML ground truth",
+                    "YES" if data.get('ml_eligible') else "NO",
+                ))
             if crash_rows:
                 self._add_section("Crash result", crash_rows)
 
@@ -3970,6 +4026,8 @@ class LibraryPanel(QtWidgets.QWidget):
 
 class ProfessionalCadApp(QtWidgets.QMainWindow):
     """Main application window for parametric design and simulation."""
+
+    modeling_export_requested = QtCore.Signal(str)
     
     def __init__(self, parent=None):
         super(ProfessionalCadApp, self).__init__(parent)
@@ -4287,6 +4345,14 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
         )
         self.save_results_action.setToolTip(
             "Save the already-computed FEA / TopOpt / Crash result as portable JSON or HDF5"
+        )
+        self.create_model_function_action = self.toolbar.addAction(
+            _icon("fa5s.project-diagram", "#d29922"),
+            "Create Function",
+            self._request_modeling_function,
+        )
+        self.create_model_function_action.setToolTip(
+            "Save this study and create a connected simulation function in the Modeling Environment"
         )
         self.toolbar.addSeparator()
 
@@ -6138,6 +6204,13 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             'mass',
             'peak_stress',
             'absorbed_energy',
+            'peak_force',
+            'mean_force',
+            'crush_force_efficiency',
+            'specific_energy_absorption',
+            'crush_distance',
+            'peak_acceleration_g',
+            'delta_v',
             'n_failed',
             'energy_balance_max_error',
             'max_stress_gauss',
@@ -6160,6 +6233,16 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             'cell_data': {name: np.asarray(values).tolist() for name, values in cell_data.items()},
             'history': {name: np.asarray(values).tolist() for name, values in history.items()},
         }
+        if isinstance(result.get('histories'), dict):
+            json_payload['crash_histories'] = result['histories']
+            for name, values in result['histories'].get('processed', {}).items():
+                arr = _as_numeric_array(values)
+                if arr is not None:
+                    history[f'crash/{name}'] = arr
+        if isinstance(result.get('quality'), dict):
+            json_payload['crash_quality'] = result['quality']
+        if isinstance(result.get('provenance'), dict):
+            json_payload['provenance'] = result['provenance']
 
         if recovered_shape is not None:
             json_payload['recovered_shape'] = {
@@ -6285,11 +6368,10 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
     def _save_project(self):
         """Save current project."""
         if not self._ensure_idle_for_io("saving the project"):
-            return
+            return False
 
         if not self.current_file:
-            self._save_as_project()
-            return
+            return self._save_as_project()
         
         try:
             self._set_project_context(self.current_file)
@@ -6313,13 +6395,15 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
             
             self.timeline.add_event(f"Saved project: {self.current_file}")
             self.statusBar().showMessage(f"Saved: {self.current_file}")
+            return True
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to save project: {e}")
+            return False
     
     def _save_as_project(self):
         """Save project with a new name."""
         if not self._ensure_idle_for_io("saving the project"):
-            return
+            return False
 
         fname, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Save Project As", "", "Design Projects (*.cad);;All Files (*)"
@@ -6330,7 +6414,21 @@ class ProfessionalCadApp(QtWidgets.QMainWindow):
                 fname += '.cad'
             self.current_file = fname
             self._set_project_context(fname)
-            self._save_project()
+            return self._save_project()
+        return False
+
+    def _request_modeling_function(self):
+        """Persist the active study, then hand it to the Modeling Environment."""
+        if not self._save_project():
+            return
+        project_path = os.path.abspath(self.current_file)
+        self.timeline.add_event(
+            f"Preparing Modeling Environment function: {project_path}"
+        )
+        self.statusBar().showMessage(
+            "Choose the simulation inputs and results for the Modeling Environment."
+        )
+        self.modeling_export_requested.emit(project_path)
     
 
     @staticmethod

@@ -2,7 +2,8 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 """Download and install the external solver components PyLCSS can launch.
 
-CalculiX (``ccx``), OpenRadioss (``starter_*`` / ``engine_*`` / ``anim_to_vtk``)
+CalculiX (``ccx``), OpenRadioss
+(``starter_*`` / ``engine_*`` / ``anim_to_vtk`` / ``th_to_csv``)
 and FreeCAD (``FreeCAD.exe`` for the interactive sketch/FEM authoring node) are
 external components, not Python packages that ship in ``requirements.txt``.
 This script fetches the upstream release archives, unpacks them under
@@ -24,6 +25,7 @@ written env file or by setting these variables yourself:
     PYLCSS_OPENRADIOSS_STARTER      -> full path to ``starter_*``
     PYLCSS_OPENRADIOSS_ENGINE       -> full path to ``engine_*``
     PYLCSS_OPENRADIOSS_ANIM2VTK     -> full path to ``anim_to_vtk``
+    PYLCSS_OPENRADIOSS_TH2CSV       -> full path to ``th_to_csv``
     PYLCSS_FREECAD_EXE              -> full path to ``FreeCAD.exe`` / ``FreeCAD`` / ``FreeCAD.AppImage``
 
 The script is intentionally conservative: it never overwrites an existing
@@ -87,6 +89,7 @@ SOLVERS: Dict[str, Dict[str, SolverAsset]] = {
             # statically) and works out of the box.
             binary_glob="**/ccx_static.exe",
             env_var="PYLCSS_CALCULIX_CCX",
+            sha256="87fc4e1721df37370ec67d0a244bb14f9bf804b0a95df49e2ae7369d30ec72e8",
         ),
         # dhondt.de does not ship Linux/macOS binaries; the .tar.bz2 there is
         # source-only.  The most reliable cross-distro path is the OS package
@@ -122,6 +125,7 @@ SOLVERS: Dict[str, Dict[str, SolverAsset]] = {
             extra_globs={
                 "PYLCSS_OPENRADIOSS_ENGINE": "**/engine_win64.exe",
                 "PYLCSS_OPENRADIOSS_ANIM2VTK": "**/anim_to_vtk*.exe",
+                "PYLCSS_OPENRADIOSS_TH2CSV": "**/th_to_csv*.exe",
             },
         ),
         "Linux": SolverAsset(
@@ -136,6 +140,7 @@ SOLVERS: Dict[str, Dict[str, SolverAsset]] = {
             extra_globs={
                 "PYLCSS_OPENRADIOSS_ENGINE": "**/engine_linux64_gf",
                 "PYLCSS_OPENRADIOSS_ANIM2VTK": "**/anim_to_vtk*",
+                "PYLCSS_OPENRADIOSS_TH2CSV": "**/th_to_csv*",
             },
         ),
         "Darwin": SolverAsset(

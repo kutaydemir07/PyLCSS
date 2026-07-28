@@ -9,7 +9,7 @@ ingest the resulting ``.vtk`` files via meshio (already a PyLCSS dependency).
 
 The animation frames are turned into the dict shape consumed by the crash
 viewer, including displacement, stress, plastic strain, erosion/failure,
-velocity, energy, topology, and physical time.
+velocity, acceleration, energy, topology, and physical time.
 """
 
 from __future__ import annotations
@@ -237,6 +237,15 @@ def convert_anim_files(
         # to ``<anim>.vtk`` ourselves.  Earlier versions of this function
         # piped stdout to a dropped pipe, which is why the conversion appeared
         # to succeed (exit 0) but produced no .vtk files.
+        out_path = anim.with_name(anim.name + ".vtk")
+        try:
+            if (
+                out_path.is_file()
+                and out_path.stat().st_mtime_ns >= anim.stat().st_mtime_ns
+            ):
+                return anim
+        except OSError:
+            pass
         try:
             proc = subprocess.run(
                 [converter, str(anim)],
@@ -250,7 +259,6 @@ def convert_anim_files(
         except subprocess.TimeoutExpired:
             return anim
         if proc.returncode == 0 and proc.stdout:
-            out_path = anim.with_name(anim.name + ".vtk")
             try:
                 out_path.write_text(_normalise_anim_vtk(proc.stdout),
                                     encoding="utf-8")
@@ -408,6 +416,7 @@ def _vtk_point_data(mesh) -> Tuple[
     Optional[np.ndarray],     # vm   (N,)
     Optional[np.ndarray],     # node_ids (N,) 1-based
     Optional[np.ndarray],     # velocity (N, 3)
+    Optional[np.ndarray],     # acceleration (N, 3)
     Optional[np.ndarray],     # cell internal energy density per element (N_elem,)
     Optional[np.ndarray],     # equivalent plastic strain per point (N,)
     Optional[np.ndarray],     # failed flag per point (N,)
@@ -415,8 +424,7 @@ def _vtk_point_data(mesh) -> Tuple[
     Optional[np.ndarray],     # equivalent plastic strain per cell (N_elem,)
     Optional[np.ndarray],     # failed flag per cell (N_elem,)
 ]:
-    """Extract displacement (N,3), Von Mises (N,), velocity (N,3), and cell
-    internal energy density (N_elem,) from a meshio object.
+    """Extract displacement, Von Mises, velocity, acceleration, and energy.
 
     OpenRadioss's ``anim_to_vtk`` writes displacement under names that vary by
     release ("Displacement", "DISP", "DEPLACEMENT"); velocity is "VEL" /
@@ -428,6 +436,7 @@ def _vtk_point_data(mesh) -> Tuple[
     vm: Optional[np.ndarray] = None
     node_ids: Optional[np.ndarray] = None
     vel: Optional[np.ndarray] = None
+    acc: Optional[np.ndarray] = None
 
     point_data = getattr(mesh, "point_data", {}) or {}
     for key in point_data:
@@ -446,6 +455,14 @@ def _vtk_point_data(mesh) -> Tuple[
                 vel = arr[:, :3]
             elif arr.ndim == 1 and arr.size % 3 == 0:
                 vel = arr.reshape((-1, 3))
+        if acc is None and (
+            kl == "acc" or "accel" in kl or "acceler" in kl
+        ):
+            arr = np.asarray(point_data[key], dtype=float)
+            if arr.ndim == 2 and arr.shape[1] >= 3:
+                acc = arr[:, :3]
+            elif arr.ndim == 1 and arr.size % 3 == 0:
+                acc = arr.reshape((-1, 3))
         if vm is None and ("von" in kl or "vonmis" in kl or kl == "vm"):
             arr = np.asarray(point_data[key], dtype=float)
             if arr.ndim == 1:
@@ -493,7 +510,7 @@ def _vtk_point_data(mesh) -> Tuple[
     if element_ids is not None:
         element_ids = np.asarray(element_ids, dtype=int)
     return (
-        disp, vm, node_ids, vel, ener_cell, eps_point, failed_point,
+        disp, vm, node_ids, vel, acc, ener_cell, eps_point, failed_point,
         element_ids, eps_cell, failed_cell,
     )
 
@@ -616,7 +633,7 @@ def read_animation_frames(
                 warnings.append(f"Failed to build playback mesh from {vtk_path.name}: {exc}")
 
         (
-            disp, vm, node_ids, vel, ener_cell, eps_point, failed_point,
+            disp, vm, node_ids, vel, acc, ener_cell, eps_point, failed_point,
             element_ids, eps_cell, failed_cell,
         ) = _vtk_point_data(mesh)
         vm_cell = _extract_cell_scalar(
@@ -653,6 +670,10 @@ def read_animation_frames(
                                    if vm_cell is not None else None),
                 "velocity": (np.asarray(vel, dtype=float) if vel is not None
                               else np.zeros((n_points, 3), dtype=float)),
+                "acceleration": (
+                    np.asarray(acc, dtype=float) if acc is not None
+                    else np.zeros((n_points, 3), dtype=float)
+                ),
                 "ener_cell": (np.asarray(ener_cell, dtype=float) if ener_cell is not None
                                else None),
                 "node_ids": node_ids,

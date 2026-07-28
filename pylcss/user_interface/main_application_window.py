@@ -122,6 +122,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cad_widget = ProfessionalCadApp()
         tab_index = self.tabs.addTab(self.cad_widget, qta.icon('fa5s.cube'), "  Design Studio")
         self.tabs.setTabToolTip(tab_index, "Parametric CAD modeling, simulation setup, and 3D result visualization.")
+        self.cad_widget.modeling_export_requested.connect(
+            self._create_modeling_function_from_study
+        )
 
         # 3. Surrogate Training Tab (NEW)
         # Pass modeling_widget to it so it can access the graph nodes
@@ -157,6 +160,19 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # --- ASSISTANT CONTROL SETUP ---
         self._setup_assistant_systems()
+
+    @QtCore.Slot(str)
+    def _create_modeling_function_from_study(self, project_path: str) -> None:
+        """Run the Design Studio bridge and reveal the created system graph."""
+        node = self.modeling_widget.import_design_studio_study(project_path)
+        if node is None:
+            return
+        modeling_index = self.tabs.indexOf(self.modeling_widget)
+        if modeling_index >= 0:
+            self.tabs.setCurrentIndex(modeling_index)
+        self.statusBar().showMessage(
+            f"Created Modeling Environment function: {node.name()}", 8000
+        )
 
     def _set_project_io_enabled(self, enabled: bool) -> None:
         self.action_save_project.setEnabled(enabled)

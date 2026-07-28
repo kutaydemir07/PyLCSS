@@ -1424,6 +1424,45 @@ def create_pylcss_tools(command_dispatcher: 'CommandDispatcher') -> ToolRegistry
         handler=lambda data: command_dispatcher._train_surrogate_node({"params": data}),
         category="analysis",
     ))
+
+    registry.register(Tool(
+        name="adaptive_training",
+        description=(
+            "Start active surrogate learning for the selected function node. "
+            "Committee (GP–RF) is the validated default acquisition strategy."
+        ),
+        parameters=[
+            ToolParameter(
+                "strategy", "string", "Acquisition strategy",
+                required=False, default="committee",
+                enum=["committee", "uncertainty", "random"],
+            ),
+            ToolParameter(
+                "n_rounds", "number", "Number of adaptive sampling rounds",
+                required=False, default=5,
+            ),
+            ToolParameter(
+                "batch_size", "number", "Expensive simulations per round",
+                required=False, default=10,
+            ),
+            ToolParameter(
+                "n_candidates", "number", "Size of the fixed LHS candidate pool",
+                required=False, default=1000,
+            ),
+            ToolParameter(
+                "explore_floor", "number",
+                "Pure-uncertainty fraction of committee score (0 to 1)",
+                required=False, default=0.3,
+            ),
+            ToolParameter(
+                "min_dist", "number",
+                "Minimum within-batch distance in normalized design space (0 to 1)",
+                required=False, default=0.06,
+            ),
+        ],
+        handler=lambda data: command_dispatcher._adaptive_training({"params": data}),
+        category="analysis",
+    ))
     
     registry.register(Tool(
         name="generate_samples",
@@ -1547,7 +1586,8 @@ CAD_NODE_TYPES = {
     "com.cad.sim.material": {
         "name": "Material",
         "properties": {"preset": "Steel (Structural)", "youngs_modulus": 210000.0,
-                        "poissons_ratio": 0.3, "density": 7.85e-9},
+                        "poissons_ratio": 0.3, "density": 7.85e-9,
+                        "thermal_conductivity": 45.0},
         "outputs": ["material"],
     },
     "com.cad.sim.mesh": {

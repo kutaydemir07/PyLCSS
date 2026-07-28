@@ -3,5 +3,6 @@ from .system_node_types import (
     InputNode,
     OutputNode,
     IntermediateNode,
-    CustomBlockNode
+    CustomBlockNode,
+    SimulationFunctionNode,
 )

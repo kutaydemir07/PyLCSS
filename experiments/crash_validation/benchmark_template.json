@@ -1,0 +1,43 @@
+{
+  "benchmark_id": "REPLACE_WITH_TEST_ID",
+  "status": "fail",
+  "reason": "Template only; replace with traceable measured or approved reference data.",
+  "specimen_id": "REQUIRED",
+  "test_date": "REQUIRED",
+  "test_laboratory": "REQUIRED",
+  "geometry_revision": "REQUIRED",
+  "material_lot_id": "REQUIRED",
+  "thickness_mm": null,
+  "test_replicate_count": null,
+  "boundary_condition": "REQUIRED",
+  "impact_velocity_m_s": null,
+  "impactor_mass_kg": null,
+  "trigger_definition": "REQUIRED",
+  "time_zero_definition": "REQUIRED",
+  "force_channel": {
+    "sensor_id": "REQUIRED",
+    "calibration_id": "REQUIRED",
+    "sample_rate_hz": null,
+    "filter_cfc": 600,
+    "positive_convention": "compression_positive"
+  },
+  "acceleration_channel": {
+    "sensor_id": "REQUIRED",
+    "location": "REQUIRED",
+    "calibration_id": "REQUIRED",
+    "sample_rate_hz": null,
+    "filter_cfc": 60,
+    "axis": "REQUIRED",
+    "positive_convention": "deceleration_positive"
+  },
+  "displacement_channel": {
+    "sensor_id": "REQUIRED",
+    "calibration_id": "REQUIRED",
+    "sample_rate_hz": null,
+    "positive_convention": "crush_positive"
+  },
+  "source_document": "REQUIRED",
+  "license_or_permission": "REQUIRED",
+  "approved_by": "REQUIRED",
+  "approval_date": "REQUIRED"
+}

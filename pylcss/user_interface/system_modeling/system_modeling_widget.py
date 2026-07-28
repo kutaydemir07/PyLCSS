@@ -74,6 +74,7 @@ def _patched_init(self, graph, nodes, emit_signal=True):
 NodesRemovedCmd.__init__ = _patched_init
 from .system_node_types import (
     CustomBlockNode, InputNode, OutputNode, IntermediateNode, CodeEditorDialog,
+    SimulationFunctionNode,
     apply_system_node_style,
 )
 from pylcss.system_modeling.model_builder import GraphBuilder
@@ -91,6 +92,7 @@ class ModelingWidget(QtWidgets.QWidget):
     """
 
     build_requested = QtCore.Signal()
+    simulation_function_created = QtCore.Signal(object, str)
 
     def __init__(self, parent=None):
         """
@@ -206,6 +208,17 @@ class ModelingWidget(QtWidgets.QWidget):
         self.action_add_function.setToolTip("Function / Discipline — Python, FEA, crash, or TopOpt calculation")
         self.action_add_function.triggered.connect(self.add_function_node)
         self.toolbar.addAction(self.action_add_function)
+
+        self.action_import_study = QtGui.QAction(
+            _ico("fa5s.cube", _MDO_ACCENT), "Design Studio", self
+        )
+        self.action_import_study.setToolTip(
+            "Create a managed simulation function from a saved Design Studio study"
+        )
+        self.action_import_study.triggered.connect(
+            lambda: self.import_design_studio_study()
+        )
+        self.toolbar.addAction(self.action_import_study)
 
         # Search Bar
         self.toolbar.addSeparator()
@@ -342,6 +355,168 @@ class ModelingWidget(QtWidgets.QWidget):
     def add_function_node(self):
         if self.current_graph: self.create_node_for_graph(self.current_graph, CustomBlockNode)
 
+    def import_design_studio_study(self, project_path=None):
+        """Open the bridge dialog and create a managed simulation function."""
+        if not project_path:
+            project_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self,
+                "Select Design Studio Study",
+                "",
+                "Design Studio Projects (*.cad);;All Files (*)",
+            )
+        if not project_path:
+            return None
+
+        from pylcss.system_modeling.design_studio_bridge import (
+            inspect_design_studio_study,
+        )
+        from .design_studio_bridge_dialog import DesignStudioBridgeDialog
+
+        try:
+            descriptor = inspect_design_studio_study(project_path)
+        except (OSError, ValueError) as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Cannot Import Study", str(exc)
+            )
+            return None
+        if not descriptor.analyses:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "No Analysis Found",
+                "This Design Studio file has no runnable FEA, crash, or topology-optimization solver.",
+            )
+            return None
+
+        manager = self.system_manager
+        dialog = DesignStudioBridgeDialog(
+            descriptor,
+            manager.system_names(),
+            manager.current_system_name(),
+            parent=self,
+        )
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return None
+
+        try:
+            return self.create_design_studio_function(
+                dialog.selected_spec(),
+                destination_system=dialog.destination_system_name(),
+                create_system=dialog.should_create_system(),
+                create_io_nodes=dialog.should_create_io_nodes(),
+            )
+        except (RuntimeError, ValueError) as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Could Not Create Function", str(exc)
+            )
+            return None
+
+    def create_design_studio_function(
+        self,
+        spec,
+        *,
+        destination_system=None,
+        create_system=False,
+        create_io_nodes=True,
+    ):
+        """Create and optionally wire a Design Studio simulation function."""
+        from pylcss.system_modeling.design_studio_bridge import (
+            validate_simulation_spec,
+        )
+
+        validate_simulation_spec(spec)
+        manager = self.system_manager
+        system_name = str(destination_system or "").strip()
+        if create_system or not manager.systems:
+            system_name, graph = manager.create_named_system(
+                system_name or f"{spec.node_name} Study"
+            )
+        elif system_name:
+            graph = manager.graph_for_system(system_name)
+            if graph is None:
+                raise ValueError(f"Modeling system not found: {system_name}")
+        else:
+            graph = manager.current_graph
+            system_name = manager.current_system_name() or ""
+        if graph is None:
+            raise RuntimeError("No Modeling Environment system is available.")
+
+        simulation = self.create_node_for_graph(graph, SimulationFunctionNode)
+        if simulation is None:
+            raise RuntimeError("The Design Studio Simulation node is not registered.")
+        simulation.configure_from_spec(spec)
+        simulation.set_pos(0.0, 0.0)
+        created_nodes = [simulation]
+
+        if create_io_nodes:
+            # The normal interactive property handler renames variable ports
+            # asynchronously. During an atomic import that would race with the
+            # immediate connections below, so install the exact port names
+            # synchronously and reconnect the handler afterward.
+            property_handler_disconnected = False
+            try:
+                graph.property_changed.disconnect(self.on_property_changed)
+                property_handler_disconnected = True
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                input_spacing = 150.0
+                input_origin = -0.5 * input_spacing * max(0, len(spec.inputs) - 1)
+                for index, item in enumerate(spec.inputs):
+                    variable = self.create_node_for_graph(graph, InputNode)
+                    if variable is None:
+                        raise RuntimeError(f"Could not create design variable {item.port_name!r}.")
+                    variable.set_property('var_name', item.port_name, push_undo=False)
+                    variable.set_property('unit', item.unit or '-', push_undo=False)
+                    variable.set_property('min', f"{item.lower:g}", push_undo=False)
+                    variable.set_property('max', f"{item.upper:g}", push_undo=False)
+                    old_output = variable.output_ports()[0]
+                    if old_output.name() != item.port_name:
+                        variable.delete_output(old_output.name())
+                        variable.add_output(item.port_name)
+                    variable.set_name(item.label or item.port_name)
+                    variable.set_pos(-430.0, input_origin + index * input_spacing)
+                    variable.get_output(item.port_name).connect_to(
+                        simulation.get_input(item.port_name)
+                    )
+                    created_nodes.append(variable)
+
+                output_spacing = 170.0
+                output_origin = -0.5 * output_spacing * max(0, len(spec.outputs) - 1)
+                for index, item in enumerate(spec.outputs):
+                    result = self.create_node_for_graph(graph, OutputNode)
+                    if result is None:
+                        raise RuntimeError(f"Could not create result {item.port_name!r}.")
+                    result.set_property('var_name', item.port_name, push_undo=False)
+                    result.set_property('unit', item.unit or '-', push_undo=False)
+                    old_input = result.input_ports()[0]
+                    if old_input.name() != item.port_name:
+                        result.delete_input(old_input.name())
+                        result.add_input(item.port_name)
+                    result.set_name(item.label or item.port_name)
+                    result.set_pos(430.0, output_origin + index * output_spacing)
+                    simulation.get_output(item.port_name).connect_to(
+                        result.get_input(item.port_name)
+                    )
+                    created_nodes.append(result)
+            finally:
+                if property_handler_disconnected:
+                    graph.property_changed.connect(self.on_property_changed)
+
+        graph.clear_selection()
+        for node in created_nodes:
+            node.set_selected(True)
+        try:
+            graph.fit_to_selection()
+        except Exception:
+            try:
+                graph.center_on(created_nodes)
+            except Exception:
+                pass
+        simulation.set_selected(True)
+        self.current_graph = graph
+        self.simulation_function_created.emit(simulation, system_name)
+        return simulation
+
     def setup_context_menu_for_graph(self, graph):
         menu = graph.context_menu()
 
@@ -360,6 +535,7 @@ class ModelingWidget(QtWidgets.QWidget):
             qmenu.removeAction(action)
 
         menu.add_command('Create Function / Discipline', lambda: self.create_node_for_graph(graph, CustomBlockNode), 'Shift+F')
+        menu.add_command('Create from Design Studio', lambda: self.import_design_studio_study())
         menu.add_command('Create Design Variable', lambda: self.create_node_for_graph(graph, InputNode), 'Shift+I')
         menu.add_command('Create Quantity of Interest', lambda: self.create_node_for_graph(graph, OutputNode), 'Shift+O')
         menu.add_command('Create Intermediate Variable', lambda: self.create_node_for_graph(graph, IntermediateNode), 'Shift+V')

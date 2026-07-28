@@ -588,6 +588,13 @@ class CodeEditorDialog(QtWidgets.QDialog):
             ("Maximum stress", "max_stress"),
             ("Maximum displacement", "peak_disp"),
             ("Absorbed energy", "absorbed_energy"),
+            ("Peak crushing force", "peak_force"),
+            ("Mean crushing force", "mean_force"),
+            ("Crush force efficiency", "crush_force_efficiency"),
+            ("Specific energy absorption", "specific_energy_absorption"),
+            ("Useful crush distance", "crush_distance"),
+            ("Peak crash-pulse acceleration", "peak_acceleration_g"),
+            ("Crash-pulse velocity change", "delta_v"),
             ("Failed element count", "n_failed"),
         ),
         "topopt": (
@@ -1013,6 +1020,27 @@ class CodeEditorDialog(QtWidgets.QDialog):
         (".n_failed",
          ".n_failed",
          "Number of elements deleted via the failure criterion."),
+        (".peak_force",
+         ".peak_force",
+         "Filtered peak crushing force from the rigid wall [kN]."),
+        (".mean_force",
+         ".mean_force",
+         "Force-displacement energy divided by useful crush stroke [kN]."),
+        (".crush_force_efficiency",
+         ".crush_force_efficiency",
+         "Mean crushing force / peak crushing force [-]."),
+        (".specific_energy_absorption",
+         ".specific_energy_absorption",
+         "Absorbed energy per structural mass [kJ/kg]."),
+        (".crush_distance",
+         ".crush_distance",
+         "Monotonic useful crush stroke [mm]."),
+        (".peak_acceleration_g",
+         ".peak_acceleration_g",
+         "Filtered peak reference deceleration [g]."),
+        (".delta_v",
+         ".delta_v",
+         "Velocity change obtained by integrating the crash pulse [m/s]."),
 
         # ── TopOpt standard fields ─────────────────────────────────────
         ("— TopOpt result (cad.topopt) —", None, None),
@@ -1271,6 +1299,11 @@ class CustomBlockNode(BaseNode):
             if widget:
                 widget.get_custom_widget().setReadOnly(True)
 
+        # Button widgets do not define model properties themselves, while
+        # NodeGraphQt still asks for those properties during serialization.
+        self.create_property('edit_function', 'Edit function…')
+        self.create_property('manage_ports', 'Manage ports…')
+        self.create_property('train_surrogate', 'Train surrogate')
         self.add_button(
             'edit_function', text='Edit function…',
             tooltip='Open the function editor, variables, and simulation coupling panel',
@@ -1448,6 +1481,96 @@ class CustomBlockNode(BaseNode):
                 self.delete_output(p.name())
         self._refresh_function_summary()
 
+
+class SimulationFunctionNode(CustomBlockNode):
+    """Managed function block created directly from a Design Studio study."""
+
+    __identifier__ = 'com.pfd.custom_block.simulation'
+    NODE_NAME = 'Design Studio Simulation'
+
+    def __init__(self) -> None:
+        super(SimulationFunctionNode, self).__init__()
+        # Amber identifies a live Design Studio analysis while keeping the
+        # neutral function-node body used throughout the system graph.
+        self.set_color(35, 35, 35)
+        self.set_property('border_color', (210, 153, 34, 255), push_undo=False)
+        self.set_property('text_color', (255, 248, 230, 255), push_undo=False)
+        self.create_property('simulation_project', '')
+        self.create_property('simulation_kind', 'fea')
+        self.create_property('simulation_interface', '')
+        self.create_property('simulation_bridge_version', 1)
+        self.add_text_input(
+            'study_summary', 'Study', text='Design Studio · Not configured',
+            tooltip='Saved Design Studio project and analysis used by this function',
+        )
+        study_widget = self.get_widget('study_summary')
+        if study_widget:
+            study_widget.get_custom_widget().setReadOnly(True)
+
+        # Ports are governed by the selected study interface. They can still
+        # be changed by re-exporting the study, but ad-hoc deletion would make
+        # the generated adapter and metadata disagree.
+        manage_widget = self.get_widget('manage_ports')
+        if manage_widget:
+            manage_widget.setVisible(False)
+        edit_widget = self.get_widget('edit_function')
+        if edit_widget:
+            button = edit_widget.get_custom_widget()
+            button.setText('Inspect adapter…')
+            button.setToolTip(
+                'Inspect the generated Design Studio adapter or configure surrogate execution'
+            )
+
+    def configure_from_spec(self, spec) -> None:
+        """Replace the managed interface with a validated bridge spec."""
+
+        from pylcss.system_modeling.design_studio_bridge import (
+            generate_simulation_function_code,
+            validate_simulation_spec,
+        )
+
+        validate_simulation_spec(spec)
+        for port in list(self.input_ports()):
+            for connected in list(port.connected_ports()):
+                port.disconnect_from(connected)
+            self.delete_input(port.name())
+        for port in list(self.output_ports()):
+            for connected in list(port.connected_ports()):
+                port.disconnect_from(connected)
+            self.delete_output(port.name())
+
+        for item in spec.inputs:
+            self.add_input(item.port_name)
+        for item in spec.outputs:
+            self.add_output(item.port_name)
+
+        # Set counts only after installing the named ports so the inherited
+        # count synchronizer sees an already-correct interface.
+        self.set_property('num_inputs', str(len(spec.inputs)), push_undo=False)
+        self.set_property('num_outputs', str(len(spec.outputs)), push_undo=False)
+        self.set_property(
+            'code_content', generate_simulation_function_code(spec), push_undo=False
+        )
+        self.set_property('simulation_project', spec.project_path, push_undo=False)
+        self.set_property('simulation_kind', spec.analysis_kind, push_undo=False)
+        self.set_property('simulation_interface', spec.to_json(), push_undo=False)
+        self.set_property('simulation_bridge_version', spec.version, push_undo=False)
+        self.set_name(spec.node_name)
+
+        analysis_labels = {
+            'fea': 'Static FEA',
+            'crash': 'Crash simulation',
+            'topopt': 'Topology optimization',
+        }
+        study_name = Path(spec.project_path).stem
+        self.set_property(
+            'study_summary',
+            f"{study_name} · {analysis_labels.get(spec.analysis_kind, spec.analysis_kind)}",
+            push_undo=False,
+        )
+        self._refresh_function_summary()
+
+
 class InputNode(BaseNode):
     """
     Design variable input node for system models.
@@ -1614,6 +1737,7 @@ class IntermediateNode(BaseNode):
 _SYSTEM_NODE_STYLES = {
     'com.pfd.input': ((35, 35, 35, 255), (55, 177, 224, 255), (235, 247, 252, 255)),
     'com.pfd.custom_block': ((35, 35, 35, 255), (148, 107, 220, 255), (242, 238, 250, 255)),
+    'com.pfd.custom_block.simulation': ((35, 35, 35, 255), (210, 153, 34, 255), (255, 248, 230, 255)),
     'com.pfd.output': ((35, 35, 35, 255), (63, 190, 143, 255), (235, 250, 244, 255)),
     'com.pfd.intermediate': ((35, 35, 35, 255), (118, 130, 150, 255), (238, 241, 246, 255)),
 }
@@ -1626,6 +1750,10 @@ _SYSTEM_NODE_TOOLTIPS = {
     'com.pfd.custom_block': (
         '<b>Function / Discipline</b><br/>Transforms inputs into outputs using Python '
         'or a linked Design Studio FEA, crash, or TopOpt study. Double-click to edit.'
+    ),
+    'com.pfd.custom_block.simulation': (
+        '<b>Design Studio Simulation</b><br/>A managed engineering function linked '
+        'to a saved Design Studio analysis. Amber means it executes the live study.'
     ),
     'com.pfd.output': (
         '<b>Quantity of Interest</b><br/>A model result used as a feasibility '

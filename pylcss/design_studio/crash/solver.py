@@ -43,6 +43,18 @@ class CrashSolverNode(CadQueryNode):
         # preview territory; users can raise both for final verification runs.
         self.create_property('end_time',   0.5, widget_type='float')
         self.create_property('n_frames',   30,  widget_type='int')
+        # Time histories must resolve force and acceleration peaks more finely
+        # than viewer animation.  1001 samples is a professional screening
+        # default while keeping T-file size modest.
+        self.create_property('history_samples', 1001, widget_type='int')
+        self.create_property(
+            'acceleration_cfc', '60', widget_type='combo',
+            items=['60', '180', '600', '1000'],
+        )
+        self.create_property(
+            'force_cfc', '600', widget_type='combo',
+            items=['60', '180', '600', '1000'],
+        )
 
         # Viewer-only — picks which field colours the deformed mesh.
         self.create_property(
@@ -62,6 +74,10 @@ class CrashSolverNode(CadQueryNode):
         # the engine deck requests /DT/NODA/CST with dt = end_time / time_steps.
         self.create_property('time_steps', 500, widget_type='int')
         self.create_property('enable_mass_scaling', False, widget_type='checkbox')
+        # Courant safety factor for the mass-neutral /DT/NODA/STOP policy.
+        # 0.9 is the OpenRadioss default; lower values support controlled
+        # temporal-discretisation studies without changing model mass.
+        self.create_property('time_step_scale', 0.9, widget_type='float')
 
         self.create_property('damping_alpha', 0.0, widget_type='float')
         self.create_property('damping_beta', 0.0, widget_type='float')
@@ -124,6 +140,7 @@ class CrashSolverNode(CadQueryNode):
 
         try:
             n_frames = int(self.get_property('n_frames') or 0)
+            history_samples = int(self.get_property('history_samples') or 0)
             end_time = float(self.get_property('end_time') or 0.0)
             timeout_s = float(self.get_property('external_timeout_s') or 0.0)
             impactor_mass = float(self.get_property('impactor_mass_kg') or 0.0)
@@ -133,6 +150,12 @@ class CrashSolverNode(CadQueryNode):
             return None
         if n_frames < 1 or not math.isfinite(end_time) or end_time <= 0.0:
             self.set_error("Crash end time must be positive and result frames must be at least 1.")
+            return None
+        if history_samples < 50:
+            self.set_error(
+                "Crash time history must contain at least 50 samples; "
+                "1001 or more is recommended for qualification."
+            )
             return None
         if not math.isfinite(timeout_s) or timeout_s <= 0.0:
             self.set_error("OpenRadioss timeout must be finite and greater than zero.")
@@ -144,6 +167,13 @@ class CrashSolverNode(CadQueryNode):
             self.set_error("Crash display scale must be finite and greater than zero.")
             return None
         output_dt = end_time / n_frames
+        history_dt = end_time / max(history_samples - 1, 1)
+        try:
+            acceleration_cfc = int(self.get_property('acceleration_cfc') or 60)
+            force_cfc = int(self.get_property('force_cfc') or 600)
+        except (TypeError, ValueError):
+            self.set_error("Crash CFC filter classes must be numeric.")
+            return None
 
         deck_only = as_bool(self.get_property('deck_only'))
         legacy_run = self.get_property('run_external_solver')
@@ -188,6 +218,9 @@ class CrashSolverNode(CadQueryNode):
             if ms_enabled:
                 steps_req = max(int(self.get_property('time_steps') or 500), 1)
                 ms_dt_target = float(end_time) / steps_req
+            time_step_scale = float(
+                self.get_property('time_step_scale') or 0.9
+            )
 
             # Hourglass control is solver policy, not a study knob.
             hg_ihq = INDUSTRIAL_HOURGLASS_IHQ
@@ -201,13 +234,17 @@ class CrashSolverNode(CadQueryNode):
                 config=config,
                 end_time=end_time,
                 output_dt=output_dt,
+                history_dt=history_dt,
                 visualization_mode=self.get_property('visualization'),
                 disp_scale=disp_scale,
                 mass_scaling_dt=ms_dt_target,
                 mass_scaling_scale=0.67,
+                time_step_scale=time_step_scale,
                 impactor_mass=impactor_mass,
                 hourglass_ihq=hg_ihq,
                 hourglass_coefficient=hg_coef,
+                acceleration_cfc=acceleration_cfc,
+                force_cfc=force_cfc,
             )
             warnings = result.get('warnings') or []
             if warnings:

@@ -10,7 +10,13 @@ including creation, deletion, renaming, and switching between systems.
 
 from PySide6 import QtWidgets, QtCore
 from NodeGraphQt import NodeGraph
-from pylcss.user_interface.system_modeling.system_node_types import CustomBlockNode, InputNode, OutputNode, IntermediateNode
+from pylcss.user_interface.system_modeling.system_node_types import (
+    CustomBlockNode,
+    InputNode,
+    IntermediateNode,
+    OutputNode,
+    SimulationFunctionNode,
+)
 
 class SystemManager(QtCore.QObject):
     """
@@ -99,6 +105,7 @@ class SystemManager(QtCore.QObject):
         """
         graph = NodeGraph()
         graph.register_node(CustomBlockNode)
+        graph.register_node(SimulationFunctionNode)
         graph.register_node(InputNode)
         graph.register_node(OutputNode)
         graph.register_node(IntermediateNode)
@@ -107,6 +114,37 @@ class SystemManager(QtCore.QObject):
         self.graph_stack.addWidget(graph.widget)
         self.systems_list.setCurrentRow(len(self.systems) - 1)
         self.system_added.emit(graph)
+        return graph
+
+    def system_names(self):
+        """Return system names in the same order as the visible list."""
+        return [item['name'] for item in self.systems]
+
+    def current_system_name(self):
+        """Return the selected system name, if any."""
+        row = self.systems_list.currentRow()
+        if 0 <= row < len(self.systems):
+            return self.systems[row]['name']
+        return None
+
+    def graph_for_system(self, name):
+        """Select and return a graph by its visible system name."""
+        for row, item in enumerate(self.systems):
+            if item['name'] == name:
+                self.systems_list.setCurrentRow(row)
+                return item['graph']
+        return None
+
+    def create_named_system(self, name):
+        """Create a new system, making the display name unique when needed."""
+        requested = str(name or '').strip() or 'Design Studio Study'
+        existing = set(self.system_names())
+        unique_name = requested
+        suffix = 2
+        while unique_name in existing:
+            unique_name = f"{requested} ({suffix})"
+            suffix += 1
+        return unique_name, self._add_system(unique_name)
 
     def remove_system(self):
         """Remove the currently selected system after confirmation."""

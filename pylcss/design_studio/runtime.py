@@ -70,8 +70,8 @@ _TOPOPT_IDS = ("com.cad.sim.topopt_voxel",)
 # and backend switches intentionally remain owned by the saved .cad study.
 _OVERRIDEABLE_PROPERTIES = {
     "com.cad.sim.material": (
-        "youngs_modulus", "poissons_ratio", "density", "yield_strength",
-        "tangent_modulus",
+        "youngs_modulus", "poissons_ratio", "density",
+        "thermal_conductivity", "yield_strength", "tangent_modulus",
     ),
     "com.cad.sim.crash_material": (
         "youngs_modulus", "poissons_ratio", "density", "yield_strength",
@@ -96,7 +96,7 @@ _OVERRIDEABLE_PROPERTIES = {
     ),
     "com.cad.sim.crash_solver": (
         "end_time", "n_frames", "time_steps", "enable_mass_scaling",
-        "impactor_mass_kg",
+        "time_step_scale", "impactor_mass_kg",
     ),
     "com.cad.sim.topopt_voxel": (
         "nelx", "nely", "nelz", "volfrac", "rmin", "penal",
@@ -123,6 +123,7 @@ _PROPERTY_LABELS = {
     "youngs_modulus": "Young's modulus",
     "poissons_ratio": "Poisson's ratio",
     "density": "Density",
+    "thermal_conductivity": "Thermal conductivity",
     "yield_strength": "Yield strength",
     "tangent_modulus": "Tangent modulus",
     "failure_strain": "Failure strain",
@@ -133,6 +134,7 @@ _PROPERTY_LABELS = {
     "end_time": "End time",
     "n_frames": "Result frames",
     "time_steps": "Time steps",
+    "time_step_scale": "Time-step scale factor",
     "volfrac": "Target material fraction",
     "rmin": "Filter radius",
     "penal": "SIMP penalty",
@@ -267,6 +269,29 @@ def _standardize(kind: str, raw: Mapping[str, Any]) -> Dict[str, Any]:
         std["peak_disp"]       = float(raw.get("peak_displacement", 0.0))
         std["absorbed_energy"] = float(raw.get("absorbed_energy", 0.0))
         std["n_failed"]        = int(raw.get("n_failed", 0))
+        std["peak_force"]      = float(raw.get("peak_force", 0.0))
+        std["mean_force"]      = float(raw.get("mean_force", 0.0))
+        std["crush_force_efficiency"] = float(
+            raw.get("crush_force_efficiency", 0.0)
+        )
+        std["specific_energy_absorption"] = float(
+            raw.get("specific_energy_absorption", 0.0)
+        )
+        std["crush_distance"] = float(raw.get("crush_distance", 0.0))
+        std["peak_acceleration_g"] = float(
+            raw.get("peak_acceleration_g", 0.0)
+        )
+        std["delta_v"] = float(raw.get("delta_v", 0.0))
+        std["quality_status"] = str(
+            raw.get("quality_status", "not_evaluated")
+        )
+        std["numerical_status"] = str(
+            raw.get("numerical_status", "not_evaluated")
+        )
+        std["physical_validation_status"] = str(
+            raw.get("physical_validation_status", "not_evaluated")
+        )
+        std["ml_eligible"] = bool(raw.get("ml_eligible", False))
 
     elif kind == "topopt":
         density = raw.get("density", None)
@@ -500,6 +525,35 @@ def _load_graph(abs_path: str):
         session_data = json.load(f)
     graph.clear_session()
     graph.deserialize_session(session_data)
+    # NodeGraphQt creates fresh runtime IDs while deserialising some older
+    # ``.cad`` studies (for example saved ID ``0x00d`` becomes a process-local
+    # pointer-like ID).  Coupling controls are discovered from the saved JSON,
+    # so retain an alias back to that stable ID for ``_settings`` lookup.  Name
+    # + type is normally unique; position resolves repeated default names.
+    unassigned = list(graph.all_nodes())
+    for saved_id, saved_data in (session_data.get("nodes", {}) or {}).items():
+        saved_name = str(saved_data.get("name", ""))
+        saved_type = str(saved_data.get("type_", ""))
+        candidates = [
+            node for node in unassigned
+            if str(getattr(node, "type_", "")) == saved_type
+            and str(node.name() if hasattr(node, "name") else "") == saved_name
+        ]
+        if len(candidates) > 1:
+            saved_pos = np.asarray(saved_data.get("pos", [0.0, 0.0]), dtype=float)
+
+            def position_distance(node):
+                try:
+                    node_pos = np.asarray(node.pos(), dtype=float)
+                    return float(np.sum((node_pos - saved_pos) ** 2))
+                except Exception:
+                    return float("inf")
+
+            candidates.sort(key=position_distance)
+        if candidates:
+            node = candidates[0]
+            node._pylcss_saved_node_id = str(saved_id)
+            unassigned.remove(node)
     project_dir = str(Path(abs_path).resolve().parent)
     for node in graph.all_nodes():
         node._project_dir = project_dir
@@ -566,6 +620,9 @@ def _apply_property_overrides(graph, settings: Mapping[str, float]) -> int:
         node_name = node.name() if hasattr(node, "name") else ""
         nodes_by_name.setdefault(str(node_name), []).append(node)
         nodes_by_id[str(getattr(node, "id", ""))] = node
+        saved_id = getattr(node, "_pylcss_saved_node_id", "")
+        if saved_id:
+            nodes_by_id[str(saved_id)] = node
 
     applied = 0
     for key, numeric_value in settings.items():
@@ -606,6 +663,7 @@ def _apply_property_overrides(graph, settings: Mapping[str, float]) -> int:
         # silently ignore the requested value.
         if identifier == "com.cad.sim.material" and prop in {
             "youngs_modulus", "poissons_ratio", "density",
+            "thermal_conductivity",
         }:
             node.set_property("preset", "Custom")
         elif identifier == "com.cad.sim.crash_material" and prop in {

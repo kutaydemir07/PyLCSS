@@ -10,8 +10,6 @@ from typing import Any, List, Tuple
 
 import numpy as np
 
-logger = logging.getLogger(__name__)
-
 from pylcss.solver_backends.common import (
     ExternalRunConfig,
     SolverBackendError,
@@ -30,6 +28,9 @@ from pylcss.solver_backends.common import (
     tet_face_sets_for_geometries,
 )
 from pylcss.solver_backends.frd_reader import read_frd
+
+
+logger = logging.getLogger(__name__)
 
 
 def _surface_area_weights_from_mesh_selection(geometries: List[Any]) -> dict[int, float]:
@@ -273,18 +274,19 @@ def _build_sets_and_step(
     return model_lines, step_lines
 
 
-def _material_block(material: dict) -> List[str]:
-    """Write the *MATERIAL block including *PLASTIC when yield strength is set.
+def _material_block(material: dict, *, include_plasticity: bool = False) -> List[str]:
+    """Write the material model selected explicitly by the solver study.
 
-    A non-zero ``yield_strength`` in the material dict produces a bilinear
+    Yield strength remains available as an allowable in a linear study.  When
+    ``include_plasticity`` is true, it instead defines this bilinear
     isotropic-hardening *PLASTIC table:
 
         σ_y at εp = 0      → ``yield_strength``
         σ_y at εp = ``ε*`` → ``yield_strength + tangent_modulus · ε*``
 
     where ``ε* = 0.10`` is a representative plastic-strain anchor.  When
-    ``yield_strength <= 0`` the material is pure linear-elastic and no
-    *PLASTIC card is emitted — CalculiX then runs a linear elastic problem.
+    ``include_plasticity`` is false, only the elastic law is emitted,
+    irrespective of the allowable yield-strength value.
     """
     e   = float(material.get("E", 210000.0))
     nu  = float(material.get("nu", material.get("poissons_ratio", 0.3)))
@@ -299,7 +301,11 @@ def _material_block(material: dict) -> List[str]:
         "*DENSITY",
         f"{rho:.12g}",
     ]
-    if sigma_y > 0.0:
+    if include_plasticity:
+        if sigma_y <= 0.0:
+            raise SolverBackendError(
+                "Nonlinear (Plastic) requires Material.yield_strength greater than zero."
+            )
         eps_anchor = 0.10
         sigma_anchor = sigma_y + et * eps_anchor
         lines.extend(
@@ -347,8 +353,9 @@ def _build_input_deck(
 ) -> str:
     """Create a CalculiX/Abaqus-style input deck.
 
-    ``analysis_type`` selects linear vs nonlinear (NLGEOM) static.  Plasticity
-    is auto-enabled whenever ``material['yield_strength'] > 0``.
+    ``analysis_type`` explicitly selects linear, geometric-nonlinear, or
+    plastic-nonlinear static behavior.  Merely defining a yield strength must
+    not change the constitutive model.
     """
     # A 10-row connectivity is a quadratic (C3D10) mesh — emit it verbatim;
     # anything else is treated as linear C3D4 (mesh_to_tet4 downgrades higher
@@ -381,7 +388,12 @@ def _build_input_deck(
         node_ids = ", ".join(str(int(v) + 1) for v in conn)
         lines.append(f"{idx}, {node_ids}")
 
-    lines.extend(_material_block(material))
+    lines.extend(
+        _material_block(
+            material,
+            include_plasticity=analysis_type == "Nonlinear (Plastic)",
+        )
+    )
     lines.extend(model_lines)
     lines.extend(step_lines)
     return "\n".join(lines) + "\n"
@@ -552,8 +564,8 @@ def run_calculix_static(
     """Write and optionally run a CalculiX static analysis deck.
 
     ``analysis_type`` is one of ``'Linear'``, ``'Nonlinear (Geometric)'``,
-    or ``'Nonlinear (Plastic)'``.  Plasticity is also auto-enabled whenever
-    the connected material dict carries ``yield_strength > 0``.
+    or ``'Nonlinear (Plastic)'``.  Plasticity is enabled only by the explicit
+    nonlinear-plastic selection.
     """
     warnings: List[str] = []
     allowed_analysis = {
@@ -562,16 +574,11 @@ def run_calculix_static(
     if analysis_type not in allowed_analysis:
         raise SolverBackendError(f"Unsupported CalculiX analysis type: {analysis_type!r}.")
     sigma_y = float(material.get("yield_strength", 0.0) or 0.0)
-    effective_analysis_type = analysis_type
     if analysis_type == "Nonlinear (Plastic)" and sigma_y <= 0.0:
         raise SolverBackendError(
             "Nonlinear (Plastic) requires Material.yield_strength greater than zero."
         )
-    if sigma_y > 0.0 and analysis_type == "Linear":
-        effective_analysis_type = "Nonlinear (Plastic)"
-        warnings.append(
-            "Material yield strength is active; promoted Linear to Nonlinear (Plastic)."
-        )
+    effective_analysis_type = analysis_type
 
     work_dir = make_work_dir("pylcss_calculix_", config.work_dir)
     job_name = config.job_name or "pylcss_calculix"

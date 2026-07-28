@@ -14,6 +14,10 @@ import joblib
 import pyqtgraph as pg
 import qtawesome as qta
 from pylcss.surrogate_modeling.training_engine import SurrogateTrainer, SKLEARN_AVAILABLE, TORCH_AVAILABLE
+from pylcss.surrogate_modeling.active_learning import (
+    ActiveLearningConfig,
+    ActiveLearningSelector,
+)
 from pylcss.surrogate_modeling.validation import CrossValidator, FeatureImportanceAnalyzer, ModelComparator
 from pylcss.system_modeling.model_builder import GraphBuilder
 import os
@@ -514,7 +518,69 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         self.btn_overfit10.setVisible(False)
         training_layout.addWidget(self.btn_overfit10)
 
-        # 4. Action Buttons
+        # 4. Active-learning configuration
+        grp_active = QtWidgets.QGroupBox("Active Learning")
+        l_active = QtWidgets.QFormLayout(grp_active)
+        self._al_random_state = 42
+        self._al_gp_restarts = 3
+
+        self.combo_al_strategy = QtWidgets.QComboBox()
+        self.combo_al_strategy.addItem("Committee (GP–RF)", "committee")
+        self.combo_al_strategy.addItem("Uncertainty", "uncertainty")
+        self.combo_al_strategy.addItem("Random (control)", "random")
+        self.combo_al_strategy.setToolTip(
+            "Committee is the validated default. Uncertainty uses the selected "
+            "model when possible and explicitly falls back to GP–RF disagreement."
+        )
+        l_active.addRow("Strategy:", self.combo_al_strategy)
+
+        self.spin_al_rounds = QtWidgets.QSpinBox()
+        self.spin_al_rounds.setRange(1, 100)
+        self.spin_al_rounds.setValue(5)
+        l_active.addRow("Rounds:", self.spin_al_rounds)
+
+        self.spin_al_batch = QtWidgets.QSpinBox()
+        self.spin_al_batch.setRange(1, 1000)
+        self.spin_al_batch.setValue(10)
+        l_active.addRow("Batch size:", self.spin_al_batch)
+
+        self.spin_al_candidates = QtWidgets.QSpinBox()
+        self.spin_al_candidates.setRange(10, 100000)
+        self.spin_al_candidates.setValue(1000)
+        self.spin_al_candidates.setSingleStep(100)
+        self.spin_al_candidates.setToolTip(
+            "Size of the fixed Latin-hypercube candidate pool shared by all rounds."
+        )
+        l_active.addRow("Candidate pool:", self.spin_al_candidates)
+
+        self.spin_al_explore = QtWidgets.QDoubleSpinBox()
+        self.spin_al_explore.setRange(0.0, 1.0)
+        self.spin_al_explore.setDecimals(2)
+        self.spin_al_explore.setSingleStep(0.05)
+        self.spin_al_explore.setValue(0.30)
+        self.spin_al_explore.setToolTip(
+            "Fraction of committee score reserved for pure GP uncertainty."
+        )
+        l_active.addRow("Explore floor:", self.spin_al_explore)
+
+        self.spin_al_min_dist = QtWidgets.QDoubleSpinBox()
+        self.spin_al_min_dist.setRange(0.0, 1.0)
+        self.spin_al_min_dist.setDecimals(3)
+        self.spin_al_min_dist.setSingleStep(0.01)
+        self.spin_al_min_dist.setValue(0.06)
+        self.spin_al_min_dist.setToolTip(
+            "Minimum within-batch distance in normalized [0,1]^d design space."
+        )
+        l_active.addRow("Minimum distance:", self.spin_al_min_dist)
+
+        self.lbl_al_budget = QtWidgets.QLabel()
+        l_active.addRow("New simulations:", self.lbl_al_budget)
+        self.spin_al_rounds.valueChanged.connect(self._update_active_budget_label)
+        self.spin_al_batch.valueChanged.connect(self._update_active_budget_label)
+        self._update_active_budget_label()
+        training_layout.addWidget(grp_active)
+
+        # 5. Action Buttons
         self.btn_train = QtWidgets.QPushButton(qta.icon('fa5s.cogs'), " Train Model")
         self.btn_train.setStyleSheet("font-weight: bold; padding: 8px;")
         self.btn_train.setToolTip("Train the chosen machine learning algorithm using the available data.")
@@ -1077,6 +1143,36 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
             self.curve_plot.autoRange()
             self._last_plot_time = current_time
 
+    def _update_active_budget_label(self) -> None:
+        total = self.spin_al_rounds.value() * self.spin_al_batch.value()
+        self.lbl_al_budget.setText(str(total))
+
+    def _active_learning_values(self) -> Dict[str, Any]:
+        return {
+            'strategy': self.combo_al_strategy.currentData(),
+            'n_rounds': self.spin_al_rounds.value(),
+            'batch_size': self.spin_al_batch.value(),
+            'n_candidates': self.spin_al_candidates.value(),
+            'explore_floor': self.spin_al_explore.value(),
+            'min_dist': self.spin_al_min_dist.value(),
+            'random_state': self._al_random_state,
+            'gp_restarts': self._al_gp_restarts,
+        }
+
+    def apply_active_learning_settings(self, values: Dict[str, Any]) -> None:
+        """Apply validated GUI/API overrides without starting a run."""
+        config = ActiveLearningConfig.from_mapping(values)
+        strategy_index = self.combo_al_strategy.findData(config.strategy)
+        if strategy_index >= 0:
+            self.combo_al_strategy.setCurrentIndex(strategy_index)
+        self.spin_al_rounds.setValue(config.n_rounds)
+        self.spin_al_batch.setValue(config.batch_size)
+        self.spin_al_candidates.setValue(config.n_candidates)
+        self.spin_al_explore.setValue(config.explore_floor)
+        self.spin_al_min_dist.setValue(config.min_dist)
+        self._al_random_state = config.random_state
+        self._al_gp_restarts = config.gp_restarts
+
     def get_config(self) -> Dict[str, Any]:
         """Gather configuration from UI."""
         algo = self.combo_algo.currentText()
@@ -1143,6 +1239,7 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
 
         # Add debug mode setting
         config['debug_mode'] = self.radio_debug.isChecked()
+        config['active_learning'] = self._active_learning_values()
             
         return config
 
@@ -1400,7 +1497,15 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Save Error", str(e))
 
-    def start_adaptive_training(self) -> None:
+    def start_adaptive_training(self, overrides: Optional[Dict[str, Any]] = None) -> None:
+        # QPushButton.clicked may provide a checked boolean. Only dictionaries
+        # are treated as programmatic assistant/API overrides.
+        if isinstance(overrides, dict):
+            try:
+                self.apply_active_learning_settings(overrides)
+            except (TypeError, ValueError) as exc:
+                QtWidgets.QMessageBox.warning(self, "Invalid Active-Learning Settings", str(exc))
+                return
         if not hasattr(self, 'X_train') or self.X_train is None:
             QtWidgets.QMessageBox.warning(self, "Error", "No training data available. Please generate or upload data first.")
             return
@@ -1412,17 +1517,11 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
 
         target_node = self.combo_nodes.itemData(idx)
         config = self.get_config()
-
-        # Check for PyTorch with zero dropout (breaks uncertainty estimation)
-        if config.get('model_type') == 'Deep Neural Network (PyTorch)' and config.get('dropout', 0.0) == 0.0:
-            reply = QtWidgets.QMessageBox.warning(self, "Zero Dropout Warning", 
-                "You are using PyTorch with 0% dropout. This will disable uncertainty estimation for adaptive sampling.\n\n"
-                "Adaptive training works by sampling points with high uncertainty. With dropout=0%, the model is deterministic and has zero uncertainty everywhere.\n\n"
-                "Consider:\n• Setting Dropout Rate > 0% (recommended: 0.1-0.2)\n• Using a different model type (Gaussian Process has built-in uncertainty)\n\n"
-                "Continue anyway?",
-                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No)
-            if reply == QtWidgets.QMessageBox.No:
-                return
+        try:
+            ActiveLearningConfig.from_mapping(config.get('active_learning'))
+        except (TypeError, ValueError) as exc:
+            QtWidgets.QMessageBox.warning(self, "Invalid Active-Learning Settings", str(exc))
+            return
 
         self.btn_adaptive.setEnabled(False)
         self.btn_train.setEnabled(False)
@@ -1483,7 +1582,7 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         self.adaptive_worker.start()
         self.btn_stop.setEnabled(True)
 
-    def adaptive_training_finished(self, model, metrics, error):
+    def adaptive_training_finished(self, model, metrics, X_train, y_train, error):
         self.btn_adaptive.setEnabled(True)
         self.btn_train.setEnabled(True)
         self.btn_stop.setEnabled(False)
@@ -1499,7 +1598,13 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
 
         self.current_model = model
         self.current_metrics = metrics
+        self.X_train = X_train
+        self.y_train = y_train
+        self.update_data_table()
         self.btn_save.setEnabled(True)
+        self.btn_run_cv.setEnabled(True)
+        self.btn_compare.setEnabled(True)
+        self.btn_feature_imp.setEnabled(True)
         self.progress.setValue(100)
 
         # Update metrics display (similar to training_finished)
@@ -1507,6 +1612,16 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
         if 'y_std' in metrics and metrics['y_std'] is not None:
             y_std = np.array(metrics['y_std'])
             msg += f"<br>Mean Uncertainty: {np.mean(y_std):.4f}"
+        active_info = metrics.get('active_learning', {})
+        if active_info:
+            msg += (
+                f"<br>Strategy: {active_info.get('strategy', 'unknown')}"
+                f"<br>New simulations: {active_info.get('new_samples', 0)}"
+            )
+            if active_info.get('fallback_rounds'):
+                msg += f"<br>Committee fallback rounds: {active_info['fallback_rounds']}"
+            if active_info.get('failed_evaluations'):
+                msg += f"<br>Failed simulations skipped: {active_info['failed_evaluations']}"
 
         self.lbl_metrics.setText(msg)
 
@@ -1769,6 +1884,8 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
             'gp_alpha': self.spin_alpha_gp.value(),
             'gp_restarts': self.spin_restarts_gp.value(),
             'gp_normalize': self.chk_normalize_gp.isChecked(),
+            # Active learning
+            'active_learning': self._active_learning_values(),
             # PyTorch
             'pytorch_lr': self.spin_lr_pytorch.value(),
             'pytorch_batch': self.spin_batch_size.value(),
@@ -1826,6 +1943,9 @@ class SurrogateTrainingWidget(QtWidgets.QWidget):
             self.spin_alpha_gp.setValue(data.get('gp_alpha', 1e-6))
             self.spin_restarts_gp.setValue(data.get('gp_restarts', 15))
             self.chk_normalize_gp.setChecked(data.get('gp_normalize', True))
+
+            # Active learning
+            self.apply_active_learning_settings(data.get('active_learning', {}))
             
             # PyTorch
             self.spin_lr_pytorch.setValue(data.get('pytorch_lr', 0.01))
@@ -1938,7 +2058,7 @@ class TrainingWorker(QtCore.QThread):
 
 class AdaptiveTrainingWorker(QtCore.QThread):
     progress_sig = QtCore.Signal(int, str)
-    done_sig = QtCore.Signal(object, object, str)
+    done_sig = QtCore.Signal(object, object, object, object, str)
 
     def __init__(self, trainer, spy_code, spy_inputs, spy_outputs, bounds, initial_X, initial_y, X_test, y_test, config):
         super().__init__()
@@ -1961,109 +2081,128 @@ class AdaptiveTrainingWorker(QtCore.QThread):
 
     def run(self):
         try:
-            # Adaptive sampling loop (5 rounds)
-            n_rounds = 5
-            for i in range(n_rounds):
+            al_config = ActiveLearningConfig.from_mapping(
+                self.config.get('active_learning')
+            )
+            initial_sample_count = len(self.X)
+            if self.X.ndim != 2:
+                raise ValueError("Adaptive training inputs must be a 2D array.")
+            if self.X.shape[1] != len(self.bounds):
+                raise ValueError(
+                    "Adaptive training currently requires the target block inputs "
+                    "to map directly to the bounded system inputs: training data "
+                    f"has {self.X.shape[1]} features but the graph exposes "
+                    f"{len(self.bounds)} bounds."
+                )
+
+            selector = ActiveLearningSelector(self.bounds, al_config)
+            acquisition_sources = []
+            fallback_rounds = 0
+            failed_evaluations = []
+            completed_rounds = 0
+
+            for i in range(al_config.n_rounds):
                 if self.stop_flag:
                     break
 
-                self.progress_sig.emit(i * 20, f"Adaptive Round {i+1}/{n_rounds}: Training...")
+                round_start = int(90 * i / al_config.n_rounds)
+                round_end = int(90 * (i + 1) / al_config.n_rounds)
+                round_span = max(1, round_end - round_start)
+                self.progress_sig.emit(
+                    round_start,
+                    f"Adaptive round {i + 1}/{al_config.n_rounds}: "
+                    f"scoring {al_config.n_candidates} candidates...",
+                )
 
-                # 1. Train model on current data
-                model, metrics = self.trainer.train_model(self.X, self.y, self.config, self.X_test, self.y_test)
+                # Committee/random acquisition is independent of the user's
+                # final model, so an expensive MLP/PyTorch model is not retrained
+                # every round. Uncertainty strategy trains it because it needs
+                # the selected model's predictive standard deviation.
+                primary_model = None
+                if al_config.strategy == 'uncertainty':
+                    primary_model, _ = self.trainer.train_model(
+                        self.X, self.y, self.config, self.X_test, self.y_test,
+                        stop_flag=lambda: self.stop_flag,
+                    )
+                selection = selector.select(
+                    self.X, self.y, primary_model=primary_model
+                )
+                acquisition_sources.append(selection.acquisition_source)
+                fallback_rounds += int(selection.fallback_used)
 
-                # 2. Generate candidate points for uncertainty sampling using LHS for better coverage
-                self.progress_sig.emit(i * 20 + 10, f"Adaptive Round {i+1}/{n_rounds}: Searching for uncertainty...")
-                n_candidates = 1000
-                try:
-                    # Use Latin Hypercube Sampling for better space coverage
-                    from scipy.stats import qmc
-                    sampler = qmc.LatinHypercube(d=len(self.bounds))
-                    lhs_samples = sampler.random(n_candidates)
-                    # Scale to bounds
-                    candidates = np.array([b[0] + (b[1] - b[0]) * lhs_samples[:, j] for j, b in enumerate(self.bounds)]).T
-                except ImportError:
-                    # Fallback to random uniform if scipy not available
-                    candidates = np.random.uniform(
-                        [b[0] for b in self.bounds],
-                        [b[1] for b in self.bounds],
-                        (n_candidates, len(self.bounds))
+                notes = []
+                if selection.fallback_used:
+                    notes.append("selected model has no informative std; using GP–RF disagreement")
+                if selection.diversity_relaxed:
+                    notes.append("minimum-distance filter relaxed to fill the batch")
+                note_text = f" ({'; '.join(notes)})" if notes else ""
+                self.progress_sig.emit(
+                    round_start + int(0.4 * round_span),
+                    f"Adaptive round {i + 1}/{al_config.n_rounds}: evaluating "
+                    f"{len(selection.points)} selected simulations via "
+                    f"{selection.acquisition_source}{note_text}...",
+                )
+
+                new_X, new_y, failures = self.trainer.evaluate_points(
+                    self.spy_code,
+                    self.spy_inputs,
+                    self.spy_outputs,
+                    selection.points,
+                    callback=lambda p, m, start=round_start, span=round_span: self.progress_sig.emit(
+                        start + int(span * (0.4 + 0.6 * p / 100.0)), m
+                    ),
+                    stop_flag=lambda: self.stop_flag,
+                )
+                failed_evaluations.extend(failures)
+                if len(new_X) == 0:
+                    if self.stop_flag:
+                        break
+                    raise RuntimeError(
+                        "Every selected simulation in the active-learning batch failed. "
+                        "No fabricated response values were added. First error: "
+                        + (failures[0] if failures else "unknown evaluation failure")
+                    )
+                if new_X.shape[1] != self.X.shape[1]:
+                    raise RuntimeError(
+                        "The spy model captured a different feature count during "
+                        "adaptive evaluation. Direct system-input mapping is required."
                     )
 
-                # 3. Predict uncertainty
-                try:
-                    _, y_std = model.predict(candidates, return_std=True)
-                    if y_std is None:
-                        # Model doesn't support uncertainty, fall back to random sampling
-                        self.progress_sig.emit(i * 20 + 15, f"Adaptive Round {i+1}/{n_rounds}: Model doesn't support uncertainty, using random sampling...")
-                        y_std = np.ones(n_candidates)
-                except:
-                    # Model doesn't support uncertainty
-                    y_std = np.ones(n_candidates)
-
-                # Handle multi-output
-                if y_std.ndim > 1:
-                    y_std = y_std.mean(axis=1)
-
-                # 4. Select top 10 most uncertain points
-                n_new_samples = min(10, n_candidates)
-                top_indices = np.argsort(y_std)[-n_new_samples:]
-                new_X = candidates[top_indices]
-
-                # 5. Evaluate new points using spy model
-                self.progress_sig.emit(i * 20 + 15, f"Adaptive Round {i+1}/{n_rounds}: Evaluating {n_new_samples} new samples...")
-                new_y = self._evaluate_points(new_X)
-
-                # 6. Ensure dimensions match for concatenation
+                # Ensure dimensions match for concatenation.
                 if self.y.ndim == 2 and new_y.ndim == 1:
                     new_y = new_y.reshape(-1, 1)
                 elif self.y.ndim == 1 and new_y.ndim == 2:
-                    new_y = new_y.flatten()
+                    if new_y.shape[1] != 1:
+                        raise RuntimeError("A multi-output response cannot be appended to single-output data.")
+                    new_y = new_y.ravel()
 
-                # Add new points to dataset
                 self.X = np.vstack([self.X, new_X])
                 self.y = np.concatenate([self.y, new_y])
+                completed_rounds += 1
+
+                if self.stop_flag:
+                    break
 
             # Final training on complete dataset
             self.progress_sig.emit(95, "Final training on complete dataset...")
-            model, metrics = self.trainer.train_model(self.X, self.y, self.config, self.X_test, self.y_test)
+            model, metrics = self.trainer.train_model(
+                self.X, self.y, self.config, self.X_test, self.y_test,
+                stop_flag=lambda: self.stop_flag,
+            )
+            metrics['active_learning'] = {
+                **al_config.to_dict(),
+                'completed_rounds': completed_rounds,
+                'new_samples': int(len(self.X) - initial_sample_count),
+                'failed_evaluations': len(failed_evaluations),
+                'failure_messages': failed_evaluations[:20],
+                'fallback_rounds': fallback_rounds,
+                'acquisition_sources': acquisition_sources,
+                'stopped_early': bool(self.stop_flag),
+            }
 
-            self.done_sig.emit(model, metrics, None)
+            self.done_sig.emit(model, metrics, self.X, self.y, None)
 
         except Exception as e:
             import traceback
             traceback.print_exc()
-            self.done_sig.emit(None, None, str(e))
-
-    def _evaluate_points(self, X):
-        """Evaluate points using the spy model code."""
-        # This is a simplified version - in production, you'd extract this logic
-        # to avoid code duplication with the data generation
-        results = []
-        for x in X:
-            try:
-                # Create a local namespace for evaluation
-                local_vars = {}
-                for i, val in enumerate(x):
-                    local_vars[self.spy_inputs[i]] = val
-
-                # Execute the spy code
-                exec(self.spy_code, {"__builtins__": {}}, local_vars)
-
-                # Get the output
-                if len(self.spy_outputs) == 1:
-                    result = local_vars[self.spy_outputs[0]]
-                else:
-                    result = [local_vars[out] for out in self.spy_outputs]
-                    result = np.array(result)
-
-                results.append(result)
-
-            except Exception:
-                # If evaluation fails, use a fallback (could be improved)
-                if len(self.spy_outputs) == 1:
-                    results.append(0.0)
-                else:
-                    results.append(np.zeros(len(self.spy_outputs)))
-
-        return np.array(results)
+            self.done_sig.emit(None, None, None, None, str(e))

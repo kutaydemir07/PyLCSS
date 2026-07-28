@@ -373,9 +373,39 @@ class UncertaintyWrapper:
             return self.model.predict(X)
         
         if self.model_type == 'Gaussian Process (Kriging)':
-            # Gaussian Process has built-in uncertainty
-            y_pred, y_std = self.model.predict(X, return_std=True)
-            return y_pred, y_std
+            # TransformedTargetRegressor cannot handle a base estimator that
+            # returns the ``(mean, std)`` tuple: it tries to inverse-transform
+            # the tuple itself.  Unwrap the fitted input pipeline and target
+            # transformer, then restore both quantities to engineering units.
+            try:
+                pipeline = self.model.regressor_
+                input_scaler = pipeline.named_steps['scaler']
+                gp = pipeline.named_steps['regressor']
+                X_scaled = input_scaler.transform(X)
+                mean_scaled, std_scaled = gp.predict(X_scaled, return_std=True)
+
+                mean_2d = np.asarray(mean_scaled)
+                std_2d = np.asarray(std_scaled)
+                mean_was_1d = mean_2d.ndim == 1
+                if mean_was_1d:
+                    mean_2d = mean_2d.reshape(-1, 1)
+                if std_2d.ndim == 1:
+                    std_2d = std_2d.reshape(-1, 1)
+
+                transformer = self.model.transformer_
+                y_pred = transformer.inverse_transform(mean_2d)
+                # This difference formulation also works for transformers
+                # without a public ``scale_`` attribute.
+                y_upper = transformer.inverse_transform(mean_2d + std_2d)
+                y_std = np.abs(y_upper - y_pred)
+                if mean_was_1d:
+                    return y_pred.ravel(), y_std.ravel()
+                return y_pred, y_std
+            except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                raise TypeError(
+                    "Gaussian Process uncertainty could not be extracted from "
+                    "the fitted preprocessing pipeline."
+                ) from exc
         elif self.model_type == 'Random Forest':
             # Tree variance: variance across individual tree predictions
             tree_predictions = np.array([tree.predict(X) for tree in self.model.estimators_])
@@ -755,52 +785,111 @@ class SurrogateTrainer:
                 self.strategies['Geom-DeepONet'] = GeomDeepONetStrategy()
                 self.strategies['GINO'] = GINOStrategy()
 
+    @staticmethod
+    def _compile_spy_function(spy_code: str, function_name: str = "spy_model"):
+        """Compile generated spy code into a callable with useful diagnostics."""
+        import importlib.util
+        import os
+        import tempfile
+        import uuid
+
+        temp_dir = os.path.join(tempfile.gettempdir(), "pylcss_spy_models")
+        os.makedirs(temp_dir, exist_ok=True)
+        module_name = f"_pylcss_spy_{uuid.uuid4().hex}"
+        filepath = os.path.join(temp_dir, f"{module_name}.py")
+        with open(filepath, 'w', encoding='utf-8') as handle:
+            handle.write(spy_code)
+
+        try:
+            spec = importlib.util.spec_from_file_location(module_name, filepath)
+            if spec is None or spec.loader is None:
+                raise ImportError("Could not create an import specification.")
+            spy_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(spy_module)
+            spy_func = getattr(spy_module, function_name)
+        except Exception as exc:
+            logger.error("Generated spy model code compilation failed.")
+            logger.debug("Code:\n%s", spy_code)
+            raise RuntimeError(f"Failed to compile spy model: {exc}") from exc
+        finally:
+            try:
+                os.unlink(filepath)
+            except OSError:
+                pass
+        return spy_func
+
+    def evaluate_points(
+        self,
+        spy_code: str,
+        spy_inputs: List[Dict[str, Any]],
+        spy_outputs: List[Dict[str, Any]],
+        points: np.ndarray,
+        callback: Optional[Callable[[int, str], None]] = None,
+        stop_flag: Optional[Callable[[], bool]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+        """Evaluate an explicit batch with the generated spy model.
+
+        Failed simulations are returned as diagnostics and omitted from the
+        arrays.  They are never replaced with a fabricated zero response,
+        because an active learner would interpret that artificial cliff as an
+        important region and waste the remaining simulation budget there.
+        """
+        points = np.asarray(points, dtype=float)
+        if points.ndim == 1:
+            points = points.reshape(1, -1)
+        if points.ndim != 2:
+            raise ValueError("points must be a two-dimensional array.")
+
+        spy_func = self._compile_spy_function(spy_code)
+        valid_X: List[List[float]] = []
+        valid_y: List[List[float]] = []
+        failures: List[str] = []
+        total = len(points)
+
+        for index, point in enumerate(points):
+            if stop_flag and stop_flag():
+                break
+            try:
+                inputs_dict, outputs_dict = spy_func(*point)
+                x_row = [inputs_dict[f'input_{j}'] for j in range(len(spy_inputs))]
+                y_row = [outputs_dict[f'output_{j}'] for j in range(len(spy_outputs))]
+                x_numeric = np.asarray(x_row, dtype=float).reshape(-1)
+                y_numeric = np.asarray(y_row, dtype=float).reshape(-1)
+                if not np.all(np.isfinite(x_numeric)) or not np.all(np.isfinite(y_numeric)):
+                    raise ValueError("simulation returned NaN or infinite values")
+                valid_X.append(x_numeric.tolist())
+                valid_y.append(y_numeric.tolist())
+            except Exception as exc:
+                message = f"Candidate {index} failed ({type(exc).__name__}): {exc}"
+                failures.append(message)
+                logger.warning(message)
+
+            if callback:
+                progress = int(100 * (index + 1) / max(1, total))
+                callback(
+                    progress,
+                    f"Evaluated {index + 1}/{total} candidates "
+                    f"({len(failures)} failed)...",
+                )
+
+        X_result = np.asarray(valid_X, dtype=float)
+        y_result = np.asarray(valid_y, dtype=float)
+        if X_result.size == 0:
+            X_result = np.empty((0, len(spy_inputs)), dtype=float)
+        if y_result.size == 0:
+            y_result = np.empty((0, len(spy_outputs)), dtype=float)
+        return X_result, y_result, failures
+
     def generate_data(self, spy_code: str, spy_inputs: List[str], spy_outputs: List[str], input_bounds: List[Tuple[float, float]], num_samples: int = 1000, test_samples: int = 200, random_state: int = 42, callback: Optional[Callable[[int, str], None]] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[str], List[str]]:
         """
         Generate training and test data using a pre-compiled spy model code.
         Uses Latin Hypercube Sampling for better space-filling coverage.
         """
         if callback: callback(0, "Initializing data generator...")
-        
-        # Compile Spy Model
-        # Use a temporary file to ensure picklability for parallel processing
-        import tempfile
-        import os
-        import importlib.util
-        import uuid
-        
-        temp_dir = os.path.join(tempfile.gettempdir(), "pylcss_spy_models")
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        filename = f"spy_{uuid.uuid4().hex}.py"
-        filepath = os.path.join(temp_dir, filename)
-        
-        # Write the spy code to temporary file
-        with open(filepath, 'w') as f:
-            f.write(spy_code)
-            
-        try:
-            # Import the module dynamically
-            spec = importlib.util.spec_from_file_location("spy_module", filepath)
-            spy_module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(spy_module)
-            
-            if hasattr(spy_module, "spy_model"):
-                spy_func = spy_module.spy_model
-            else:
-                raise AttributeError("spy_model function not found in generated code")
-                
-        except Exception as e:
-            # Log the generated code for debugging before raising error
-            logger.error("Generated spy model code compilation failed.")
-            logger.debug(f"Code:\n{spy_code}")
-            raise RuntimeError(f"Failed to compile spy model: {e}")
-        finally:
-            # Always clean up the temporary file
-            try:
-                os.unlink(filepath)
-            except:
-                pass
+
+        # Compile once and reuse the same evaluator for static generation and
+        # adaptive batches.
+        spy_func = self._compile_spy_function(spy_code)
 
         # Generate Data
         total_samples = num_samples + test_samples

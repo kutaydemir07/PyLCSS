@@ -1,0 +1,17 @@
+{
+  "material_id": "Aluminum 5052-H32",
+  "status": "fail",
+  "reason": "Template only; populate from traceable coupon tests for the simulated material lot.",
+  "test_standard": "REQUIRED",
+  "lot_id": "REQUIRED",
+  "thickness_mm": null,
+  "rate_range_per_s": [null, null],
+  "temperature_c": null,
+  "curve_source": "REQUIRED",
+  "true_stress_plastic_strain_verified": false,
+  "strain_rate_model_verified": false,
+  "failure_model_verified": false,
+  "coupon_report": "REQUIRED",
+  "approved_by": "REQUIRED",
+  "approval_date": "REQUIRED"
+}

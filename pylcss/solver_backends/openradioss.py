@@ -11,6 +11,7 @@ the ``anim_to_vtk`` converter that ships with OpenRadioss tools).
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any, List
 
 import numpy as np
@@ -31,6 +32,9 @@ from pylcss.solver_backends.common import (
     tail,
 )
 from pylcss.solver_backends.radioss_reader import read_animation_frames, resolve_anim_to_vtk
+from pylcss.solver_backends.radioss_time_history import (
+    read_openradioss_time_history,
+)
 from typing import Optional
 
 
@@ -135,10 +139,77 @@ def _collect_radioss_failure_context(
     return "\n".join(parts)
 
 
+def _read_radioss_diagnostics(
+    work_dir: Path,
+    job_name: str,
+) -> dict[str, object]:
+    """Read Starter/Engine termination and summary counts from OUT files."""
+
+    def stage(path: Path) -> dict[str, object]:
+        if not path.is_file():
+            return {
+                "path": str(path),
+                "available": False,
+                "normal_termination": False,
+                "error_count": None,
+                "warning_count": None,
+            }
+        text = path.read_text(encoding="utf-8", errors="replace")
+        errors = re.findall(r"(?mi)^\s*(\d+)\s+ERROR\(S\)\s*$", text)
+        warnings = re.findall(
+            r"(?mi)^\s*(\d+)\s+WARNING\(S\)\s*$",
+            text,
+        )
+        normal_termination = "NORMAL TERMINATION" in text.upper()
+        return {
+            "path": str(path.resolve()),
+            "available": True,
+            "normal_termination": normal_termination,
+            "error_count": (
+                int(errors[-1]) if errors else 0 if normal_termination else None
+            ),
+            "warning_count": (
+                int(warnings[-1])
+                if warnings
+                else 0 if normal_termination else None
+            ),
+        }
+
+    return {
+        "starter": stage(work_dir / f"{job_name}_0000.out"),
+        "engine": stage(work_dir / f"{job_name}_0001.out"),
+    }
+
+
 def _node_set(lines: List[str], set_id: int, nodes_1based: np.ndarray) -> None:
     lines.extend(["*SET_NODE_LIST", "$#     sid"])
     lines.append(f"{set_id}")
     lines.extend(id_lines(nodes_1based, per_line=8))
+
+
+def _keyword_field(value: object) -> str:
+    """Format one LS-DYNA keyword field without exceeding 10 columns."""
+    if value is None:
+        return " " * 10
+    if isinstance(value, (int, np.integer)):
+        text = str(int(value))
+    else:
+        number = float(value)
+        text = f"{number:.6g}"
+        if len(text) > 10:
+            text = f"{number:.3e}"
+    if len(text) > 10:
+        raise ValueError(
+            f"LS-DYNA keyword value does not fit a 10-column field: {value!r}"
+        )
+    return text.rjust(10)
+
+
+def _keyword_card(*values: object) -> str:
+    """Build the conventional 8-by-10-column LS-DYNA card."""
+    if len(values) > 8:
+        raise ValueError("An LS-DYNA keyword card can contain at most 8 fields.")
+    return "".join(_keyword_field(value) for value in values)
 
 
 def _normalise_crash_scenario(value: Any) -> str:
@@ -177,6 +248,7 @@ def _build_keyword_deck(
     impact: dict,
     end_time: float,
     output_dt: float,
+    history_dt: float | None,
     gravity: dict | None,
     warnings: List[str],
     impactor_mass: float = 0.0,
@@ -513,11 +585,17 @@ def _build_keyword_deck(
         lines.extend([
             "*RIGIDWALL_PLANAR",
             "$#    nsid     nsedx   dsearch",
-            f"{wall_slave_set_id}, 0, 0.0",
+            _keyword_card(wall_slave_set_id, 0, None, 0.0),
             "$#      xt        yt        zt        xh        yh        zh      fric",
-            (f"{wall_pt[0]:.12g}, {wall_pt[1]:.12g}, {wall_pt[2]:.12g}, "
-             f"{wall_head[0]:.12g}, {wall_head[1]:.12g}, {wall_head[2]:.12g}, "
-             f"{wall_friction:.12g}"),
+            _keyword_card(
+                wall_pt[0],
+                wall_pt[1],
+                wall_pt[2],
+                wall_head[0],
+                wall_head[1],
+                wall_head[2],
+                wall_friction,
+            ),
         ])
         print(
             f"OpenRadioss deck: added RIGIDWALL_PLANAR at "
@@ -576,17 +654,34 @@ def _build_keyword_deck(
         wall_mass = 0.0 if prescribed_wall else max(float(impactor_mass), 0.0) * 1e-3
         wall_slave_set_id = next_set_id
         next_set_id += 1
-        _node_set(lines, wall_slave_set_id, np.arange(1, points.shape[0] + 1, dtype=int))
+        wall_candidate_nodes = np.arange(1, points.shape[0] + 1, dtype=int)
+        if constrained_node_ids:
+            # A node cannot simultaneously be a rigid-wall secondary and carry
+            # an incompatible SPC. Excluding the fixed support removes Starter
+            # warning 152 while retaining every node that can physically enter
+            # the moving wall contact plane.
+            wall_candidate_nodes = np.setdiff1d(
+                wall_candidate_nodes,
+                np.asarray(constrained_node_ids, dtype=int),
+                assume_unique=False,
+            )
+        _node_set(lines, wall_slave_set_id, wall_candidate_nodes)
         lines.extend([
             "*RIGIDWALL_PLANAR_MOVING",
             "$#    nsid     nsedx   dsearch",
-            f"{wall_slave_set_id}, 0, 0.0",
+            _keyword_card(wall_slave_set_id, 0, None, 0.0),
             "$#      xt        yt        zt        xh        yh        zh      fric",
-            (f"{wall_pt[0]:.12g}, {wall_pt[1]:.12g}, {wall_pt[2]:.12g}, "
-             f"{wall_head[0]:.12g}, {wall_head[1]:.12g}, {wall_head[2]:.12g}, "
-             f"{wall_friction:.12g}"),
+            _keyword_card(
+                wall_pt[0],
+                wall_pt[1],
+                wall_pt[2],
+                wall_head[0],
+                wall_head[1],
+                wall_head[2],
+                wall_friction,
+            ),
             "$#    mass        v0",
-            f"{wall_mass:.12g}, {v_mag:.12g}",
+            _keyword_card(wall_mass, v_mag),
         ])
         if prescribed_wall and float(impactor_mass) > 0.0:
             warnings.append(
@@ -686,17 +781,63 @@ def _build_keyword_deck(
                 f"distributed over {len(mass_nodes)} {mass_label}."
             )
 
-    # Time-history outputs (*DATABASE_GLSTAT / _MATSUM / _RWFORC) are NOT
-    # emitted here.  OpenRadioss's LS-DYNA reader does not implement those
-    # keywords — they are silently dropped during translation to native
-    # Radioss, and the engine produces no glstat/matsum/rwforc files.
-    # Energy-balance and rigid-wall force histories therefore have to come
-    # from the T01 file produced via the engine /TFILE cadence card (see
-    # _build_engine_deck) plus the auto-included rigid-wall TH group that
-    # *RIGIDWALL_PLANAR creates internally.  Native LS-DYNA users running
-    # this deck through LS-PrePost will get full *DATABASE_* support, but
-    # for OpenRadioss the T01 file is the only TH output available.
-    lines.append("*END")
+    # Measurement contract side-channel.  Node IDs are kept in the original
+    # PyLCSS mesh numbering so imported animation vectors can be reduced to a
+    # deterministic structural reference signal.
+    if moving_body:
+        if impact_faces:
+            reference_nodes = (
+                nodes_matching_geometries(
+                    mesh,
+                    impact_faces,
+                    tolerance=float(impact.get("node_tolerance", 2.0)),
+                )
+                + 1
+            )
+        else:
+            projections = points @ v_hat
+            leading = float(np.max(projections))
+            reference_nodes = np.where(projections >= leading - 5.0)[0] + 1
+        projections = points @ v_hat
+        trailing = float(np.min(projections))
+        support_nodes = np.where(projections <= trailing + 5.0)[0] + 1
+    else:
+        reference_nodes = np.asarray(impact_nodes, dtype=int)
+        support_nodes = np.asarray(sorted(set(constrained_node_ids)), dtype=int)
+    if len(reference_nodes) == 0:
+        reference_nodes = np.asarray(impact_nodes, dtype=int)
+    if out_meta is not None:
+        out_meta["measurement"] = {
+            "scenario": scenario,
+            "scenario_label": scenario_label,
+            "impact_axis": [float(v) for v in v_hat],
+            "initial_speed_m_s": float(v_mag),
+            "impactor_mass_kg": float(impactor_mass),
+            "reference_name": (
+                "impact face structural reference"
+                if not moving_body
+                else "leading impact-face structural reference"
+            ),
+            "reference_node_ids": [int(v) for v in reference_nodes],
+            "support_node_ids": [int(v) for v in support_nodes],
+            "coordinate_system": "global Cartesian",
+        }
+
+    # Keyword971 supports *DATABASE_RWFORC. Request ASCII explicitly so the
+    # direct rigid-wall force remains available independently of self-contact
+    # TH-INTER channels and of the T01 converter. Global energy, mass, and
+    # time-step histories still use the high-rate T01 contract.
+    rwforc_dt = float(
+        history_dt if history_dt is not None else output_dt
+    )
+    lines.extend(
+        [
+            "*DATABASE_RWFORC",
+            "$       DT    BINARY      LCUR     IOOPT",
+            f"{max(rwforc_dt, 1.0e-12):.12g}, 1, 0, 0",
+            "*END",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -704,8 +845,10 @@ def _build_engine_deck(
     job_name: str,
     end_time: float,
     output_dt: float,
+    history_dt: Optional[float] = None,
     mass_scaling_dt: float = 0.0,
     mass_scaling_scale: float = 0.9,
+    time_step_scale: float = 0.9,
 ) -> str:
     """Write the OpenRadioss ``<job>_0001.rad`` engine deck.
 
@@ -717,12 +860,10 @@ def _build_engine_deck(
         with one or two frames and the "expected remaining time" line in the
         log is the only signal of progress.
 
-    2.  ``/DT/NODA/CST`` - explicit dynamics' default time step shrinks as
-        contact engages or stiff regions activate, which makes the Engine's
-        per-cycle ``REMAINING TIME ESTIMATE`` grow upward over the run.  When
-        ``mass_scaling_dt > 0`` we ask Radioss to hold the time step at that
-        value by adding mass to nodes whose CFL bound drops below it.  This is
-        the standard industry trick for keeping crash sims wall-clock-bounded.
+    2.  ``/DT/NODA/STOP`` or ``/DT/NODA/CST`` - without mass scaling the
+        explicit Courant step is multiplied by a controlled safety factor.
+        With mass scaling enabled, Radioss holds a minimum step by adding
+        nodal mass. The two policies remain explicit and auditable.
 
     Parameters
     ----------
@@ -733,20 +874,38 @@ def _build_engine_deck(
     mass_scaling_scale
         Safety factor on the critical time step.  ``0.9`` is the
         Altair-documented default.
+    time_step_scale
+        Courant safety factor used by ``/DT/NODA/STOP`` when mass scaling is
+        disabled. Values above 0.9 are rejected to retain contact stability.
     """
     out_dt = float(max(output_dt, 1e-12))
+    th_dt = float(max(history_dt if history_dt is not None else out_dt, 1e-12))
     lines: List[str] = [
         "#RADIOSS ENGINE INPUT",
         f"/RUN/{job_name}/1",
         f"{float(end_time):.6g}",
     ]
 
-    # Optional nodal-mass time-step control (keeps dt approximately constant).
+    dt_scale = float(time_step_scale)
+    if not 0.0 < dt_scale <= 0.9:
+        raise ValueError("time_step_scale must be greater than 0 and at most 0.9.")
+
+    # Select nodal time-step control explicitly. /STOP with DTmin=0 changes no
+    # mass or stiffness; it is also what makes 0.9/0.67/0.5 temporal
+    # discretisation studies meaningful. /CST is reserved for an explicitly
+    # requested mass-scaling target and is checked by the added-mass QC gate.
     if float(mass_scaling_dt) > 0.0:
         lines.extend(
             [
                 "/DT/NODA/CST/0",
                 f"{float(mass_scaling_scale):.6g}  {float(mass_scaling_dt):.6g}",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "/DT/NODA/STOP/0",
+                f"{dt_scale:.6g}  0.0",
             ]
         )
 
@@ -773,12 +932,14 @@ def _build_engine_deck(
     # Time-history file cadence.  The correct OpenRadioss engine keyword
     # for T01 sampling rate is /TFILE — *not* /TH/DT (which is a Starter
     # keyword for TH-group definitions, not an engine cadence card).
-    # Sampling at output_dt matches the animation cadence so any TH
-    # curves line up with the visualization timeline.
+    # /TH/TITLE writes the companion metadata used by the official
+    # th_to_csv converter to expand variable names and differentiate the
+    # rigid-wall impulses into physical force channels.
     lines.extend(
         [
+            "/TH/TITLE",
             "/TFILE",
-            f"{out_dt:.6g}",
+            f"{th_dt:.6g}",
             "",
         ]
     )
@@ -1116,9 +1277,9 @@ def _wrap_deck_result(
 def _build_animation_frames_with_mesh(mesh: Any, frames: list) -> list:
     """Pad / truncate animation frame arrays to match the source mesh point count.
 
-    Preserves the per-node velocity field and per-element internal-energy
-    density when available, so the time-history builder downstream can
-    compute KE(t) and IE(t).
+    Preserves per-node velocity/acceleration and per-element internal-energy
+    density when available, so downstream measurement reduction uses the
+    exact selected reference nodes.
     """
     n_points = int(np.asarray(mesh.p).shape[1])
     n_elements = int(np.asarray(mesh.t).shape[1])
@@ -1133,11 +1294,47 @@ def _build_animation_frames_with_mesh(mesh: Any, frames: list) -> list:
         vel_raw = np.asarray(frame.get("velocity", []), dtype=float)
         if vel_raw.ndim != 2 or vel_raw.shape[1] != 3:
             vel_raw = np.zeros((0, 3), dtype=float)
+        acc_raw = np.asarray(frame.get("acceleration", []), dtype=float)
+        if acc_raw.ndim != 2 or acc_raw.shape[1] != 3:
+            acc_raw = np.zeros((0, 3), dtype=float)
+        disp_3 = (
+            flat.reshape((-1, 3))
+            if flat.size % 3 == 0
+            else np.zeros((0, 3))
+        )
+        wall_reference = None
+        if node_ids.size:
+            wall_candidates = np.flatnonzero(node_ids > n_points)
+            if wall_candidates.size:
+                # The LS-DYNA rigid-wall translation creates a native Radioss
+                # wall main node immediately after the deformable source nodes.
+                # Preserve it before scattering viewer arrays back to the
+                # original PyLCSS mesh, otherwise independent wall kinematics
+                # would be silently discarded.
+                wall_index = int(
+                    wall_candidates[
+                        np.argmax(node_ids[wall_candidates])
+                    ]
+                )
+                if wall_index < disp_3.shape[0]:
+                    wall_reference = {
+                        "node_id": int(node_ids[wall_index]),
+                        "displacement": disp_3[wall_index].tolist(),
+                        "velocity": (
+                            vel_raw[wall_index].tolist()
+                            if wall_index < vel_raw.shape[0]
+                            else [0.0, 0.0, 0.0]
+                        ),
+                        "acceleration": (
+                            acc_raw[wall_index].tolist()
+                            if wall_index < acc_raw.shape[0]
+                            else [0.0, 0.0, 0.0]
+                        ),
+                    }
 
         # Ensure length 3*N and N respectively. anim_to_vtk may reorder points,
         # but it emits NODE_ID, so scatter back to the source mesh ids first.
         target_disp_3 = np.zeros((n_points, 3), dtype=float)
-        disp_3 = flat.reshape((-1, 3)) if flat.size % 3 == 0 else np.zeros((0, 3))
         if node_ids.size == disp_3.shape[0]:
             valid = (node_ids >= 1) & (node_ids <= n_points)
             target_disp_3[node_ids[valid] - 1] = disp_3[valid]
@@ -1163,6 +1360,14 @@ def _build_animation_frames_with_mesh(mesh: Any, frames: list) -> list:
         elif vel_raw.shape[0] > 0:
             n_copy = min(vel_raw.shape[0], n_points)
             target_vel[:n_copy] = vel_raw[:n_copy]
+
+        target_acc = np.zeros((n_points, 3), dtype=float)
+        if node_ids.size == acc_raw.shape[0] and acc_raw.shape[0] > 0:
+            valid = (node_ids >= 1) & (node_ids <= n_points)
+            target_acc[node_ids[valid] - 1] = acc_raw[valid]
+        elif acc_raw.shape[0] > 0:
+            n_copy = min(acc_raw.shape[0], n_points)
+            target_acc[:n_copy] = acc_raw[:n_copy]
 
         element_ids = np.asarray(frame.get("element_ids", []), dtype=int).reshape(-1)
 
@@ -1208,11 +1413,13 @@ def _build_animation_frames_with_mesh(mesh: Any, frames: list) -> list:
                 "stress_vm": target_vm,
                 "stress_vm_cell": stress_cell,
                 "velocity": target_vel,
+                "acceleration": target_acc,
                 "ener_cell": ener_cell,
                 "eps_p": target_eps,
                 "failed": target_failed,
                 "eps_p_cell": eps_cell,
                 "failed_cell": failed_cell,
+                "rigid_wall_reference": wall_reference,
                 "time": float(frame.get("time", 0.0)),
                 "time_is_normalized": bool(frame.get("time_is_normalized", False)),
             }
@@ -1309,14 +1516,18 @@ def run_openradioss_crash(
     config: ExternalRunConfig,
     end_time: float,
     output_dt: float,
+    history_dt: Optional[float] = None,
     visualization_mode: str = "Von Mises Stress",
     disp_scale: float = 1.0,
     gravity: dict | None = None,
     mass_scaling_dt: float = 0.0,
     mass_scaling_scale: float = 0.9,
+    time_step_scale: float = 0.9,
     impactor_mass: float = 0.0,
     hourglass_ihq: int = 4,
     hourglass_coefficient: float = 0.10,
+    acceleration_cfc: int = 60,
+    force_cfc: int = 600,
 ) -> dict:
     """Write deck, run Starter + Engine, then import animation frames."""
     if impact is None:
@@ -1335,6 +1546,7 @@ def run_openradioss_crash(
             impact=impact,
             end_time=end_time,
             output_dt=output_dt,
+            history_dt=history_dt,
             gravity=gravity,
             warnings=warnings,
             impactor_mass=impactor_mass,
@@ -1354,8 +1566,10 @@ def run_openradioss_crash(
                 job_name,
                 end_time,
                 output_dt,
+                history_dt=history_dt,
                 mass_scaling_dt=mass_scaling_dt,
                 mass_scaling_scale=mass_scaling_scale,
+                time_step_scale=time_step_scale,
             ),
             encoding="utf-8",
         )
@@ -1390,6 +1604,7 @@ def run_openradioss_crash(
     status = "deck_written"
     solver_log = ""
     frames: list = []
+    solver_history: dict = {}
 
     if config.run_solver:
         if starter is None:
@@ -1472,6 +1687,13 @@ def run_openradioss_crash(
                         + aux
                     )
                 status = "engine_completed"
+                solver_history = read_openradioss_time_history(
+                    work_dir=work_dir,
+                    job_name=job_name,
+                    solver_executable=engine,
+                    timeout_s=min(config.timeout_s, 300.0),
+                )
+                warnings.extend(solver_history.get("warnings") or [])
                 converter = resolve_anim_to_vtk()
                 raw_frames, anim_warnings = read_animation_frames(
                     work_dir, job_name, converter=converter,
@@ -1495,13 +1717,37 @@ def run_openradioss_crash(
                         f"global max |VM| = {max_vm:.4e} MPa"
                     )
 
+    diagnostics = _read_radioss_diagnostics(work_dir, job_name)
+
     # Choose result type based on what we managed to import.
     if frames:
+        from pylcss.design_studio.crash.provenance import (
+            build_crash_provenance,
+            write_crash_manifest,
+        )
+        from pylcss.design_studio.crash.quality import evaluate_crash_quality
+        from pylcss.design_studio.crash.signals import build_crash_measurements
+
         n_points = int(np.asarray(mesh.p).shape[1])
         last = frames[-1]
         displacement_flat = last["displacement"]
         stress_field = last["stress_vm"]
-        peak_disp = float(np.max(np.linalg.norm(displacement_flat.reshape(n_points, 3), axis=1)))
+        peak_disp = max(
+            (
+                float(
+                    np.max(
+                        np.linalg.norm(
+                            np.asarray(frame["displacement"], dtype=float).reshape(
+                                n_points, 3
+                            ),
+                            axis=1,
+                        )
+                    )
+                )
+                for frame in frames
+            ),
+            default=0.0,
+        )
         element_stress = last.get("stress_vm_cell")
         stress_for_peak = (
             np.asarray(element_stress, dtype=float)
@@ -1514,14 +1760,78 @@ def run_openradioss_crash(
         # rescale belongs only to run_openradioss_existing_deck, where the
         # deck's native stress unit is user-supplied.
         peak_vm = float(np.max(stress_for_peak)) if stress_for_peak.size else 0.0
-        time_history = _compute_time_history(mesh, material, frames, end_time)
+        frame_history = _compute_time_history(mesh, material, frames, end_time)
+        time_history = dict(frame_history)
+        if solver_history.get("time_ms"):
+            time_history.update(solver_history)
+        measurement = dict(deck_meta.get("measurement") or {})
+        measurement["source_point_count"] = n_points
+        measurement["solver_diagnostics"] = diagnostics
+        measurement["structural_mass_kg"] = float(
+            frame_history.get("total_mass_kg") or 0.0
+        )
+        measurement["material_validation"] = dict(
+            material.get("validation") or {}
+        )
+        measurements = build_crash_measurements(
+            solver_history=time_history,
+            frames=frames,
+            measurement=measurement,
+            acceleration_cfc=acceleration_cfc,
+            force_cfc=force_cfc,
+        )
+        quality = evaluate_crash_quality(
+            measurements=measurements,
+            external_status=status,
+            end_time_ms=float(end_time),
+        )
+        solver_settings = {
+            "end_time_ms": float(end_time),
+            "animation_output_dt_ms": float(output_dt),
+            "history_output_dt_ms": float(
+                history_dt if history_dt is not None else output_dt
+            ),
+            "mass_scaling_dt_ms": float(mass_scaling_dt),
+            "mass_scaling_scale": float(mass_scaling_scale),
+            "time_step_scale": float(time_step_scale),
+            "hourglass_ihq": int(hourglass_ihq),
+            "hourglass_coefficient": float(hourglass_coefficient),
+            "acceleration_cfc": int(acceleration_cfc),
+            "force_cfc": int(force_cfc),
+        }
+        provenance = build_crash_provenance(
+            mesh=mesh,
+            material=material,
+            impact=impact,
+            constraints=constraints,
+            solver_settings=solver_settings,
+            deck_path=deck_path,
+            engine_path=engine_deck_path,
+            starter_executable=starter,
+            engine_executable=engine,
+            time_history_converter=solver_history.get("converter"),
+            result_artifacts={
+                "starter_output": work_dir / f"{job_name}_0000.out",
+                "engine_output": work_dir / f"{job_name}_0001.out",
+                "time_history_binary": solver_history.get("source_file"),
+                "time_history_csv": solver_history.get("source_csv"),
+            },
+        )
+        metrics = measurements.get("metrics", {})
+        manifest_path = write_crash_manifest(
+            work_dir,
+            provenance=provenance,
+            quality=quality,
+            metrics=metrics,
+        )
         final_plastic = last.get("eps_p_cell")
         final_failed = last.get("failed_cell")
         n_failed = int(np.count_nonzero(
             np.asarray(final_failed if final_failed is not None else [], dtype=float) >= 0.5
         ))
-        ie_kj = time_history.get("ie_kj") or []
-        absorbed_energy_nmm = float(ie_kj[-1]) * 1.0e6 if ie_kj else 0.0
+        absorbed_energy_nmm = (
+            float(metrics.get("absorbed_energy_kJ") or 0.0) * 1.0e6
+        )
         return {
             "type": "crash",
             "backend": "OpenRadioss",
@@ -1539,9 +1849,38 @@ def run_openradioss_crash(
             "failed_elements": final_failed,
             "n_failed": n_failed,
             "absorbed_energy": absorbed_energy_nmm,
+            "peak_force": float(metrics.get("peak_crushing_force_kN") or 0.0),
+            "mean_force": float(metrics.get("mean_crushing_force_kN") or 0.0),
+            "crush_force_efficiency": float(
+                metrics.get("crush_force_efficiency") or 0.0
+            ),
+            "specific_energy_absorption": float(
+                metrics.get("specific_energy_absorption_kJ_kg") or 0.0
+            ),
+            "crush_distance": float(
+                metrics.get("useful_crush_stroke_mm") or 0.0
+            ),
+            "peak_acceleration_g": float(
+                metrics.get("peak_acceleration_g") or 0.0
+            ),
+            "delta_v": float(metrics.get("delta_v_m_s") or 0.0),
             "wall": wall_info,
             "end_time": float(end_time),
             "time_history": time_history,
+            "histories": measurements,
+            "crash_metrics": metrics,
+            "quality": quality,
+            "quality_status": quality.get("status"),
+            "numerical_status": quality.get("numerical_status"),
+            "physical_validation_status": quality.get(
+                "physical_validation_status"
+            ),
+            "ml_eligible": bool(quality.get("ml_eligible")),
+            "energy_balance_max_error": quality.get(
+                "energy_balance_max_error"
+            ),
+            "provenance": provenance,
+            "manifest_file": str(manifest_path),
             "input_file": str(deck_path),
             "engine_file": str(engine_deck_path),
             "work_dir": str(work_dir),
@@ -1552,6 +1891,71 @@ def run_openradioss_crash(
             "message": "OpenRadioss solve complete; animation frames imported.",
         }
 
+    from pylcss.design_studio.crash.provenance import (
+        build_crash_provenance,
+        write_crash_manifest,
+    )
+    from pylcss.design_studio.crash.quality import evaluate_crash_quality
+    from pylcss.design_studio.crash.signals import build_crash_measurements
+
+    measurement = dict(deck_meta.get("measurement") or {})
+    measurement["source_point_count"] = int(
+        np.asarray(mesh.p).shape[1]
+    )
+    measurement["solver_diagnostics"] = diagnostics
+    measurement["material_validation"] = dict(
+        material.get("validation") or {}
+    )
+    measurements = build_crash_measurements(
+        solver_history=solver_history,
+        frames=[],
+        measurement=measurement,
+        acceleration_cfc=acceleration_cfc,
+        force_cfc=force_cfc,
+    )
+    quality = evaluate_crash_quality(
+        measurements=measurements,
+        external_status=status,
+        end_time_ms=float(end_time),
+    )
+    solver_settings = {
+        "end_time_ms": float(end_time),
+        "animation_output_dt_ms": float(output_dt),
+        "history_output_dt_ms": float(
+            history_dt if history_dt is not None else output_dt
+        ),
+        "mass_scaling_dt_ms": float(mass_scaling_dt),
+        "mass_scaling_scale": float(mass_scaling_scale),
+        "time_step_scale": float(time_step_scale),
+        "hourglass_ihq": int(hourglass_ihq),
+        "hourglass_coefficient": float(hourglass_coefficient),
+        "acceleration_cfc": int(acceleration_cfc),
+        "force_cfc": int(force_cfc),
+    }
+    provenance = build_crash_provenance(
+        mesh=mesh,
+        material=material,
+        impact=impact,
+        constraints=constraints,
+        solver_settings=solver_settings,
+        deck_path=deck_path,
+        engine_path=engine_deck_path,
+        starter_executable=starter,
+        engine_executable=engine,
+        time_history_converter=solver_history.get("converter"),
+        result_artifacts={
+            "starter_output": work_dir / f"{job_name}_0000.out",
+            "engine_output": work_dir / f"{job_name}_0001.out",
+            "time_history_binary": solver_history.get("source_file"),
+            "time_history_csv": solver_history.get("source_csv"),
+        },
+    )
+    manifest_path = write_crash_manifest(
+        work_dir,
+        provenance=provenance,
+        quality=quality,
+        metrics=measurements.get("metrics", {}),
+    )
     return {
         "type": "external_solver",
         "backend": "OpenRadioss",
@@ -1561,6 +1965,19 @@ def run_openradioss_crash(
         "disp_scale": disp_scale,
         "wall": wall_info,
         "end_time": float(end_time),
+        "time_history": solver_history,
+        "histories": measurements,
+        "crash_metrics": measurements.get("metrics", {}),
+        "quality": quality,
+        "quality_status": quality.get("status"),
+        "numerical_status": quality.get("numerical_status"),
+        "physical_validation_status": quality.get(
+            "physical_validation_status"
+        ),
+        "ml_eligible": bool(quality.get("ml_eligible")),
+        "energy_balance_max_error": quality.get("energy_balance_max_error"),
+        "provenance": provenance,
+        "manifest_file": str(manifest_path),
         "input_file": str(deck_path),
         "engine_file": str(engine_deck_path),
         "work_dir": str(work_dir),

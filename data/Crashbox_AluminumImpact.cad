@@ -247,7 +247,12 @@
         "tangent_modulus": 500.0,
         "failure_strain": 0.14,
         "enable_fracture": false,
-        "strain_rate_sensitive": true
+        "strain_rate_sensitive": true,
+        "validation_status": "Unvalidated",
+        "material_lot_id": "",
+        "validation_report_path": "",
+        "validated_rate_min_per_s": 0.0,
+        "validated_rate_max_per_s": 0.0
       }
     },
     "0x20419d688c0": {
@@ -381,12 +386,16 @@
         "external_timeout_s": 1800.0,
         "end_time": 6.0,
         "n_frames": 80,
+        "history_samples": 2001,
+        "acceleration_cfc": "60",
+        "force_cfc": "600",
         "visualization": "Von Mises Stress",
         "disp_scale": 1.0,
         "solver_backend": "OpenRadioss",
         "run_external_solver": true,
         "time_steps": 45000,
         "enable_mass_scaling": true,
+        "time_step_scale": 0.9,
         "damping_alpha": 1.0,
         "damping_beta": 0.0,
         "enable_corotation": true,

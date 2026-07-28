@@ -3,6 +3,7 @@
 
 from .training_engine import SurrogateTrainer
 from .models import ConfigurableNet, PyTorchWrapper
+from .active_learning import ActiveLearningConfig, ActiveLearningSelector
 from .validation import (
     CrossValidator,
     FeatureImportanceAnalyzer,
