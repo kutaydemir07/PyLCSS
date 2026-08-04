@@ -1,0 +1,470 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "0x201146eb2c0": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Cantilever Domain",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 163.296875,
+      "height": 168.6,
+      "pos": [
+        -900.0,
+        -40.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Rectangular cantilever design domain.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "Edit the parameters to rescale the benchmark.",
+        "schema_version": 1,
+        "code": "# Rectangular cantilever design domain, built in at x = -L/2.\n# The tip load acts on the free-end lower corner, which is the classical\n# arrangement used to produce the Michell-type strut layout.\nresult = cq.Workplane('XY').box(L, H, T)\n",
+        "parameters": "",
+        "param_1_name": "L",
+        "param_1_value": 120.0,
+        "param_2_name": "H",
+        "param_2_value": 60.0,
+        "param_3_name": "T",
+        "param_3_value": 10.0,
+        "param_4_name": "hole_d",
+        "param_4_value": 6.0,
+        "param_5_name": "fillet_r",
+        "param_5_value": 1.0,
+        "param_6_name": "clearance",
+        "param_6_value": 0.2
+      }
+    },
+    "0x201146ebf50": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "Steel S355",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 354.390625,
+      "height": 122.4,
+      "pos": [
+        -900.0,
+        -360.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Structural steel: E = 210 GPa, nu = 0.3.",
+        "tags": "bundled-example, topology-optimization, pymoto, material",
+        "notes": "Linear elastic only; the optimizer uses E and nu.",
+        "schema_version": 1,
+        "analysis_purpose": "Structural FEA",
+        "preset": "Steel (Structural)",
+        "youngs_modulus": 210000.0,
+        "poissons_ratio": 0.3,
+        "density": 7.85e-09,
+        "thermal_conductivity": 45.0,
+        "yield_strength": 355.0,
+        "tangent_modulus": 0.0,
+        "failure_strain": 0.2,
+        "enable_fracture": false,
+        "strain_rate_sensitive": true,
+        "validation_status": "Unvalidated",
+        "material_lot_id": "",
+        "validation_report_path": "",
+        "validated_rate_min_per_s": 0.0,
+        "validated_rate_max_per_s": 0.0
+      }
+    },
+    "0x201146e9430": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Built-In Root Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.609375,
+      "height": 60,
+      "pos": [
+        -620.0,
+        -240.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Selects the <X face.",
+        "tags": "bundled-example, topology-optimization, pymoto, named-selection",
+        "notes": "Fully clamped wall attachment.",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": "<X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Built-In Root Face"
+      }
+    },
+    "0x201146f1010": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Free-End Lower Corner",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 176.53125,
+      "height": 60,
+      "pos": [
+        -620.0,
+        60.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Selects the edge nearest (60.0, -30.0, 0.0).",
+        "tags": "bundled-example, topology-optimization, pymoto, named-selection",
+        "notes": "Classical point of load introduction.",
+        "schema_version": 1,
+        "entity_type": "Edge",
+        "selector_type": "NearestToPoint",
+        "direction": ">Z",
+        "near_x": 60.0,
+        "near_y": -30.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Free-End Lower Corner"
+      }
+    },
+    "0x201146f2360": {
+      "type_": "com.cad.topopt.support.TopologySupportNode",
+      "icon": null,
+      "name": "Clamped Root",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 235.3125,
+      "height": 60,
+      "pos": [
+        -340.0,
+        -240.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Fixed on the selected region.",
+        "tags": "bundled-example, topology-optimization, pymoto, topology-support",
+        "notes": "All three translations blocked.",
+        "schema_version": 1,
+        "support_type": "Fixed"
+      }
+    },
+    "0x201146e9d90": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "Tip Load 2.0 kN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -340.0,
+        60.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Resultant force on the selected region.",
+        "tags": "bundled-example, topology-optimization, pymoto, topology-load",
+        "notes": "Transverse shear load at the free end.",
+        "schema_version": 1,
+        "force_x": 0.0,
+        "force_y": -2000.0,
+        "force_z": 0.0
+      }
+    },
+    "0x201146e1940": {
+      "type_": "com.cad.sim.topopt_voxel.TopologyOptVoxelNode",
+      "icon": null,
+      "name": "Cantilever Compliance Optimization",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": true,
+      "visible": true,
+      "width": 253.484375,
+      "height": 122.4,
+      "pos": [
+        17.851975051975074,
+        0.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Runs the topology optimization.",
+        "tags": "bundled-example, topology-optimization, pymoto",
+        "notes": "Z extrusion reproduces the planar benchmark; remove it to let the optimizer use the full thickness.",
+        "workflow_mode": "Guided",
+        "design_goal": "Lightweight Stiffness",
+        "manufacturing_process": "Extruded",
+        "minimum_member_size_mm": 5.0,
+        "exclusion_scope": "All Loads and Supports",
+        "exclusion_thickness_mode": "Program Controlled",
+        "validate_after_optimize": false,
+        "cad_export_filename": "topology_optimized.step",
+        "volfrac": 0.4,
+        "visualization": "Surface",
+        "extrusion": "Z"
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "0x201146eb2c0",
+        "shape"
+      ],
+      "in": [
+        "0x201146e9430",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x201146eb2c0",
+        "shape"
+      ],
+      "in": [
+        "0x201146f1010",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x201146eb2c0",
+        "shape"
+      ],
+      "in": [
+        "0x201146e1940",
+        "design_domain"
+      ]
+    },
+    {
+      "out": [
+        "0x201146ebf50",
+        "material"
+      ],
+      "in": [
+        "0x201146e1940",
+        "material"
+      ]
+    },
+    {
+      "out": [
+        "0x201146e9430",
+        "selection"
+      ],
+      "in": [
+        "0x201146f2360",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x201146f1010",
+        "selection"
+      ],
+      "in": [
+        "0x201146e9d90",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x201146f2360",
+        "supports"
+      ],
+      "in": [
+        "0x201146e1940",
+        "supports"
+      ]
+    },
+    {
+      "out": [
+        "0x201146e9d90",
+        "loads"
+      ],
+      "in": [
+        "0x201146e1940",
+        "loads"
+      ]
+    }
+  ],
+  "_guided_topology_policy": {
+    "version": 1,
+    "nodes": 1,
+    "storage": "engineering-intent"
+  },
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "_result_store": {
+    "format": "HDF5",
+    "version": 1,
+    "file": "02_cantilever_beam.cad.results.h5",
+    "result_count": 1,
+    "saved_at": "2026-08-04T20:28:12.315848"
+  }
+}

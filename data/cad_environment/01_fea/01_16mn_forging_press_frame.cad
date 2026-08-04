@@ -1,0 +1,1336 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "0x16262031460": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Continuous Reinforced Press Frame",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 247.6875,
+      "height": 168.6,
+      "pos": [
+        -1450.0,
+        -220.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "One conformal global weldment with hollow columns and tapered load-spreading transitions.",
+        "tags": "engineering-challenge, structural-fea, calculix, press-frame, continuous-solid",
+        "notes": "This global model intentionally removes numerical assembly ties; detailed weld profiles remain local-submodel work.",
+        "schema_version": 1,
+        "code": "if min(L, D, BED_H, CROWN_H, COLUMN_W, WALL) <= 0:\n    raise ValueError('All primary frame dimensions must be positive.')\nif 2.0 * WALL >= min(COLUMN_W, column_depth):\n    raise ValueError('Column wall thickness closes the hollow section.')\n\nbed = cq.Workplane('XY').box(L, D, BED_H).translate((0.0, 0.0, BED_H / 2.0))\ncrown = cq.Workplane('XY').box(L, D, CROWN_H).translate((0.0, 0.0, crown_z + CROWN_H / 2.0))\nframe = bed.union(crown)\n\nfor x in (-column_x, column_x):\n    for y in (-column_y, column_y):\n        column_height = column_z1 - column_z0\n        outer = cq.Workplane('XY').box(COLUMN_W, column_depth, column_height).translate((x, y, (column_z0 + column_z1) / 2.0))\n        inner = cq.Workplane('XY').box(COLUMN_W - 2.0 * WALL, column_depth - 2.0 * WALL, column_height + 4.0).translate((x, y, (column_z0 + column_z1) / 2.0))\n        tube = outer.cut(inner)\n        base_plate = cq.Workplane('XY').box(end_plate, end_plate, plate_t).translate((x, y, BED_H + plate_t / 2.0))\n        lower_haunch = cq.Workplane('XY').transformed(offset=(x, y, BED_H + plate_t)).rect(end_plate, end_plate).workplane(offset=haunch_h).rect(COLUMN_W, column_depth).loft(combine=True)\n        upper_haunch = cq.Workplane('XY').transformed(offset=(x, y, crown_z - plate_t - haunch_h)).rect(COLUMN_W, column_depth).workplane(offset=haunch_h).rect(end_plate, end_plate).loft(combine=True)\n        cap_plate = cq.Workplane('XY').box(end_plate, end_plate, plate_t).translate((x, y, crown_z - plate_t / 2.0))\n        frame = frame.union(tube).union(base_plate).union(lower_haunch).union(upper_haunch).union(cap_plate)\n\nfor y in (-column_y, column_y):\n    brace = cq.Workplane('XY').box(brace_length, column_depth, brace_height).translate((0.0, y, brace_z))\n    frame = frame.union(brace)\n\nfor x in (-pad_offset, pad_offset):\n    pad = cq.Workplane('XY').box(pad_length, pad_width, pad_height).translate((x, 0.0, crown_z + CROWN_H + pad_height / 2.0))\n    frame = frame.union(pad)\n\nresult = frame.clean()\n",
+        "parameters": "column_depth=400\ncolumn_x=1300\ncolumn_y=700\ncolumn_z0=600\ncolumn_z1=3300\ncrown_z=3500\nend_plate=620\nplate_t=80\nhaunch_h=170\nbrace_length=2220\nbrace_height=300\nbrace_z=2000\npad_offset=450\npad_length=700\npad_width=800\npad_height=160",
+        "param_1_name": "L",
+        "param_1_value": 3000.0,
+        "param_2_name": "D",
+        "param_2_value": 1800.0,
+        "param_3_name": "BED_H",
+        "param_3_value": 400.0,
+        "param_4_name": "CROWN_H",
+        "param_4_value": 500.0,
+        "param_5_name": "COLUMN_W",
+        "param_5_value": 400.0,
+        "param_6_name": "WALL",
+        "param_6_value": 60.0
+      }
+    },
+    "0x16262103f50": {
+      "type_": "com.cad.analysis.mass_properties.MassPropertiesNode",
+      "icon": null,
+      "name": "Frame Mass and Center of Gravity",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 238.71875,
+      "height": 99.3,
+      "pos": [
+        -1050.0,
+        -720.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Reports baseline volume, steel mass, and center of gravity.",
+        "tags": "engineering-challenge, structural-fea, mass",
+        "notes": "Compare the mass against lifting, transport, and foundation assumptions.",
+        "schema_version": 1,
+        "density": 7.85e-09
+      }
+    },
+    "0x1626210a270": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Foundation Support Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 188.828125,
+      "height": 60,
+      "pos": [
+        -1050.0,
+        -500.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Selects only the large lower bed face.",
+        "tags": "engineering-challenge, structural-fea, support, named-selection",
+        "notes": "Replace the fixed plane with anchors and foundation stiffness for detailed qualification.",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "NearestToPoint",
+        "direction": ">Z",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Bed underside"
+      }
+    },
+    "0x1626210aba0": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Left Crown Pad Load Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 191.8125,
+      "height": 60,
+      "pos": [
+        -1050.0,
+        -280.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Physical distributed-load face on the left raised pad.",
+        "tags": "engineering-challenge, structural-fea, load, named-selection",
+        "notes": "",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "NearestToPoint",
+        "direction": ">Z",
+        "near_x": -450.0,
+        "near_y": 0.0,
+        "near_z": 4160.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Left pad top"
+      }
+    },
+    "0x1626210af90": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Right Crown Pad Load Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 200.734375,
+      "height": 60,
+      "pos": [
+        -1050.0,
+        -60.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Physical distributed-load face on the right raised pad.",
+        "tags": "engineering-challenge, structural-fea, load, named-selection",
+        "notes": "",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "NearestToPoint",
+        "direction": ">Z",
+        "near_x": 450.0,
+        "near_y": 0.0,
+        "near_z": 4160.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Right pad top"
+      }
+    },
+    "0x1626210b3e0": {
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "icon": null,
+      "name": "Conformal Frame Tet10 Mesh",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 238.265625,
+      "height": 122.4,
+      "pos": [
+        -650.0,
+        -380.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "One quadratic tetrahedral mesh across the complete continuous frame.",
+        "tags": "engineering-challenge, structural-fea, calculix, mesh",
+        "notes": "Create a 25% finer governing-case copy before accepting hot-spot stress.",
+        "schema_version": 1,
+        "mesh_source": "CAD",
+        "mesh_path": "",
+        "mesh_type": "Tet10",
+        "element_size": 140.0,
+        "refinement_size": 80.0,
+        "shell_thickness": 1.5,
+        "shell_nip": 5
+      }
+    },
+    "0x16262101c10": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "S460 Structural Steel",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 354.390625,
+      "height": 122.4,
+      "pos": [
+        -650.0,
+        -100.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Elastic S460 baseline for the global weldment.",
+        "tags": "engineering-challenge, structural-fea, material",
+        "notes": "Confirm product thickness, temperature, weld procedure, and code allowables before release.",
+        "schema_version": 1,
+        "analysis_purpose": "Structural FEA",
+        "preset": "Custom",
+        "youngs_modulus": 210000.0,
+        "poissons_ratio": 0.3,
+        "density": 7.85e-09,
+        "thermal_conductivity": 45.0,
+        "yield_strength": 460.0,
+        "tangent_modulus": 0.0,
+        "failure_strain": 0.2,
+        "enable_fracture": false,
+        "strain_rate_sensitive": true,
+        "validation_status": "Unvalidated",
+        "material_lot_id": "",
+        "validation_report_path": "",
+        "validated_rate_min_per_s": 0.0,
+        "validated_rate_max_per_s": 0.0
+      }
+    },
+    "0x162621101a0": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "icon": null,
+      "name": "Fixed Foundation Plane",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 179.5,
+      "height": 76.2,
+      "pos": [
+        -250.0,
+        -720.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Constrains translations on the lower bed face only.",
+        "tags": "engineering-challenge, structural-fea, support",
+        "notes": "A conservative global support; detailed anchors/foundation require a separate model.",
+        "schema_version": 1,
+        "constraint_type": "Fixed",
+        "displacement_x": 0.0,
+        "displacement_y": 0.0,
+        "displacement_z": 0.0,
+        "displacement_x_enabled": true,
+        "displacement_y_enabled": true,
+        "displacement_z_enabled": true,
+        "condition": ""
+      }
+    },
+    "0x162620e5100": {
+      "type_": "com.cad.sim.load.LoadNode",
+      "icon": null,
+      "name": "Complete Frame Self-Weight",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 210.203125,
+      "height": 60,
+      "pos": [
+        -250.0,
+        -500.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "One global body-force definition for the continuous steel frame.",
+        "tags": "engineering-challenge, structural-fea, gravity",
+        "notes": "",
+        "schema_version": 1,
+        "load_type": "Gravity",
+        "condition": "",
+        "force_x": 0.0,
+        "force_y": 0.0,
+        "force_z": 0.0,
+        "moment_x": 0.0,
+        "moment_y": 0.0,
+        "moment_z": 0.0,
+        "gravity_accel": 9810.0,
+        "gravity_direction": "-Z"
+      }
+    },
+    "0x16262110680": {
+      "type_": "com.cad.sim.load.LoadNode",
+      "icon": null,
+      "name": "LC1 Left Pad 6.0 MN Down",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 197.546875,
+      "height": 145.5,
+      "pos": [
+        -250.0,
+        -220.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Half of the rated centered forging reaction.",
+        "tags": "engineering-challenge, structural-fea, lc1, force",
+        "notes": "",
+        "schema_version": 1,
+        "load_type": "Force",
+        "condition": "",
+        "force_x": 0.0,
+        "force_y": 0.0,
+        "force_z": -6000000.0,
+        "moment_x": 0.0,
+        "moment_y": 0.0,
+        "moment_z": 0.0,
+        "gravity_accel": 9810.0,
+        "gravity_direction": "-Y"
+      }
+    },
+    "0x16262111f40": {
+      "type_": "com.cad.sim.load.LoadNode",
+      "icon": null,
+      "name": "LC1 Right Pad 6.0 MN Down",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 206.46875,
+      "height": 145.5,
+      "pos": [
+        -250.0,
+        -20.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Half of the rated centered forging reaction.",
+        "tags": "engineering-challenge, structural-fea, lc1, force",
+        "notes": "",
+        "schema_version": 1,
+        "load_type": "Force",
+        "condition": "",
+        "force_x": 0.0,
+        "force_y": 0.0,
+        "force_z": -6000000.0,
+        "moment_x": 0.0,
+        "moment_y": 0.0,
+        "moment_z": 0.0,
+        "gravity_accel": 9810.0,
+        "gravity_direction": "-Y"
+      }
+    },
+    "0x16262112660": {
+      "type_": "com.cad.sim.load.LoadNode",
+      "icon": null,
+      "name": "LC2 Left Pad Eccentric Load",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 201.0625,
+      "height": 145.5,
+      "pos": [
+        -250.0,
+        260.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Seventy percent of the eccentric production load and side thrust.",
+        "tags": "engineering-challenge, structural-fea, lc2, force",
+        "notes": "",
+        "schema_version": 1,
+        "load_type": "Force",
+        "condition": "",
+        "force_x": 420000.0,
+        "force_y": 0.0,
+        "force_z": -8400000.0,
+        "moment_x": 0.0,
+        "moment_y": 0.0,
+        "moment_z": 0.0,
+        "gravity_accel": 9810.0,
+        "gravity_direction": "-Y"
+      }
+    },
+    "0x162621132f0": {
+      "type_": "com.cad.sim.load.LoadNode",
+      "icon": null,
+      "name": "LC2 Right Pad Eccentric Load",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 209.984375,
+      "height": 145.5,
+      "pos": [
+        -250.0,
+        460.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Thirty percent of the eccentric production load and side thrust.",
+        "tags": "engineering-challenge, structural-fea, lc2, force",
+        "notes": "",
+        "schema_version": 1,
+        "load_type": "Force",
+        "condition": "",
+        "force_x": 180000.0,
+        "force_y": 0.0,
+        "force_z": -3600000.0,
+        "moment_x": 0.0,
+        "moment_y": 0.0,
+        "moment_z": 0.0,
+        "gravity_accel": 9810.0,
+        "gravity_direction": "-Y"
+      }
+    },
+    "0x16262113d70": {
+      "type_": "com.cad.sim.load.LoadNode",
+      "icon": null,
+      "name": "LC3 Left Pad Emergency Jam",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 207.890625,
+      "height": 145.5,
+      "pos": [
+        -250.0,
+        740.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Ninety percent of the emergency die-jam load and side thrust.",
+        "tags": "engineering-challenge, structural-fea, lc3, force",
+        "notes": "Global elastic screening; follow with nonlinear material and stability studies.",
+        "schema_version": 1,
+        "load_type": "Force",
+        "condition": "",
+        "force_x": -1080000.0,
+        "force_y": 360000.0,
+        "force_z": -16200000.0,
+        "moment_x": 0.0,
+        "moment_y": 0.0,
+        "moment_z": 0.0,
+        "gravity_accel": 9810.0,
+        "gravity_direction": "-Y"
+      }
+    },
+    "0x16262103d10": {
+      "type_": "com.cad.sim.load.LoadNode",
+      "icon": null,
+      "name": "LC3 Right Pad Emergency Jam",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 216.8125,
+      "height": 145.5,
+      "pos": [
+        -250.0,
+        940.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Ten percent of the emergency die-jam load and side thrust.",
+        "tags": "engineering-challenge, structural-fea, lc3, force",
+        "notes": "Global elastic screening; follow with nonlinear material and stability studies.",
+        "schema_version": 1,
+        "load_type": "Force",
+        "condition": "",
+        "force_x": -120000.0,
+        "force_y": 40000.0,
+        "force_z": -1800000.0,
+        "moment_x": 0.0,
+        "moment_y": 0.0,
+        "moment_z": 0.0,
+        "gravity_accel": 9810.0,
+        "gravity_direction": "-Y"
+      }
+    },
+    "0x1623fee1010": {
+      "type_": "com.cad.sim.solver.SolverNode",
+      "icon": null,
+      "name": "LC1 Rated Centered Solve",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 192.734375,
+      "height": 145.5,
+      "pos": [
+        280.0,
+        -300.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Rated centered qualification solve with self-weight.",
+        "tags": "engineering-challenge, structural-fea, calculix, lc1",
+        "notes": "Use converged hot-spot/path values; the raw nodal maximum is retained but is not an allowable.",
+        "schema_version": 1,
+        "external_solver_path": "",
+        "external_work_dir": "",
+        "deck_only": false,
+        "external_timeout_s": 7200.0,
+        "visualization": "Von Mises Stress",
+        "deformation_scale": "Auto",
+        "analysis_type": "Linear",
+        "assembly_connection": "Automatic Bonded",
+        "connection_tolerance_mm": 0.25,
+        "solver_backend": "CalculiX",
+        "run_external_solver": true
+      }
+    },
+    "0x162621017f0": {
+      "type_": "com.cad.sim.solver.SolverNode",
+      "icon": null,
+      "name": "LC2 Eccentric Production Solve",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 220.640625,
+      "height": 145.5,
+      "pos": [
+        280.0,
+        300.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Eccentric production case for crown twist and column load redistribution.",
+        "tags": "engineering-challenge, structural-fea, calculix, lc2",
+        "notes": "Report area-averaged pad displacement, not a single node.",
+        "schema_version": 1,
+        "external_solver_path": "",
+        "external_work_dir": "",
+        "deck_only": false,
+        "external_timeout_s": 7200.0,
+        "visualization": "Von Mises Stress",
+        "deformation_scale": "Auto",
+        "analysis_type": "Linear",
+        "assembly_connection": "Automatic Bonded",
+        "connection_tolerance_mm": 0.25,
+        "solver_backend": "CalculiX",
+        "run_external_solver": true
+      }
+    },
+    "0x1623fee17f0": {
+      "type_": "com.cad.sim.solver.SolverNode",
+      "icon": null,
+      "name": "LC3 Emergency Die-Jam Solve",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": true,
+      "visible": true,
+      "width": 216.8125,
+      "height": 145.5,
+      "pos": [
+        280.0,
+        900.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Emergency 18 MN global screening solve with biaxial side thrust.",
+        "tags": "engineering-challenge, structural-fea, calculix, lc3",
+        "notes": "High-stress regions require local refinement, nonlinear material, and stability follow-up.",
+        "schema_version": 1,
+        "external_solver_path": "",
+        "external_work_dir": "",
+        "deck_only": false,
+        "external_timeout_s": 7200.0,
+        "visualization": "Von Mises Stress",
+        "deformation_scale": "Auto",
+        "analysis_type": "Linear",
+        "assembly_connection": "Automatic Bonded",
+        "connection_tolerance_mm": 0.25,
+        "solver_backend": "CalculiX",
+        "run_external_solver": true
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "0x16262031460",
+        "shape"
+      ],
+      "in": [
+        "0x16262103f50",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x16262031460",
+        "shape"
+      ],
+      "in": [
+        "0x1626210a270",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x16262031460",
+        "shape"
+      ],
+      "in": [
+        "0x1626210aba0",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x16262031460",
+        "shape"
+      ],
+      "in": [
+        "0x1626210af90",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x16262031460",
+        "shape"
+      ],
+      "in": [
+        "0x1626210b3e0",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210a270",
+        "selection"
+      ],
+      "in": [
+        "0x162621101a0",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210aba0",
+        "selection"
+      ],
+      "in": [
+        "0x16262110680",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210aba0",
+        "selection"
+      ],
+      "in": [
+        "0x16262112660",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210aba0",
+        "selection"
+      ],
+      "in": [
+        "0x16262113d70",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210af90",
+        "selection"
+      ],
+      "in": [
+        "0x16262111f40",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210af90",
+        "selection"
+      ],
+      "in": [
+        "0x162621132f0",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210af90",
+        "selection"
+      ],
+      "in": [
+        "0x16262103d10",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210b3e0",
+        "mesh"
+      ],
+      "in": [
+        "0x162621101a0",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210b3e0",
+        "mesh"
+      ],
+      "in": [
+        "0x162620e5100",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210b3e0",
+        "mesh"
+      ],
+      "in": [
+        "0x16262110680",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210b3e0",
+        "mesh"
+      ],
+      "in": [
+        "0x16262111f40",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210b3e0",
+        "mesh"
+      ],
+      "in": [
+        "0x16262112660",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210b3e0",
+        "mesh"
+      ],
+      "in": [
+        "0x162621132f0",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210b3e0",
+        "mesh"
+      ],
+      "in": [
+        "0x16262113d70",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210b3e0",
+        "mesh"
+      ],
+      "in": [
+        "0x16262103d10",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210b3e0",
+        "mesh"
+      ],
+      "in": [
+        "0x1623fee1010",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210b3e0",
+        "mesh"
+      ],
+      "in": [
+        "0x162621017f0",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1626210b3e0",
+        "mesh"
+      ],
+      "in": [
+        "0x1623fee17f0",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x16262101c10",
+        "material"
+      ],
+      "in": [
+        "0x1623fee1010",
+        "material"
+      ]
+    },
+    {
+      "out": [
+        "0x16262101c10",
+        "material"
+      ],
+      "in": [
+        "0x162621017f0",
+        "material"
+      ]
+    },
+    {
+      "out": [
+        "0x16262101c10",
+        "material"
+      ],
+      "in": [
+        "0x1623fee17f0",
+        "material"
+      ]
+    },
+    {
+      "out": [
+        "0x162621101a0",
+        "constraints"
+      ],
+      "in": [
+        "0x1623fee1010",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "0x162621101a0",
+        "constraints"
+      ],
+      "in": [
+        "0x162621017f0",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "0x162621101a0",
+        "constraints"
+      ],
+      "in": [
+        "0x1623fee17f0",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "0x162620e5100",
+        "loads"
+      ],
+      "in": [
+        "0x1623fee1010",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x162620e5100",
+        "loads"
+      ],
+      "in": [
+        "0x162621017f0",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x162620e5100",
+        "loads"
+      ],
+      "in": [
+        "0x1623fee17f0",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x16262110680",
+        "loads"
+      ],
+      "in": [
+        "0x1623fee1010",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x16262111f40",
+        "loads"
+      ],
+      "in": [
+        "0x1623fee1010",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x16262112660",
+        "loads"
+      ],
+      "in": [
+        "0x162621017f0",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x162621132f0",
+        "loads"
+      ],
+      "in": [
+        "0x162621017f0",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x16262113d70",
+        "loads"
+      ],
+      "in": [
+        "0x1623fee17f0",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x16262103d10",
+        "loads"
+      ],
+      "in": [
+        "0x1623fee17f0",
+        "loads"
+      ]
+    }
+  ],
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "_result_store": {
+    "format": "HDF5",
+    "version": 1,
+    "file": "01_16mn_forging_press_frame.cad.results.h5",
+    "result_count": 4,
+    "saved_at": "2026-08-04T16:19:00.272815"
+  }
+}

@@ -1,0 +1,1057 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "0x22931841460": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Rocker Billet",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        -60.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Rectangular plate billet, 300 x 200 x 25 mm.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "A 25 mm plate is the stock; the Z-extruded constraint is what makes the result a 2.5-D machined part rather than an unmakeable 3-D shape.",
+        "schema_version": 1,
+        "code": "# Plate billet the rocker is machined out of. The optimizer is given\n# the whole billet and has to find the arms itself.\nresult = cq.Workplane('XY').box(L, H, T)\n",
+        "parameters": "",
+        "param_1_name": "L",
+        "param_1_value": 300.0,
+        "param_2_name": "H",
+        "param_2_value": 200.0,
+        "param_3_name": "T",
+        "param_3_value": 25.0,
+        "param_4_name": "",
+        "param_4_value": 0.0,
+        "param_5_name": "",
+        "param_5_value": 0.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
+      }
+    },
+    "0x229306ec8f0": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Pivot Boss",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        180.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Preserved boss around the chassis pivot, 76 mm outside diameter.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "A 20 mm wall around the 36 mm bore.",
+        "schema_version": 1,
+        "code": "result = cq.Workplane('XY').circle(OD / 2.0).extrude(T).translate((CX, CY, -T / 2.0))\n",
+        "parameters": "",
+        "param_1_name": "OD",
+        "param_1_value": 76.0,
+        "param_2_name": "T",
+        "param_2_value": 25.0,
+        "param_3_name": "CX",
+        "param_3_value": 0.0,
+        "param_4_name": "CY",
+        "param_4_value": -62.0,
+        "param_5_name": "",
+        "param_5_value": 0.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
+      }
+    },
+    "0x22931874290": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Damper Eye Boss",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        300.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Preserved boss around the damper eye, 60 mm outside diameter.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "An 18 mm wall around the 24 mm bore.",
+        "schema_version": 1,
+        "code": "result = cq.Workplane('XY').circle(OD / 2.0).extrude(T).translate((CX, CY, -T / 2.0))\n",
+        "parameters": "",
+        "param_1_name": "OD",
+        "param_1_value": 60.0,
+        "param_2_name": "T",
+        "param_2_value": 25.0,
+        "param_3_name": "CX",
+        "param_3_value": -118.0,
+        "param_4_name": "CY",
+        "param_4_value": 62.0,
+        "param_5_name": "",
+        "param_5_value": 0.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
+      }
+    },
+    "0x22931874440": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Pushrod Eye Boss",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        420.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Preserved boss around the pushrod eye, 60 mm outside diameter.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "An 18 mm wall around the 24 mm bore.",
+        "schema_version": 1,
+        "code": "result = cq.Workplane('XY').circle(OD / 2.0).extrude(T).translate((CX, CY, -T / 2.0))\n",
+        "parameters": "",
+        "param_1_name": "OD",
+        "param_1_value": 60.0,
+        "param_2_name": "T",
+        "param_2_value": 25.0,
+        "param_3_name": "CX",
+        "param_3_value": 118.0,
+        "param_4_name": "CY",
+        "param_4_value": 58.0,
+        "param_5_name": "",
+        "param_5_value": 0.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
+      }
+    },
+    "0x22931864c50": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Pivot Bore",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        560.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Chassis pivot bore, 36 mm diameter.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "Kept open through the full thickness so the bearing can be pressed in.",
+        "schema_version": 1,
+        "code": "result = cq.Workplane('XY').circle(D / 2.0).extrude(T).translate((CX, CY, -T / 2.0))\n",
+        "parameters": "",
+        "param_1_name": "D",
+        "param_1_value": 36.0,
+        "param_2_name": "T",
+        "param_2_value": 25.0,
+        "param_3_name": "CX",
+        "param_3_value": 0.0,
+        "param_4_name": "CY",
+        "param_4_value": -62.0,
+        "param_5_name": "",
+        "param_5_value": 0.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
+      }
+    },
+    "0x22931875010": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Damper Eye Bore",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        680.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Damper eye bore, 24 mm diameter.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "The damper rod-end spherical bearing seats here.",
+        "schema_version": 1,
+        "code": "result = cq.Workplane('XY').circle(D / 2.0).extrude(T).translate((CX, CY, -T / 2.0))\n",
+        "parameters": "",
+        "param_1_name": "D",
+        "param_1_value": 24.0,
+        "param_2_name": "T",
+        "param_2_value": 25.0,
+        "param_3_name": "CX",
+        "param_3_value": -118.0,
+        "param_4_name": "CY",
+        "param_4_value": 62.0,
+        "param_5_name": "",
+        "param_5_value": 0.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
+      }
+    },
+    "0x229318662a0": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Pushrod Eye Bore",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        800.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Pushrod eye bore, 24 mm diameter.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "The pushrod rod-end spherical bearing seats here.",
+        "schema_version": 1,
+        "code": "result = cq.Workplane('XY').circle(D / 2.0).extrude(T).translate((CX, CY, -T / 2.0))\n",
+        "parameters": "",
+        "param_1_name": "D",
+        "param_1_value": 24.0,
+        "param_2_name": "T",
+        "param_2_value": 25.0,
+        "param_3_name": "CX",
+        "param_3_value": 118.0,
+        "param_4_name": "CY",
+        "param_4_value": 58.0,
+        "param_5_name": "",
+        "param_5_value": 0.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
+      }
+    },
+    "0x229306ecc20": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Pivot Boss Wall",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.609375,
+      "height": 60,
+      "pos": [
+        -820.0,
+        180.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "The cylindrical wall of the chassis pivot boss.",
+        "tags": "bundled-example, topology-optimization, pymoto, named-selection",
+        "notes": "The chassis bracket reacts here, through the bearing and its housing.",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Box",
+        "direction": ">Z",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -45.0,
+        "box_max_x": 45.0,
+        "box_min_y": -107.0,
+        "box_max_y": -17.0,
+        "box_min_z": -5.0,
+        "box_max_z": 5.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Pivot Boss Wall"
+      }
+    },
+    "0x22931865a30": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Damper Boss Wall",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.609375,
+      "height": 60,
+      "pos": [
+        -820.0,
+        300.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "The cylindrical wall of the damper eye boss.",
+        "tags": "bundled-example, topology-optimization, pymoto, named-selection",
+        "notes": "",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Box",
+        "direction": ">Z",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -153.0,
+        "box_max_x": -83.0,
+        "box_min_y": 27.0,
+        "box_max_y": 97.0,
+        "box_min_z": -5.0,
+        "box_max_z": 5.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Damper Boss Wall"
+      }
+    },
+    "0x22931866d80": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Pushrod Boss Wall",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.609375,
+      "height": 60,
+      "pos": [
+        -820.0,
+        420.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "The cylindrical wall of the pushrod eye boss.",
+        "tags": "bundled-example, topology-optimization, pymoto, named-selection",
+        "notes": "",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Box",
+        "direction": ">Z",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": 83.0,
+        "box_max_x": 153.0,
+        "box_min_y": 23.0,
+        "box_max_y": 93.0,
+        "box_min_z": -5.0,
+        "box_max_z": 5.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Pushrod Boss Wall"
+      }
+    },
+    "0x22931867110": {
+      "type_": "com.cad.topopt.support.TopologySupportNode",
+      "icon": null,
+      "name": "Chassis Pivot Fixity",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 235.3125,
+      "height": 60,
+      "pos": [
+        -480.0,
+        180.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Fixed on the chassis pivot boss.",
+        "tags": "bundled-example, topology-optimization, pymoto, topology-support",
+        "notes": "An ideal pin. The real joint is a bearing in a chassis bracket; neither the bearing clearance nor the bracket's own compliance is in this model.",
+        "schema_version": 1,
+        "support_type": "Fixed"
+      }
+    },
+    "0x229318756d0": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC1 Pushrod 22.5 kN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -480.0,
+        620.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Pushrod resultant for the design bump case.",
+        "tags": "bundled-example, topology-optimization, pymoto, topology-load",
+        "notes": "8 kN wheel load through the pushrod at the design motion ratio.",
+        "schema_version": 1,
+        "force_x": -4500.0,
+        "force_y": 22000.0,
+        "force_z": 0.0
+      }
+    },
+    "0x22931877b90": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC1 Damper 18.2 kN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -480.0,
+        780.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Damper resultant reacting the design bump case.",
+        "tags": "bundled-example, topology-optimization, pymoto, topology-load",
+        "notes": "Spring plus damping force at the peak of the stroke.",
+        "schema_version": 1,
+        "force_x": 3000.0,
+        "force_y": -18000.0,
+        "force_z": 0.0
+      }
+    },
+    "0x229318677d0": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC2 Pushrod 35.5 kN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -480.0,
+        940.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Pushrod resultant for the kerb-strike case.",
+        "tags": "bundled-example, topology-optimization, pymoto, topology-load",
+        "notes": "A kerb strike arrives at a different angle, not just a larger magnitude, which is what makes this a second load path rather than a scaled copy of the first.",
+        "schema_version": 1,
+        "force_x": 13000.0,
+        "force_y": 33000.0,
+        "force_z": 0.0
+      }
+    },
+    "0x22931867a70": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC2 Damper 28.3 kN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -480.0,
+        1100.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Damper resultant reacting the kerb-strike case.",
+        "tags": "bundled-example, topology-optimization, pymoto, topology-load",
+        "notes": "",
+        "schema_version": 1,
+        "force_x": -8500.0,
+        "force_y": -27000.0,
+        "force_z": 0.0
+      }
+    },
+    "0x229306efd40": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "Aluminium 7075-T6",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 354.390625,
+      "height": 122.4,
+      "pos": [
+        -1160.0,
+        -320.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "7075-T6 plate: E = 71.7 GPa, nu = 0.33, Rp0.2 = 503 MPa.",
+        "tags": "bundled-example, topology-optimization, pymoto, material",
+        "notes": "Linear elastic; the optimizer uses E and nu only.",
+        "schema_version": 1,
+        "preset": "Aluminum 7075-T6",
+        "youngs_modulus": 71700.0,
+        "poissons_ratio": 0.33,
+        "density": 2.81e-09,
+        "thermal_conductivity": 130.0,
+        "yield_strength": 503.0,
+        "tangent_modulus": 0.0,
+        "failure_strain": 0.2,
+        "enable_fracture": false,
+        "strain_rate_sensitive": true,
+        "validation_status": "Unvalidated",
+        "material_lot_id": "",
+        "validation_report_path": "",
+        "validated_rate_min_per_s": 0.0,
+        "validated_rate_max_per_s": 0.0
+      }
+    },
+    "0x229306ee030": {
+      "type_": "com.cad.sim.topopt_voxel.TopologyOptVoxelNode",
+      "icon": null,
+      "name": "Rocker Compliance Study",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": true,
+      "visible": true,
+      "width": 253.484375,
+      "height": 122.4,
+      "pos": [
+        200.0,
+        200.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Minimizes weighted compliance over the two operating cases.",
+        "tags": "bundled-example, topology-optimization, pymoto",
+        "notes": "Z-extruded, so the result is a prismatic 2.5-D part that a 3-axis mill can cut and that reconstructs exactly as a swept-profile B-rep.",
+        "workflow_mode": "Guided",
+        "design_goal": "Lightweight Stiffness",
+        "manufacturing_process": "Extruded",
+        "minimum_member_size_mm": 8.0,
+        "exclusion_scope": "All Loads and Supports",
+        "exclusion_thickness_mode": "Program Controlled",
+        "validate_after_optimize": false,
+        "cad_export_filename": "rocker_link_optimized.step",
+        "volfrac": 0.32,
+        "visualization": "Density",
+        "extrusion": "Z"
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "0x22931841460",
+        "shape"
+      ],
+      "in": [
+        "0x229306ee030",
+        "design_domain"
+      ]
+    },
+    {
+      "out": [
+        "0x229306ec8f0",
+        "shape"
+      ],
+      "in": [
+        "0x229306ecc20",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x22931874290",
+        "shape"
+      ],
+      "in": [
+        "0x22931865a30",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x22931874440",
+        "shape"
+      ],
+      "in": [
+        "0x22931866d80",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x229306ecc20",
+        "selection"
+      ],
+      "in": [
+        "0x22931867110",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x22931865a30",
+        "selection"
+      ],
+      "in": [
+        "0x22931877b90",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x22931865a30",
+        "selection"
+      ],
+      "in": [
+        "0x22931867a70",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x22931866d80",
+        "selection"
+      ],
+      "in": [
+        "0x229318756d0",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x22931866d80",
+        "selection"
+      ],
+      "in": [
+        "0x229318677d0",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x22931867110",
+        "supports"
+      ],
+      "in": [
+        "0x229306ee030",
+        "supports"
+      ]
+    },
+    {
+      "out": [
+        "0x229318756d0",
+        "loads"
+      ],
+      "in": [
+        "0x229306ee030",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x22931877b90",
+        "loads"
+      ],
+      "in": [
+        "0x229306ee030",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x229318677d0",
+        "loads"
+      ],
+      "in": [
+        "0x229306ee030",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x22931867a70",
+        "loads"
+      ],
+      "in": [
+        "0x229306ee030",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x229306efd40",
+        "material"
+      ],
+      "in": [
+        "0x229306ee030",
+        "material"
+      ]
+    }
+  ],
+  "_guided_topology_policy": {
+    "version": 1,
+    "nodes": 1,
+    "storage": "engineering-intent"
+  },
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "_result_store": {
+    "format": "HDF5",
+    "version": 1,
+    "file": "03_suspension_rocker_link.cad.results.h5",
+    "result_count": 1,
+    "saved_at": "2026-08-04T13:40:05.902644"
+  }
+}

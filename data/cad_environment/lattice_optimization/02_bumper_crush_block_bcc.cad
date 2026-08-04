@@ -1,0 +1,771 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "0x2554b965ee0": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Crush Block Envelope",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 167.609375,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        -60.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Crush-block envelope, 320 x 160 x 160 mm.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "The space between the vehicle chassis rail and the bumper beam that the absorber may occupy.",
+        "schema_version": 1,
+        "code": "result = cq.Workplane('XY').box(L, H, W)\n",
+        "parameters": "",
+        "param_1_name": "L",
+        "param_1_value": 320.0,
+        "param_2_name": "H",
+        "param_2_value": 160.0,
+        "param_3_name": "W",
+        "param_3_value": 160.0,
+        "param_4_name": "",
+        "param_4_value": 0.0,
+        "param_5_name": "",
+        "param_5_value": 0.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
+      }
+    },
+    "0x2554b964c20": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Chassis Mounting Plate",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 178.46875,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        180.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Bolted interface to the chassis rail.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "32 mm of solid behind the lattice: enough for the bolts to bear on material, and enough to restrain a whole lattice cell.",
+        "schema_version": 1,
+        "code": "result = cq.Workplane('XY').box(SX, SY, SZ).translate((OX, OY, OZ))\n",
+        "parameters": "",
+        "param_1_name": "SX",
+        "param_1_value": 32.0,
+        "param_2_name": "SY",
+        "param_2_value": 160.0,
+        "param_3_name": "SZ",
+        "param_3_value": 160.0,
+        "param_4_name": "OX",
+        "param_4_value": -144.0,
+        "param_5_name": "OY",
+        "param_5_value": 0.0,
+        "param_6_name": "OZ",
+        "param_6_value": 0.0
+      }
+    },
+    "0x2554b967d70": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Chassis Bolt Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.609375,
+      "height": 60,
+      "pos": [
+        -820.0,
+        180.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "The rearward face of the chassis mounting plate.",
+        "tags": "bundled-example, topology-optimization, pymoto, named-selection",
+        "notes": "Fixed: the chassis rail is much stiffer than the absorber.",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": "<X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Chassis Bolt Face"
+      }
+    },
+    "0x2554b87e6f0": {
+      "type_": "com.cad.topopt.support.TopologySupportNode",
+      "icon": null,
+      "name": "Mounting Fixity",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 235.3125,
+      "height": 60,
+      "pos": [
+        -480.0,
+        180.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Fixed on the mounting interface.",
+        "tags": "bundled-example, topology-optimization, pymoto, topology-support",
+        "notes": "Ideal fixity; bolt preload and interface compliance are not modelled.",
+        "schema_version": 1,
+        "support_type": "Fixed"
+      }
+    },
+    "0x255acdea690": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Impact Plate",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        420.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "The plate the bumper beam bolts to.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "32 mm of solid, so the impact load is introduced into a plate rather than into individual lattice struts.",
+        "schema_version": 1,
+        "code": "result = cq.Workplane('XY').box(SX, SY, SZ).translate((OX, OY, OZ))\n",
+        "parameters": "",
+        "param_1_name": "SX",
+        "param_1_value": 32.0,
+        "param_2_name": "SY",
+        "param_2_value": 160.0,
+        "param_3_name": "SZ",
+        "param_3_value": 160.0,
+        "param_4_name": "OX",
+        "param_4_value": 144.0,
+        "param_5_name": "OY",
+        "param_5_value": 0.0,
+        "param_6_name": "OZ",
+        "param_6_value": 0.0
+      }
+    },
+    "0x2554b9655e0": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Impact Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.609375,
+      "height": 60,
+      "pos": [
+        -820.0,
+        420.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "The forward face of the impact plate.",
+        "tags": "bundled-example, topology-optimization, pymoto, named-selection",
+        "notes": "",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": ">X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Impact Face"
+      }
+    },
+    "0x2557aa42930": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC1 Frontal 60 kN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -480.0,
+        420.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Full-overlap frontal load resultant.",
+        "tags": "bundled-example, topology-optimization, pymoto, topology-load",
+        "notes": "A static surrogate for the crush event. It places material; it does not compute energy absorption.",
+        "schema_version": 1,
+        "force_x": -60000.0,
+        "force_y": 0.0,
+        "force_z": 0.0
+      }
+    },
+    "0x2553e654da0": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Impact Plate (Oblique Case)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 203.4375,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        720.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "The same impact plate, carrying the oblique case.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "A second pad node keeps each case's face selection unambiguous.",
+        "schema_version": 1,
+        "code": "result = cq.Workplane('XY').box(SX, SY, SZ).translate((OX, OY, OZ))\n",
+        "parameters": "",
+        "param_1_name": "SX",
+        "param_1_value": 32.0,
+        "param_2_name": "SY",
+        "param_2_value": 160.0,
+        "param_3_name": "SZ",
+        "param_3_value": 160.0,
+        "param_4_name": "OX",
+        "param_4_value": 144.0,
+        "param_5_name": "OY",
+        "param_5_value": 0.0,
+        "param_6_name": "OZ",
+        "param_6_value": 0.0
+      }
+    },
+    "0x2554b925340": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Impact Face (Oblique)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 170.03125,
+      "height": 60,
+      "pos": [
+        -820.0,
+        720.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "The forward face of the impact plate.",
+        "tags": "bundled-example, topology-optimization, pymoto, named-selection",
+        "notes": "",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": ">X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Impact Face (Oblique)"
+      }
+    },
+    "0x2554b925d30": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC2 Oblique 45 kN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -480.0,
+        720.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Oblique 30-degree impact resultant.",
+        "tags": "bundled-example, topology-optimization, pymoto, topology-load",
+        "notes": "An offset or angled hit loads the absorber in shear as well as compression, which is what stops the optimizer from returning four unbraced columns.",
+        "schema_version": 1,
+        "force_x": -39000.0,
+        "force_y": 22500.0,
+        "force_z": 0.0
+      }
+    },
+    "0x255acdea9c0": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "AlSi10Mg (LPBF)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 354.390625,
+      "height": 122.4,
+      "pos": [
+        -1160.0,
+        -320.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "AlSi10Mg, LPBF as-built: E = 70 GPa, nu = 0.33, Rp0.2 = 230 MPa.",
+        "tags": "bundled-example, topology-optimization, pymoto, material",
+        "notes": "Representative as-built values. LPBF AlSi10Mg is orientation dependent and heat-treatment sensitive; use coupon data from the intended build.",
+        "schema_version": 1,
+        "analysis_purpose": "Structural FEA",
+        "preset": "Custom",
+        "youngs_modulus": 70000.0,
+        "poissons_ratio": 0.33,
+        "density": 2.67e-09,
+        "thermal_conductivity": 120.0,
+        "yield_strength": 230.0,
+        "tangent_modulus": 0.0,
+        "failure_strain": 0.2,
+        "enable_fracture": false,
+        "strain_rate_sensitive": true,
+        "validation_status": "Unvalidated",
+        "material_lot_id": "",
+        "validation_report_path": "",
+        "validated_rate_min_per_s": 0.0,
+        "validated_rate_max_per_s": 0.0
+      }
+    },
+    "0x2554b924b60": {
+      "type_": "com.cad.sim.lattice_voxel.LatticeOptVoxelNode",
+      "icon": null,
+      "name": "BCC Lattice Absorber Study",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": true,
+      "visible": true,
+      "width": 253.484375,
+      "height": 122.4,
+      "pos": [
+        200.0,
+        200.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Two-scale compliance minimization with a BCC cell.",
+        "tags": "bundled-example, topology-optimization, pymoto",
+        "notes": "BCC is bending dominated, so no axial-truss member sizing is run: that surrogate is only valid for a stretch-dominated cell such as octet.",
+        "workflow_mode": "Guided",
+        "design_goal": "Lightweight Stiffness",
+        "manufacturing_process": "None",
+        "minimum_member_size_mm": 16.0,
+        "exclusion_scope": "All Loads and Supports",
+        "exclusion_thickness_mode": "Program Controlled",
+        "validate_after_optimize": false,
+        "cad_export_filename": "bumper_crush_block_bcc.step",
+        "volfrac": 0.35,
+        "visualization": "Density",
+        "structure_mode": "BCC Lattice",
+        "lattice_settings_mode": "Manual",
+        "lattice_cell_size_mm": 0.0,
+        "lattice_member_thickness_mm": 0.0,
+        "lattice_skin_thickness_mm": 0.0,
+        "lattice_target_relative_density": 0.0,
+        "lattice_porosity": "Conservative"
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "0x2554b965ee0",
+        "shape"
+      ],
+      "in": [
+        "0x2554b924b60",
+        "design_domain"
+      ]
+    },
+    {
+      "out": [
+        "0x2554b964c20",
+        "shape"
+      ],
+      "in": [
+        "0x2554b967d70",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x2554b967d70",
+        "selection"
+      ],
+      "in": [
+        "0x2554b87e6f0",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x2554b87e6f0",
+        "supports"
+      ],
+      "in": [
+        "0x2554b924b60",
+        "supports"
+      ]
+    },
+    {
+      "out": [
+        "0x255acdea690",
+        "shape"
+      ],
+      "in": [
+        "0x2554b9655e0",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x2554b9655e0",
+        "selection"
+      ],
+      "in": [
+        "0x2557aa42930",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x2557aa42930",
+        "loads"
+      ],
+      "in": [
+        "0x2554b924b60",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x2553e654da0",
+        "shape"
+      ],
+      "in": [
+        "0x2554b925340",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x2554b925340",
+        "selection"
+      ],
+      "in": [
+        "0x2554b925d30",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x2554b925d30",
+        "loads"
+      ],
+      "in": [
+        "0x2554b924b60",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x255acdea9c0",
+        "material"
+      ],
+      "in": [
+        "0x2554b924b60",
+        "material"
+      ]
+    }
+  ],
+  "_guided_topology_policy": {
+    "version": 1,
+    "nodes": 1,
+    "storage": "engineering-intent"
+  },
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "_result_store": {
+    "format": "HDF5",
+    "version": 1,
+    "file": "02_bumper_crush_block_bcc.cad.results.h5",
+    "result_count": 1,
+    "saved_at": "2026-08-04T19:06:03.989614"
+  }
+}

@@ -1,0 +1,771 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "0x1f3dc8fc710": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Panel Core Envelope",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.890625,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        -60.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Equipment-panel core envelope, 420 x 320 x 32 mm.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "The core between the two facesheets. Honeycomb prisms run along Z, which here is the panel thickness - the direction a sandwich core's cells actually run.",
+        "schema_version": 1,
+        "code": "result = cq.Workplane('XY').box(L, W, T)\n",
+        "parameters": "",
+        "param_1_name": "L",
+        "param_1_value": 420.0,
+        "param_2_name": "W",
+        "param_2_value": 320.0,
+        "param_3_name": "T",
+        "param_3_value": 32.0,
+        "param_4_name": "",
+        "param_4_value": 0.0,
+        "param_5_name": "",
+        "param_5_value": 0.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
+      }
+    },
+    "0x1f40e65ffb0": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Perimeter Attachment Frame",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 209.296875,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        180.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Solid perimeter land, 12 mm wide, full core depth.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "A sandwich panel needs a solid edge close-out to take the attachment bolts and to close the core.",
+        "schema_version": 1,
+        "code": "# The panel is bolted to the structure all the way round its edge.\nouter = cq.Workplane('XY').box(L, W, T)\ninner = cq.Workplane('XY').box(L - 2.0 * B, W - 2.0 * B, T * 2.0)\nresult = outer.cut(inner)\n",
+        "parameters": "",
+        "param_1_name": "L",
+        "param_1_value": 420.0,
+        "param_2_name": "W",
+        "param_2_value": 320.0,
+        "param_3_name": "B",
+        "param_3_value": 12.0,
+        "param_4_name": "T",
+        "param_4_value": 32.0,
+        "param_5_name": "",
+        "param_5_value": 0.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
+      }
+    },
+    "0x1f40e6b0140": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Panel Attachment Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 174.953125,
+      "height": 60,
+      "pos": [
+        -820.0,
+        180.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "The downward face of the perimeter close-out.",
+        "tags": "bundled-example, topology-optimization, pymoto, named-selection",
+        "notes": "Fixed: the surrounding structure is much stiffer than the panel.",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": "<Z",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Panel Attachment Face"
+      }
+    },
+    "0x1f40e65c080": {
+      "type_": "com.cad.topopt.support.TopologySupportNode",
+      "icon": null,
+      "name": "Mounting Fixity",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 235.3125,
+      "height": 60,
+      "pos": [
+        -480.0,
+        180.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Fixed on the mounting interface.",
+        "tags": "bundled-example, topology-optimization, pymoto, topology-support",
+        "notes": "Ideal fixity; bolt preload and interface compliance are not modelled.",
+        "schema_version": 1,
+        "support_type": "Fixed"
+      }
+    },
+    "0x1f40df0db50": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Equipment Footprints",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 169.09375,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        420.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Two equipment-box footprints on the upper face.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "Solid inserts under the bolt patterns; a honeycomb cell cannot take a bolt on its own. Kept small on purpose: preserved material is spent out of the same budget the core has to live on, and a generous pad leaves the optimizer nothing to decide.",
+        "schema_version": 1,
+        "code": "# Two equipment boxes bolted through the upper facesheet.\nresult = None\nfor sx in (-1.0, 1.0):\n    pad = cq.Workplane('XY').box(PX, PY, P)\n    pad = pad.translate((sx * X, 0.0, T / 2.0 - P / 2.0))\n    result = pad if result is None else result.union(pad)\n",
+        "parameters": "",
+        "param_1_name": "PX",
+        "param_1_value": 100.0,
+        "param_2_name": "PY",
+        "param_2_value": 80.0,
+        "param_3_name": "P",
+        "param_3_value": 6.0,
+        "param_4_name": "X",
+        "param_4_value": 95.0,
+        "param_5_name": "T",
+        "param_5_value": 32.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
+      }
+    },
+    "0x1f40df0f020": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Equipment Seating Faces",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 187.796875,
+      "height": 60,
+      "pos": [
+        -820.0,
+        420.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "The upward faces of the two equipment footprints.",
+        "tags": "bundled-example, topology-optimization, pymoto, named-selection",
+        "notes": "",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": ">Z",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Equipment Seating Faces"
+      }
+    },
+    "0x1f3e0db2930": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC1 Normal 3.92 kN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -480.0,
+        420.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Two 8 kg boxes at 25 g normal to the panel.",
+        "tags": "bundled-example, topology-optimization, pymoto, topology-load",
+        "notes": "Quasi-static launch load factor out of plane - the case that sets the core's shear path to the edges.",
+        "schema_version": 1,
+        "force_x": 0.0,
+        "force_y": 0.0,
+        "force_z": -3924.0
+      }
+    },
+    "0x1f3e0db0c20": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Equipment Footprints (Lateral Case)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 249.171875,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        720.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "The same footprints, carrying the lateral case.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "A second pad node keeps each case's face selection unambiguous.",
+        "schema_version": 1,
+        "code": "# Two equipment boxes bolted through the upper facesheet.\nresult = None\nfor sx in (-1.0, 1.0):\n    pad = cq.Workplane('XY').box(PX, PY, P)\n    pad = pad.translate((sx * X, 0.0, T / 2.0 - P / 2.0))\n    result = pad if result is None else result.union(pad)\n",
+        "parameters": "",
+        "param_1_name": "PX",
+        "param_1_value": 100.0,
+        "param_2_name": "PY",
+        "param_2_value": 80.0,
+        "param_3_name": "P",
+        "param_3_value": 6.0,
+        "param_4_name": "X",
+        "param_4_value": 95.0,
+        "param_5_name": "T",
+        "param_5_value": 32.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
+      }
+    },
+    "0x1f40e6003b0": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Equipment Seating Faces (Lateral)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 237.359375,
+      "height": 60,
+      "pos": [
+        -820.0,
+        720.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "The upward faces of the two equipment footprints.",
+        "tags": "bundled-example, topology-optimization, pymoto, named-selection",
+        "notes": "",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": ">Z",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Equipment Seating Faces (Lateral)"
+      }
+    },
+    "0x1f40e600680": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC2 Lateral 2.83 kN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -480.00000000000006,
+        717.429106029106
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Two 8 kg boxes at 18 g in plane.",
+        "tags": "bundled-example, topology-optimization, pymoto, topology-load",
+        "notes": "In-plane inertia is carried by completely different core material than the out-of-plane case.",
+        "schema_version": 1,
+        "force_x": 2826.0,
+        "force_y": 0.0,
+        "force_z": 0.0
+      }
+    },
+    "0x1f40e6009b0": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "AlSi10Mg (LPBF)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 354.390625,
+      "height": 122.4,
+      "pos": [
+        -1160.0,
+        -320.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "AlSi10Mg, LPBF as-built: E = 70 GPa, nu = 0.33.",
+        "tags": "bundled-example, topology-optimization, pymoto, material",
+        "notes": "Representative as-built values.",
+        "schema_version": 1,
+        "analysis_purpose": "Structural FEA",
+        "preset": "Custom",
+        "youngs_modulus": 70000.0,
+        "poissons_ratio": 0.33,
+        "density": 2.67e-09,
+        "thermal_conductivity": 120.0,
+        "yield_strength": 230.0,
+        "tangent_modulus": 0.0,
+        "failure_strain": 0.2,
+        "enable_fracture": false,
+        "strain_rate_sensitive": true,
+        "validation_status": "Unvalidated",
+        "material_lot_id": "",
+        "validation_report_path": "",
+        "validated_rate_min_per_s": 0.0,
+        "validated_rate_max_per_s": 0.0
+      }
+    },
+    "0x1f3d23be7e0": {
+      "type_": "com.cad.sim.lattice_voxel.LatticeOptVoxelNode",
+      "icon": null,
+      "name": "Honeycomb Core Panel Study",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": true,
+      "visible": true,
+      "width": 253.484375,
+      "height": 122.4,
+      "pos": [
+        200.0,
+        200.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Two-scale compliance minimization with a prismatic honeycomb cell.",
+        "tags": "bundled-example, topology-optimization, pymoto",
+        "notes": "Honeycomb has no cubic homogenized law, so this solve uses the isotropic continuum surrogate and the report says so.",
+        "workflow_mode": "Guided",
+        "design_goal": "Lightweight Stiffness",
+        "manufacturing_process": "None",
+        "minimum_member_size_mm": 20.0,
+        "exclusion_scope": "All Loads and Supports",
+        "exclusion_thickness_mode": "Program Controlled",
+        "validate_after_optimize": false,
+        "cad_export_filename": "equipment_panel_core_honeycomb.step",
+        "volfrac": 0.38,
+        "visualization": "Density",
+        "structure_mode": "Honeycomb Lattice",
+        "lattice_settings_mode": "Manual",
+        "lattice_cell_size_mm": 0.0,
+        "lattice_member_thickness_mm": 0.0,
+        "lattice_skin_thickness_mm": 0.0,
+        "lattice_target_relative_density": 0.0,
+        "lattice_porosity": "Conservative"
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "0x1f3dc8fc710",
+        "shape"
+      ],
+      "in": [
+        "0x1f3d23be7e0",
+        "design_domain"
+      ]
+    },
+    {
+      "out": [
+        "0x1f40e65ffb0",
+        "shape"
+      ],
+      "in": [
+        "0x1f40e6b0140",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1f40e6b0140",
+        "selection"
+      ],
+      "in": [
+        "0x1f40e65c080",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x1f40e65c080",
+        "supports"
+      ],
+      "in": [
+        "0x1f3d23be7e0",
+        "supports"
+      ]
+    },
+    {
+      "out": [
+        "0x1f40df0db50",
+        "shape"
+      ],
+      "in": [
+        "0x1f40df0f020",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1f40df0f020",
+        "selection"
+      ],
+      "in": [
+        "0x1f3e0db2930",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3e0db2930",
+        "loads"
+      ],
+      "in": [
+        "0x1f3d23be7e0",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3e0db0c20",
+        "shape"
+      ],
+      "in": [
+        "0x1f40e6003b0",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1f40e6003b0",
+        "selection"
+      ],
+      "in": [
+        "0x1f40e600680",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x1f40e600680",
+        "loads"
+      ],
+      "in": [
+        "0x1f3d23be7e0",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x1f40e6009b0",
+        "material"
+      ],
+      "in": [
+        "0x1f3d23be7e0",
+        "material"
+      ]
+    }
+  ],
+  "_guided_topology_policy": {
+    "version": 1,
+    "nodes": 1,
+    "storage": "engineering-intent"
+  },
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "_result_store": {
+    "format": "HDF5",
+    "version": 1,
+    "file": "05_equipment_panel_core_honeycomb.cad.results.h5",
+    "result_count": 1,
+    "saved_at": "2026-08-04T20:18:07.256183"
+  }
+}

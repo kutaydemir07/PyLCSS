@@ -1,0 +1,479 @@
+{
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "_title": "Resonance-Avoiding Beam — Disconnected Frequency Bands",
+  "_purpose": "Find robust beam dimensions that keep natural frequencies away from an operating excitation band while controlling mass.",
+  "_fidelity": "Euler-Bernoulli analytical benchmark. Thick-beam effects, joints, damping, material scatter, and full modal FEA require downstream verification.",
+  "_workflow": [
+    "Discover the feasible regions above and below the forbidden frequency band.",
+    "Retain separate multimodal boxes rather than bridging the resonance gap.",
+    "Select a mode using mass and manufacturing-robustness criteria."
+  ],
+  "_acceptance_criteria": [
+    "No retained box intersects the forbidden excitation band.",
+    "Frequency separation includes the declared uncertainty margin.",
+    "Selected corners are checked with a modal finite-element model."
+  ],
+  "product_name": "Resonance Avoiding Beam",
+  "systems": [
+    {
+      "name": "Resonance Avoiding Beam",
+      "graph": {
+        "graph": {
+          "layout_direction": 0,
+          "acyclic": true,
+          "pipe_collision": false,
+          "pipe_slicing": true,
+          "pipe_style": 1,
+          "accept_connection_types": "{}",
+          "reject_connection_types": "{}"
+        },
+        "nodes": {
+          "0x1000000001": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "Beam Height",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 230,
+            "height": 250,
+            "pos": [
+              -620,
+              -220
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "h",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "h",
+              "unit": "mm",
+              "min": "5",
+              "max": "50"
+            }
+          },
+          "0x1000000002": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "Beam Width",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 230,
+            "height": 250,
+            "pos": [
+              -620,
+              40
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "b",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "b",
+              "unit": "mm",
+              "min": "10",
+              "max": "100"
+            }
+          },
+          "0x1000000003": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "Beam Length",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 230,
+            "height": 250,
+            "pos": [
+              -620,
+              300
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "L",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "L",
+              "unit": "m",
+              "min": "0.3",
+              "max": "1"
+            }
+          },
+          "0x2000000001": {
+            "type_": "com.pfd.custom_block.CustomBlockNode",
+            "icon": null,
+            "name": "Resonance Avoiding Beam",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 520,
+            "height": 552,
+            "pos": [
+              20,
+              20
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "h",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "b",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "L",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [
+              {
+                "name": "sigma",
+                "multi_connection": true,
+                "display_name": true
+              },
+              {
+                "name": "delta",
+                "multi_connection": true,
+                "display_name": true
+              },
+              {
+                "name": "f_n",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "func_name": "Resonance_Avoiding_Beam",
+              "num_inputs": "3",
+              "num_outputs": "3",
+              "surrogate_controls": false,
+              "surrogate_model_path": "",
+              "use_surrogate": false,
+              "surrogate_status": "Not Trained",
+              "surrogate_train_trigger": 0,
+              "code_content": "h_m = h * 0.001\nb_m = b * 0.001\nP = 200.0\nE = 210.0e9\nrho = 7850.0\nI = (b_m * h_m**3) / 12.0\nA = b_m * h_m\nsigma = (P * L * (h_m / 2.0)) / (I + 1e-12)\ndelta = (P * L**3) / (3.0 * E * (I + 1e-12))\nbeta_l_sq = 1.875**2\nfrequency_factor = beta_l_sq / (2.0 * np.pi * L**2)\nf_natural = frequency_factor * np.sqrt((E * (I + 1e-12)) / (rho * (A + 1e-12)))\ndistance_lower = f_natural - 60.0\ndistance_upper = 120.0 - f_natural\nf_n = np.minimum(distance_lower, distance_upper)"
+            }
+          },
+          "0x3000000001": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "Maximum Stress",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 250,
+            "height": 332,
+            "pos": [
+              760,
+              -220
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "sigma",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "sigma",
+              "unit": "Pa",
+              "req_min": "0",
+              "req_max": "250000000",
+              "minimize": false,
+              "maximize": false
+            }
+          },
+          "0x3000000002": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "Tip Deflection",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 250,
+            "height": 332,
+            "pos": [
+              760,
+              110
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "delta",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "delta",
+              "unit": "m",
+              "req_min": "0",
+              "req_max": "0.01",
+              "minimize": false,
+              "maximize": false
+            }
+          },
+          "0x3000000003": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "Resonance Constraint",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 250,
+            "height": 332,
+            "pos": [
+              760,
+              440
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "f_n",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "f_n",
+              "unit": "Hz",
+              "req_min": "-inf",
+              "req_max": "0",
+              "minimize": false,
+              "maximize": false,
+              "show_in_legend": true
+            }
+          }
+        },
+        "connections": [
+          {
+            "out": [
+              "0x1000000001",
+              "h"
+            ],
+            "in": [
+              "0x2000000001",
+              "h"
+            ]
+          },
+          {
+            "out": [
+              "0x1000000002",
+              "b"
+            ],
+            "in": [
+              "0x2000000001",
+              "b"
+            ]
+          },
+          {
+            "out": [
+              "0x1000000003",
+              "L"
+            ],
+            "in": [
+              "0x2000000001",
+              "L"
+            ]
+          },
+          {
+            "out": [
+              "0x2000000001",
+              "sigma"
+            ],
+            "in": [
+              "0x3000000001",
+              "sigma"
+            ]
+          },
+          {
+            "out": [
+              "0x2000000001",
+              "delta"
+            ],
+            "in": [
+              "0x3000000002",
+              "delta"
+            ]
+          },
+          {
+            "out": [
+              "0x2000000001",
+              "f_n"
+            ],
+            "in": [
+              "0x3000000003",
+              "f_n"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

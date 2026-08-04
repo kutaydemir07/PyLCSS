@@ -1,0 +1,99 @@
+# Copyright (c) 2026 Kutay Demir.
+# Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
+# PyLCSS - Professional Low-Code System Solutions
+# .gitignore file
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Data files
+*.h5
+*.hdf5
+*.csv
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+pylcss/generated_models/
+
+# Assistant runtime state (stored in the per-user config directory)
+pylcss/assistant_systems/config/.llm_key
+pylcss/assistant_systems/config/settings.json
+pylcss/assistant_systems/config/llm_memory.json
+
+# Node-owned FreeCAD documents written by the FreeCAD Part bridge
+# (pylcss/design_studio/freecad_bridge/paths.py creates this lazily).
+# These are per-user design files, not source.
+data_freecad/
+
+# Distribution
+dist/
+build/
+
+# External solver binaries (CalculiX, OpenRadioss) fetched by
+# scripts/install_solvers.py — large, platform-specific, and reproducible
+# via the script, so don't commit them or the auto-generated path config.
+external_solvers/
+
+# Downloaded benchmark decks (e.g. the ~30 MB Neon HPC zip).  Fetched by
+# `python scripts/install_solvers.py --with-neon` and reproducible from the
+# upstream URL, so we don't commit them.
+data/cad_environment/benchmarks/neon/
+
+# Generated experiment and solver outputs
+experiments/active_learning/results/
+experiments/crash_validation/results/
+output/
+data/Active Learning Demo Results.json

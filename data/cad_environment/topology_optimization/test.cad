@@ -1,0 +1,527 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "0x2013e704170": {
+      "type_": "com.cad.geometry.box.BoxNode",
+      "icon": null,
+      "name": "Box",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 182.875,
+      "height": 99.3,
+      "pos": [
+        1166.0,
+        17.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "",
+        "tags": "",
+        "notes": "",
+        "schema_version": 1,
+        "length_x": 100.0,
+        "width_y": 40.0,
+        "height_z": 20.0,
+        "centered": true
+      }
+    },
+    "0x2014ae99eb0": {
+      "type_": "com.cad.select_face_interactive.InteractiveSelectFaceNode",
+      "icon": null,
+      "name": "Pick Geometry",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.609375,
+      "height": 60,
+      "pos": [
+        1494.4752598752596,
+        -16.480249480249462
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "",
+        "tags": "",
+        "notes": "",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "picked_face_indices": "1",
+        "selection_label": "1 face selected  (idx: 1)"
+      }
+    },
+    "0x2013e76f860": {
+      "type_": "com.cad.select_face_interactive.InteractiveSelectFaceNode",
+      "icon": null,
+      "name": "Pick Geometry 1",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.609375,
+      "height": 60,
+      "pos": [
+        1425.7384615384615,
+        174.69397089397074
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "",
+        "tags": "",
+        "notes": "",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "picked_face_indices": "0",
+        "selection_label": "1 face selected  (idx: 0)"
+      }
+    },
+    "0x2013e76f0b0": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "icon": null,
+      "name": "Support",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 179.5,
+      "height": 76.2,
+      "pos": [
+        2327.3983367983346,
+        201.13804573804558
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "",
+        "tags": "",
+        "notes": "",
+        "schema_version": 1,
+        "constraint_type": "Fixed",
+        "displacement_x": 0.0,
+        "displacement_y": 0.0,
+        "displacement_z": 0.0,
+        "displacement_x_enabled": true,
+        "displacement_y_enabled": true,
+        "displacement_z_enabled": true,
+        "condition": ""
+      }
+    },
+    "0x2014adcac60": {
+      "type_": "com.cad.sim.load.LoadNode",
+      "icon": null,
+      "name": "Force",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.421875,
+      "height": 145.5,
+      "pos": [
+        2348.878586278585,
+        -29.774636174636157
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "",
+        "tags": "",
+        "notes": "",
+        "schema_version": 1,
+        "load_type": "Force",
+        "condition": "",
+        "force_x": 0.0,
+        "force_y": -100.0,
+        "force_z": 0.0,
+        "moment_x": 0.0,
+        "moment_y": 0.0,
+        "moment_z": 0.0,
+        "gravity_accel": 9810.0,
+        "gravity_direction": "-Y"
+      }
+    },
+    "0x2014ae45310": {
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "icon": null,
+      "name": "Mesh",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 238.265625,
+      "height": 122.4,
+      "pos": [
+        1829.4748440748426,
+        65.73846153846154
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "",
+        "tags": "",
+        "notes": "",
+        "schema_version": 1,
+        "mesh_source": "CAD",
+        "mesh_path": "",
+        "mesh_type": "Tet",
+        "element_size": 2.0,
+        "refinement_size": 0.5,
+        "shell_thickness": 1.5,
+        "shell_nip": 5
+      }
+    },
+    "0x2013e76ff50": {
+      "type_": "com.cad.sim.topopt_voxel.TopologyOptVoxelNode",
+      "icon": null,
+      "name": "Topology Solver",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": true,
+      "visible": true,
+      "width": 253.484375,
+      "height": 122.4,
+      "pos": [
+        2770.8178794178784,
+        82.25488565488561
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "",
+        "tags": "",
+        "notes": "",
+        "workflow_mode": "Guided",
+        "design_goal": "Lightweight Stiffness",
+        "manufacturing_process": "None",
+        "minimum_member_size_mm": 0.0,
+        "exclusion_scope": "All Loads and Supports",
+        "exclusion_thickness_mode": "Program Controlled",
+        "validate_after_optimize": false,
+        "cad_export_filename": "topology_optimized.step",
+        "volfrac": 0.29,
+        "visualization": "Density"
+      }
+    },
+    "0x2013eba53a0": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "Material",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 354.390625,
+      "height": 122.4,
+      "pos": [
+        1805.2212058212049,
+        -109.54927234927229
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "",
+        "tags": "",
+        "notes": "",
+        "schema_version": 1,
+        "analysis_purpose": "Structural FEA",
+        "preset": "Steel (Structural)",
+        "youngs_modulus": 210000.0,
+        "poissons_ratio": 0.3,
+        "density": 7.85e-09,
+        "thermal_conductivity": 45.0,
+        "yield_strength": 0.0,
+        "tangent_modulus": 0.0,
+        "failure_strain": 0.2,
+        "enable_fracture": false,
+        "strain_rate_sensitive": true,
+        "validation_status": "Unvalidated",
+        "material_lot_id": "",
+        "validation_report_path": "",
+        "validated_rate_min_per_s": 0.0,
+        "validated_rate_max_per_s": 0.0
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "0x2013e704170",
+        "shape"
+      ],
+      "in": [
+        "0x2014ae99eb0",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x2013e704170",
+        "shape"
+      ],
+      "in": [
+        "0x2013e76f860",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x2013e704170",
+        "shape"
+      ],
+      "in": [
+        "0x2014ae45310",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x2013e704170",
+        "shape"
+      ],
+      "in": [
+        "0x2013e76ff50",
+        "design_domain"
+      ]
+    },
+    {
+      "out": [
+        "0x2014ae99eb0",
+        "selection"
+      ],
+      "in": [
+        "0x2014adcac60",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x2013e76f860",
+        "selection"
+      ],
+      "in": [
+        "0x2013e76f0b0",
+        "target_face"
+      ]
+    },
+    {
+      "in": [
+        "0x2013e76f0b0",
+        "mesh"
+      ],
+      "out": [
+        "0x2014ae45310",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x2013e76f0b0",
+        "constraints"
+      ],
+      "in": [
+        "0x2013e76ff50",
+        "supports"
+      ]
+    },
+    {
+      "in": [
+        "0x2014adcac60",
+        "mesh"
+      ],
+      "out": [
+        "0x2014ae45310",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x2014adcac60",
+        "loads"
+      ],
+      "in": [
+        "0x2013e76ff50",
+        "loads"
+      ]
+    },
+    {
+      "in": [
+        "0x2013e76ff50",
+        "material"
+      ],
+      "out": [
+        "0x2013eba53a0",
+        "material"
+      ]
+    }
+  ],
+  "_guided_topology_policy": {
+    "version": 1,
+    "nodes": 1,
+    "storage": "engineering-intent"
+  },
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "_result_store": {
+    "format": "HDF5",
+    "version": 1,
+    "file": "test.cad.results.h5",
+    "result_count": 2,
+    "saved_at": "2026-08-04T20:34:56.922667"
+  }
+}

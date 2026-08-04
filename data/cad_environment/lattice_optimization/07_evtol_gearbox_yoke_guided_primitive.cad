@@ -1,0 +1,864 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "0x1f4f9206780": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Yoke Design Envelope",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 170.640625,
+      "height": 168.6,
+      "pos": [
+        -940.0,
+        0.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Tapered 420 x 260 x 160 mm yoke with twin bearing bosses, pin bores, and a service tunnel.",
+        "tags": "topology-optimization, evtol, gearbox-yoke, design-domain",
+        "notes": "One connected design body; four operating cases form the envelope.",
+        "schema_version": 1,
+        "code": "body = (\n    cq.Workplane('YZ', origin=(0.0, 0.50 * H, 0.50 * W))\n    .ellipse(0.45 * H, 0.43 * W)\n    .workplane(offset=0.55 * L)\n    .ellipse(0.38 * H, 0.36 * W)\n    .workplane(offset=0.27 * L)\n    .ellipse(0.30 * H, 0.29 * W)\n    .loft(combine=True)\n)\nroot = (\n    cq.Workplane('XY')\n    .box(0.10 * L, 0.94 * H, 0.94 * W, centered=(False, False, False))\n    .translate((0.0, 0.03 * H, 0.03 * W))\n)\nupper = (\n    cq.Workplane('YZ', origin=(0.76 * L, 0.70 * H, 0.50 * W))\n    .ellipse(0.155 * H, 0.25 * W)\n    .extrude(0.24 * L)\n)\nlower = (\n    cq.Workplane('YZ', origin=(0.76 * L, 0.30 * H, 0.50 * W))\n    .ellipse(0.155 * H, 0.25 * W)\n    .extrude(0.24 * L)\n)\nresult = body.union(root).union(upper).union(lower)\ntunnel = (\n    cq.Workplane('YZ', origin=(0.13 * L, 0.50 * H, 0.50 * W))\n    .ellipse(0.16 * H, 0.22 * W)\n    .extrude(0.61 * L)\n)\nupper_bore = (\n    cq.Workplane('YZ', origin=(0.78 * L, 0.70 * H, 0.50 * W))\n    .ellipse(0.058 * H, 0.108 * W)\n    .extrude(0.22 * L)\n)\nlower_bore = (\n    cq.Workplane('YZ', origin=(0.78 * L, 0.30 * H, 0.50 * W))\n    .ellipse(0.058 * H, 0.108 * W)\n    .extrude(0.22 * L)\n)\nresult = result.cut(tunnel).cut(upper_bore).cut(lower_bore)\n",
+        "parameters": "",
+        "param_1_name": "L",
+        "param_1_value": 420.0,
+        "param_2_name": "H",
+        "param_2_value": 260.0,
+        "param_3_name": "W",
+        "param_3_value": 160.0,
+        "param_4_name": "hole_d",
+        "param_4_value": 6.0,
+        "param_5_name": "fillet_r",
+        "param_5_value": 1.0,
+        "param_6_name": "clearance",
+        "param_6_value": 0.2
+      }
+    },
+    "0x1f4f9289eb0": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "Ti-6Al-4V",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 354.390625,
+      "height": 122.4,
+      "pos": [
+        -330.0,
+        -720.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Representative room-temperature Ti-6Al-4V elastic data.",
+        "tags": "topology-optimization, titanium, material",
+        "notes": "Allowables, fatigue, defects, and AM process knockdowns require project-specific substantiation.",
+        "schema_version": 1,
+        "analysis_purpose": "Structural FEA",
+        "preset": "Custom",
+        "youngs_modulus": 114000.0,
+        "poissons_ratio": 0.34,
+        "density": 4.43e-09,
+        "thermal_conductivity": 6.7,
+        "yield_strength": 880.0,
+        "tangent_modulus": 0.0,
+        "failure_strain": 0.2,
+        "enable_fracture": false,
+        "strain_rate_sensitive": true,
+        "validation_status": "Unvalidated",
+        "material_lot_id": "",
+        "validation_report_path": "",
+        "validated_rate_min_per_s": 0.0,
+        "validated_rate_max_per_s": 0.0
+      }
+    },
+    "0x1f4f9292150": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Fuselage Root Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.609375,
+      "height": 60,
+      "pos": [
+        -650.0,
+        -560.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Physical CAD face selection for fuselage root face.",
+        "tags": "topology-optimization, named-selection, boundary-interface",
+        "notes": "Face-based interface; no point/edge regularization.",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": "<X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Fuselage Root Face"
+      }
+    },
+    "0x1f3efd6a810": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Both Bearing Faces",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.609375,
+      "height": 60,
+      "pos": [
+        -650.0,
+        -330.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Physical CAD face selection for both bearing faces.",
+        "tags": "topology-optimization, named-selection, boundary-interface",
+        "notes": "Face-based interface; no point/edge regularization.",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": ">X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Both Bearing Faces"
+      }
+    },
+    "0x1f3d2445130": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Upper Bearing Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.609375,
+      "height": 60,
+      "pos": [
+        -650.0,
+        -100.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Physical CAD face selection for upper bearing face.",
+        "tags": "topology-optimization, named-selection, boundary-interface",
+        "notes": "Face-based interface; no point/edge regularization.",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Box",
+        "direction": ">X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": 418.0,
+        "box_max_x": 422.0,
+        "box_min_y": 135.0,
+        "box_max_y": 230.0,
+        "box_min_z": 25.0,
+        "box_max_z": 135.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Upper Bearing Face"
+      }
+    },
+    "0x1f3efd69460": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Lower Bearing Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.609375,
+      "height": 60,
+      "pos": [
+        -650.0,
+        200.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Physical CAD face selection for lower bearing face.",
+        "tags": "topology-optimization, named-selection, boundary-interface",
+        "notes": "Face-based interface; no point/edge regularization.",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Box",
+        "direction": ">X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": 418.0,
+        "box_max_x": 422.0,
+        "box_min_y": 30.0,
+        "box_max_y": 125.0,
+        "box_min_z": 25.0,
+        "box_max_z": 135.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Lower Bearing Face"
+      }
+    },
+    "0x1f3e1fe1340": {
+      "type_": "com.cad.topopt.support.TopologySupportNode",
+      "icon": null,
+      "name": "Fixed Fuselage Interface",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 235.3125,
+      "height": 60,
+      "pos": [
+        -330.0,
+        -560.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Fully fixed physical root face.",
+        "tags": "topology-optimization, support",
+        "notes": "All three translations constrained.",
+        "schema_version": 1,
+        "support_type": "Fixed"
+      }
+    },
+    "0x1f4f928a930": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "2.5g Thrust Resultant",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -330.0,
+        -420.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Resultant force on the connected bearing interface.",
+        "tags": "topology-optimization, structural-load, operating-case",
+        "notes": "Force components are in N and are distributed over a CAD face.",
+        "schema_version": 1,
+        "force_x": 24000.0,
+        "force_y": -185000.0,
+        "force_z": -15000.0
+      }
+    },
+    "0x1f3e1fe0bc0": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "Lateral Gust + Yaw",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -330.0,
+        -230.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Resultant force on the connected bearing interface.",
+        "tags": "topology-optimization, structural-load, operating-case",
+        "notes": "Force components are in N and are distributed over a CAD face.",
+        "schema_version": 1,
+        "force_x": 10000.0,
+        "force_y": -36000.0,
+        "force_z": 100000.0
+      }
+    },
+    "0x1f3e1fe0470": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "Drive Torque Upper",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -330.0,
+        -40.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Resultant force on the connected bearing interface.",
+        "tags": "topology-optimization, structural-load, operating-case",
+        "notes": "Force components are in N and are distributed over a CAD face.",
+        "schema_version": 1,
+        "force_x": 0.0,
+        "force_y": 0.0,
+        "force_z": 62000.0
+      }
+    },
+    "0x1f3e1fe0380": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "Drive Torque Lower",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -330.0,
+        150.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Resultant force on the connected bearing interface.",
+        "tags": "topology-optimization, structural-load, operating-case",
+        "notes": "Force components are in N and are distributed over a CAD face.",
+        "schema_version": 1,
+        "force_x": 0.0,
+        "force_y": 0.0,
+        "force_z": -62000.0
+      }
+    },
+    "0x1f3e1fe1bb0": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "Axial Braking",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -330.0,
+        340.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Resultant force on the connected bearing interface.",
+        "tags": "topology-optimization, structural-load, operating-case",
+        "notes": "Force components are in N and are distributed over a CAD face.",
+        "schema_version": 1,
+        "force_x": -95000.0,
+        "force_y": -20000.0,
+        "force_z": 0.0
+      }
+    },
+    "0x1f3e1fe17f0": {
+      "type_": "com.cad.sim.lattice_voxel.LatticeOptVoxelNode",
+      "icon": null,
+      "name": "Professional Schwarz Primitive Lattice TopOpt",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": true,
+      "visible": true,
+      "width": 304.796875,
+      "height": 122.4,
+      "pos": [
+        340.0,
+        0.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Guided Professional variable-density Schwarz Primitive Lattice optimization across four operating cases.",
+        "tags": "topology-optimization, guided, evtol, primitive, saved-result",
+        "notes": "A precomputed density result is restored from the sidecar. Rerunning evaluates the fully connected graph shown here.",
+        "workflow_mode": "Guided",
+        "design_goal": "Load-Case Envelope",
+        "manufacturing_process": "None",
+        "minimum_member_size_mm": 0.0,
+        "exclusion_scope": "All Loads and Supports",
+        "exclusion_thickness_mode": "Program Controlled",
+        "validate_after_optimize": false,
+        "cad_export_filename": "topology_optimized.step",
+        "volfrac": 0.45,
+        "visualization": "Density",
+        "structure_mode": "Schwarz Primitive Lattice",
+        "lattice_settings_mode": "Guided",
+        "lattice_cell_size_mm": 0.0,
+        "lattice_member_thickness_mm": 0.0,
+        "lattice_skin_thickness_mm": 0.0,
+        "lattice_target_relative_density": 0.0,
+        "lattice_porosity": "Conservative"
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "0x1f4f9206780",
+        "shape"
+      ],
+      "in": [
+        "0x1f4f9292150",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1f4f9206780",
+        "shape"
+      ],
+      "in": [
+        "0x1f3efd6a810",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1f4f9206780",
+        "shape"
+      ],
+      "in": [
+        "0x1f3d2445130",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1f4f9206780",
+        "shape"
+      ],
+      "in": [
+        "0x1f3efd69460",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1f4f9206780",
+        "shape"
+      ],
+      "in": [
+        "0x1f3e1fe17f0",
+        "design_domain"
+      ]
+    },
+    {
+      "out": [
+        "0x1f4f9289eb0",
+        "material"
+      ],
+      "in": [
+        "0x1f3e1fe17f0",
+        "material"
+      ]
+    },
+    {
+      "out": [
+        "0x1f4f9292150",
+        "selection"
+      ],
+      "in": [
+        "0x1f3e1fe1340",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3efd6a810",
+        "selection"
+      ],
+      "in": [
+        "0x1f4f928a930",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3efd6a810",
+        "selection"
+      ],
+      "in": [
+        "0x1f3e1fe0bc0",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3efd6a810",
+        "selection"
+      ],
+      "in": [
+        "0x1f3e1fe1bb0",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3d2445130",
+        "selection"
+      ],
+      "in": [
+        "0x1f3e1fe0470",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3efd69460",
+        "selection"
+      ],
+      "in": [
+        "0x1f3e1fe0380",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3e1fe1340",
+        "supports"
+      ],
+      "in": [
+        "0x1f3e1fe17f0",
+        "supports"
+      ]
+    },
+    {
+      "out": [
+        "0x1f4f928a930",
+        "loads"
+      ],
+      "in": [
+        "0x1f3e1fe17f0",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3e1fe0bc0",
+        "loads"
+      ],
+      "in": [
+        "0x1f3e1fe17f0",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3e1fe0470",
+        "loads"
+      ],
+      "in": [
+        "0x1f3e1fe17f0",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3e1fe0380",
+        "loads"
+      ],
+      "in": [
+        "0x1f3e1fe17f0",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3e1fe1bb0",
+        "loads"
+      ],
+      "in": [
+        "0x1f3e1fe17f0",
+        "loads"
+      ]
+    }
+  ],
+  "_guided_topology_policy": {
+    "version": 1,
+    "nodes": 1,
+    "storage": "engineering-intent"
+  },
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "_result_store": {
+    "format": "HDF5",
+    "version": 1,
+    "file": "07_evtol_gearbox_yoke_guided_primitive.cad.results.h5",
+    "result_count": 1,
+    "saved_at": "2026-08-04T20:44:24.342001"
+  }
+}

@@ -1,0 +1,665 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "0x16262020050": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Six-Cell Module Envelope",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 190.71875,
+      "height": 168.6,
+      "pos": [
+        -1050.0,
+        -180.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Conceptual manufacturable six-cell solid for envelope and approximate mass orientation.",
+        "tags": "explicit-impact, openradioss, engineering-challenge, ev-crash",
+        "notes": "The checked solver deck contains seven geometric trigger bands; this clean solid intentionally omits them.",
+        "schema_version": 1,
+        "code": "# Conceptual six-cell DP780 extrusion aligned with global X.\n# The checked shell deck contains seven trigger bands; this solid is only the\n# clean manufacturing envelope used for mass and package orientation.\nif min(L, W, H, wall_t) <= 0.0:\n    raise ValueError('All dimensions must be positive.')\nif 2.0 * wall_t >= min(W / 3.0, H / 2.0):\n    raise ValueError('Wall gauge closes a cell.')\ncenter = (0.5 * L, 0.0, 0.0)\nouter = cq.Workplane('XY').box(L, W, H).translate(center)\ninner = cq.Workplane('XY').box(L + 2.0, W - 2.0 * wall_t, H - 2.0 * wall_t).translate(center)\nperimeter = outer.cut(inner)\nweb_left = cq.Workplane('XY').box(L, wall_t, H - 2.0 * wall_t).translate((0.5 * L, -W / 6.0, 0.0))\nweb_right = cq.Workplane('XY').box(L, wall_t, H - 2.0 * wall_t).translate((0.5 * L, W / 6.0, 0.0))\nweb_horizontal = cq.Workplane('XY').box(L, W - 2.0 * wall_t, wall_t).translate(center)\nresult = perimeter.union(web_left).union(web_right).union(web_horizontal)\n",
+        "parameters": "",
+        "param_1_name": "L",
+        "param_1_value": 650.0,
+        "param_2_name": "W",
+        "param_2_value": 360.0,
+        "param_3_name": "H",
+        "param_3_value": 240.0,
+        "param_4_name": "wall_t",
+        "param_4_value": 0.9,
+        "param_5_name": "unused_5",
+        "param_5_value": 0.0,
+        "param_6_name": "unused_6",
+        "param_6_value": 0.0
+      }
+    },
+    "0x16262023ad0": {
+      "type_": "com.cad.analysis.mass_properties.MassPropertiesNode",
+      "icon": null,
+      "name": "Concept Module Mass",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 200.53125,
+      "height": 99.3,
+      "pos": [
+        -750.0,
+        430.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Approximate clean-extrusion mass; compare with the checked 9.376 kg shell result.",
+        "tags": "explicit-impact, requirement, mass",
+        "notes": "Trigger corrugations create a small difference from the exact solver mass.",
+        "schema_version": 1,
+        "density": 7.83e-09
+      }
+    },
+    "0x16262111490": {
+      "type_": "com.cad.analysis.bounding_box.BoundingBoxNode",
+      "icon": null,
+      "name": "Package Envelope",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 215.859375,
+      "height": 145.5,
+      "pos": [
+        -470.0,
+        430.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Fixed 650 x 360 x 240 mm packaging envelope.",
+        "tags": "explicit-impact, requirement, packaging",
+        "notes": "The useful crush requirement is 520 mm, leaving 130 mm residual length.",
+        "schema_version": 1
+      }
+    },
+    "0x16262028260": {
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "icon": null,
+      "name": "Exact Trigger Shell Mesh",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 238.265625,
+      "height": 122.4,
+      "pos": [
+        -750.0,
+        -340.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Loads the exact deterministic 13,134-node, 26,520-shell trigger mesh used by the checked baseline.",
+        "tags": "explicit-impact, shell-mesh, checked-baseline",
+        "notes": "The NPZ mesh is connected directly to the named selections and Impact Solver. Change the source to CAD only when intentionally replacing this baseline mesh.",
+        "schema_version": 1,
+        "mesh_source": "Mesh NPZ",
+        "mesh_path": "data/impact_cases/ev_multicell_front_crash/ev_multicell_front_crash_mesh.npz",
+        "mesh_type": "Shell",
+        "element_size": 10.0,
+        "refinement_size": 5.0,
+        "shell_thickness": 0.9,
+        "shell_nip": 5
+      }
+    },
+    "0x1626201dd60": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Front Impact Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.609375,
+      "height": 60,
+      "pos": [
+        -750.0,
+        -80.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Selects the module front plane struck by the finite-mass moving wall.",
+        "tags": "explicit-impact, named-selection, impact-face",
+        "notes": "The checked deterministic deck selects the equivalent x = 0 shell-edge nodes.",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": "<X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "top"
+      }
+    },
+    "0x1623fefdf40": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Rear Bulkhead Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.609375,
+      "height": 60,
+      "pos": [
+        -750.0,
+        160.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Selects the rear attachment plane at x = 650 mm.",
+        "tags": "explicit-impact, named-selection, support-face",
+        "notes": "The checked deck fully constrains translations of the matching rear shell-edge nodes.",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": ">X",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "top"
+      }
+    },
+    "0x1623fee91c0": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "DP780 Saturating Concept Curve",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 354.390625,
+      "height": 122.4,
+      "pos": [
+        -430.0,
+        -500.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Eight-point 560-1000 MPa concept flow curve prevents unbounded bilinear hardening at severe fold strains.",
+        "tags": "explicit-impact, material, dp780, unvalidated",
+        "notes": "This corrects the former 2.14 GPa extrapolation. Replace with lot-, gauge-, forming-, and rate-specific coupon curves before qualification.",
+        "schema_version": 1,
+        "analysis_purpose": "Impact",
+        "preset": "DP780 Saturating Curve (Concept)",
+        "youngs_modulus": 210000.0,
+        "poissons_ratio": 0.28,
+        "density": 7.83e-09,
+        "thermal_conductivity": 45.0,
+        "yield_strength": 560.0,
+        "tangent_modulus": 1800.0,
+        "failure_strain": 0.22,
+        "enable_fracture": false,
+        "strain_rate_sensitive": false,
+        "validation_status": "Unvalidated",
+        "material_lot_id": "",
+        "validation_report_path": "",
+        "validated_rate_min_per_s": 0.0,
+        "validated_rate_max_per_s": 0.0
+      }
+    },
+    "0x1623feebb00": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "icon": null,
+      "name": "Rigid Rear Bulkhead",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 179.5,
+      "height": 76.2,
+      "pos": [
+        -430.0,
+        160.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Idealized fully fixed rear shell edge.",
+        "tags": "explicit-impact, boundary-condition, rigid-bulkhead",
+        "notes": "A compliant body-in-white attachment is required before vehicle-level correlation.",
+        "schema_version": 1,
+        "constraint_type": "Fixed",
+        "displacement_x": 0.0,
+        "displacement_y": 0.0,
+        "displacement_z": 0.0,
+        "displacement_x_enabled": true,
+        "displacement_y_enabled": true,
+        "displacement_z_enabled": true,
+        "condition": "x >= 649.999999"
+      }
+    },
+    "0x161c646cd70": {
+      "type_": "com.cad.sim.impact.ImpactConditionNode",
+      "icon": null,
+      "name": "1850 kg Sled at 56 km/h",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 213.96875,
+      "height": 60,
+      "pos": [
+        -430.0,
+        -80.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Finite-mass moving rigid wall with 223.83 kJ initial kinetic energy.",
+        "tags": "explicit-impact, load-case, finite-mass-sled",
+        "notes": "Velocity is 15.556 mm/ms, equivalent to 56 km/h.",
+        "schema_version": 1,
+        "velocity_x": 15.5555555556,
+        "velocity_y": 0.0,
+        "velocity_z": 0.0,
+        "application_scope": "Fixed specimen + moving impactor",
+        "impactor_mass_kg": 1850.0,
+        "node_tolerance": 0.5,
+        "wall_friction": 0.08,
+        "wall_gap_mm": 0.5
+      }
+    },
+    "0x162620e5c10": {
+      "type_": "com.cad.sim.crash_solver.CrashSolverNode",
+      "icon": null,
+      "name": "Checked Trigger-Mesh Impact Solver",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": true,
+      "visible": true,
+      "width": 255.625,
+      "height": 122.4,
+      "pos": [
+        -80.0,
+        -210.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Connected checked workflow for the exact mesh, material, support, impact, solver, and saved 58-frame result.",
+        "tags": "explicit-impact, openradioss, checked-baseline",
+        "notes": "This node now owns the cached verification result. Run recomputes the same connected deterministic trigger-mesh model.",
+        "schema_version": 1,
+        "openradioss_starter_path": "",
+        "openradioss_engine_path": "",
+        "external_work_dir": "",
+        "deck_only": false,
+        "external_timeout_s": 2400.0,
+        "end_time": 57.0,
+        "n_frames": 57,
+        "history_samples": 2001,
+        "acceleration_cfc": "60",
+        "force_cfc": "600",
+        "visualization": "Von Mises Stress",
+        "disp_scale": 1.0,
+        "solver_backend": "OpenRadioss",
+        "run_external_solver": true,
+        "time_steps": 28788,
+        "enable_mass_scaling": true,
+        "mass_scaling_target_dt": 0.00198,
+        "time_step_scale": 0.9,
+        "damping_alpha": 0.0,
+        "damping_beta": 0.0,
+        "enable_corotation": true,
+        "enable_contact": true,
+        "contact_stiffness": 0.1,
+        "contact_thickness": 0.2,
+        "contact_update_interval": 5,
+        "mass_scaling_threshold": 0.0,
+        "impactor_mass_kg": 1850.0
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "0x16262020050",
+        "shape"
+      ],
+      "in": [
+        "0x16262023ad0",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x16262020050",
+        "shape"
+      ],
+      "in": [
+        "0x16262111490",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x16262020050",
+        "shape"
+      ],
+      "in": [
+        "0x16262028260",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x16262028260",
+        "mesh"
+      ],
+      "in": [
+        "0x1626201dd60",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x16262028260",
+        "mesh"
+      ],
+      "in": [
+        "0x1623fefdf40",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x16262028260",
+        "mesh"
+      ],
+      "in": [
+        "0x1623feebb00",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x16262028260",
+        "mesh"
+      ],
+      "in": [
+        "0x162620e5c10",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "0x1626201dd60",
+        "selection"
+      ],
+      "in": [
+        "0x161c646cd70",
+        "impact_face"
+      ]
+    },
+    {
+      "out": [
+        "0x1623fefdf40",
+        "selection"
+      ],
+      "in": [
+        "0x1623feebb00",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "0x1623fee91c0",
+        "material"
+      ],
+      "in": [
+        "0x162620e5c10",
+        "material"
+      ]
+    },
+    {
+      "out": [
+        "0x1623feebb00",
+        "constraints"
+      ],
+      "in": [
+        "0x162620e5c10",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "0x161c646cd70",
+        "impact"
+      ],
+      "in": [
+        "0x162620e5c10",
+        "impact"
+      ]
+    }
+  ],
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "_result_store": {
+    "format": "HDF5",
+    "version": 1,
+    "file": "04_ev_multicell_front_crash.cad.results.h5",
+    "result_count": 2,
+    "saved_at": "2026-08-04T16:25:06.349358"
+  }
+}

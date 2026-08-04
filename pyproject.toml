@@ -1,0 +1,132 @@
+# Copyright (c) 2026 Kutay Demir.
+# Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pylcss"
+version = "2.2.0"
+description = "Source-available desktop engineering design, simulation, sensitivity, and optimization workbench"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "PolyForm Shield License 1.0.0"}
+authors = [
+    {name = "Kutay Demir"}
+]
+keywords = [
+    "engineering",
+    "optimization",
+    "parametric-design",
+    "design-studio",
+    "simulation",
+    "CAD",
+    "FEA",
+    "CalculiX",
+    "OpenRadioss",
+    "topology-optimization",
+    "sensitivity-analysis",
+    "surrogate-modeling",
+    "solution-space",
+    "NSGA-II",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Manufacturing",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: Microsoft :: Windows",
+]
+dependencies = [
+    # Core scientific stack
+    "numpy==2.2.6",
+    "scipy==1.15.2",
+    "pandas==2.2.2",
+
+    # Desktop UI
+    "PySide6==6.10.1",
+    "NodeGraphQt==0.6.43",
+    "pyqtgraph==0.14.0",
+    "QtAwesome==1.3.1",
+
+    # Geometry, meshing, FEA data, and visualization
+    "cadquery==2.6.1",
+    "vtk==9.3.1",
+    "scikit-fem==11.0.0",
+    "netgen-mesher==6.2.2506",
+    "meshio==5.3.5",
+    "scikit-image==0.26.0",
+    "numpy-stl==3.2.0",
+    "trimesh==4.5.3",
+    "lxml==5.3.0",  # required by trimesh for 3MF import/export
+    "fast-simplification==0.1.13",
+    "rtree==1.4.1",
+    # Optimization and sensitivity analysis
+    "nevergrad==1.0.4",
+    "SALib==1.5.2",
+    "pymoto==2.0.1",
+
+    # Machine learning and surrogate models
+    "torch==2.9.1",
+    "scikit-learn==1.8.0",
+    "hdbscan==0.8.41",
+    "joblib==1.5.3",
+
+    # Units, graph utilities, and serialization
+    "pint==0.25.2",
+    "h5py==3.11.0",
+    "dill==0.4.1",
+    "networkx==3.3",
+
+    # Tabular I/O
+    "openpyxl==3.1.5",
+
+    # AI assistant (LLM agent) — PydanticAI native function-calling
+    "cryptography==48.0.0",
+    "pydantic==2.12.5",
+    "pydantic-ai-slim[openai,anthropic,google]==1.96.1",
+
+    # Utilities
+    "py7zr==0.20.8",  # used by scripts/install_solvers.py to unpack FreeCAD 7z release
+    "packaging==26.0",
+    "simpleeval==1.0.3",
+    "numba==0.63.1",
+]
+
+[project.scripts]
+pylcss = "pylcss.main:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pylcss*"]
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+include = '\.pyi?$'
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]
+filterwarnings = [
+    # pyMOTO's sparse LU converts CSR→CSC internally; benign and noisy.
+    "ignore::scipy.sparse.SparseEfficiencyWarning",
+    # NodeGraphQt 0.6.43 compares the Qt version with distutils.LooseVersion.
+    "ignore:distutils Version classes are deprecated.*:DeprecationWarning:NodeGraphQt.widgets.viewer",
+]
+markers = [
+    "slow: numerical integration or external-solver smoke tests",
+]

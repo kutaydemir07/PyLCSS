@@ -1,0 +1,771 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "0x1f3dc8b1c10": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Baseplate Envelope",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 160,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        -60.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Instrument baseplate envelope, 300 x 220 x 45 mm.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "A thick plate is the classic gyroid-infill case: solid faces where things bolt on, graded infill everywhere else.",
+        "schema_version": 1,
+        "code": "result = cq.Workplane('XY').box(L, W, T)\n",
+        "parameters": "",
+        "param_1_name": "L",
+        "param_1_value": 300.0,
+        "param_2_name": "W",
+        "param_2_value": 220.0,
+        "param_3_name": "T",
+        "param_3_value": 45.0,
+        "param_4_name": "",
+        "param_4_value": 0.0,
+        "param_5_name": "",
+        "param_5_value": 0.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
+      }
+    },
+    "0x1f3d23a0350": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Corner Mounting Feet",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 171.734375,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        180.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Four bolted mounting feet on the underside.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "The baseplate is kinematically located on four deck hard points; everything between them is the optimizer's.",
+        "schema_version": 1,
+        "code": "# Four bolted feet on the underside, at the deck hard points.\nresult = None\nfor sx in (-1.0, 1.0):\n    for sy in (-1.0, 1.0):\n        foot = cq.Workplane('XY').box(P, P, F)\n        foot = foot.translate((sx * X, sy * Y, -T / 2.0 + F / 2.0))\n        result = foot if result is None else result.union(foot)\n",
+        "parameters": "",
+        "param_1_name": "P",
+        "param_1_value": 55.0,
+        "param_2_name": "F",
+        "param_2_value": 8.0,
+        "param_3_name": "X",
+        "param_3_value": 115.0,
+        "param_4_name": "Y",
+        "param_4_value": 75.0,
+        "param_5_name": "T",
+        "param_5_value": 45.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
+      }
+    },
+    "0x1f3dc829430": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Deck Bolt Faces",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.609375,
+      "height": 60,
+      "pos": [
+        -820.0,
+        180.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "The four downward faces of the mounting feet.",
+        "tags": "bundled-example, topology-optimization, pymoto, named-selection",
+        "notes": "All four feet share the same lowest plane, so one direction selector names all four faces.",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": "<Z",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Deck Bolt Faces"
+      }
+    },
+    "0x1f3dc828ce0": {
+      "type_": "com.cad.topopt.support.TopologySupportNode",
+      "icon": null,
+      "name": "Mounting Fixity",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 235.3125,
+      "height": 60,
+      "pos": [
+        -480.0,
+        180.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Fixed on the mounting interface.",
+        "tags": "bundled-example, topology-optimization, pymoto, topology-support",
+        "notes": "Ideal fixity; bolt preload and interface compliance are not modelled.",
+        "schema_version": 1,
+        "support_type": "Fixed"
+      }
+    },
+    "0x1f3dc8fb200": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Instrument Mounting Boss",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 196.9375,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        420.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "The pad the instrument bolts to, on the upper face.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "Solid so the instrument's bolt pattern bears on material.",
+        "schema_version": 1,
+        "code": "result = cq.Workplane('XY').box(SX, SY, SZ).translate((OX, OY, OZ))\n",
+        "parameters": "",
+        "param_1_name": "SX",
+        "param_1_value": 110.0,
+        "param_2_name": "SY",
+        "param_2_value": 85.0,
+        "param_3_name": "SZ",
+        "param_3_value": 8.0,
+        "param_4_name": "OX",
+        "param_4_value": 0.0,
+        "param_5_name": "OY",
+        "param_5_value": 0.0,
+        "param_6_name": "OZ",
+        "param_6_value": 18.5
+      }
+    },
+    "0x1f3dc829bb0": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Instrument Pad Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 161.609375,
+      "height": 60,
+      "pos": [
+        -820.0,
+        420.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "The upward face of the instrument boss.",
+        "tags": "bundled-example, topology-optimization, pymoto, named-selection",
+        "notes": "",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": ">Z",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Instrument Pad Face"
+      }
+    },
+    "0x1f3d23d5be0": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC1 Normal 2.94 kN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -480.0,
+        420.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "A 12 kg instrument at 25 g normal to the plate.",
+        "tags": "bundled-example, topology-optimization, pymoto, topology-load",
+        "notes": "Quasi-static launch load factor, normal to the baseplate. This is the plate-bending case.",
+        "schema_version": 1,
+        "force_x": 0.0,
+        "force_y": 0.0,
+        "force_z": -2940.0
+      }
+    },
+    "0x1f3d23a3b30": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Instrument Boss (Lateral Case)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 216.984375,
+      "height": 168.6,
+      "pos": [
+        -1500.0,
+        720.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "The same instrument pad, carrying the lateral case.",
+        "tags": "bundled-example, topology-optimization, pymoto, geometry",
+        "notes": "A second pad node keeps each case's face selection unambiguous.",
+        "schema_version": 1,
+        "code": "result = cq.Workplane('XY').box(SX, SY, SZ).translate((OX, OY, OZ))\n",
+        "parameters": "",
+        "param_1_name": "SX",
+        "param_1_value": 110.0,
+        "param_2_name": "SY",
+        "param_2_value": 85.0,
+        "param_3_name": "SZ",
+        "param_3_value": 8.0,
+        "param_4_name": "OX",
+        "param_4_value": 0.0,
+        "param_5_name": "OY",
+        "param_5_value": 0.0,
+        "param_6_name": "OZ",
+        "param_6_value": 18.5
+      }
+    },
+    "0x1f3dc82a960": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Instrument Pad Face (Lateral)",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 210.328125,
+      "height": 60,
+      "pos": [
+        -820.0,
+        720.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "The upward face of the instrument boss.",
+        "tags": "bundled-example, topology-optimization, pymoto, named-selection",
+        "notes": "",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": ">Z",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Instrument Pad Face (Lateral)"
+      }
+    },
+    "0x1f3dc82acc0": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC2 Lateral 1.77 kN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -480.0,
+        720.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "A 12 kg instrument at 15 g in plane.",
+        "tags": "bundled-example, topology-optimization, pymoto, topology-load",
+        "notes": "In-plane shear, which the plate carries through completely different material than the bending case.",
+        "schema_version": 1,
+        "force_x": 1766.0,
+        "force_y": 0.0,
+        "force_z": 0.0
+      }
+    },
+    "0x1f3dc82afc0": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "Titanium Ti-6Al-4V",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 354.390625,
+      "height": 122.4,
+      "pos": [
+        -1160.0,
+        -320.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Ti-6Al-4V: E = 113.8 GPa, nu = 0.34.",
+        "tags": "bundled-example, topology-optimization, pymoto, material",
+        "notes": "Representative wrought room-temperature elastic data.",
+        "schema_version": 1,
+        "analysis_purpose": "Structural FEA",
+        "preset": "Ti-6Al-4V",
+        "youngs_modulus": 114000.0,
+        "poissons_ratio": 0.34,
+        "density": 4.43e-09,
+        "thermal_conductivity": 6.7,
+        "yield_strength": 880.0,
+        "tangent_modulus": 0.0,
+        "failure_strain": 0.2,
+        "enable_fracture": false,
+        "strain_rate_sensitive": true,
+        "validation_status": "Unvalidated",
+        "material_lot_id": "",
+        "validation_report_path": "",
+        "validated_rate_min_per_s": 0.0,
+        "validated_rate_max_per_s": 0.0
+      }
+    },
+    "0x1f3dc8b11f0": {
+      "type_": "com.cad.sim.lattice_voxel.LatticeOptVoxelNode",
+      "icon": null,
+      "name": "Gyroid Infill Baseplate Study",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": true,
+      "visible": true,
+      "width": 253.484375,
+      "height": 122.4,
+      "pos": [
+        200.0,
+        200.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Two-scale compliance minimization with a gyroid sheet cell.",
+        "tags": "bundled-example, topology-optimization, pymoto",
+        "notes": "The macro solve runs on the measured gyroid tensor; the built sheet is de-homogenized from the same field.",
+        "workflow_mode": "Guided",
+        "design_goal": "Lightweight Stiffness",
+        "manufacturing_process": "None",
+        "minimum_member_size_mm": 12.0,
+        "exclusion_scope": "All Loads and Supports",
+        "exclusion_thickness_mode": "Program Controlled",
+        "validate_after_optimize": false,
+        "cad_export_filename": "instrument_baseplate_gyroid.step",
+        "volfrac": 0.3,
+        "visualization": "Density",
+        "structure_mode": "Gyroid Lattice",
+        "lattice_settings_mode": "Manual",
+        "lattice_cell_size_mm": 0.0,
+        "lattice_member_thickness_mm": 0.0,
+        "lattice_skin_thickness_mm": 0.0,
+        "lattice_target_relative_density": 0.0,
+        "lattice_porosity": "Conservative"
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "0x1f3dc8b1c10",
+        "shape"
+      ],
+      "in": [
+        "0x1f3dc8b11f0",
+        "design_domain"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3d23a0350",
+        "shape"
+      ],
+      "in": [
+        "0x1f3dc829430",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3dc829430",
+        "selection"
+      ],
+      "in": [
+        "0x1f3dc828ce0",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3dc828ce0",
+        "supports"
+      ],
+      "in": [
+        "0x1f3dc8b11f0",
+        "supports"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3dc8fb200",
+        "shape"
+      ],
+      "in": [
+        "0x1f3dc829bb0",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3dc829bb0",
+        "selection"
+      ],
+      "in": [
+        "0x1f3d23d5be0",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3d23d5be0",
+        "loads"
+      ],
+      "in": [
+        "0x1f3dc8b11f0",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3d23a3b30",
+        "shape"
+      ],
+      "in": [
+        "0x1f3dc82a960",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3dc82a960",
+        "selection"
+      ],
+      "in": [
+        "0x1f3dc82acc0",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3dc82acc0",
+        "loads"
+      ],
+      "in": [
+        "0x1f3dc8b11f0",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x1f3dc82afc0",
+        "material"
+      ],
+      "in": [
+        "0x1f3dc8b11f0",
+        "material"
+      ]
+    }
+  ],
+  "_guided_topology_policy": {
+    "version": 1,
+    "nodes": 1,
+    "storage": "engineering-intent"
+  },
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "_result_store": {
+    "format": "HDF5",
+    "version": 1,
+    "file": "03_instrument_baseplate_gyroid.cad.results.h5",
+    "result_count": 1,
+    "saved_at": "2026-08-04T20:06:55.014105"
+  }
+}

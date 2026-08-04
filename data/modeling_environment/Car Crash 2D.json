@@ -1,0 +1,414 @@
+{
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "_title": "Crashworthiness Trade Space — Screening Surrogate",
+  "_purpose": "Explore the coupled mass, intrusion, and acceleration trade space of a crash structure before committing to expensive explicit simulations.",
+  "_fidelity": "Analytical screening response surface, not an impact solver. Refit the equations to correlated OpenRadioss or test data before making safety decisions.",
+  "_workflow": [
+    "Explore design-variable bounds and requirement feasibility.",
+    "Identify a robust box-shaped region for thickness and crush length.",
+    "Use the selected region to define an OpenRadioss design-of-experiments campaign."
+  ],
+  "_acceptance_criteria": [
+    "All three response requirements are satisfied throughout the retained solution box.",
+    "The surrogate domain never exceeds its correlated simulation or test envelope.",
+    "Final candidates pass explicit energy, mass-balance, and physical-correlation checks."
+  ],
+  "product_name": "Crashworthiness Screening Surrogate",
+  "systems": [
+    {
+      "name": "Two-Stage Crashworthiness",
+      "graph": {
+        "graph": {
+          "layout_direction": 0,
+          "acyclic": true,
+          "pipe_collision": false,
+          "pipe_slicing": true,
+          "pipe_style": 1,
+          "accept_connection_types": "{}",
+          "reject_connection_types": "{}"
+        },
+        "nodes": {
+          "0x2cb0ad0d0d0": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "Stage 1 Crush Force",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 204.359375,
+            "height": 249.60000000000002,
+            "pos": [
+              -52.90247596630596,
+              556.9687660251772
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "stage_1_force",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "stage_1_force",
+              "unit": "N",
+              "min": "0",
+              "max": "1000000"
+            }
+          },
+          "0x2cb0c860c90": {
+            "type_": "com.pfd.input.InputNode",
+            "icon": null,
+            "name": "Stage 2 Crush Force",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 204.359375,
+            "height": 249.60000000000002,
+            "pos": [
+              -23.797254211061784,
+              997.0167189770231
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [],
+            "output_ports": [
+              {
+                "name": "stage_2_force",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "var_name": "stage_2_force",
+              "unit": "N",
+              "min": "0",
+              "max": "1000000"
+            }
+          },
+          "0x2cb0c82de10": {
+            "type_": "com.pfd.custom_block.CustomBlockNode",
+            "icon": null,
+            "name": "Two-Stage Crashworthiness Surrogate",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": true,
+            "visible": true,
+            "width": 444.890625,
+            "height": 552.0,
+            "pos": [
+              518.7522557776101,
+              651.9324173639297
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "stage_1_force",
+                "multi_connection": false,
+                "display_name": true
+              },
+              {
+                "name": "stage_2_force",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [
+              {
+                "name": "peak_acceleration",
+                "multi_connection": true,
+                "display_name": true
+              },
+              {
+                "name": "residual_energy",
+                "multi_connection": true,
+                "display_name": true
+              },
+              {
+                "name": "force_order_margin",
+                "multi_connection": true,
+                "display_name": true
+              }
+            ],
+            "custom": {
+              "func_name": "Crashworthiness_Screening_Surrogate",
+              "num_inputs": "2",
+              "num_outputs": "3",
+              "surrogate_controls": false,
+              "surrogate_model_path": "",
+              "use_surrogate": false,
+              "surrogate_status": "Not Trained",
+              "surrogate_train_trigger": 0.0,
+              "code_content": "# Analytical two-stage crashworthiness screening model.\n# Refit constants and equations to correlated test or OpenRadioss data.\nvehicle_mass_kg = 2000.0\nstage_1_stroke_m = 0.3\nstage_2_stroke_m = 0.3\nimpact_speed_mps = 15.6\n\ninitial_kinetic_energy = 0.5 * vehicle_mass_kg * impact_speed_mps**2\nabsorbed_energy = (\n    stage_1_force * stage_1_stroke_m\n    + stage_2_force * stage_2_stroke_m\n)\nresidual_energy = initial_kinetic_energy - absorbed_energy\npeak_acceleration = stage_2_force / vehicle_mass_kg\nforce_order_margin = stage_1_force - stage_2_force"
+            }
+          },
+          "0x2cb0c861b50": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "Peak Acceleration",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 220.703125,
+            "height": 331.5,
+            "pos": [
+              1261.7015595140583,
+              289.38109163166473
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "peak_acceleration",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "peak_acceleration",
+              "unit": "m/s^2",
+              "req_min": "0",
+              "req_max": "320",
+              "minimize": false,
+              "maximize": false
+            }
+          },
+          "0x2cb12073fd0": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "Force-Order Margin",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 221.28125,
+            "height": 331.5,
+            "pos": [
+              1237.553860782815,
+              1102.1056791288318
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "force_order_margin",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "force_order_margin",
+              "unit": "N",
+              "req_min": "-inf",
+              "req_max": "0",
+              "minimize": false,
+              "maximize": false
+            }
+          },
+          "0x2cb12059c50": {
+            "type_": "com.pfd.output.OutputNode",
+            "icon": null,
+            "name": "Residual Energy",
+            "color": [
+              13,
+              18,
+              23,
+              255
+            ],
+            "border_color": [
+              74,
+              84,
+              85,
+              255
+            ],
+            "text_color": [
+              255,
+              255,
+              255,
+              180
+            ],
+            "disabled": false,
+            "selected": false,
+            "visible": true,
+            "width": 219.59375,
+            "height": 331.5,
+            "pos": [
+              1257.8431449589696,
+              702.2314490261731
+            ],
+            "layout_direction": 0,
+            "port_deletion_allowed": true,
+            "subgraph_session": {},
+            "input_ports": [
+              {
+                "name": "residual_energy",
+                "multi_connection": false,
+                "display_name": true
+              }
+            ],
+            "output_ports": [],
+            "custom": {
+              "var_name": "residual_energy",
+              "unit": "J",
+              "req_min": "-inf",
+              "req_max": "0",
+              "minimize": false,
+              "maximize": false
+            }
+          }
+        },
+        "connections": [
+          {
+            "out": [
+              "0x2cb0ad0d0d0",
+              "stage_1_force"
+            ],
+            "in": [
+              "0x2cb0c82de10",
+              "stage_1_force"
+            ]
+          },
+          {
+            "out": [
+              "0x2cb0c860c90",
+              "stage_2_force"
+            ],
+            "in": [
+              "0x2cb0c82de10",
+              "stage_2_force"
+            ]
+          },
+          {
+            "out": [
+              "0x2cb0c82de10",
+              "peak_acceleration"
+            ],
+            "in": [
+              "0x2cb0c861b50",
+              "peak_acceleration"
+            ]
+          },
+          {
+            "out": [
+              "0x2cb0c82de10",
+              "residual_energy"
+            ],
+            "in": [
+              "0x2cb12059c50",
+              "residual_energy"
+            ]
+          },
+          {
+            "out": [
+              "0x2cb0c82de10",
+              "force_order_margin"
+            ],
+            "in": [
+              "0x2cb12073fd0",
+              "force_order_margin"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

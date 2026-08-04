@@ -1,0 +1,113 @@
+# Copyright (c) 2026 Kutay Demir.
+# Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
+
+import math
+
+import cadquery as cq
+
+from pylcss.design_studio.core.base_node import CadQueryNode
+
+
+def _analysis_shape_value(shape):
+    if isinstance(shape, cq.Assembly):
+        compound = shape.toCompound()
+        solids = list(compound.Solids())
+        if solids:
+            return cq.Compound.makeCompound(solids)
+        return compound
+    return shape.val() if hasattr(shape, "val") else shape
+
+
+class MassPropertiesNode(CadQueryNode):
+    """Calculate mass properties of a part."""
+    __identifier__ = 'com.cad.analysis.mass_properties'
+    NODE_NAME = 'Mass Properties'
+
+    def __init__(self):
+        super(MassPropertiesNode, self).__init__()
+        self.add_input('shape', color=(100, 255, 100))
+        self.add_output('properties', color=(255, 200, 100))
+        self.add_output('mass', color=(220, 200, 70))
+        self.add_output('volume', color=(220, 200, 70))
+        
+        self.create_property('density', 7.85e-9, widget_type='float')  # Steel tonne/mm^3
+
+    def run(self):
+        self.clear_error()
+        shape = self.get_input_shape('shape')
+            
+        if shape is None:
+            self.set_error("Connect a CAD shape to Mass Properties.")
+            return None
+        
+        density = float(self.get_property('density'))
+        if not math.isfinite(density) or density <= 0.0:
+            self.set_error("Density must be finite and greater than zero.")
+            return None
+        
+        try:
+            # Handle Workplane vs value
+            solid = _analysis_shape_value(shape)
+            
+            # Note: Volume() returns mm^3. Density typically tonne/mm^3 in this system.
+            # So mass (tonne) = Volume(mm^3) * density(tonne/mm^3)
+            # 1 tonne = 1000 kg.
+            
+            volume_mm3 = solid.Volume()
+            mass_tonne = volume_mm3 * float(density)
+            mass_kg = mass_tonne * 1000.0
+            
+            # Use actual center of mass if available
+            try:
+                com = solid.Center()
+                center = (com.x, com.y, com.z)
+            except Exception:
+                bb = solid.BoundingBox()
+                center = (bb.center.x, bb.center.y, bb.center.z)
+            
+            return {
+                'type': 'analysis',
+                'property': 'mass_properties',
+                'mass': mass_kg,
+                'volume': volume_mm3,
+                'density': float(density),
+                'center_of_mass': center
+            }
+        except Exception as e:
+            self.set_error(f"Mass properties error: {e}")
+            return None
+
+
+class BoundingBoxNode(CadQueryNode):
+    """Get bounding box dimensions."""
+    __identifier__ = 'com.cad.analysis.bounding_box'
+    NODE_NAME = 'Bounding Box'
+
+    def __init__(self):
+        super(BoundingBoxNode, self).__init__()
+        self.add_input('shape', color=(100, 255, 100))
+        self.add_output('dimensions', color=(255, 200, 100))
+        for name in ('length', 'width', 'height', 'volume'):
+            self.add_output(name, color=(220, 200, 70))
+
+    def run(self):
+        self.clear_error()
+        shape = self.get_input_shape('shape')
+        if shape is None:
+            self.set_error("Connect a CAD shape to Bounding Box.")
+            return None
+        
+        try:
+            val = _analysis_shape_value(shape)
+            bb = val.BoundingBox()
+            return {
+                'type': 'analysis',
+                'property': 'bounding_box',
+                'length': bb.xlen,
+                'width': bb.ylen,
+                'height': bb.zlen,
+                'volume': bb.xlen * bb.ylen * bb.zlen
+            }
+        except Exception as e:
+            self.set_error(f"Bounding box error: {e}")
+            return None

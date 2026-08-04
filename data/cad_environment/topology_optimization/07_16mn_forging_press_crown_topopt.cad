@@ -1,0 +1,1147 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "0x229573cade0": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Tapered Crown Design Envelope",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 229.546875,
+      "height": 168.6,
+      "pos": [
+        -3000.0,
+        -900.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "3600 x 900 x 2200 mm press-crown packaging envelope with tapered end shoulders.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, large-structure",
+        "notes": "Only material inside this source volume can be redistributed.",
+        "schema_version": 1,
+        "code": "if min(L, H, W) <= 0.0 or TAPER < 0.0 or 2.0 * TAPER >= L:\n    raise ValueError('Invalid crown envelope dimensions.')\nprofile = [(-L / 2.0, -H / 2.0), (L / 2.0, -H / 2.0), (L / 2.0 - TAPER, H / 2.0), (-L / 2.0 + TAPER, H / 2.0)]\nresult = cq.Workplane('XY').polyline(profile).close().extrude(W / 2.0, both=True)\n",
+        "parameters": "",
+        "param_1_name": "L",
+        "param_1_value": 3600.0,
+        "param_2_name": "H",
+        "param_2_value": 900.0,
+        "param_3_name": "W",
+        "param_3_value": 2200.0,
+        "param_4_name": "TAPER",
+        "param_4_value": 250.0,
+        "param_5_name": "fillet_r",
+        "param_5_value": 1.0,
+        "param_6_name": "clearance",
+        "param_6_value": 0.2
+      }
+    },
+    "0x22951e48350": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Four Preserved Column Bearing Pads",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 255.8125,
+      "height": 168.6,
+      "pos": [
+        -3000.0,
+        -720.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Four machined bearing blocks at the column-head interfaces.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, interface",
+        "notes": "The complete pad volumes are mandatory material; their undersides define the ideal supports.",
+        "schema_version": 1,
+        "code": "pads = []\nfor x in (-X, X):\n    for z in (-Z, Z):\n        pads.append(cq.Workplane('XY').box(PX, PY, PZ, centered=(True, True, True)).translate((x, -H / 2.0 + PY / 2.0, z)))\nresult = pads[0]\nfor pad in pads[1:]:\n    result = result.union(pad)\n",
+        "parameters": "",
+        "param_1_name": "X",
+        "param_1_value": 1400.0,
+        "param_2_name": "Z",
+        "param_2_value": 850.0,
+        "param_3_name": "PX",
+        "param_3_value": 500.0,
+        "param_4_name": "PY",
+        "param_4_value": 150.0,
+        "param_5_name": "PZ",
+        "param_5_value": 360.0,
+        "param_6_name": "H",
+        "param_6_value": 900.0
+      }
+    },
+    "0x22931874680": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Left Preserved Cylinder Seat",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 204.671875,
+      "height": 168.6,
+      "pos": [
+        -3000.0,
+        -540.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Left machined cylinder-reaction seat retained as material.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, interface",
+        "notes": "Loads are introduced on the upper face of this preserved block.",
+        "schema_version": 1,
+        "code": "result = cq.Workplane('XY').box(PX, PY, PZ, centered=(True, True, True)).translate((-X, H / 2.0 - PY / 2.0, 0.0))\n",
+        "parameters": "",
+        "param_1_name": "X",
+        "param_1_value": 600.0,
+        "param_2_name": "PX",
+        "param_2_value": 700.0,
+        "param_3_name": "PY",
+        "param_3_value": 150.0,
+        "param_4_name": "PZ",
+        "param_4_value": 1000.0,
+        "param_5_name": "H",
+        "param_5_value": 900.0,
+        "param_6_name": "clearance",
+        "param_6_value": 0.2
+      }
+    },
+    "0x229319f5fa0": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Right Preserved Cylinder Seat",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 213.59375,
+      "height": 168.6,
+      "pos": [
+        -3000.0,
+        -360.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Right machined cylinder-reaction seat retained as material.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, interface",
+        "notes": "Loads are introduced on the upper face of this preserved block.",
+        "schema_version": 1,
+        "code": "result = cq.Workplane('XY').box(PX, PY, PZ, centered=(True, True, True)).translate((X, H / 2.0 - PY / 2.0, 0.0))\n",
+        "parameters": "",
+        "param_1_name": "X",
+        "param_1_value": 600.0,
+        "param_2_name": "PX",
+        "param_2_value": 700.0,
+        "param_3_name": "PY",
+        "param_3_value": 150.0,
+        "param_4_name": "PZ",
+        "param_4_value": 1000.0,
+        "param_5_name": "H",
+        "param_5_value": 900.0,
+        "param_6_name": "clearance",
+        "param_6_value": 0.2
+      }
+    },
+    "0x229319f6000": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Four Column-Pad Undersides",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 212.671875,
+      "height": 60,
+      "pos": [
+        -2460.0,
+        400.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Selects the lower bearing face of every column pad.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, support",
+        "notes": "The ideal fixity must be replaced by column/tie-rod stiffness in system re-analysis.",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": "<Y",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Column pad undersides"
+      }
+    },
+    "0x22931875a30": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Left Cylinder Load Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 177.1875,
+      "height": 60,
+      "pos": [
+        -2460.0,
+        570.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Selects the upper load-transfer face of the left cylinder seat.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, load",
+        "notes": "Patch loading avoids a point-force singularity.",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": ">Y",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Left cylinder face"
+      }
+    },
+    "0x22951e50350": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Right Cylinder Load Face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 186.109375,
+      "height": 60,
+      "pos": [
+        -2460.0,
+        740.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Selects the upper load-transfer face of the right cylinder seat.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, load",
+        "notes": "Patch loading avoids a point-force singularity.",
+        "schema_version": 1,
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": ">Y",
+        "near_x": 0.0,
+        "near_y": 0.0,
+        "near_z": 0.0,
+        "box_min_x": -10.0,
+        "box_max_x": 10.0,
+        "box_min_y": -10.0,
+        "box_max_y": 10.0,
+        "box_min_z": -10.0,
+        "box_max_z": 10.0,
+        "range_expr": "(x > 0) & (y < 20)",
+        "face_index": 0,
+        "tag": "Right cylinder face"
+      }
+    },
+    "0x229306edc10": {
+      "type_": "com.cad.topopt.support.TopologySupportNode",
+      "icon": null,
+      "name": "Ideal Four-Column Fixity",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 235.3125,
+      "height": 60,
+      "pos": [
+        -1900.0,
+        400.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Fixes all translations on the four column-pad undersides.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, support",
+        "notes": "This is a crown-only stiffness idealization, not a full press boundary model.",
+        "schema_version": 1,
+        "support_type": "Fixed"
+      }
+    },
+    "0x229306ed1f0": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC1 Left Cylinder 8.0 MN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -1900.0,
+        570.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Rated centered vertical force on the left pad.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, load-case-1",
+        "notes": "Resultant is distributed over the selected pad face.",
+        "schema_version": 1,
+        "force_x": 0.0,
+        "force_y": -8000000.0,
+        "force_z": 0.0
+      }
+    },
+    "0x22951d44a70": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC1 Right Cylinder 8.0 MN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -1900.0,
+        700.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Rated centered vertical force on the right pad.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, load-case-1",
+        "notes": "Resultant is distributed over the selected pad face.",
+        "schema_version": 1,
+        "force_x": 0.0,
+        "force_y": -8000000.0,
+        "force_z": 0.0
+      }
+    },
+    "0x229306efef0": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC2 Left Cylinder 11.2 MN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -1900.0,
+        850.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Left-heavy eccentric production force.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, load-case-2",
+        "notes": "Paired with LC3 so X symmetry is legitimate for the load envelope.",
+        "schema_version": 1,
+        "force_x": 0.0,
+        "force_y": -11200000.0,
+        "force_z": 0.0
+      }
+    },
+    "0x229306ece30": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC2 Right Cylinder 4.8 MN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -1900.0,
+        980.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Right pad share in the left-heavy production case.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, load-case-2",
+        "notes": "The total vertical force remains 16 MN.",
+        "schema_version": 1,
+        "force_x": 0.0,
+        "force_y": -4800000.0,
+        "force_z": 0.0
+      }
+    },
+    "0x229319f4140": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC3 Left Cylinder 4.8 MN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -1900.0,
+        1130.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Left pad share in the right-heavy production case.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, load-case-3",
+        "notes": "Mirrors LC2 exactly.",
+        "schema_version": 1,
+        "force_x": 0.0,
+        "force_y": -4800000.0,
+        "force_z": 0.0
+      }
+    },
+    "0x22931a0c470": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC3 Right Cylinder 11.2 MN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -1900.0,
+        1260.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Right-heavy eccentric production force.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, load-case-3",
+        "notes": "Mirrors LC2 exactly.",
+        "schema_version": 1,
+        "force_x": 0.0,
+        "force_y": -11200000.0,
+        "force_z": 0.0
+      }
+    },
+    "0x22931a0c680": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC4 Left Jam Resultant",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -1900.0,
+        1410.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Left emergency resultant: vertical overload, side thrust, and transverse couple.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, load-case-4",
+        "notes": "Linear topology load only; final die-jam verification must be nonlinear.",
+        "schema_version": 1,
+        "force_x": 600000.0,
+        "force_y": -10000000.0,
+        "force_z": 400000.0
+      }
+    },
+    "0x22931a0c830": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "LC4 Right Jam Resultant",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 202.453125,
+      "height": 60,
+      "pos": [
+        -1900.0,
+        1540.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Right emergency resultant: vertical overload, side thrust, and opposing transverse force.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, load-case-4",
+        "notes": "The opposite Z force creates the emergency twisting couple.",
+        "schema_version": 1,
+        "force_x": 600000.0,
+        "force_y": -10000000.0,
+        "force_z": -400000.0
+      }
+    },
+    "0x229306ed190": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "S460 Welded Structural Steel",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 354.390625,
+      "height": 122.4,
+      "pos": [
+        -1320.0,
+        50.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Concept material: E = 205 GPa, nu = 0.30, nominal yield = 460 MPa.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, material",
+        "notes": "Final plate grade, through-thickness properties, weldability, and allowable reductions require procurement review.",
+        "schema_version": 1,
+        "preset": "Custom",
+        "youngs_modulus": 205000.0,
+        "poissons_ratio": 0.3,
+        "density": 7.85e-09,
+        "thermal_conductivity": 45.0,
+        "yield_strength": 460.0,
+        "tangent_modulus": 0.0,
+        "failure_strain": 0.2,
+        "enable_fracture": false,
+        "strain_rate_sensitive": true,
+        "validation_status": "Unvalidated",
+        "material_lot_id": "",
+        "validation_report_path": "",
+        "validated_rate_min_per_s": 0.0,
+        "validated_rate_max_per_s": 0.0
+      }
+    },
+    "0x22931a0ed50": {
+      "type_": "com.cad.sim.topopt_voxel.TopologyOptVoxelNode",
+      "icon": null,
+      "name": "Press-Crown Multi-Load Topology Study",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": true,
+      "visible": true,
+      "width": 275.390625,
+      "height": 122.4,
+      "pos": [
+        -650.0,
+        420.0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "description": "Worst-case compliance optimization for the complete four-case crown load envelope.",
+        "tags": "topology-optimization, engineering-challenge, press-crown, large-structure",
+        "notes": "The output is a load-path concept for welded interpretation. Stress, buckling, weld, fatigue, and nonlinear release checks are mandatory.",
+        "workflow_mode": "Guided",
+        "design_goal": "Lightweight Stiffness",
+        "manufacturing_process": "Extruded + Symmetric",
+        "minimum_member_size_mm": 300.0,
+        "exclusion_scope": "All Loads and Supports",
+        "exclusion_thickness_mode": "Program Controlled",
+        "validate_after_optimize": false,
+        "cad_export_filename": "16mn_press_crown_topology.step",
+        "volfrac": 0.34,
+        "visualization": "CAD"
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "0x229573cade0",
+        "shape"
+      ],
+      "in": [
+        "0x22931a0ed50",
+        "design_domain"
+      ]
+    },
+    {
+      "out": [
+        "0x22951e48350",
+        "shape"
+      ],
+      "in": [
+        "0x229319f6000",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x22931874680",
+        "shape"
+      ],
+      "in": [
+        "0x22931875a30",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x229319f5fa0",
+        "shape"
+      ],
+      "in": [
+        "0x22951e50350",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "0x229319f6000",
+        "selection"
+      ],
+      "in": [
+        "0x229306edc10",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x22931875a30",
+        "selection"
+      ],
+      "in": [
+        "0x229306ed1f0",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x22931875a30",
+        "selection"
+      ],
+      "in": [
+        "0x229306efef0",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x22931875a30",
+        "selection"
+      ],
+      "in": [
+        "0x229319f4140",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x22931875a30",
+        "selection"
+      ],
+      "in": [
+        "0x22931a0c680",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x22951e50350",
+        "selection"
+      ],
+      "in": [
+        "0x22951d44a70",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x22951e50350",
+        "selection"
+      ],
+      "in": [
+        "0x229306ece30",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x22951e50350",
+        "selection"
+      ],
+      "in": [
+        "0x22931a0c470",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x22951e50350",
+        "selection"
+      ],
+      "in": [
+        "0x22931a0c830",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "0x229306edc10",
+        "supports"
+      ],
+      "in": [
+        "0x22931a0ed50",
+        "supports"
+      ]
+    },
+    {
+      "out": [
+        "0x229306ed1f0",
+        "loads"
+      ],
+      "in": [
+        "0x22931a0ed50",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x22951d44a70",
+        "loads"
+      ],
+      "in": [
+        "0x22931a0ed50",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x229306efef0",
+        "loads"
+      ],
+      "in": [
+        "0x22931a0ed50",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x229306ece30",
+        "loads"
+      ],
+      "in": [
+        "0x22931a0ed50",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x229319f4140",
+        "loads"
+      ],
+      "in": [
+        "0x22931a0ed50",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x22931a0c470",
+        "loads"
+      ],
+      "in": [
+        "0x22931a0ed50",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x22931a0c680",
+        "loads"
+      ],
+      "in": [
+        "0x22931a0ed50",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x22931a0c830",
+        "loads"
+      ],
+      "in": [
+        "0x22931a0ed50",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "0x229306ed190",
+        "material"
+      ],
+      "in": [
+        "0x22931a0ed50",
+        "material"
+      ]
+    }
+  ],
+  "_guided_topology_policy": {
+    "version": 1,
+    "nodes": 1,
+    "storage": "engineering-intent"
+  },
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "_result_store": {
+    "format": "HDF5",
+    "version": 1,
+    "file": "07_16mn_forging_press_crown_topopt.cad.results.h5",
+    "result_count": 1,
+    "saved_at": "2026-08-04T13:46:41.151905"
+  }
+}

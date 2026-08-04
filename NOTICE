@@ -1,0 +1,201 @@
+# PyLCSS Third-Party Notices
+
+Document version: 2.1
+Last updated: 2026-08-01
+
+This file identifies third-party software used by or obtainable through
+PyLCSS 2.2.0. It is a notice and license index, not a replacement for the
+license text supplied by each third party.
+
+PyLCSS-authored code is licensed under the PolyForm Shield License 1.0.0 plus
+the additional LGPL compatibility permission in `LICENSE`. Third-party
+software is not covered by the PyLCSS license. Each component remains subject
+to its own copyright notices, license terms, warranty disclaimers, and source
+obligations. No third-party name or mark implies sponsorship or endorsement.
+
+## Installed license materials
+
+The Windows setup installs or retains license materials in:
+
+- `app/THIRD_PARTY_LICENSES/bundled/` for software carried inside setup or the
+  launcher;
+- `app/THIRD_PARTY_LICENSES/common/` for commonly referenced full license
+  texts; and
+- `app/THIRD_PARTY_LICENSES/python-packages/` for the actual Python
+  distributions installed into the isolated runtime.
+
+The package exporter generates `INDEX.json` and `INDEX.txt` from the installed
+wheel records. It copies both metadata license files and package-internal
+license trees and preserves wheel-relative paths. This is important for native
+bundles such as CasADi and CadQuery OCP, which carry many separate notices.
+Optional solver archives retain their upstream notices beside their binaries.
+The exact packaged license files control if this summary differs from them.
+
+## What setup downloads and what users accept
+
+The setup contains the PyLCSS source, a small launcher, the CPython 3.12.10
+embeddable runtime, and the pinned pip 26.1.2 zipapp. During installation pip
+downloads the exact Windows CPython 3.12 wheels and SHA-256 values recorded in
+`requirements-windows-py312.lock`, including every transitive dependency, from
+the configured Python package index. CalculiX,
+OpenRadioss, and FreeCAD are downloaded only when their optional tasks are
+selected.
+
+Setup asks for acceptance of the PyLCSS license and displays this notice before
+installation. It does not add a separate click-through for CalculiX,
+OpenRadioss, FreeCAD, or Python packages. Selecting or downloading a component
+does not relicense it: its own license still governs use, modification, and
+redistribution.
+
+## Optional external applications
+
+### CalculiX 2.23 (`ccx_static.exe`)
+
+- Purpose: structural finite-element solves launched as a separate process.
+- Copyright: Copyright (C) 1998-2026 Guido Dhondt, Klaus Wittig, and
+  contributors identified by the upstream project.
+- License: GNU General Public License version 2 or later, as stated upstream.
+- Binary: https://www.dhondt.de/calculix_2.23_4win.zip
+- Corresponding source: https://www.dhondt.de/ccx_2.23.src.tar.bz2
+- Project: https://www.calculix.de/
+
+The upstream Windows archive contains additional programs and libraries that
+PyLCSS does not invoke. The provisioner removes the unused `tetgen.exe` and the
+download archive but retains remaining upstream material, including
+`README_Install`. Redistributors must independently satisfy the GPL source and
+notice conditions for every binary they retain.
+
+### OpenRadioss stable build dated 2026-06-15
+
+- Purpose: Starter, Engine, and conversion processes for crash/impact work.
+- Copyright: Copyright (C) 1986-2026 Altair Engineering Inc.
+- License: GNU Affero General Public License version 3 or later.
+- Release: https://github.com/OpenRadioss/OpenRadioss/releases/tag/latest-20260615
+- Corresponding source: https://github.com/OpenRadioss/OpenRadioss/tree/latest-20260615
+- License: https://github.com/OpenRadioss/OpenRadioss/blob/latest-20260615/LICENSE.md
+
+The archive includes `COPYRIGHT.md`, `licenses/`, and additional material under
+`extlib/`. Those files remain beside the installed solver and must be preserved
+on redistribution.
+
+### FreeCAD 1.1.3
+
+- Purpose: optional interactive CAD authoring and headless parameter updates,
+  launched as separate processes.
+- License: GNU Lesser General Public License version 2.1.
+- Release/source: https://github.com/FreeCAD/FreeCAD/tree/1.1.3
+- License: https://github.com/FreeCAD/FreeCAD/blob/1.1.3/LICENSE
+
+PyLCSS starts the official FreeCAD installer, which supplies FreeCAD's notices
+and component licenses. PyLCSS does not bundle the FreeCAD binaries.
+
+## Software carried by the Windows setup or launcher
+
+| Component | Version/build | License | Project |
+|---|---:|---|---|
+| CPython embeddable runtime | 3.12.10 | Python Software Foundation License 2 and bundled notices | https://www.python.org/ |
+| pip zipapp | 26.1.2, SHA-256 pinned | MIT; vendored dependencies have separate notices | https://pip.pypa.io/ |
+| PyInstaller bootloader | 6.21.0 | GPL-2.0-or-later with the PyInstaller exception | https://pyinstaller.org/ |
+| Inno Setup runtime | compiler-selected 6.x | Inno Setup License | https://jrsoftware.org/isinfo.php |
+
+The build copies available license files for these components to
+`THIRD_PARTY_LICENSES/bundled/`.
+
+## Direct Python requirements
+
+This table covers direct requirements. The generated installed-package index
+covers transitive distributions and bundled native libraries.
+
+| Distribution | Version | Primary license identifier or family |
+|---|---:|---|
+| numpy | 2.2.6 | BSD-3-Clause |
+| scipy | 1.15.2 | BSD-3-Clause and bundled terms |
+| pandas | 2.2.2 | BSD-3-Clause |
+| PySide6 | 6.10.1 | LGPL-3.0-only community option selected for this distribution |
+| NodeGraphQt | 0.6.43 | MIT |
+| pyqtgraph | 0.14.0 | MIT |
+| QtAwesome | 1.3.1 | MIT; bundled font works have separate terms below |
+| cadquery | 2.6.1 | Apache-2.0 |
+| vtk | 9.3.1 | BSD-3-Clause |
+| scikit-fem | 11.0.0 | BSD-3-Clause |
+| netgen-mesher | 6.2.2506 | LGPL-2.1 |
+| meshio | 5.3.5 | MIT |
+| scikit-image | 0.26.0 | BSD-3-Clause and bundled terms |
+| numpy-stl | 3.2.0 | BSD-3-Clause |
+| trimesh | 4.5.3 | MIT |
+| lxml | 5.3.0 | BSD-3-Clause and bundled terms |
+| fast-simplification | 0.1.13 | MIT |
+| rtree | 1.4.1 | MIT; bundled libspatialindex has separate MIT terms |
+| nevergrad | 1.0.4 | MIT |
+| SALib | 1.5.2 | MIT |
+| pyMOTO | 2.0.1 | MIT |
+| torch | 2.9.1 | BSD-3-Clause and bundled terms |
+| scikit-learn | 1.8.0 | BSD-3-Clause |
+| hdbscan | 0.8.41 | BSD-3-Clause |
+| joblib | 1.5.3 | BSD-3-Clause |
+| pint | 0.25.2 | BSD-3-Clause |
+| h5py | 3.11.0 | BSD-3-Clause and HDF5 terms |
+| dill | 0.4.1 | BSD-3-Clause |
+| networkx | 3.3 | BSD-3-Clause |
+| openpyxl | 3.1.5 | MIT |
+| cryptography | 48.0.0 | Apache-2.0 OR BSD-3-Clause |
+| pydantic | 2.12.5 | MIT |
+| pydantic-ai-slim | 1.96.1 | MIT |
+| py7zr | 0.20.8 | LGPL-2.1-or-later; codec dependencies have separate terms |
+| packaging | 26.0 | Apache-2.0 OR BSD-2-Clause |
+| simpleeval | 1.0.3 | MIT |
+| numba | 0.63.1 | BSD-2-Clause and bundled terms |
+
+PyLCSS does not use PyAutoGUI, MouseInfo, or a system-wide mouse/keyboard
+automation dependency.
+
+## Icon-font attribution
+
+QtAwesome 1.3.1 is Copyright (c) 2015 the Spyder development team and is MIT
+licensed. Its wheel carries these unmodified, separately licensed font works:
+
+| Font work | Version(s) | License |
+|---|---:|---|
+| Font Awesome | 4.7, 5.15.4, 6.7.2 | SIL Open Font License 1.1 |
+| Elusive Icons | 2.0 | SIL Open Font License 1.1 |
+| Material Design Icons | 5.9.55, 6.9.96 | Apache License 2.0 |
+| Phosphor Icons | 1.3.0 | MIT |
+| Remix Icon | 2.5.0 | Apache License 2.0 |
+| Microsoft Codicons | 0.0.35 and 0.0.36 wheel files | CC BY 4.0 |
+
+Upstream attribution and source:
+https://github.com/spyder-ide/qtawesome/blob/v1.3.1/README.md#license
+The installer includes OFL-1.1, Apache-2.0, CC-BY-4.0, and applicable packaged
+MIT texts under `THIRD_PARTY_LICENSES`.
+
+## LGPL source, replacement, and relinking information
+
+The Windows distribution uses the community LGPL option for PySide6/Qt, not a
+Qt commercial license. PyLCSS loads the Python wheels and native libraries at
+runtime. The installation includes the complete PyLCSS source and the
+additional LGPL compatibility permission in `LICENSE`. Recipients may replace
+compatible LGPL-covered wheels or libraries and may modify or reverse engineer
+the PyLCSS portion to the extent stated in that permission. No installation
+mechanism intentionally prevents replacement or relinking.
+
+Corresponding-source locations for the selected versions include:
+
+- PySide6, Addons, Essentials, and Shiboken6 6.10.1:
+  https://download.qt.io/official_releases/QtForPython/pyside6/
+- Qt 6.10.1 libraries carried by those wheels:
+  https://download.qt.io/official_releases/qt/6.10/6.10.1/single/
+- Netgen 6.2.2506: https://github.com/NGSolve/netgen/tree/v6.2.2506
+- netgen-occt 7.8.1 and CadQuery OCP 7.8.1.1.post1:
+  https://github.com/CadQuery/OCP and https://github.com/CadQuery/ocp-build-system
+- CasADi 3.7.2: https://github.com/casadi/casadi/tree/3.7.2
+- py7zr 0.20.8 and its separately packaged codecs:
+  https://github.com/miurahr/py7zr/tree/v0.20.8
+
+The exporter preserves CasADi and CadQuery OCP package-internal license trees,
+Netgen's pybind11 notice, and license files declared by transitive wheels. A
+redistributor should archive the exact source releases and build scripts used
+and must preserve all applicable notices, source offers, replacement rights,
+and reverse-engineering rights.
+
+This notice supports attribution and compliance review; it is not legal advice.
+Distributors remain responsible for the exact artifacts they ship.
