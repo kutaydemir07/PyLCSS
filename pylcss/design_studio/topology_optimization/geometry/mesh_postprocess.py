@@ -14,6 +14,54 @@ from .analytic_shapes import AnalyticShape
 
 logger = logging.getLogger(__name__)
 
+#: Above this face count the handoff screening stops being free.
+#:
+#: Every check below was sized against a recovered *solid* envelope, which this
+#: pipeline caps at a few hundred thousand triangles. An explicit lattice is a
+#: different object: a 25% gyroid filling a 240,000 mm^3 block comes back at
+#: 2.9 million triangles and genus ~16,800, because its surface area is the
+#: point of it. Measured on that mesh, the screening cost 115 s against 15 s to
+#: generate the geometry — the run looks hung, and nothing about the extra time
+#: was informative.
+#:
+#: The checks are not silently dropped: the report says which ones ran over
+#: what sample, so a thin screen never reads as a clean bill of health.
+FULL_SCREENING_FACE_LIMIT = 750_000
+
+def _screening_budget(face_count: int) -> dict[str, Any]:
+    """Decide how much handoff screening this mesh size can afford.
+
+    Returns the thickness sample count, whether the self-intersection scan and
+    the coplanar cleanup run, and a plain-language note for the report.
+    """
+    faces = int(max(face_count, 0))
+    if faces <= FULL_SCREENING_FACE_LIMIT:
+        return {
+            "thickness_samples": 500,
+            "self_intersection": True,
+            "coplanar_cleanup": True,
+            "note": "full",
+        }
+    return {
+        # Both scans reach the mesh through trimesh's r-tree over every face,
+        # and building it costs 13-14 s at 2.9M triangles before a single ray
+        # is cast or a single pair is tested. That cost is fixed, so a smaller
+        # sample buys almost nothing and neither scan is worth it at this size.
+        "thickness_samples": 0,
+        "self_intersection": False,
+        # The lossless coplanar collapse and the Delaunay flip after it both
+        # target the uniform tessellation of *flat* regions. A periodic lattice
+        # isosurface has none: measured on a 2.9M-triangle gyroid the pair spent
+        # 21 s to remove 2 triangles and flip 17 edges.
+        "coplanar_cleanup": False,
+        "note": (
+            f"reduced for a {faces:,}-triangle mesh, above the "
+            f"{FULL_SCREENING_FACE_LIMIT:,} budgeted for full screening: wall "
+            "thickness and self-intersection not screened, coplanar cleanup "
+            "not run"
+        ),
+    }
+
 
 def _topology_signature(mesh) -> tuple[int, int, int]:
     """Return component, Euler, and boundary-edge counts for a triangle mesh."""
@@ -218,7 +266,13 @@ def _self_intersecting_faces(mesh, *, sample_limit: int = 40_000) -> Optional[in
     return int(len(offending))
 
 
-def _surface_quality_report(mesh, *, thickness_samples: int = 500) -> dict[str, Any]:
+def _surface_quality_report(
+    mesh,
+    *,
+    thickness_samples: int = 500,
+    screen_self_intersection: bool = True,
+    screening_note: str = "full",
+) -> dict[str, Any]:
     """Describe a recovered surface for CAD/FEA handoff.
 
     Watertightness alone does not tell a user whether the mesh can be remeshed,
@@ -229,6 +283,11 @@ def _surface_quality_report(mesh, *, thickness_samples: int = 500) -> dict[str, 
     The four keys the result panel and the study gate already read --
     ``connected_components``, ``euler_number``, ``open_boundary_edges`` and
     ``watertight`` -- keep their names and meaning.
+
+    ``thickness_samples`` and ``screen_self_intersection`` come from
+    :func:`_screening_budget` on large meshes. What was actually screened is
+    reported in ``screening_scope`` and in the warnings, because a check that
+    did not run must never be read as a check that passed.
     """
     components, euler_number, boundary_edges = _topology_signature(mesh)
 
@@ -245,7 +304,9 @@ def _surface_quality_report(mesh, *, thickness_samples: int = 500) -> dict[str, 
     watertight = bool(mesh.is_watertight)
     winding_consistent = bool(mesh.is_winding_consistent)
     thickness_min, thickness_p05 = _sampled_wall_thickness(mesh, thickness_samples)
-    self_intersecting_faces = _self_intersecting_faces(mesh)
+    self_intersecting_faces = (
+        _self_intersecting_faces(mesh) if screen_self_intersection else None
+    )
 
     warnings: list[str] = []
     if not watertight:
@@ -277,15 +338,27 @@ def _surface_quality_report(mesh, *, thickness_samples: int = 500) -> dict[str, 
         )
     if thickness_min is None:
         warnings.append(
-            "Wall thickness was not sampled. It needs a watertight mesh and a "
-            "ray backend, and is a screening sample rather than a medial-axis "
-            "thickness field either way."
+            "Wall thickness was not sampled "
+            + (
+                f"(this mesh has {len(mesh.faces):,} triangles, above the "
+                f"{FULL_SCREENING_FACE_LIMIT:,} the ray sample is budgeted for)."
+                if int(thickness_samples) <= 0
+                else "; it needs a watertight mesh and a ray backend."
+            )
+            + " It is a screening sample rather than a medial-axis thickness "
+            "field either way."
         )
     if self_intersecting_faces is None:
+        reason = (
+            f"this mesh has {len(mesh.faces):,} triangles, above the "
+            f"{FULL_SCREENING_FACE_LIMIT:,} the scan is budgeted for"
+            if not screen_self_intersection
+            else "the spatial-index backend is unavailable"
+        )
         warnings.append(
-            "Self-intersection was not screened; the spatial-index backend is "
-            "unavailable. Watertightness alone does not rule out a surface "
-            "that passes through itself."
+            f"Self-intersection was not screened ({reason}). Watertightness "
+            "alone does not rule out a surface that passes through itself; "
+            "check it in the slicer or mesher before release."
         )
     elif self_intersecting_faces:
         warnings.append(
@@ -328,6 +401,10 @@ def _surface_quality_report(mesh, *, thickness_samples: int = 500) -> dict[str, 
         ),
         "sampled_minimum_thickness": thickness_min,
         "sampled_p05_thickness": thickness_p05,
+        # How thorough the screening above was. `full` means every check ran at
+        # its normal sample; anything else names what was reduced or skipped.
+        "screening_scope": str(screening_note),
+        "thickness_sample_count": int(thickness_samples),
         "warnings": tuple(warnings),
     }
 
@@ -357,8 +434,12 @@ def _collapse_degenerate_slivers(mesh, *, area_tolerance: float = 1e-10) -> Any:
     if len(faces) == 0:
         return mesh
 
-    signature_before = _topology_signature(mesh)
-    volume_before = float(abs(mesh.volume)) if mesh.is_watertight else None
+    # Taken lazily, below, once a sliver is known to exist. A topology signature
+    # walks the whole face-adjacency graph -- 2.5 s on a 2.9M-triangle lattice --
+    # and the common case is that there is nothing to collapse and nothing to
+    # validate against.
+    signature_before: Optional[tuple[int, int, int]] = None
+    volume_before: Optional[float] = None
     parent = np.arange(len(vertices), dtype=np.int64)
 
     def find(index: int) -> int:
@@ -388,6 +469,11 @@ def _collapse_degenerate_slivers(mesh, *, area_tolerance: float = 1e-10) -> Any:
         flat = np.flatnonzero((areas <= float(area_tolerance)) & distinct)
         if flat.size == 0:
             break
+        if signature_before is None:
+            signature_before = _topology_signature(mesh)
+            volume_before = (
+                float(abs(mesh.volume)) if mesh.is_watertight else None
+            )
         for face_index in flat:
             corners = working[face_index]
             pairs = ((corners[0], corners[1]), (corners[1], corners[2]),
@@ -886,14 +972,27 @@ def _enhanced_mesh_postprocess(
             except Exception:
                 pass
 
-    # 3. Remove the uniform-density tessellation of flat regions. This runs
-    # before any lossy decimation so that a requested ratio is spent on the
-    # triangles that actually describe curvature.
-    mesh, removed_coplanar_faces = _collapse_redundant_coplanar_faces(mesh)
-
-    # 4. The collapse picks edges by quadric error, which says nothing about
-    # triangle shape. Recover it on the flat regions, where a flip is free.
-    mesh, flipped_coplanar_edges = _flip_coplanar_edges_to_delaunay(mesh)
+    # 3. Remove the uniform-density tessellation of flat regions, then recover
+    # triangle shape on those regions where a flip is free. Both run before any
+    # lossy decimation so that a requested ratio is spent on the triangles that
+    # actually describe curvature.
+    #
+    # Neither is free on a surface with no flat regions to fix: each costs full
+    # topology signatures over the whole mesh, and on a 2.9M-triangle gyroid the
+    # pair spent 21 s to remove 2 triangles and flip 17 edges. Budget them by
+    # size, like the screening below.
+    removed_coplanar_faces = 0
+    flipped_coplanar_edges = 0
+    if _screening_budget(len(mesh.faces))["coplanar_cleanup"]:
+        mesh, removed_coplanar_faces = _collapse_redundant_coplanar_faces(mesh)
+        mesh, flipped_coplanar_edges = _flip_coplanar_edges_to_delaunay(mesh)
+    else:
+        logger.info(
+            "Coplanar triangle cleanup skipped on a %d-triangle surface: both "
+            "passes only act on flat regions, which a periodic lattice "
+            "isosurface does not have.",
+            len(mesh.faces),
+        )
 
     # 5. Optional decimation (requires `fast_simplification`).
     if 0.0 < float(decimate_ratio) < 1.0 and len(mesh.faces) > 0:
@@ -920,7 +1019,14 @@ def _enhanced_mesh_postprocess(
         except Exception:
             logger.debug("Decimation failed; keeping un-decimated mesh")
 
-    surface_quality = _surface_quality_report(mesh)
+    # Decimation can move the mesh across a budget boundary, so re-ask.
+    budget = _screening_budget(len(mesh.faces))
+    surface_quality = _surface_quality_report(
+        mesh,
+        thickness_samples=budget["thickness_samples"],
+        screen_self_intersection=budget["self_intersection"],
+        screening_note=budget["note"],
+    )
     surface_quality["removed_numerical_fragments"] = (
         removed_numerical_fragments
     )

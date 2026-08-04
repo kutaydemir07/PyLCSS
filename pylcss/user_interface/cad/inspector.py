@@ -543,6 +543,28 @@ class PropertiesPanel(
         "lattice_cell_size_mm": "Lattice unit-cell pitch in model units. Unlike "
             "the voxel value, this stays fixed when the analysis grid "
             "changes. 0 falls back to the voxel pitch.",
+        "lattice_target_relative_density": "Fraction of the filled volume that "
+        "is material. Met by searching the wall/strut thickness and measuring "
+        "what gets built, so this is the number delivered rather than a "
+        "nominal one. Lower densities need a coarser cell to stay buildable.",
+        "infill_cell_size_mode": "Automatic sizes the cell against the body, "
+        "so the same setting means the same thing on a boss and on a bracket. "
+        "Manual states the pitch in model units.",
+        "infill_fineness": "Roughly how many cells fit across the part: "
+        "Coarse 3, Medium 4, Fine 5, Very Fine 6.\n\n"
+        "A finer cell needs a finer build grid to hold its wall, so Fine "
+        "generally needs High build quality and Very Fine needs Professional. "
+        "Ask for more than the quality can carry and a larger cell is built "
+        "instead — the relative density is still delivered, and the result "
+        "says the pitch was coarsened.",
+        "infill_cell_size_mm": "Unit-cell pitch in model units, used when "
+        "Cell Size Mode is Manual.",
+        "infill_skin_thickness_mm": "Solid wall wrapping the lattice. 0 leaves "
+        "the cells open at the boundary, which is what a powder process needs "
+        "for evacuation; any skin seals the lattice in and traps powder.",
+        "infill_build_quality": "Caps the voxel grid the lattice is rasterized "
+        "on. Nothing is solved on it — higher quality buys a finer cell and "
+        "more triangles, at more time and memory.",
         "lattice_member_thickness_mm": "Thinnest strut or TPMS wall, in model "
         "units. 0 falls back to the voxel value.",
         "lattice_skin_thickness_mm": "Solid skin over the lattice, in model "
@@ -1476,7 +1498,7 @@ class PropertiesPanel(
         preferred_open = {
             "TopologyOptVoxelNode": {"Design Intent"},
             "LatticeOptVoxelNode": {"Design Intent"},
-            "LatticeInfillNode": {"Design Intent"},
+            "LatticeInfillNode": {"Lattice Infill Settings", "Result"},
             "SolverNode": {"Analysis"},
             "CrashSolverNode": {"Analysis"},
             "MaterialNode": {"Material"},

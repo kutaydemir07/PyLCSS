@@ -15,6 +15,7 @@ import re
 from typing import Any
 
 from pylcss.design_studio.topology_optimization.integration.study_identity import (
+    LATTICE_INFILL_CLASS_NAME,
     LATTICE_SOLVER_CLASS_NAME,
     TOPOLOGY_SOLVER_CLASS_NAME,
     is_density_study_class,
@@ -383,17 +384,22 @@ _REQUIRED_INPUTS = {
 
 
 def _mirror_topology_study_entries(table: dict) -> None:
-    """Give the lattice study the topology study's port vocabulary.
+    """Give the other density studies the topology study's port vocabulary.
 
-    ``LatticeOptVoxelNode`` subclasses the topology node and declares no ports
-    of its own, so restating these tables by hand would only create a second
-    place for the same label, type, and requirement to drift from.
+    ``LatticeOptVoxelNode`` and ``LatticeInfillNode`` both descend from the
+    topology node and declare no ports of their own, so restating these tables
+    by hand would only create a second place for the same label, type, and
+    requirement to drift from. The infill deletes the ports it does not use
+    rather than relabelling them, so the entries it inherits for those never
+    resolve against a real port.
     """
     for key, value in list(table.items()):
         if isinstance(key, tuple) and key[0] == TOPOLOGY_SOLVER_CLASS_NAME:
             table[(LATTICE_SOLVER_CLASS_NAME, *key[1:])] = value
+            table[(LATTICE_INFILL_CLASS_NAME, *key[1:])] = value
         elif key == TOPOLOGY_SOLVER_CLASS_NAME:
             table[LATTICE_SOLVER_CLASS_NAME] = value
+            table[LATTICE_INFILL_CLASS_NAME] = value
 
 
 for _study_table in (_EXPLICIT_LABELS, _EXPLICIT_TYPES, _REQUIRED_INPUTS):

@@ -142,8 +142,13 @@ def guided_lattice_voxel_dimensions(
     return cell_size, member_size, skin_size
 
 
-#: Finest cell pitch, in analysis voxels, an infill will build. Mirrors the
-#: bound `ManufacturingStructureOptions` validates.
+#: Absolute floor on an infill cell pitch, in build voxels. Mirrors the bound
+#: `ManufacturingStructureOptions` validates.
+#:
+#: The infill node sizes its own grid from the requested pitch, so this is a
+#: backstop rather than the working limit: it is reached only when the
+#: build-quality budget caps the grid below what the family asked for, and the
+#: family's own `minimum_cell_voxels` is what governs before that.
 MINIMUM_INFILL_CELL_VOXELS = 3.0
 
 
@@ -180,23 +185,25 @@ def _infill_structure_options(
     cell_physical = float(resolve_cell_size(_characteristic_bounds_span(bounds)))
     cell_voxels = lattice_voxels_from_length(cell_physical, voxel_size, 8.0)
     if cell_voxels < MINIMUM_INFILL_CELL_VOXELS:
-        # The pitch is finer than the analysis grid can express. Clamping is
-        # the only honest option here — the grid defines the envelope every
-        # later stage is trimmed against — but it silently coarsens what the
-        # user asked for, so say what happened and what fixes it. Unlike an
-        # optimizing study, this node runs no FE solve, so refining the grid
-        # costs only memory.
+        # Only reachable when the build-quality budget capped the grid far
+        # below the pitch: `LatticeInfillNode.resolve_build_plan` sizes the
+        # voxel from the pitch and grows the pitch rather than thinning the
+        # wall, so a planned grid lands at the family's own floor by
+        # construction. Clamping is the only honest option here — the
+        # grid defines the envelope every later stage is trimmed against — but
+        # it coarsens what was asked for, so say what happened and what fixes
+        # it. This node runs no FE solve, so a finer grid costs only memory.
         try:
             edge = float(voxel_size or 0.0)
         except (TypeError, ValueError):
             edge = 0.0
         achievable = MINIMUM_INFILL_CELL_VOXELS * edge
         logger.warning(
-            "Lattice infill asked for a %.3g cell on a grid whose voxel is "
-            "%.3g, which is %.1f voxels per cell; a cell needs at least %.0f. "
-            "Building at %.3g instead. Raise the study's grid resolution to "
-            "reach the requested pitch — this node runs no FE solve, so a "
-            "finer grid costs only memory.",
+            "Lattice infill asked for a %.3g cell on a build grid whose voxel "
+            "is %.3g, which is %.1f voxels per cell; a cell needs at least "
+            "%.0f. Building at %.3g instead. Raise Build Quality or the cell "
+            "pitch — this node runs no FE solve, so a finer grid costs only "
+            "memory and triangles.",
             cell_physical,
             edge,
             cell_voxels,

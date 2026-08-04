@@ -18,6 +18,8 @@ from pylcss.design_studio.topology_optimization.manufacturing.structures import 
 )
 from pylcss.design_studio.topology_optimization.integration.lattice_infill_node import (
     AUTOMATIC_FINENESS_FRACTIONS,
+    BUILD_VOXEL_BUDGET,
+    DEFAULT_BUILD_QUALITY,
 )
 from pylcss.design_studio.topology_optimization.integration.lattice_settings import (
     guided_lattice_voxel_dimensions,
@@ -1743,28 +1745,275 @@ class TopologyInspectorMixin:
                 widget.setToolTip(str(tooltip))
             return widget
 
+        def _rebuild_later():
+            QtCore.QTimer.singleShot(
+                0,
+                lambda n=node: self.display_node(n)
+                if self.current_node is n
+                else None,
+            )
+
         infill_group = QtWidgets.QGroupBox("Lattice Infill Settings")
         infill_layout = QtWidgets.QFormLayout()
         infill_layout.addRow("Lattice Pattern", _combo("structure_mode", list(PUBLIC_LATTICE_FAMILY_NAMES), "Gyroid Lattice"))
         infill_layout.addRow("Relative Density", _double("lattice_target_relative_density", 0.25, 0.05, 1.0, decimals=2, step=0.05))
-        infill_layout.addRow("Cell Size Mode", _combo("infill_cell_size_mode", ["Automatic", "Manual"], "Automatic"))
+        # Swapping the mode swaps the control below it, so the panel has to be
+        # rebuilt; without this the fineness picker stayed on screen in Manual
+        # mode and the pitch field never appeared.
+        cell_mode = _combo("infill_cell_size_mode", ["Automatic", "Manual"], "Automatic")
+        cell_mode.currentTextChanged.connect(lambda _value: _rebuild_later())
+        infill_layout.addRow("Cell Size Mode", cell_mode)
         if str(node.get_property("infill_cell_size_mode") or "Automatic") == "Automatic":
             infill_layout.addRow("Cell Fineness", _combo("infill_fineness", list(AUTOMATIC_FINENESS_FRACTIONS.keys()), "Medium"))
         else:
             infill_layout.addRow("Cell Size (mm)", _double("infill_cell_size_mm", 10.0, 0.1, 10000.0, decimals=2, step=1.0, suffix=" mm"))
         infill_layout.addRow("Outer Skin", _double("infill_skin_thickness_mm", 0.0, 0.0, 100.0, decimals=2, step=0.5, suffix=" mm"))
+        # The printable floor. Without it the result gate reports that the
+        # delivered wall was never checked against a process capability and
+        # tells the user to set it — which, until now, there was nowhere to do
+        # on this node.
+        minimum_member = _double(
+            "minimum_member_size_mm", 0.0, 0.0, 100.0,
+            decimals=2, step=0.1, suffix=" mm",
+        )
+        minimum_member.setToolTip(
+            "Thinnest wall or strut the process can build. Zero leaves it "
+            "unchecked.\n\n"
+            "When set, it becomes a floor on the lattice member, and the cell "
+            "pitch grows with it if the requested relative density would "
+            "otherwise ask for something thinner."
+        )
+        infill_layout.addRow("Min. Wall / Strut", minimum_member)
         infill_group.setLayout(infill_layout)
         self.props_layout.addWidget(infill_group)
 
-        grid_group = QtWidgets.QGroupBox("Grid & Display")
-        grid_layout = QtWidgets.QFormLayout()
-        grid_layout.addRow("Grid X (voxels)", _int("nelx", 40, 4, 300))
-        grid_layout.addRow("Grid Y (voxels)", _int("nely", 40, 4, 300))
-        grid_layout.addRow("Grid Z (voxels)", _int("nelz", 40, 4, 300))
-        grid_layout.addRow("Visualization", _combo("visualization", ["Manufactured Mesh", "Density", "CAD"], "Manufactured Mesh"))
-        grid_layout.addRow("Export Filename", _text("cad_export_filename", "lattice_infill.step"))
-        grid_group.setLayout(grid_layout)
-        self.props_layout.addWidget(grid_group)
+        build_group = QtWidgets.QGroupBox("Build & Display")
+        build_layout = QtWidgets.QFormLayout()
+        # No grid spinboxes. The voxel grid is derived from the cell pitch, the
+        # family's resolution floor and the requested density — see
+        # `LatticeInfillNode.resolve_build_grid`. Exposing it as three numbers
+        # invited a grid that could not represent the cell it was asked to
+        # build, which is what made "Fine" and "Very Fine" identical.
+        quality = _combo(
+            "infill_build_quality", list(BUILD_VOXEL_BUDGET), DEFAULT_BUILD_QUALITY
+        )
+        quality.setToolTip(
+            "How finely the lattice is rasterized before its surface is "
+            "extracted.\n\n"
+            "The grid is sized from the cell pitch automatically; this caps how "
+            "large it may get. Higher quality holds the requested pitch and "
+            "relative density on finer cells, at more triangles and more time. "
+            "Nothing is solved on this grid."
+        )
+        build_layout.addRow("Build Quality", quality)
+        build_layout.addRow("Visualization", _combo("visualization", ["Manufactured Mesh", "Density", "CAD"], "Manufactured Mesh"))
+        grid_shape = [
+            int(node.get_property(name) or 0) for name in ("nelx", "nely", "nelz")
+        ]
+        if all(value > 0 for value in grid_shape):
+            grid_label = QtWidgets.QLabel(
+                "{} × {} × {} voxels".format(*grid_shape)
+            )
+            grid_label.setStyleSheet("color:#8f98a5; font-size:10px;")
+            build_layout.addRow("Last build grid", grid_label)
+        build_group.setLayout(build_layout)
+        self.props_layout.addWidget(build_group)
+
+        self._build_lattice_infill_results(node)
+        self._build_lattice_infill_export(node, _text)
+
+    def _build_lattice_infill_results(self, node):
+        """Report the delivered lattice, not the optimizer's study report.
+
+        A lattice infill has no objective, no load case and no iteration, so
+        the topology result rows -- material budget, compliance, objective
+        improvement, iterations used, convergence -- are all undefined for it.
+        What it does have is a requested relative density and a built one, and
+        those were the two numbers with nowhere to appear.
+        """
+        result = getattr(node, "_last_result", None)
+        summary = (
+            result.get("lattice_infill") if isinstance(result, dict) else None
+        )
+        if not isinstance(summary, dict):
+            return
+
+        group = QtWidgets.QGroupBox("Result")
+        layout = QtWidgets.QFormLayout()
+
+        requested = float(summary.get("requested_relative_density") or 0.0)
+        achieved = summary.get("achieved_relative_density")
+        if achieved is not None:
+            achieved_value = float(achieved)
+            density_label = QtWidgets.QLabel(
+                f"{achieved_value:.1%} built · {requested:.0%} requested"
+            )
+            # A search that lands outside a point of the request means the
+            # thickness hit the raster floor or the cell ceiling, and the part
+            # is not the mass that was asked for.
+            on_target = abs(achieved_value - requested) <= 0.01
+            density_label.setStyleSheet(
+                "color:#66d17a; font-size:11px;"
+                if on_target
+                else "color:#ffb74d; font-size:11px;"
+            )
+            layout.addRow("Relative density", density_label)
+
+        member = summary.get("member_thickness_model_units")
+        if member is not None:
+            layout.addRow(
+                "Wall / strut", QtWidgets.QLabel(f"{float(member):.3g} mm")
+            )
+        built_pitch = summary.get("cell_size")
+        requested_pitch = summary.get("requested_cell_size")
+        if built_pitch:
+            coarsened = bool(summary.get("pitch_coarsened")) and requested_pitch
+            pitch_label = QtWidgets.QLabel(
+                f"{float(built_pitch):.3g} mm "
+                f"(asked {float(requested_pitch):.3g} mm)"
+                if coarsened
+                else f"{float(built_pitch):.3g} mm"
+            )
+            pitch_label.setWordWrap(True)
+            if coarsened:
+                pitch_label.setToolTip(
+                    "The requested pitch needs a finer grid than this build "
+                    "quality allows. A larger cell was built so the relative "
+                    "density is still the one requested; raise Build Quality "
+                    "for the pitch you asked for."
+                )
+                pitch_label.setStyleSheet("color:#ffb74d; font-size:11px;")
+            layout.addRow("Cell pitch", pitch_label)
+        reach = summary.get("envelope_reach")
+        if reach is not None:
+            reach_label = QtWidgets.QLabel(f"{float(reach):.0%} of the body")
+            reach_label.setStyleSheet(
+                "color:#8f98a5; font-size:10px;"
+                if float(reach) >= 0.99
+                else "color:#ffb74d; font-size:11px;"
+            )
+            layout.addRow("Filled", reach_label)
+
+        manufacturing = (
+            result.get("manufacturing") if isinstance(result, dict) else None
+        )
+        surface = (
+            (manufacturing or {}).get("surface_quality")
+            if isinstance(manufacturing, dict)
+            else None
+        )
+        if isinstance(surface, dict):
+            watertight = surface.get("watertight")
+            faces = surface.get("faces")
+            bodies = surface.get("connected_components")
+            parts = []
+            if faces:
+                parts.append(f"{int(faces):,} triangles")
+            if bodies:
+                parts.append(f"{int(bodies)} body" if int(bodies) == 1 else f"{int(bodies)} bodies")
+            if watertight is not None:
+                parts.append("watertight" if watertight else "not watertight")
+            if parts:
+                mesh_label = QtWidgets.QLabel(" · ".join(parts))
+                mesh_label.setWordWrap(True)
+                mesh_label.setStyleSheet(
+                    "color:#8f98a5; font-size:10px;"
+                    if watertight is not False
+                    else "color:#ff8a80; font-size:10px;"
+                )
+                layout.addRow("Mesh", mesh_label)
+
+        warnings = list((result or {}).get("warnings") or [])
+        if warnings:
+            notes = QtWidgets.QLabel("\n\n".join(f"• {text}" for text in warnings))
+            notes.setWordWrap(True)
+            notes.setStyleSheet("color:#b0b6c0; font-size:10px;")
+            layout.addRow(notes)
+
+        group.setLayout(layout)
+        self.props_layout.addWidget(group)
+
+    def _build_lattice_infill_export(self, node, _text):
+        """Offer the same export routes the lattice study does.
+
+        Nothing about export is specific to how the density field was produced,
+        so an infill releases through exactly the same workers: an exact B-rep
+        for the strut families, native 3MF Beam Lattice for their centrelines,
+        and STL for the minimal-surface and honeycomb cells that have no
+        compact boundary representation.
+        """
+        from pylcss.design_studio.topology_optimization.manufacturing import (
+            FAMILIES as _LATTICE_FAMILIES,
+        )
+
+        family = _LATTICE_FAMILIES.get(
+            normalize_family_key(node.get_property("structure_mode"))
+        )
+        has_brep = family is not None and family.is_strut
+
+        group = QtWidgets.QGroupBox("Export")
+        layout = QtWidgets.QFormLayout()
+        step_name = _text("cad_export_filename", "lattice_infill.step")
+        step_name.setEnabled(has_brep)
+        layout.addRow("STEP File:", step_name)
+
+        panel = QtWidgets.QWidget()
+        panel_layout = QtWidgets.QVBoxLayout(panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(4)
+
+        row = QtWidgets.QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+
+        btn_step = QtWidgets.QPushButton("Export STEP")
+        btn_step.setEnabled(has_brep)
+        btn_step.setToolTip(
+            "Exact analytic B-rep built from the lattice centrelines: one "
+            "cylinder or cone per member, one ball per node."
+            if has_brep
+            else "A minimal-surface or honeycomb cell has no compact B-rep. "
+            "Release this infill as STL."
+        )
+        btn_step.clicked.connect(lambda: self._export_topopt_step(node))
+        row.addWidget(btn_step)
+
+        btn_stl = QtWidgets.QPushButton("Export STL")
+        btn_stl.setToolTip(
+            "Triangulation of the manufactured lattice, ready to slice."
+        )
+        btn_stl.clicked.connect(lambda: self._export_topopt_stl(node))
+        row.addWidget(btn_stl)
+        panel_layout.addLayout(row)
+
+        btn_3mf = QtWidgets.QPushButton("Export 3MF Lattice")
+        btn_3mf.setEnabled(has_brep)
+        btn_3mf.setToolTip(
+            "Strut lattices only.\n\n"
+            "Writes the lattice as nodes and beams with per-end radii, in the "
+            "3MF Beam Lattice format the AM tool chain reads natively. It "
+            "stores the lattice as a lattice instead of as a tessellation of "
+            "one, so it is exact, a few hundred kilobytes, and effectively "
+            "instant — where the same body as STL is millions of triangles."
+        )
+        btn_3mf.clicked.connect(lambda: self._export_topopt_beam_3mf(node))
+        panel_layout.addWidget(btn_3mf)
+        layout.addRow("Shape:", panel)
+
+        has_result = isinstance(getattr(node, "_last_result", None), dict)
+        for button in (btn_step, btn_stl, btn_3mf):
+            if not has_result:
+                button.setEnabled(False)
+                button.setToolTip("Run the infill first.")
+
+        group.setToolTip(
+            "BCC and Octet are reconstructed exactly from their centrelines, "
+            "so they export as STEP and as native 3MF Beam Lattice preserving "
+            "their nodes, beams and end radii. A gyroid, Schwarz primitive or "
+            "honeycomb infill has no compact B-rep and exports as STL."
+        )
+        group.setLayout(layout)
+        self.props_layout.addWidget(group)
 
     def _set_topopt_visualization(self, node, mode):
         """Switch result views and lazily build the requested CAD body."""

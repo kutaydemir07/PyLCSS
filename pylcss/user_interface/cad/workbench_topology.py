@@ -12,6 +12,7 @@ from PySide6 import QtCore, QtWidgets
 from pylcss.design_studio.topology_optimization.integration.study_identity import (
     DENSITY_STUDY_IDENTIFIERS,
     is_density_study_node,
+    is_lattice_infill_node,
 )
 
 from .execution_workers import GraphExecutionWorker
@@ -73,6 +74,14 @@ class WorkbenchTopologyMixin:
                 "watertight imported surface directly to 'design_domain'; the "
                 "voxel analysis grid is generated internally."
             )
+        if is_lattice_infill_node(node):
+            # A body to fill is the whole specification. Every check below
+            # exists to catch a mis-specified analysis — a missing material,
+            # an unrestrained model, an unloaded one — and an infill runs no
+            # analysis: it reads no stiffness and no allowable, and there is
+            # nothing for a support or a load to act on. Demanding them would
+            # make the node impossible to run for no benefit.
+            return None
         if not self._port_has_connections(node, "material"):
             return (
                 "Topology Opt needs a Material connection so stiffness, stress, "

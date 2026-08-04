@@ -1001,7 +1001,139 @@ class ResultsPanel(QtWidgets.QWidget):
                 self._add_section("Impact result", crash_rows)
             self._add_crash_history_plots(data)
 
-        if rtype == "topopt_voxel":
+        # A lattice infill shares the topology payload but not its meaning: it
+        # has no goal, no physics, no material budget, no compliance, no
+        # objective and no iterations, so the optimizer report below would be a
+        # page of zeros and inapplicable rows. Report what it does have.
+        is_lattice_infill = (
+            rtype == "topopt_voxel"
+            and str(data.get("study_kind") or "") == "lattice_infill"
+        )
+        if is_lattice_infill:
+            infill = data.get("lattice_infill")
+            infill = infill if isinstance(infill, dict) else {}
+            rows = [("Pattern", str(infill.get("pattern") or "Lattice"))]
+            requested = infill.get("requested_relative_density")
+            achieved = infill.get("achieved_relative_density")
+            if achieved is not None and requested:
+                rows.append(
+                    (
+                        "Relative density",
+                        f"{float(achieved) * 100:.1f}% built "
+                        f"(requested {float(requested) * 100:.0f}%)",
+                    )
+                )
+            elif requested:
+                rows.append(
+                    ("Relative density requested", f"{float(requested) * 100:.0f}%")
+                )
+            if infill.get("member_thickness_model_units") is not None:
+                rows.append(
+                    (
+                        "Wall / strut thickness",
+                        self._fmt(infill["member_thickness_model_units"], "mm"),
+                    )
+                )
+            mode = str(infill.get("cell_size_mode") or "Automatic")
+            rows.append(
+                (
+                    "Cell size",
+                    f"Manual"
+                    if mode.strip().lower() == "manual"
+                    else f"Automatic · {infill.get('cell_fineness') or ''}".strip(" ·"),
+                )
+            )
+            built_pitch = infill.get("cell_size")
+            requested_pitch = infill.get("requested_cell_size")
+            if built_pitch:
+                rows.append(
+                    (
+                        "Cell pitch",
+                        f"{float(built_pitch):.3g} mm "
+                        f"(requested {float(requested_pitch):.3g} mm)"
+                        if infill.get("pitch_coarsened") and requested_pitch
+                        else self._fmt(built_pitch, "mm"),
+                    )
+                )
+            grid = infill.get("build_grid")
+            cell_voxels = infill.get("cell_size_voxels")
+            if (
+                isinstance(grid, (list, tuple))
+                and len(grid) >= 3
+                and cell_voxels
+            ):
+                rows.append(
+                    (
+                        "Build grid",
+                        f"{int(grid[0])} × {int(grid[1])} × {int(grid[2])} voxels "
+                        f"({float(cell_voxels):.1f} per cell)",
+                    )
+                )
+            if infill.get("build_quality"):
+                rows.append(("Build quality", str(infill["build_quality"])))
+            if float(infill.get("skin_thickness") or 0.0) > 0.0:
+                rows.append(
+                    ("Outer skin", self._fmt(infill["skin_thickness"], "mm"))
+                )
+            if infill.get("envelope_reach") is not None:
+                rows.append(
+                    (
+                        "Body filled",
+                        f"{float(infill['envelope_reach']) * 100:.0f}%",
+                    )
+                )
+            if data.get("recovered_design_volume") is not None:
+                rows.append(
+                    (
+                        "Lattice volume",
+                        self._fmt(data["recovered_design_volume"], "mm^3"),
+                    )
+                )
+            manufacturing = data.get("manufacturing")
+            surface_quality = (
+                manufacturing.get("surface_quality")
+                if isinstance(manufacturing, dict)
+                else None
+            )
+            if isinstance(surface_quality, dict):
+                if surface_quality.get("faces") is not None:
+                    rows.append(
+                        ("Triangles", f"{int(surface_quality['faces']):,}")
+                    )
+                if surface_quality.get("connected_components") is not None:
+                    rows.append(
+                        (
+                            "Separate bodies",
+                            str(int(surface_quality["connected_components"])),
+                        )
+                    )
+                if surface_quality.get("watertight") is not None:
+                    rows.append(
+                        (
+                            "Watertight",
+                            "Yes" if surface_quality["watertight"] else "No",
+                        )
+                    )
+                rows.extend(_surface_handoff_rows(surface_quality))
+            quality_gate = data.get("quality_gate")
+            if isinstance(quality_gate, dict):
+                rows.append(
+                    (
+                        "Geometry checks",
+                        str(quality_gate.get("status") or "").title(),
+                    )
+                )
+                failed_checks = list(quality_gate.get("failed_checks") or [])
+                if failed_checks:
+                    rows.append(("Blocking checks", ", ".join(failed_checks)))
+            timing = data.get("timing")
+            if isinstance(timing, dict) and timing.get("recovery_s"):
+                rows.append(
+                    ("Build time", f"{float(timing['recovery_s']):.1f} s")
+                )
+            self._add_section("Lattice infill", rows)
+
+        if rtype == "topopt_voxel" and not is_lattice_infill:
             topo_rows = []
             if data.get("design_goal"):
                 topo_rows.append(("Goal", str(data["design_goal"])))

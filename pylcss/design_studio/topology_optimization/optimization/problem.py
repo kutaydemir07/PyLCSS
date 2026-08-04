@@ -96,6 +96,16 @@ class TopologyOptVoxelProblem:
     # and the tabulated tensor is an extrapolation. 1.0 leaves a solid study
     # unbounded, which is the correct behaviour there.
     lattice_maximum_density: float = 1.0
+    # Whether this problem will be handed to the solver.
+    #
+    # Lattice infill builds one to *describe* its grid, units and cell family
+    # to the shared output stage, and then never solves it: there is no
+    # objective, no load case and no iteration. The voxel cap in
+    # ``__post_init__`` bounds the assembled system and its sensitivities, so
+    # applying it to a description forces the infill's rasterization grid down
+    # to a solver's size and with it the cell pitch it can build. Set False
+    # only when nothing will call the solver on this instance.
+    solve_enabled: bool = True
     # Compliance minimization at a material budget, or true mass/volume
     # minimization subject to the stress constraint.
     objective_mode: str = "compliance"  # compliance | minimum_mass
@@ -163,7 +173,7 @@ class TopologyOptVoxelProblem:
         if min(self.nelx, self.nely, self.nelz) < 1:
             raise ValueError("Topology grid dimensions must each be at least 1 voxel.")
         n_voxels = self.nelx * self.nely * self.nelz
-        if n_voxels > 500_000:
+        if self.solve_enabled and n_voxels > 500_000:
             raise ValueError(
                 f"Topology grid has {n_voxels:,} voxels; the supported limit is "
                 "500,000. Reduce expert grid dimensions or use Guided mode."

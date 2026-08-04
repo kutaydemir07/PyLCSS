@@ -1123,6 +1123,9 @@ def build_topology_output(
         },
     }
 
+    if is_infill_study:
+        _apply_lattice_infill_reporting(node, output, recovered, structure_options)
+
     return TopologyOutputContext(
         payload=output,
         manufactured_density=manufactured_density,
@@ -1130,6 +1133,113 @@ def build_topology_output(
         result=result,
         study=study,
     )
+
+
+def _apply_lattice_infill_reporting(
+    node: Any,
+    output: dict[str, Any],
+    recovered: Any,
+    structure_options: ManufacturingStructureOptions,
+) -> None:
+    """Report a lattice infill on the geometry it delivers.
+
+    Two corrections, both about *which field was measured*.
+
+    The payload above is the topology optimizer's report, and most of it is
+    undefined for a node that runs no solve: there is no material budget, no
+    compliance, no objective and no iteration count. ``study_kind`` lets the
+    result panel show the lattice numbers instead of a page of zeros and
+    inapplicable rows.
+
+    The rest is a grid mismatch. ``final_vol_frac`` measures the *design field*,
+    which for an infill is the constant 1.0 meaning "this is all part", so it
+    reported 100% material for a 25% lattice. ``meaningful_component_count``
+    measures the analysis-grid rebuild, which is sized from a nominal member
+    rather than from the one the density search settled on. Both are replaced
+    here by the corresponding measurement on the build that was delivered —
+    the same field the recovered surface was contoured from.
+    """
+    sizing = (
+        recovered.get("lattice_sizing") if isinstance(recovered, dict) else None
+    )
+    connectivity = (
+        recovered.get("lattice_connectivity")
+        if isinstance(recovered, dict)
+        else None
+    )
+    surface = (
+        recovered.get("surface_quality") if isinstance(recovered, dict) else None
+    )
+    output["study_kind"] = "lattice_infill"
+
+    achieved = None
+    if isinstance(sizing, dict) and sizing.get("achieved_relative_density"):
+        achieved = float(sizing["achieved_relative_density"])
+    elif isinstance(connectivity, dict) and connectivity.get("relative_density"):
+        achieved = float(connectivity["relative_density"])
+    if achieved is not None:
+        output["final_vol_frac"] = achieved
+    output["target_vol_frac"] = float(
+        structure_options.target_relative_density or 0.0
+    ) or None
+
+    # The delivered body count. The mesh has already had sub-resolution
+    # contouring specks removed, so this is the number of bodies a slicer will
+    # actually see, not a voxel-connectivity proxy for it.
+    if isinstance(surface, dict) and surface.get("connected_components"):
+        manufacturing = output.get("manufacturing")
+        if isinstance(manufacturing, dict):
+            manufacturing["meaningful_component_count"] = int(
+                surface["connected_components"]
+            )
+
+    output["lattice_infill"] = {
+        "pattern": structure_options.display_name,
+        "requested_relative_density": float(
+            structure_options.target_relative_density or 0.0
+        ),
+        "achieved_relative_density": achieved,
+        "cell_size_mode": str(
+            node.get_property("infill_cell_size_mode") or "Automatic"
+        ),
+        "cell_fineness": str(node.get_property("infill_fineness") or ""),
+        "build_quality": str(node.get_property("infill_build_quality") or ""),
+        "skin_thickness": float(
+            node.get_property("infill_skin_thickness_mm") or 0.0
+        ),
+        "cell_size_voxels": float(structure_options.cell_size_voxels),
+        "member_thickness_model_units": (
+            float(sizing.get("member_thickness_model_units"))
+            if isinstance(sizing, dict)
+            and sizing.get("member_thickness_model_units") is not None
+            else None
+        ),
+        "envelope_reach": (
+            float(connectivity.get("envelope_reach"))
+            if isinstance(connectivity, dict)
+            and connectivity.get("envelope_reach") is not None
+            else None
+        ),
+        "build_grid": [
+            int(node.get_property("nelx") or 0),
+            int(node.get_property("nely") or 0),
+            int(node.get_property("nelz") or 0),
+        ],
+        # Set when the build-quality budget could not carry the requested
+        # pitch and it was grown to keep the delivered density honest. The
+        # user asked for a cell size and did not get it, so this travels with
+        # the result rather than living only in the log.
+        "pitch_coarsened": bool(
+            getattr(node, "_infill_pitch_coarsened", False)
+        ),
+        "requested_cell_size": (
+            float(getattr(node, "_requested_infill_cell_size", 0.0)) or None
+        ),
+        "cell_size": float(
+            getattr(node, "_resolved_infill_cell_size", 0.0) or 0.0
+        )
+        or None,
+    }
 
 
 def _report_lattice_printability(
@@ -1216,6 +1326,7 @@ def finalize_topology_output(
         str(node.get_property("workflow_mode") or "Guided").strip().lower()
         == "guided"
     )
+    is_infill_study = callable(getattr(node, "resolve_infill_cell_size", None))
     warnings_out: list[str] = []
     failed_checks: list[str] = []
     advisory_checks: list[str] = []
@@ -1259,7 +1370,7 @@ def finalize_topology_output(
             "so geometry recovery used the connected projected density. "
             "Review surface finish and refine the grid before release.",
         )
-    if structure_options.mode != "solid":
+    if structure_options.mode != "solid" and not is_infill_study:
         block(
             "explicit_structure_external_reanalysis_required",
             "The built-in voxel check does not resolve local lattice/rib "
@@ -1394,12 +1505,20 @@ def finalize_topology_output(
                 "smoothing before meshing or printing this body.",
             )
         elif self_intersections is None:
+            # Two different reasons produce `None`, and telling the user the
+            # wrong one sends them to install a package they already have. The
+            # screening report names which it was.
+            scope = str(surface_quality.get("screening_scope") or "").strip()
+            reason = (
+                f"the mesh is too large to screen affordably ({scope})"
+                if scope and scope != "full"
+                else "the spatial-index backend is unavailable"
+            )
             advise(
                 "self_intersection_not_screened",
-                "The recovered surface was not screened for self-intersection "
-                "because the spatial-index backend is unavailable. A watertight "
-                "mesh can still pass through itself; check it in the slicer or "
-                "mesher before release.",
+                "The recovered surface was not screened for self-intersection: "
+                f"{reason}. A watertight mesh can still pass through itself; "
+                "check it in the slicer or mesher before release.",
             )
     # The requested minimum member size and the delivered geometry were both
     # being computed and neither was ever compared to the other, so a study
@@ -1603,6 +1722,22 @@ def finalize_topology_output(
     )
     if fit_warning:
         advise("lattice_cell_does_not_fit_envelope", fit_warning)
+    infill_summary = output.get("lattice_infill")
+    if isinstance(infill_summary, dict) and infill_summary.get("pitch_coarsened"):
+        # The user asked for a cell size and did not get it. That travels with
+        # the result, not only in the log: the pitch is half the specification
+        # of an infill and a silent substitution is indistinguishable from the
+        # setting not working, which is how this node read before.
+        advise(
+            "infill_pitch_coarsened_to_budget",
+            f"The requested {float(infill_summary.get('requested_cell_size') or 0.0):.3g} "
+            "cell needs a finer grid than the "
+            f"{infill_summary.get('build_quality') or 'current'} build quality "
+            f"allows, so a {float(infill_summary.get('cell_size') or 0.0):.3g} "
+            "cell was built instead. The relative density is still the one "
+            "requested — the cells are larger and there are fewer of them. "
+            "Raise Build Quality for the pitch you asked for.",
+        )
     if structure_options.mode != "solid":
         _report_lattice_printability(
             node,
@@ -1755,6 +1890,19 @@ def finalize_topology_output(
             logger.warning("TopologyOptVoxelNode: %s", msg)
             output["validation_error"] = str(exc)
             block("validation_failed", msg)
+    elif is_infill_study:
+        # Not a failed check. A lattice infill has no solve to validate and
+        # never claimed one, so listing this as a blocking gate would mark
+        # every correct result as failed and leave the user with nothing to
+        # act on. It replaces the reanalysis block above, which says the same
+        # thing in optimizer terms.
+        advise(
+            "infill_is_geometry_only",
+            "This is generated geometry, not an analyzed result: nothing here "
+            "resolves member bending, joint stress, fatigue or process "
+            "defects. Run it through an analysis before using it for anything "
+            "load bearing.",
+        )
     else:
         block(
             "independent_validation_not_run",
@@ -1888,8 +2036,22 @@ def finalize_topology_output(
     # or an automatic release decision.
     output["release_ready"] = verification_passed
     output["verification_passed"] = verification_passed
+    # An infill has no solve, so it can never reach "verification passed" and
+    # calling every correct result "concept only" says nothing. Report whether
+    # the geometry checks passed, which is the question this node can answer.
+    infill_status = (
+        "geometry built"
+        if not failed_checks
+        else "geometry checks failed"
+    )
     output["quality_gate"] = {
-        "status": "verification passed" if verification_passed else "concept only",
+        "status": (
+            infill_status
+            if is_infill_study
+            else "verification passed"
+            if verification_passed
+            else "concept only"
+        ),
         "release_ready": verification_passed,
         "verification_passed": verification_passed,
         "failed_checks": failed_checks,

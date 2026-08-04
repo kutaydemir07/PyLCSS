@@ -544,7 +544,15 @@ def _prepare_domain(
         40_000,
         int(160_000 / np.sqrt(float(structural_case_count))),
     )
-    if min(nelx, nely, nelz) < 1 or nelx * nely * nelz > safe_cell_cap:
+    # This cap bounds an FE solve: every voxel is an element, and the factored
+    # system plus its sensitivities is what makes a large grid unaffordable. A
+    # lattice infill assembles nothing and solves nothing — its grid is a
+    # rasterization budget, already bounded by the node's own build quality —
+    # so applying a solver cap to it only forces a cell too coarse to build.
+    is_infill_study = callable(getattr(node, "resolve_infill_cell_size", None))
+    if min(nelx, nely, nelz) < 1 or (
+        not is_infill_study and nelx * nely * nelz > safe_cell_cap
+    ):
         node.set_error(
             "Topology grid dimensions must be positive and contain no more "
             f"than {safe_cell_cap:,} voxels for this number of structural "
@@ -838,6 +846,7 @@ def _build_problem(
 ) -> PreparedTopologyStudy | None:
     """Validate material/optimizer settings and instantiate the solver problem."""
     graph = domain.graph
+    is_infill_study = callable(getattr(node, "resolve_infill_cell_size", None))
     bounds = graph.bounds
     material = graph.material
     constraint_list = graph.constraints
@@ -1013,6 +1022,10 @@ def _build_problem(
             nelx=nelx,
             nely=nely,
             nelz=nelz,
+            # A lattice infill never reaches the solver: this instance exists
+            # to carry the grid, units and cell family to the shared output
+            # stage. See `TopologyOptVoxelProblem.solve_enabled`.
+            solve_enabled=not is_infill_study,
             E0=youngs_modulus,
             Emin=minimum_stiffness,
             nu=study_poisson,
