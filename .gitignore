@@ -68,10 +68,6 @@ temp/
 tmp/
 pylcss/generated_models/
 
-# Assistant runtime state (stored in the per-user config directory)
-pylcss/assistant_systems/config/.llm_key
-pylcss/assistant_systems/config/settings.json
-pylcss/assistant_systems/config/llm_memory.json
 
 # Node-owned FreeCAD documents written by the FreeCAD Part bridge
 # (pylcss/design_studio/freecad_bridge/paths.py creates this lazily).

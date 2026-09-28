@@ -47,12 +47,22 @@ InfoBeforeFile={#StagingRoot}\app\THIRD_PARTY_NOTICES.txt
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[Types]
+Name: "both"; Description: "PyLCSS MDAO and CAE"
+Name: "mdao"; Description: "PyLCSS MDAO only"
+Name: "cae"; Description: "PyLCSS CAE only"
+Name: "custom"; Description: "Custom installation"; Flags: iscustom
+
+[Components]
+Name: "mdao"; Description: "PyLCSS MDAO — system modeling and optimization"; Types: both mdao
+Name: "cae"; Description: "PyLCSS CAE — CAD and simulation"; Types: both cae
+
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"
-Name: "solvers"; Description: "Download optional engineering solver backends (separately licensed)"; GroupDescription: "Optional third-party components:"; Flags: checkablealone unchecked
-Name: "solvers\calculix"; Description: "CalculiX structural FEA solver (GPL v2 or later; separate terms)"; Flags: unchecked
-Name: "solvers\radioss"; Description: "OpenRadioss crash and impact solver (AGPL v3 or later; separate terms)"; Flags: unchecked
-Name: "freecad"; Description: "FreeCAD CAD backend (LGPL v2.1; large download; its own installer and UAC prompt)"; GroupDescription: "Optional third-party components:"; Flags: unchecked
+Name: "solvers"; Description: "Download optional engineering solver backends (separately licensed)"; GroupDescription: "Optional third-party components:"; Flags: checkablealone unchecked; Components: cae
+Name: "solvers\calculix"; Description: "CalculiX structural FEA solver (GPL v2 or later; separate terms)"; Flags: unchecked; Components: cae
+Name: "solvers\radioss"; Description: "OpenRadioss crash and impact solver (AGPL v3 or later; separate terms)"; Flags: unchecked; Components: cae
+Name: "freecad"; Description: "FreeCAD CAD backend (LGPL v2.1; large download; its own installer and UAC prompt)"; GroupDescription: "Optional third-party components:"; Flags: unchecked; Components: cae
 
 [Files]
 Source: "{#StagingRoot}\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -71,6 +81,8 @@ Type: filesandordirs; Name: "{app}\app\scripts"
 
 [Icons]
 Name: "{group}\PyLCSS"; Filename: "{app}\PyLCSS.exe"; WorkingDir: "{app}\app"
+Name: "{group}\PyLCSS MDAO"; Filename: "{app}\PyLCSS.exe"; Parameters: "--workspace mdao"; WorkingDir: "{app}\app"; Components: mdao
+Name: "{group}\PyLCSS CAE"; Filename: "{app}\PyLCSS.exe"; Parameters: "--workspace cae"; WorkingDir: "{app}\app"; Components: cae
 Name: "{group}\PyLCSS License"; Filename: "{app}\app\LICENSE.txt"
 Name: "{group}\Third-Party Notices"; Filename: "{app}\app\THIRD_PARTY_NOTICES.txt"
 Name: "{group}\Privacy Information"; Filename: "{app}\app\PRIVACY.md"
@@ -86,6 +98,36 @@ Type: filesandordirs; Name: "{app}\app\external_solvers"
 Type: filesandordirs; Name: "{app}\install"
 
 [Code]
+function SelectedWorkspaces(): String;
+begin
+  if WizardIsComponentSelected('mdao') and WizardIsComponentSelected('cae') then
+    Result := 'both'
+  else if WizardIsComponentSelected('mdao') then
+    Result := 'mdao'
+  else
+    Result := 'cae';
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (CurPageID = wpSelectComponents) and
+     not WizardIsComponentSelected('mdao') and
+     not WizardIsComponentSelected('cae') then
+  begin
+    MsgBox('Select MDAO, CAE, or both to continue.', mbInformation, MB_OK);
+    Result := False;
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  if not WizardIsComponentSelected('mdao') and
+     not WizardIsComponentSelected('cae') then
+    Result := 'Select at least one PyLCSS workspace.';
+end;
+
 function RunAndWait(
   const Executable: String;
   const Parameters: String;
@@ -133,7 +175,7 @@ begin
       '" -PythonArchive "' +
       ExpandConstant('{tmp}\{#PythonArchiveName}') +
       '" -PipZipApp "' + ExpandConstant('{tmp}\pip.pyz') +
-      '" -Phase Runtime',
+      '" -Phase Runtime -Workspaces ' + SelectedWorkspaces(),
     'Preparing the isolated Python runtime...',
     True);
 
@@ -145,7 +187,7 @@ begin
       '" -PythonArchive "' +
       ExpandConstant('{tmp}\{#PythonArchiveName}') +
       '" -PipZipApp "' + ExpandConstant('{tmp}\pip.pyz') +
-      '" -Phase Bootstrap',
+      '" -Phase Bootstrap -Workspaces ' + SelectedWorkspaces(),
     'Installing Python packaging tools...',
     True);
 
@@ -157,7 +199,7 @@ begin
       '" -PythonArchive "' +
       ExpandConstant('{tmp}\{#PythonArchiveName}') +
       '" -PipZipApp "' + ExpandConstant('{tmp}\pip.pyz') +
-      '" -Phase Requirements',
+      '" -Phase Requirements -Workspaces ' + SelectedWorkspaces(),
     'Installing engineering packages (large download; typically 10-20 minutes)...',
     True);
 
@@ -169,7 +211,7 @@ begin
       '" -PythonArchive "' +
       ExpandConstant('{tmp}\{#PythonArchiveName}') +
       '" -PipZipApp "' + ExpandConstant('{tmp}\pip.pyz') +
-      '" -Phase Verify',
+      '" -Phase Verify -Workspaces ' + SelectedWorkspaces(),
     'Verifying the PyLCSS runtime...',
     True);
 
@@ -177,21 +219,21 @@ begin
   InstallerScript := ExpandConstant(
     '{app}\app\scripts\install_solvers.py');
 
-  if WizardIsTaskSelected('solvers\calculix') then
+  if WizardIsComponentSelected('cae') and WizardIsTaskSelected('solvers\calculix') then
     RunAndWait(
       PythonExe,
       '"' + InstallerScript + '" --only ccx',
       'Installing CalculiX...',
       False);
 
-  if WizardIsTaskSelected('solvers\radioss') then
+  if WizardIsComponentSelected('cae') and WizardIsTaskSelected('solvers\radioss') then
     RunAndWait(
       PythonExe,
       '"' + InstallerScript + '" --only radioss',
       'Installing OpenRadioss...',
       False);
 
-  if WizardIsTaskSelected('freecad') then
+  if WizardIsComponentSelected('cae') and WizardIsTaskSelected('freecad') then
     RunAndWait(
       PythonExe,
       '"' + InstallerScript + '" --only freecad',

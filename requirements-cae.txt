@@ -1,0 +1,15 @@
+-r requirements-core.txt
+cadquery==2.6.1
+vtk==9.3.1
+scikit-fem==11.0.0
+netgen-mesher==6.2.2506
+meshio==5.3.5
+scikit-image==0.26.0
+numpy-stl==3.2.0
+trimesh==4.5.3
+lxml==5.3.0
+fast-simplification==0.1.13
+rtree==1.4.1
+pymoto==2.0.1
+py7zr==0.20.8
+numba==0.63.1

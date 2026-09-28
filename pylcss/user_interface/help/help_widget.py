@@ -37,41 +37,82 @@ def _page(body: str) -> str:
 _PAGES: dict[str, str] = {
     "Start Here": _page("""
 <h1>Start Here</h1>
-<p>PyLCSS separates system-level design work from detailed CAD and simulation.
-Choose the tab that matches the job.</p>
-<table><tr><th>Task</th><th>Tab</th></tr>
-<tr><td>Build a functional model from variables, calculations, and quantities of interest</td><td><b>Modeling Environment</b></td></tr>
-<tr><td>Create geometry and run FEA, impact, or topology optimization</td><td><b>Design Studio</b></td></tr>
-<tr><td>Train a fast approximation from model data or a saved CAD study</td><td><b>Surrogate Training</b></td></tr>
-<tr><td>Sample feasible designs and compute solution spaces</td><td><b>Solution Space</b></td></tr>
-<tr><td>Optimize objectives under constraints</td><td><b>Optimization</b></td></tr>
-<tr><td>Rank variable influence on an output</td><td><b>Sensitivity Analysis</b></td></tr></table>
-<h2>A reliable first workflow</h2><ol>
-<li>In Modeling Environment, add Design Variable, Function Block, and QoI nodes.</li>
-<li>Connect the ports and use <b>Validate</b>.</li>
+<p>Open <b>PyLCSS</b> to choose a workspace. The chooser shows the workspaces
+available in your installation. Close the workspace window to return to the
+chooser; when started using a direct workspace shortcut, closing it exits.</p>
+<table><tr><th>Workspace</th><th>What you can do</th></tr>
+<tr><td><b>PyLCSS MDAO</b></td><td>System modeling, surrogate training,
+solution-space exploration, optimization, and sensitivity analysis.</td></tr>
+<tr><td><b>PyLCSS CAE</b></td><td>CAD, geometry selection, meshing, static FEA,
+impact, topology optimization, and lattice optimization.</td></tr></table>
+<h2>Start in MDAO</h2><ol>
+<li>Open Modeling Environment and add Design Variable, Function Block, and QoI nodes.</li>
+<li>Connect their ports and use <b>Validate</b>.</li>
 <li>Use <b>Build Model</b> to forward the compiled model to Solution Space and Optimization.</li>
-<li>Set QoI limits, objectives, and constraints in the target analysis tab.</li></ol>
-<div class="tip">The robot button at the upper-right opens the optional AI Assistant. Its gear button opens provider settings.</div>
+<li>Set requirements, objectives, and constraints in the target analysis tab.</li></ol>
+<h2>Start in CAE</h2><ol>
+<li>Create or open a geometry graph using the workbench toolbar.</li>
+<li>Add the mesh, materials, boundary conditions, and solver for your study.</li>
+<li>Select the desired terminal node and use <b>Run</b> or <b>F5</b>.</li>
+<li>Inspect results and save the study before exporting.</li></ol>
+<p>MDAO pages open from the top row beside File and View. CAE opens directly into the workbench.
+Use the MDAO <b>Help</b> action or CAE <b>Help &rarr; User Guide</b> for this guide.</p>
+"""),
+    "Installation and Workspaces": _page("""
+<h1>Installation and Workspaces</h1>
+<p>Run the Windows setup and choose <b>PyLCSS MDAO only</b>,
+<b>PyLCSS CAE only</b>, or <b>PyLCSS MDAO and CAE</b>. Setup installs a shared
+Python runtime and the packages needed by your selection.</p>
+<p>CalculiX, OpenRadioss, and FreeCAD are optional CAE components on the setup
+options page. Select only the external tools your workflows need.</p>
+<h2>Add another workspace</h2>
+<p>Run setup again and select both workspaces. An unavailable chooser button
+means that workspace is not installed. Reducing the selection hides the
+workspace; previously downloaded packages may remain in the shared runtime.</p>
+<h2>Launch options</h2>
+<p>The PyLCSS shortcut opens the chooser. The workspace shortcuts open MDAO or
+CAE directly. From a terminal:</p>
+<pre>PyLCSS.exe --workspace mdao
+PyLCSS.exe --workspace cae</pre>
+<h2>Source installation</h2>
+<p>From the source folder in an activated Python environment, choose one:</p>
+<pre>pip install -e ".[mdao]"
+pip install -e ".[cae]"
+pip install -e ".[mdao,cae]"</pre>
+<p>Start with <code>python -m pylcss.main</code>,
+<code>python -m pylcss.mdao</code>, or <code>python -m pylcss.cae</code>.</p>
+<p>A MDAO Function Block that evaluates a saved CAE study requires both
+workspaces and the external solver used by that study.</p>
 """),
     "Projects and Files": _page("""
 <h1>Projects and Files</h1>
-<h2>Application project folder</h2>
-<p><b>File &rarr; Save Project</b> creates a folder named from the product and saves
-Modeling, Design Studio, Surrogate, Solution Space, Optimization, and
-Sensitivity state. Design Studio simulation results are compressed into an
-HDF5 sidecar. <b>File &rarr; Load Project</b> restores the complete folder.</p>
-<h2>Design Studio file</h2>
-<p>Design Studio has separate <b>New</b>, <b>Open</b>, and <b>Save</b> toolbar
-commands. Its graph and settings are stored in a <code>.cad</code> file; cached
-FEA, impact, topology, and remesh results are stored beside it in
-<code>.cad.results.h5</code>. Keep both files when sharing a standalone study.</p>
+<h2>MDAO project folder</h2>
+<p>In MDAO, <b>File &rarr; Save Project</b> creates a folder named from the
+product and saves Modeling, Surrogate, Solution Space, Optimization, and
+Sensitivity state. <b>File &rarr; Load Project</b> restores that folder.
+Save CAE studies separately.</p>
+<h2>CAE study</h2>
+<p>The CAE workbench has <b>New</b>, <b>Open</b>, and <b>Save</b> toolbar actions.
+The graph and settings are stored in a <code>.cad</code> file; cached FEA,
+impact, topology, and remesh results are stored beside it in
+<code>.cad.results.h5</code>. Keep the study and its companion files together
+when moving or sharing a project.</p>
+<h2>Existing combined projects</h2>
+<p>Load the project folder in MDAO. To open its saved CAD work in CAE, use
+<b>Open</b> and select <code>design_studio.cad</code> from that folder.
+Keep linked CAD documents and other referenced input files accessible.</p>
 <h2>Computed results</h2>
-<p><b>Save Results</b> in Design Studio exports an already-computed result as JSON
-or HDF5; it does not run a solver. Geometry export uses the STEP or STL actions.</p>
+<p><b>Save Results</b> in CAE exports an already-computed result as JSON or HDF5;
+it does not run a solver. Geometry export uses the STEP or STL actions.</p>
 """),
     "Interface": _page("""
 <h1>Interface</h1>
-<h2>Design Studio layout</h2><ul>
+<h2>MDAO navigation</h2>
+<p>Use Modeling Environment, Surrogate Training, Solution Space, Optimization,
+Sensitivity Analysis, and Help in the top row beside File and View.
+Click a name to open its page; the active page is shown in bold. CAD and simulation are in the
+separate CAE workspace.</p>
+<h2>CAE workbench layout</h2><ul>
 <li><b>Left:</b> searchable node library; double-click or drag an item.</li>
 <li><b>Center top:</b> 3D viewer for previews and results.</li>
 <li><b>Center bottom:</b> node graph.</li>
@@ -79,17 +120,18 @@ or HDF5; it does not run a solver. Geometry export uses the STEP or STL actions.
 <li><b>Right bottom:</b> Results for the selected node.</li></ul>
 <p>FEA, Impact, and Topology studies are built by connecting nodes in the graph;
 the inspector holds each node's settings. There is no separate Studies tab.</p>
-<h2>Design Studio shortcuts</h2><table>
+<h2>CAE shortcuts</h2><table>
 <tr><td>Run selected study or graph</td><td><code>F5</code></td></tr>
 <tr><td>Stop computation</td><td><code>Shift+F5</code></td></tr>
 <tr><td>Fit graph / Reset 3D view</td><td><code>F</code> / <code>R</code></td></tr>
 <tr><td>Undo / Redo</td><td><code>Ctrl+Z</code> / <code>Ctrl+Y</code></td></tr>
 <tr><td>Delete selected nodes</td><td><code>Delete</code></td></tr></table>
-<p>Choose <b>View &rarr; Theme</b> for the complete dark or light interface.</p>
+<p>In MDAO, choose <b>View &rarr; Theme</b>. In CAE, use the <b>Theme</b> menu.
+Both workspaces support dark and light themes.</p>
 """),
     "Design Studio Overview": _page("""
 <h1>Design Studio Overview</h1>
-<p>Design Studio is a saved node graph for parametric geometry, preparation,
+<p>Design Studio is the workbench inside PyLCSS CAE. It uses a saved node graph for parametric geometry, preparation,
 simulation, measurement, and export.</p>
 <h2>Geometry sources</h2><ul>
 <li>Native Box, Cylinder, Tube, shell, Boolean, hole, fillet, transform, and pattern nodes.</li>
@@ -298,7 +340,8 @@ appropriate beam or solid model before engineering release.</p>
 <tr><td>Stress, pressure, Young's modulus</td><td>MPa = N/mm<sup>2</sup></td></tr>
 <tr><td>Density</td><td>tonne/mm<sup>3</sup>; steel about <code>7.85e-9</code></td></tr>
 <tr><td>Impact time / velocity</td><td>ms / mm/ms</td></tr></table>
-<h2>Optional installations</h2><pre>python scripts/install_solvers.py --only ccx
+<h2>Optional installations</h2><p>In Windows setup, select CAE and the required
+external solver options. For a source installation, run:</p><pre>python scripts/install_solvers.py --only ccx
 python scripts/install_solvers.py --only radioss
 python scripts/install_solvers.py --only freecad</pre>
 <p>PyLCSS starts without them. Solver nodes can prepare decks, but a full solve
@@ -316,7 +359,8 @@ requires the executable. Library tooltips show detection status.</p>
 <li>Double-click nodes to edit configuration.</li><li>Use <b>Validate</b>.</li>
 <li>Use <b>Build Model</b> to forward it to Solution Space and Optimization.</li></ol>
 <p>A Design Studio Function Block reads a saved <code>.cad</code> graph, maps
-inputs to exposed parameters, and calls the chosen FEA, Impact, or Topology terminal.</p>
+inputs to exposed parameters, and calls the chosen FEA, Impact, or Topology terminal.
+Install both MDAO and CAE to use this connection.</p>
 """),
     "Surrogate Training": _page("""
 <h1>Surrogate Training</h1><ol>
@@ -382,32 +426,6 @@ evaluation estimate for the selected method and variable count. Sensitivity
 indices describe the chosen input distributions and bounds, not universal
 causality; repeat or inspect confidence intervals before decisions.</p>
 """),
-    "AI Assistant": _page("""
-<h1>AI Assistant</h1>
-<p>Click the upper-right robot button, enter a request, and press Enter or Send.
-The assistant can inspect Design Studio state; create and connect native CAD,
-condition, solver, and expert code nodes; set properties; run one explicitly
-selected workflow; stop it; and export cached CAD or recovered topology
-geometry. Long solver runs stay in the application's background worker.</p>
-<h2>Setup</h2><ol><li>Open the panel and click the gear.</li>
-<li>Select a cloud provider or OpenAI-compatible local server.</li>
-<li>Enter credentials or base URL, select a model, and test.</li>
-<li>Save and begin with a small request.</li></ol>
-<h2>Data and privacy</h2>
-<p>The Local provider sends requests only to the configured local endpoint.
-Cloud providers receive the current request, recent history when memory is
-enabled, and a snapshot of the active graph including node properties and
-connections. Provider terms and privacy policies apply. Conversation memory is
-off by default and, when enabled, is stored locally in plaintext. Loading a
-cloud model list sends the API key only after you explicitly press Load Models
-or Test Connection.</p>
-<p>State the target tab, dimensions, units, bounds, and solver type. Ask for graph
-validation after node changes. If a graph has multiple solver terminals, name
-the exact terminal to run.</p>
-<div class="warn">Review generated engineering work. Validate units, connections,
-boundary conditions, solver settings, and results before decisions. Do not send
-confidential or personal data to a cloud provider unless authorized.</div>
-"""),
     "Security and Trusted Files": _page("""
 <h1>Security and Trusted Files</h1>
 <p>Design Studio projects can include CadQuery Code nodes. Their Python executes
@@ -416,15 +434,17 @@ for trust before executing code from a newly opened external project.</p>
 <p>Serialized joblib, pickle, dill, and PyTorch model files can also execute code
 during loading. Open projects, scripts, model files, plugins, and solver decks
 only from sources you trust. Inspect Code nodes before approving execution.</p>
-<p>The AI assistant can modify in-application graphs and launch selected PyLCSS
-workflows, but it has no system-wide mouse or keyboard automation capability.
-Keep automatic tool execution disabled unless the project, model, and request
-are trusted.</p>
 <div class="warn">A file extension is not a security boundary. Do not open an
 unknown .cad or serialized model merely because it looks like ordinary data.</div>
 """),
     "Troubleshooting": _page("""
 <h1>Troubleshooting</h1>
+<h2>A workspace is unavailable</h2><p>Run setup again and include the required
+workspace. For a source installation, install its corresponding package extra.</p>
+<h2>Where is CAD in MDAO?</h2><p>Close MDAO to return to the chooser, then open CAE.
+If you used a direct workspace shortcut, open the main PyLCSS shortcut instead.</p>
+<h2>A linked CAE model fails in MDAO</h2><p>Check that both workspaces are installed,
+the referenced .cad file is accessible, and its required external solver is installed.</p>
 <h2>Solver will not start</h2><ul>
 <li>Hover the solver in the library for detection detail.</li>
 <li>Use Deck Only if you only need an input deck.</li></ul>
@@ -440,16 +460,17 @@ an upstream shape and a completed preview.</p>
 <h1>About PyLCSS</h1>
 <p><b>PyLCSS 2.2.0</b> is a source-available desktop environment for system
 modeling, parametric CAD, simulation, solution-space exploration, optimization,
-sensitivity analysis, and surrogate modeling.</p>
+sensitivity analysis, and surrogate modeling. Its MDAO and CAE workspaces can
+be installed separately or together.</p>
 <p>Copyright &copy; 2026 Kutay Demir.</p>
 <p>Licensed under the <b>PolyForm Shield License 1.0.0</b>. See LICENSE and NOTICE.</p>
 """),
 }
 
 _NAV = [
-    ("Getting Started", ["Start Here", "Projects and Files", "Interface"]),
+    ("Getting Started", ["Start Here", "Installation and Workspaces", "Projects and Files", "Interface"]),
     (
-        "Design Studio",
+        "CAE — CAD and Simulation",
         [
             "Design Studio Overview",
             "Geometry Selection",
@@ -462,7 +483,7 @@ _NAV = [
         ],
     ),
     (
-        "System Workflows",
+        "MDAO — System Workflows",
         [
             "Modeling Environment",
             "Surrogate Training",
@@ -473,7 +494,7 @@ _NAV = [
     ),
     (
         "Support",
-        ["AI Assistant", "Security and Trusted Files", "Troubleshooting", "About"],
+        ["Security and Trusted Files", "Troubleshooting", "About"],
     ),
 ]
 

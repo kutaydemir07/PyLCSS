@@ -225,6 +225,11 @@ foreach ($fileName in @(
     "README.md",
     "pyproject.toml",
     "requirements.txt",
+    "requirements-core.txt",
+    "requirements-mdao.txt",
+    "requirements-cae.txt",
+    "requirements-mdao-windows-py312.lock",
+    "requirements-cae-windows-py312.lock",
     "requirements-windows-py312.lock"
 )) {
     Copy-Item -LiteralPath (Join-Path $repoRoot $fileName) -Destination $appStage
@@ -250,7 +255,7 @@ foreach ($scriptName in @(
         -Destination $scriptStage
 }
 
-# Never ship local bytecode, logs, credentials, assistant state, or generated
+# Never ship local bytecode, logs, credentials, settings, or generated
 # runtime data. These can exist in a developer checkout even when ignored.
 $cacheDirectories = Get-ChildItem -LiteralPath $appStage -Recurse -Directory |
     Where-Object { $_.Name -eq "__pycache__" }
@@ -262,7 +267,7 @@ $generatedFiles = Get-ChildItem -LiteralPath $appStage -Recurse -File |
     Where-Object {
         $_.Extension -in @(".pyc", ".pyo", ".log", ".h5", ".hdf5", ".tmp", ".temp") -or
         $_.Name -like "*.cad.0x*" -or
-        $_.Name -in @(".llm_key", "llm_memory.json", "settings.json")
+        $_.Name -in @("settings.json")
     }
 foreach ($file in $generatedFiles) {
     Assert-ChildPath -Parent $stagingRoot -Candidate $file.FullName

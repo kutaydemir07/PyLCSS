@@ -171,7 +171,7 @@ def _validate_result_files(folder: Path) -> None:
             "The project is incomplete: Design Studio results are missing."
         )
 
-    from pylcss.design_studio.result_store import (
+    from pylcss.cae.design_studio.result_store import (
         FORMAT_NAME as RESULT_FORMAT,
         FORMAT_VERSION as RESULT_VERSION,
     )

@@ -1,0 +1,12 @@
+prune tests
+prune .pytest_cache
+prune .mypy_cache
+prune .ruff_cache
+prune .claude
+prune build
+prune .venv
+global-exclude __pycache__ *.py[cod] *.log
+include requirements*.txt requirements*.lock
+include LICENSE NOTICE PRIVACY.md SECURITY.md
+include scripts/install_solvers.py
+include scripts/export_third_party_licenses.py

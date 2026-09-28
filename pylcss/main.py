@@ -107,7 +107,7 @@ def _signal_launcher_ready() -> None:
 # Apply patches and import main window
 from pylcss.user_interface.common import qt_patches  # noqa: E402,F401 - startup patch
 from pylcss.user_interface.common import apply_professional_theme  # noqa: E402
-from pylcss.user_interface.main_application_window import MainWindow  # noqa: E402
+
 
 
 def cleanup_temp_models():
@@ -140,7 +140,25 @@ def main() -> NoReturn:
     # colours.  Applying it from inside a half-constructed QMainWindow can
     # also interfere with creation of its native menu bar.
     apply_professional_theme()
-    window: MainWindow = MainWindow()
+    import argparse
+    from pylcss.workspaces import installed_workspaces, create_window
+    from pylcss.user_interface.start_page import StartPage
+
+    parser = argparse.ArgumentParser(description="PyLCSS engineering workspaces")
+    parser.add_argument("--workspace", choices=("mdao", "cae"))
+    arguments, _ = parser.parse_known_args()
+    available = installed_workspaces()
+    if arguments.workspace:
+        if arguments.workspace not in available:
+            QtWidgets.QMessageBox.information(
+                None, "Workspace not installed",
+                f"PyLCSS {arguments.workspace.upper()} is not installed. "
+                "Run setup again and select this workspace.",
+            )
+            sys.exit(2)
+        window = create_window(arguments.workspace)
+    else:
+        window = StartPage(available)
     window.showMaximized()
     window.raise_()
     window.activateWindow()

@@ -138,9 +138,6 @@ covers transitive distributions and bundled native libraries.
 | dill | 0.4.1 | BSD-3-Clause |
 | networkx | 3.3 | BSD-3-Clause |
 | openpyxl | 3.1.5 | MIT |
-| cryptography | 48.0.0 | Apache-2.0 OR BSD-3-Clause |
-| pydantic | 2.12.5 | MIT |
-| pydantic-ai-slim | 1.96.1 | MIT |
 | py7zr | 0.20.8 | LGPL-2.1-or-later; codec dependencies have separate terms |
 | packaging | 26.0 | Apache-2.0 OR BSD-2-Clause |
 | simpleeval | 1.0.3 | MIT |

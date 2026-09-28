@@ -13,14 +13,6 @@ execution. PyLCSS warns before executing code embedded in a newly opened Design
 Studio project and requires explicit trust for the public `TorchRegressor.load`
 API.
 
-## AI assistant
-
-Cloud-assistant requests can disclose graph properties and can invoke
-application tools. Keep automatic tool execution disabled unless the provider,
-model, prompt, and project are trusted. Review changes and engineering results
-before relying on them. The assistant no longer has a system-wide mouse or
-keyboard control capability.
-
 ## Installers and releases
 
 Official public Windows releases should be Authenticode-signed and published

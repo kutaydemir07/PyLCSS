@@ -13,7 +13,10 @@ param(
     [string]$PipZipApp,
 
     [ValidateSet("All", "Runtime", "Bootstrap", "Requirements", "Verify")]
-    [string]$Phase = "All"
+    [string]$Phase = "All",
+
+    [ValidateSet("both", "mdao", "cae")]
+    [string]$Workspaces = "both"
 )
 
 $ErrorActionPreference = "Stop"
@@ -66,8 +69,11 @@ $runtimeRoot = Join-Path $root "runtime"
 $pythonRoot = Join-Path $runtimeRoot "python"
 $pythonExe = Join-Path $pythonRoot "python.exe"
 $applicationRoot = Join-Path $root "app"
-$requirements = Join-Path $applicationRoot "requirements.txt"
-$requirementsLock = Join-Path $applicationRoot "requirements-windows-py312.lock"
+$selectedWorkspaces = if ($Workspaces -eq "both") { @("mdao", "cae") } else { @($Workspaces) }
+$requirementsName = if ($Workspaces -eq "both") { "requirements.txt" } else { "requirements-$Workspaces.txt" }
+$lockName = if ($Workspaces -eq "both") { "requirements-windows-py312.lock" } else { "requirements-$Workspaces-windows-py312.lock" }
+$requirements = Join-Path $applicationRoot $requirementsName
+$requirementsLock = Join-Path $applicationRoot $lockName
 $bootstrapLock = Join-Path $InstallRoot "installer\bootstrap-requirements.lock"
 $licenseExporter = Join-Path $applicationRoot "scripts\export_third_party_licenses.py"
 $pythonLicenseRoot = Join-Path $applicationRoot "THIRD_PARTY_LICENSES\python-packages"
@@ -231,13 +237,19 @@ try {
             -Stage "verify" `
             -State "running" `
             -Message "Verifying the PyLCSS runtime."
-        Invoke-Checked -Executable $pythonExe -Arguments @(
-            "-c",
-            "import PySide6, cadquery, pymoto, torch, vtk, pylcss; print('PyLCSS runtime verified')"
-        )
+        $verification = "import PySide6, pylcss; "
+        if ($selectedWorkspaces -contains "mdao") {
+            $verification += "import torch, nevergrad, SALib; from pylcss.mdao.user_interface.main_application_window import MainWindow; "
+        }
+        if ($selectedWorkspaces -contains "cae") {
+            $verification += "import cadquery, pymoto, vtk; from pylcss.cae.user_interface.main_window import CAEMainWindow; "
+        }
+        $verification += "print('PyLCSS runtime verified')"
+        Invoke-Checked -Executable $pythonExe -Arguments @("-c", $verification)
 
         $receipt = [ordered]@{
             product = "PyLCSS"
+            workspaces = @($selectedWorkspaces)
             version = "2.2.0"
             installed_at = (Get-Date).ToUniversalTime().ToString("o")
             python = (& $pythonExe --version 2>&1 | Out-String).Trim()

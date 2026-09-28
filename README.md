@@ -42,7 +42,6 @@ The core concept is the **Solution Space** approach for robust design: instead o
 - **Sensitivity Analysis** — Sobol, Morris, FAST, and Delta
 - **Surrogate Models** — MLP, random forest, gradient boosting, and Gaussian process
 - **System Modelling** — graph-based functional architecture
-- **AI Assistant** — multi-provider, tool-driven project editing
 - **Black-Box Integration** — wrap external tools in an `evaluate(x)` function
 
 Detailed documentation on node types, workflows, and solver configuration is available in the **Help** widget inside the application.
@@ -55,7 +54,8 @@ Detailed documentation on node types, workflows, and solver configuration is ava
 
 Run `PyLCSS-2.2.0-Setup-x64.exe`. Setup displays the PyLCSS license and a
 separate third-party notice, then installs an isolated Python runtime, the
-declared Python packages, and Start Menu/desktop shortcuts. CalculiX,
+selected Python packages, and Start Menu/desktop shortcuts. Choose **MDAO**,
+**CAE**, or **both** on the component selection page. CalculiX,
 OpenRadioss, and FreeCAD are downloaded only when their optional tasks are
 selected. Normal startup is the terminal-free `PyLCSS.exe` at the application
 root. Installed copies check the official GitHub Releases feed at most once a
@@ -92,13 +92,33 @@ python -m venv .venv
 .venv\Scripts\activate          # Windows
 # source .venv/bin/activate     # Linux/Mac
 
-pip install -r requirements.txt
+# Choose one workspace or both:
+pip install -e ".[mdao]"
+# pip install -e ".[cae]"
+# pip install -e ".[mdao,cae]"
 
 # Optional: download CalculiX, OpenRadioss, FreeCAD (interactive)
 python scripts/install_solvers.py
 
 python -m pylcss.main
 ```
+
+Startup shows a workspace chooser. You can also launch directly with
+`python -m pylcss.mdao`, `python -m pylcss.cae`, or
+`PyLCSS.exe --workspace mdao` / `--workspace cae`.
+
+MDAO code lives under `pylcss/mdao/` (system modeling, optimization,
+sensitivity, solution spaces, and surrogate modeling). CAE code lives under
+`pylcss/cae/` (Design Studio, meshing, simulation, topology optimization,
+and solver backends). Shared configuration, I/O, themes, and the start page
+remain under `pylcss/`. Legacy Python import paths still work for saved models.
+CAD-backed MDAO models require both workspaces. The Windows installer records
+the selected workspaces; rerun setup to add one. Source installations can use
+`requirements-mdao.txt`, `requirements-cae.txt`, or `requirements.txt` for both.
+The installer uses the corresponding hashed Windows dependency lock. Shared
+source files are shipped together, but dependencies and launch choices follow
+the selected components. Removing a workspace selection during an upgrade
+hides it; previously downloaded packages are retained in the shared runtime.
 
 External solvers (CalculiX, OpenRadioss, FreeCAD) are optional. PyLCSS opens cleanly without them; solver nodes remain available for deck-only preparation and show their detected runtime status in the component-library tooltip. Attempting a full solve without the required executable reports a node error. The external tools are governed by their own upstream licenses (CalculiX: GPL, OpenRadioss: AGPL-3.0, FreeCAD: LGPL-2.1+).
 
@@ -116,7 +136,7 @@ an independent license grant.
 
 See [LICENSE](LICENSE) for the complete standardized PyLCSS terms and
 [NOTICE](NOTICE) for separately licensed dependencies and optional components.
-See [PRIVACY.md](PRIVACY.md) for AI data handling and [SECURITY.md](SECURITY.md)
+See [PRIVACY.md](PRIVACY.md) for data handling and [SECURITY.md](SECURITY.md)
 before opening projects or serialized models from other people.
 
 <div align="center">
