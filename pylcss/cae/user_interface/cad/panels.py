@@ -174,12 +174,34 @@ class ResultsPanel(QtWidgets.QWidget):
     for what otherwise only goes to stdout.
     """
 
+    view_mode_requested = QtCore.Signal(str)
+    undeformed_requested = QtCore.Signal(bool)
+    extrema_requested = QtCore.Signal(bool)
+    deform_scale_requested = QtCore.Signal(str)
+
     # Mirrors the inspector's group styling; this panel sits directly beneath
     # it in the same dock and should not look like a different application.
     _RESULTS_QSS = """
         #ResultsPanel { background: #1c1e22; }
         QScrollArea { background: transparent; border: none; }
         #qt_scrollarea_viewport { background: transparent; }
+        #Results3DModeButton, #ResultsTablesGraphsButton {
+            background-color: transparent;
+            color: #e0e4ea;
+            border: 1px solid #383e4a;
+            border-radius: 5px;
+            padding: 5px 8px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        #Results3DModeButton:hover, #ResultsTablesGraphsButton:hover {
+            background-color: #383f4d;
+            border-color: #4f5869;
+            color: #ffffff;
+        }
+        #Results3DModeButton:pressed, #ResultsTablesGraphsButton:pressed {
+            background-color: #1e2229;
+        }
         QGroupBox {
             background: #24272d;
             border: 1px solid #2f333a;
@@ -195,11 +217,14 @@ class ResultsPanel(QtWidgets.QWidget):
             subcontrol-position: top left;
             left: 12px;
             padding: 0 4px;
-            color: #6fb3ff;
+            color: #d29922;
             font-weight: 700;
         }
         QLabel { color: #aab0b8; font-size: 11px; background: transparent; }
     """
+
+    result_received = QtCore.Signal(object, object)
+    open_results_page_requested = QtCore.Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -208,30 +233,65 @@ class ResultsPanel(QtWidgets.QWidget):
         self.setObjectName("ResultsPanel")
         self.setStyleSheet(self._RESULTS_QSS)
         outer = QtWidgets.QVBoxLayout(self)
-        outer.setContentsMargins(8, 7, 8, 7)
-        outer.setSpacing(5)
+        outer.setContentsMargins(6, 4, 6, 4)
+        outer.setSpacing(0)
 
         self._empty = QtWidgets.QLabel("No results yet.")
         self._empty.setStyleSheet("color:#8f98a5; font-style:italic;")
-        outer.addWidget(self._empty)
+        self._empty.setVisible(False)
         # Measure-category values are collected separately from solver runs so
         # they stay on screen while the user inspects a solver result.
         self._measurements = []
         self._last_data = None
+        self._results_dialog = None
+        self._undeformed_checked = False
+        self._extrema_checked = False
+
+        # Header action bar with single full-width 3D view popup menu button
+        self._header_bar = QtWidgets.QWidget()
+        h_layout = QtWidgets.QHBoxLayout(self._header_bar)
+        h_layout.setContentsMargins(0, 0, 0, 0)
+        h_layout.setSpacing(0)
+
+        self._btn_3d_mode = QtWidgets.QToolButton()
+        self._btn_3d_mode.setObjectName("Results3DModeButton")
+        self._btn_3d_mode.setText("3D View")
+        self._btn_3d_mode.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        self._btn_3d_mode.setToolTip("Select 3D simulation field to show in VTK viewer")
+        self._btn_3d_mode.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
+        )
+        self._btn_3d_mode.setStyleSheet(
+            "QToolButton { padding: 5px 10px; font-weight: 600; font-size: 11px; text-align: left; }"
+        )
+        try:
+            import qtawesome as qta
+            self._btn_3d_mode.setIcon(qta.icon("fa5s.cube", color="#8b949e"))
+        except Exception:
+            pass
+
+        self._btn_tables_graphs = QtWidgets.QPushButton("Tables & Graphs")
+        self._btn_tables_graphs.setObjectName("ResultsTablesGraphsButton")
+        self._btn_tables_graphs.setVisible(False)
+        self._btn_tables_graphs.clicked.connect(
+            lambda: self.open_detailed_results("tables")
+        )
+
+        h_layout.addWidget(self._btn_3d_mode)
+        self._header_bar.setVisible(False)
+        outer.addWidget(self._header_bar)
+
         self._scroll = QtWidgets.QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        # Like the inspector: the panel is narrow and resizable, so content
-        # wraps to the available width instead of growing a horizontal bar.
         self._scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self._content = QtWidgets.QWidget()
         self._content.setMinimumWidth(0)
         self._content_layout = QtWidgets.QVBoxLayout(self._content)
-        self._content_layout.setContentsMargins(2, 2, 2, 2)
-        self._content_layout.setSpacing(5)
+        self._content_layout.setContentsMargins(0, 0, 0, 0)
+        self._content_layout.setSpacing(0)
         self._scroll.setWidget(self._content)
         self._scroll.setVisible(False)
-        outer.addWidget(self._scroll, 1)
 
         class _ResultsViewportFilter(QtCore.QObject):
             def __init__(self, content_widget, scroll_widget):
@@ -249,6 +309,105 @@ class ResultsPanel(QtWidgets.QWidget):
         self._scroll.viewport().installEventFilter(
             _ResultsViewportFilter(self._content, self._scroll)
         )
+
+    def apply_theme(self, theme_name):
+        from pylcss.user_interface.common.theme_manager import THEMES
+        self._theme_name = "light" if str(theme_name).lower() == "light" else "dark"
+        colors = THEMES[self._theme_name]
+        self.setStyleSheet(
+            f"#ResultsPanel {{ background: {colors['bg_panel']}; }}"
+            f"QToolButton {{ background: {colors['bg_input']}; color: {colors['text_main']}; border: 1px solid {colors['border']}; border-radius: 4px; padding: 5px 10px; }}"
+            f"QToolButton:hover {{ color: {colors['primary']}; }}"
+            f"QLabel {{ color: {colors['text_dim']}; }}"
+        )
+        self._update_3d_menu()
+
+    def _get_available_3d_modes(self, data: Optional[Dict[str, Any]]) -> List[str]:
+        from .result_fields import available_result_fields
+        return available_result_fields(data)
+
+    def _update_3d_menu(self):
+        data = self._last_data or {}
+        modes = self._get_available_3d_modes(data)
+        current = str(data.get("visualization_mode") or modes[0])
+        if current not in modes:
+            current = modes[0]
+        self._btn_3d_mode.setText(f"3D View: {current}")
+
+        menu = QtWidgets.QMenu(self)
+        from pylcss.user_interface.common.theme_manager import THEMES
+        colors = THEMES[getattr(self, "_theme_name", "dark")]
+        menu.setStyleSheet(
+            "QMenu { background-color: #21242b; border: 1px solid #383e4a; color: #e0e4ea; padding: 4px; }"
+            "QMenu::item { padding: 6px 20px 6px 24px; font-size: 11px; border-radius: 3px; }"
+            "QMenu::item:selected { background-color: #2d3748; color: #d29922; }"
+            "QMenu::item:disabled { color: #64748b; font-weight: bold; background: transparent; }"
+            "QMenu::separator { height: 1px; background-color: #2e3440; margin: 4px 6px; }"
+        )
+        menu.setStyleSheet(
+            f"QMenu {{ background: {colors['bg_panel']}; color: {colors['text_main']}; border: 1px solid {colors['border']}; padding: 4px; }}"
+            "QMenu::item { padding: 6px 20px; }"
+            f"QMenu::item:selected {{ background: {colors['bg_input']}; color: {colors['primary']}; }}"
+            f"QMenu::item:disabled {{ color: {colors['text_dim']}; }}"
+        )
+
+        header = menu.addAction("3D Display Mode")
+        header.setEnabled(False)
+
+        for mode in modes:
+            act = menu.addAction(mode)
+            act.setCheckable(True)
+            if mode == current:
+                act.setChecked(True)
+            act.triggered.connect(
+                lambda checked=False, m=mode: self._on_mode_selected(m)
+            )
+
+        menu.addSeparator()
+
+        act_undef = menu.addAction("Undeformed Wireframe")
+        act_undef.setCheckable(True)
+        act_undef.setEnabled(data.get("displacement") is not None or bool(data.get("frames")))
+        act_undef.setChecked(self._undeformed_checked)
+        act_undef.toggled.connect(self._on_undeformed_toggled)
+
+        act_extrema = menu.addAction("Min / Max Extrema Markers")
+        act_extrema.setCheckable(True)
+        act_extrema.setEnabled(modes != ["Default View"] and current not in {"CAD", "Manufactured Mesh", "Deformed Animation"})
+        act_extrema.setChecked(self._extrema_checked)
+        act_extrema.toggled.connect(self._on_extrema_toggled)
+
+        menu.addSeparator()
+
+        act_tables = menu.addAction("Data Tables...")
+        act_tables.triggered.connect(
+            lambda: self.open_detailed_results("tables")
+        )
+
+        act_graphs = menu.addAction("Graph Results...")
+        act_graphs.triggered.connect(
+            lambda: self.open_detailed_results("graphs")
+        )
+
+        self._btn_3d_mode.setMenu(menu)
+
+    def _on_mode_selected(self, mode: str):
+        self._btn_3d_mode.setText(f"3D View: {mode}")
+        if self._last_data is not None:
+            self._last_data["visualization_mode"] = mode
+        self.view_mode_requested.emit(mode)
+
+    def _on_undeformed_toggled(self, checked: bool):
+        self._undeformed_checked = bool(checked)
+        self.undeformed_requested.emit(bool(checked))
+
+    def _on_extrema_toggled(self, checked: bool):
+        self._extrema_checked = bool(checked)
+        self.extrema_requested.emit(bool(checked))
+
+    def open_detailed_results(self, initial_tab: str = "tables"):
+        """Switch to the Results tab in the main CAE window without popping up a dialog."""
+        self.open_results_page_requested.emit(str(initial_tab))
 
     @staticmethod
     def _fmt(value, unit=""):
@@ -277,8 +436,9 @@ class ResultsPanel(QtWidgets.QWidget):
         self._last_data = None
         self._measurements = []
         self._clear()
-        self._empty.setVisible(True)
-        self._scroll.setVisible(False)
+        self.setVisible(False)
+        self._empty.setVisible(False)
+        self._header_bar.setVisible(False)
 
     def _add_section(self, title, rows):
         """rows: list of (label, value-string)."""
@@ -320,7 +480,7 @@ class ResultsPanel(QtWidgets.QWidget):
         for w in warnings:
             label = QtWidgets.QLabel(f"• {w}")
             label.setWordWrap(True)
-            label.setStyleSheet("color: #FFCC80;")
+            label.setStyleSheet("color: #e3b341;")
             label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
             v.addWidget(label)
         self._content_layout.addWidget(group)
@@ -351,7 +511,7 @@ class ResultsPanel(QtWidgets.QWidget):
 
         objective = _normalized(data.get("objective_history"))
         if objective is not None:
-            curves.append(("Objective / initial", objective, "#42A5F5"))
+            curves.append(("Objective / initial", objective, "#58a6ff"))
 
         raw_change = data.get("change_history")
         change = np.asarray(
@@ -360,7 +520,7 @@ class ResultsPanel(QtWidgets.QWidget):
         ).reshape(-1)
         change = change[np.isfinite(change)]
         if change.size >= 2:
-            curves.append(("Design change", change, "#FFB74D"))
+            curves.append(("Design change", change, "#d29922"))
 
         raw_stress = data.get("stress_history")
         stress = np.asarray(
@@ -375,14 +535,14 @@ class ResultsPanel(QtWidgets.QWidget):
             else 0.0
         )
         if stress.size >= 2 and allowable > 0.0:
-            curves.append(("Stress utilization", stress / allowable, "#EF5350"))
+            curves.append(("Stress utilization", stress / allowable, "#f85149"))
 
         thermal = _normalized(data.get("thermal_compliance_history"))
         if (
             thermal is not None
             and str(data.get("physics_mode") or "").lower() == "thermo_mechanical"
         ):
-            curves.append(("Thermal response / initial", thermal, "#66BB6A"))
+            curves.append(("Thermal response / initial", thermal, "#3fb950"))
 
         if not curves:
             return
@@ -408,7 +568,7 @@ class ResultsPanel(QtWidgets.QWidget):
             plot.addLine(
                 y=1.0,
                 pen=pg.mkPen(
-                    "#EF5350",
+                    "#f85149",
                     width=1,
                     style=QtCore.Qt.DashLine,
                 ),
@@ -420,12 +580,12 @@ class ResultsPanel(QtWidgets.QWidget):
     # internal energy are the physics; hourglass and contact energy are the
     # numerical-health traces a reviewer checks before trusting the run.
     _CRASH_ENERGY_CHANNELS = (
-        ("kinetic_energy_kj", "Kinetic", "#42A5F5"),
-        ("internal_energy_kj", "Internal (absorbed)", "#66BB6A"),
-        ("total_energy_kj", "Total", "#ECEFF1"),
-        ("external_work_kj", "External work", "#AB47BC"),
-        ("contact_energy_kj", "Contact", "#FFB74D"),
-        ("hourglass_energy_kj", "Hourglass", "#EF5350"),
+        ("kinetic_energy_kj", "Kinetic", "#58a6ff"),
+        ("internal_energy_kj", "Internal (absorbed)", "#3fb950"),
+        ("total_energy_kj", "Total", "#c9d1d9"),
+        ("external_work_kj", "External work", "#9e8ac9"),
+        ("contact_energy_kj", "Contact", "#d29922"),
+        ("hourglass_energy_kj", "Hourglass", "#f85149"),
     )
 
     @staticmethod
@@ -498,20 +658,20 @@ class ResultsPanel(QtWidgets.QWidget):
                     crush[:count],
                     raw_force[:count],
                     name="Unfiltered",
-                    pen=pg.mkPen(color="#546E7A", width=1),
+                    pen=pg.mkPen(color="#475569", width=1),
                 )
             filter_label = self._crash_filter_label(histories, "force_filter")
             plot.plot(
                 crush[:count],
                 force[:count],
                 name=filter_label,
-                pen=pg.mkPen(color="#42A5F5", width=2),
+                pen=pg.mkPen(color="#58a6ff", width=2),
             )
             mean_force = self._crash_metric(histories, "mean_crushing_force_kN")
             if mean_force:
                 plot.addLine(
                     y=mean_force,
-                    pen=pg.mkPen("#FFB74D", width=1, style=QtCore.Qt.DashLine),
+                    pen=pg.mkPen("#d29922", width=1, style=QtCore.Qt.DashLine),
                 )
             plots.append(plot)
 
@@ -549,13 +709,13 @@ class ResultsPanel(QtWidgets.QWidget):
                     time_ms[:count],
                     raw_pulse[:count],
                     name="Unfiltered",
-                    pen=pg.mkPen(color="#546E7A", width=1),
+                    pen=pg.mkPen(color="#475569", width=1),
                 )
             plot.plot(
                 time_ms[:count],
                 pulse[:count],
                 name=self._crash_filter_label(histories, "acceleration_filter"),
-                pen=pg.mkPen(color="#EF5350", width=2),
+                pen=pg.mkPen(color="#f85149", width=2),
             )
             plots.append(plot)
 
@@ -592,6 +752,7 @@ class ResultsPanel(QtWidgets.QWidget):
 
     _SOLVER_RESULT_TYPES = (
         "fea",
+        "modal",
         "crash",
         "external_solver",
         "topopt_voxel",
@@ -663,13 +824,23 @@ class ResultsPanel(QtWidgets.QWidget):
         if solver_data is not None:
             self._last_data = solver_data
         if solver_data is None and not self._measurements:
-            self._empty.setVisible(True)
-            self._scroll.setVisible(False)
+            self.setVisible(False)
+            self._empty.setVisible(False)
+            self._header_bar.setVisible(False)
             return
 
         self._clear()
         self._empty.setVisible(False)
-        self._scroll.setVisible(True)
+        if solver_data is not None:
+            self.setVisible(True)
+            self._header_bar.setVisible(True)
+            self._update_3d_menu()
+            self.result_received.emit(self._last_data, self._measurements)
+        else:
+            self.setVisible(False)
+            self._header_bar.setVisible(False)
+        return
+
         if self._measurements:
             self._add_section("Measurements", self._measurements)
         if solver_data is None:
@@ -1577,12 +1748,12 @@ class LibraryPanel(QtWidgets.QWidget):
     """Component library with categorized nodes."""
 
     _CATEGORY_ICONS = {
-        "Geometry": ("fa5s.cube", "#81C784"),
-        "Selection": ("fa5s.mouse-pointer", "#80CBC4"),
-        "Analysis Setup": ("fa5s.sliders-h", "#64B5F6"),
-        "Solvers": ("fa5s.play-circle", "#9CCC65"),
-        "Measure": ("fa5s.ruler-combined", "#B39DDB"),
-        "Data": ("fa5s.file-export", "#90A4AE"),
+        "Geometry":       ("fa5s.cube",           "#7a9bbf"),  # Muted slate blue
+        "Selection":      ("fa5s.mouse-pointer",  "#6e9e7a"),  # Muted sage
+        "Analysis Setup": ("fa5s.sliders-h",      "#8b949e"),  # Neutral text-dim
+        "Solvers":        ("fa5s.play-circle",    "#d29922"),  # MDAO amber (primary action)
+        "Measure":        ("fa5s.ruler-combined", "#9e8ac9"),  # Muted plum
+        "Data":           ("fa5s.file-export",    "#8b949e"),  # Neutral text-dim
     }
     # Glyph only. The colour always comes from the category the node is listed
     # under, with no per-node exceptions, so a category cannot end up half one
@@ -1594,11 +1765,7 @@ class LibraryPanel(QtWidgets.QWidget):
     _NODE_ICONS = (
         ("com.cad.geometry.box", "fa5s.cube"),
         ("com.cad.geometry.cylinder", "fa5s.database"),
-        ("com.cad.geometry.tube", "fa5s.circle"),
-        ("com.cad.geometry.cylindrical_shell", "fa5s.circle-notch"),
         ("com.cad.geometry.boolean", "fa5s.object-group"),
-        ("com.cad.geometry.through_hole", "fa5s.dot-circle"),
-        ("com.cad.geometry.fillet", "fa5s.bezier-curve"),
         ("com.cad.geometry.transform", "fa5s.arrows-alt"),
         ("com.cad.geometry.linear_pattern", "fa5s.grip-horizontal"),
         ("com.cad.code_part", "fa5s.code"),
@@ -1615,6 +1782,7 @@ class LibraryPanel(QtWidgets.QWidget):
         ("com.cad.sim.gravity", "fa5s.globe"),
         ("com.cad.sim.pressure_load", "fa5s.compress-arrows-alt"),
         ("com.cad.sim.solver", "fa5s.play-circle"),
+        ("com.cad.sim.modal_solver", "fa5s.wave-square"),
         ("com.cad.topopt.support", "fa5s.anchor"),
         ("com.cad.topopt.load", "fa5s.arrow-down"),
         ("com.cad.sim.topopt_voxel", "fa5s.project-diagram"),
@@ -1632,7 +1800,7 @@ class LibraryPanel(QtWidgets.QWidget):
         ("com.cad.export_step", "fa5s.file-export"),
         ("com.cad.export_stl", "fa5s.file-export"),
     )
-    _DEFAULT_CATEGORY_COLOR = "#90A4AE"
+    _DEFAULT_CATEGORY_COLOR = "#8b949e"
 
     @classmethod
     def _category_color(cls, category: str) -> str:
@@ -1784,7 +1952,7 @@ class LibraryPanel(QtWidgets.QWidget):
                 background: rgba(255, 255, 255, 18);
             }
             QTreeView::item:selected {
-                background: rgba(33, 150, 243, 60);
+                background: rgba(210, 153, 34, 55);
                 color: white;
             }
             """
@@ -1809,29 +1977,9 @@ class LibraryPanel(QtWidgets.QWidget):
                     "Create a cylinder.",
                 ),
                 (
-                    "Tube",
-                    "com.cad.geometry.tube",
-                    "Create a tube.",
-                ),
-                (
-                    "Cylindrical Shell",
-                    "com.cad.geometry.cylindrical_shell",
-                    "Create a shell tube.",
-                ),
-                (
                     "Boolean",
                     "com.cad.geometry.boolean",
                     "Join, cut, or intersect solids.",
-                ),
-                (
-                    "Through Hole",
-                    "com.cad.geometry.through_hole",
-                    "Cut a through-hole.",
-                ),
-                (
-                    "Fillet",
-                    "com.cad.geometry.fillet",
-                    "Round selected edges.",
                 ),
                 (
                     "Transform",
@@ -1857,11 +2005,6 @@ class LibraryPanel(QtWidgets.QWidget):
                     "Import Mesh",
                     "com.cad.import_stl",
                     "Import STL, OBJ, or 3MF.",
-                ),
-                (
-                    "Body",
-                    "com.cad.sim.component",
-                    "Pair a mesh and material for a multibody study.",
                 ),
                 (
                     "FreeCAD Part",
@@ -1898,31 +2041,25 @@ class LibraryPanel(QtWidgets.QWidget):
                     "Create the FE mesh used by static FEA.",
                 ),
                 (
+                    "Assembly Component",
+                    "com.cad.sim.component",
+                    "Optional: pair a mesh and material for multi-body assemblies.",
+                ),
+                (
                     "Support",
                     "com.cad.sim.constraint",
                     "Shared support for static FEA and topology optimization. "
                     "Connect FE Mesh for FEA; Topology maps the selection internally.",
                 ),
                 (
-                    "Force",
+                    "Load",
                     "com.cad.sim.load",
-                    "Shared force for static FEA and topology optimization. "
-                    "Connect FE Mesh for FEA; Topology maps the selection internally.",
+                    "Shared load (force, pressure, or body acceleration) for static FEA and topology optimization.",
                 ),
                 (
-                    "Gravity",
-                    "com.cad.sim.gravity",
-                    "Add an FEA body acceleration.",
-                ),
-                (
-                    "Pressure",
-                    "com.cad.sim.pressure_load",
-                    "Shared face pressure for static FEA and topology optimization.",
-                ),
-                (
-                    "Impact Setup",
+                    "Impact Condition",
                     "com.cad.sim.impact",
-                    "Set impact motion and contact.",
+                    "For crash analysis: set impact velocity, barrier, and platen mass.",
                 ),
             ],
             "Solvers": [
@@ -1930,6 +2067,11 @@ class LibraryPanel(QtWidgets.QWidget):
                     "Static FEA",
                     "com.cad.sim.solver",
                     "Run CalculiX.",
+                ),
+                (
+                    "Modal Solver",
+                    "com.cad.sim.modal_solver",
+                    "Run CalculiX modal analysis to extract natural frequencies and mode shapes.",
                 ),
                 (
                     "Topology Optimization",
@@ -2011,18 +2153,18 @@ class LibraryPanel(QtWidgets.QWidget):
                 item = QtWidgets.QTreeWidgetItem([label])
                 item.setData(0, QtCore.Qt.UserRole, node_id)
                 item.setIcon(0, self._icon_for_node(node_id, category))
-                if node_id == "com.cad.sim.solver":
+                if node_id in ("com.cad.sim.solver", "com.cad.sim.modal_solver"):
                     tooltip += "\n\n" + calculix_status
                     item.setData(0, QtCore.Qt.UserRole + 1, calculix_ready)
                     if not calculix_ready:
-                        item.setForeground(0, QtGui.QColor("#FFB74D"))
+                        item.setForeground(0, QtGui.QColor("#e3b341"))
                 elif node_id in (
                     "com.cad.sim.crash_solver",
                 ):
                     tooltip += "\n\n" + radioss_status
                     item.setData(0, QtCore.Qt.UserRole + 1, radioss_ready)
                     if not radioss_ready:
-                        item.setForeground(0, QtGui.QColor("#FFB74D"))
+                        item.setForeground(0, QtGui.QColor("#e3b341"))
                 item.setToolTip(0, tooltip)  # Show description on hover
                 cat_item.addChild(item)
 

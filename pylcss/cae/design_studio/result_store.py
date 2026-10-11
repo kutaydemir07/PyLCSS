@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 FORMAT_NAME = "pylcss-design-results"
 FORMAT_VERSION = 1
-RESULT_TYPES = {"fea", "crash", "topopt_voxel", "remesh"}
+RESULT_TYPES = {"fea", "modal", "crash", "topopt_voxel", "remesh"}
 _SKIPPED_RUNTIME_KEYS = {
     "shape",
     "cad",
@@ -440,6 +440,17 @@ def load_results(
             if node is None or result_key not in group:
                 continue
             result = _read_value(group[result_key])
+            if isinstance(result, dict) and result.get("type") == "modal":
+                # Modal results index both field maps by 1-based mode number.
+                # HDF5 group names are strings, so restore their numeric keys
+                # for the mode selector and viewer lookup after reopening.
+                for field in ("mode_shapes", "mode_displacements_flat"):
+                    values = result.get(field)
+                    if isinstance(values, dict):
+                        result[field] = {
+                            int(key) if str(key).isdigit() else key: value
+                            for key, value in values.items()
+                        }
             if not isinstance(result, dict) and not (
                 hasattr(result, "p") and hasattr(result, "t")
             ):

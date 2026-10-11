@@ -12,7 +12,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 
 from .plotting import (
-    ArrowLine,
+    CurvedArrowLine,
     ScalableText,
 )
 
@@ -310,6 +310,29 @@ class AllDimensionsGraphMixin:
             self.adg_layout_worker = None
             self.btn_compute_adg.setEnabled(True)
 
+    def _highlight_adg_node(self, name):
+        """Dim everything except `name` and its direct neighbours; same node again resets."""
+        edges = getattr(self, "_adg_edge_items", [])
+        nodes = getattr(self, "_adg_node_items", {})
+        if getattr(self, "_adg_highlight", None) == name:
+            keep = None
+            self._adg_highlight = None
+        else:
+            keep = {name}
+            for source, target, _item in edges:
+                if source == name:
+                    keep.add(target)
+                elif target == name:
+                    keep.add(source)
+            self._adg_highlight = name
+        for node, items in nodes.items():
+            opacity = 1.0 if keep is None or node in keep else 0.15
+            for item in items:
+                item.setOpacity(opacity)
+        for source, target, item in edges:
+            incident = name in (source, target)
+            item.setOpacity(1.0 if keep is None or incident else 0.04)
+
     def visualize_adg(self, G, pos=None):
         """Visualize the attribute dependency graph using pyqtgraph."""
         self.adg_plot.clear()
@@ -333,6 +356,9 @@ class AllDimensionsGraphMixin:
             RADIUS_STD = SIZE_STD / 2
             RADIUS_BB = SIZE_BB / 2
 
+            edge_items = []
+            node_items = {}
+
             # Draw edges with arrows (drawn first, so nodes appear on top)
             for edge in G.edges(data=True):
                 source = edge[0]
@@ -345,15 +371,16 @@ class AllDimensionsGraphMixin:
                 target_radius = RADIUS_BB if target_type == "blackbox" else RADIUS_STD
 
                 # Create arrow line with data-coordinate sizing
-                edge_item = ArrowLine(
+                edge_item = CurvedArrowLine(
                     start_pos=(x1, y1),
                     end_pos=(x2, y2),
-                    pen="k",
+                    pen=(90, 100, 115, 130),  # muted so dense graphs stay readable
                     head_len=ARROW_HEAD,
                     node_radius=target_radius,
                     line_width=LINE_WIDTH,
                 )
                 self.adg_plot.addItem(edge_item)
+                edge_items.append((source, target, edge_item))
 
             # Draw nodes (drawn after edges so they appear on top)
             for node in G.nodes(data=True):
@@ -373,18 +400,21 @@ class AllDimensionsGraphMixin:
                         pxMode=False,  # Scales with zoom
                     )
                     self.adg_plot.addItem(node_scatter)
+                    node_items[name] = [node_scatter]
                 else:
-                    # Draw white circle with black border
+                    # Inputs and outputs get a tint so the two ends are easy to tell apart
+                    fill = {"input": "#dbe9f6", "output": "#fde7c8"}.get(node_type, "w")
                     node_scatter = pg.ScatterPlotItem(
                         [x],
                         [y],
                         size=SIZE_STD,
                         pen=pg.mkPen("k", width=2),
-                        brush=pg.mkBrush("w"),
+                        brush=pg.mkBrush(fill),
                         symbol="o",
                         pxMode=False,  # Scales with zoom
                     )
                     self.adg_plot.addItem(node_scatter)
+                    node_items[name] = [node_scatter]
 
                     # Add scalable text label (truncate long names)
                     display_name = name if len(name) <= 8 else name[:7] + "…"
@@ -394,7 +424,18 @@ class AllDimensionsGraphMixin:
                         display_name, x, y, size=text_size, color="k"
                     )
                     self.adg_plot.addItem(text_item)
+                    node_items[name].append(text_item)
 
+                node_scatter.sigClicked.connect(
+                    lambda _plot, _points, n=name: self._highlight_adg_node(n)
+                )
+
+            self._adg_edge_items = edge_items
+            self._adg_node_items = node_items
+            self._adg_highlight = None
+            self.adg_plot.setToolTip(
+                "Click a node to highlight its connections; click it again to reset."
+            )
             # Auto-fit view to show all nodes with padding
             if pos:
                 all_x = [p[0] for p in pos.values()]
@@ -476,28 +517,42 @@ class AllDimensionsGraphMixin:
 
                 max(nodes_by_level.keys()) if nodes_by_level else 0
 
+                ordered = {lv: sorted(ns) for lv, ns in nodes_by_level.items()}
+                level_ids = sorted(ordered)
+                rank_of = {}
+
+                def _refresh(level):
+                    n = len(ordered[level])
+                    for i, node in enumerate(ordered[level]):
+                        rank_of[node] = (i + 0.5) / n
+
+                def _reorder(level, neighbours):
+                    def score(node):
+                        links = list(neighbours(node))
+                        if not links:
+                            return rank_of[node]
+                        return sum(rank_of[link] for link in links) / len(links)
+
+                    ordered[level].sort(key=score)  # stable: ties keep prior order
+                    _refresh(level)
+
+                for level in level_ids:
+                    _refresh(level)
+                # Barycentre sweeps (down then up) reduce edge crossings
+                for _ in range(8):
+                    for level in level_ids[1:]:
+                        _reorder(level, G.predecessors)
+                    for level in reversed(level_ids[:-1]):
+                        _reorder(level, G.successors)
+
+                # Spread every level across the same width so edges stay near-vertical
+                layer_width = max_nodes_in_level * H_SPACING
                 pos = {}
-                for level, nodes in nodes_by_level.items():
-                    # Sort nodes to minimize crossings with previous level
-                    if level > 0:
-                        node_scores = {}
-                        for node in nodes:
-                            preds = list(G.predecessors(node))
-                            if preds and all(p in pos for p in preds):
-                                avg_x = sum(pos[p][0] for p in preds) / len(preds)
-                                node_scores[node] = avg_x
-                            else:
-                                node_scores[node] = 0
-                        nodes = sorted(nodes, key=lambda n: node_scores.get(n, 0))
-
-                    # Vertical position
+                for level, nodes in ordered.items():
+                    n = len(nodes)
                     y = level * V_SPACING
-
-                    # Horizontal spacing
-                    width = len(nodes)
                     for i, node in enumerate(nodes):
-                        x = (i - (width - 1) / 2.0) * H_SPACING
-                        pos[node] = (x, y)
+                        pos[node] = (((i + 0.5) / n - 0.5) * layer_width, y)
 
             except nx.NetworkXException:
                 # Fallback if topological sort fails (graph has cycles)

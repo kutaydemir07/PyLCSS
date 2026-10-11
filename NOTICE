@@ -1,10 +1,10 @@
 # PyLCSS Third-Party Notices
 
-Document version: 2.1
-Last updated: 2026-08-01
+Document version: 2.2
+Last updated: 2026-10-10
 
 This file identifies third-party software used by or obtainable through
-PyLCSS 2.2.0. It is a notice and license index, not a replacement for the
+PyLCSS 2.2.0.2. It is a notice and license index, not a replacement for the
 license text supplied by each third party.
 
 PyLCSS-authored code is licensed under the PolyForm Shield License 1.0.0 plus
@@ -89,6 +89,27 @@ on redistribution.
 PyLCSS starts the official FreeCAD installer, which supplies FreeCAD's notices
 and component licenses. PyLCSS does not bundle the FreeCAD binaries.
 
+### AMRTO (Automated Multi-Resolution Topology Optimization CAD Reconstruction)
+
+- Purpose: Quad-dominant surface remeshing, harmonic parametrization, patch
+  layout partitioning, and multi-resolution NURBS fitting to reconstruct
+  topology optimization and cellular designs into watertight B-rep STEP and
+  IGES CAD models.
+- Research citation: Hongyuan Ren, Bo Xia, Wenrui Wang, Xueqian Chen, Yang
+  Liu, Pingzhang Zhou, Jianbin Du. "AMRTO: Automated CAD model reconstruction of
+  topology optimization result", Computer Methods in Applied Mechanics and
+  Engineering 435 (2025) 117673.
+- License: AMRTO Research License, MIT License, and BSD-3-Clause components.
+- Toolchain binaries and sub-components:
+  - Instant Meshes: Copyright (C) 2015 Wenzel Jakob, Daniele Panozzo, Marco
+    Tarini, Olga Sorkine-Hornung. Licensed under the BSD 3-Clause License.
+  - GMCG / GMCG-headless: Copyright (C) 2017 Nico Schertler. Licensed under the
+    BSD 3-Clause License.
+  - json2on / reconstruction pipeline: Copyright (C) 2024 rhy-thu. Licensed
+    under the MIT License.
+- Location: `external_solvers/amrto` and download via
+  `python scripts/install_solvers.py --only amrto`.
+
 ## Software carried by the Windows setup or launcher
 
 | Component | Version/build | License | Project |
@@ -142,6 +163,8 @@ covers transitive distributions and bundled native libraries.
 | packaging | 26.0 | Apache-2.0 OR BSD-2-Clause |
 | simpleeval | 1.0.3 | MIT |
 | numba | 0.63.1 | BSD-2-Clause and bundled terms |
+| geomdl | 5.3.1 | MIT |
+| pymeshlab | 2025.7.post1 | GPL-3.0-or-later |
 
 PyLCSS does not use PyAutoGUI, MouseInfo, or a system-wide mouse/keyboard
 automation dependency.

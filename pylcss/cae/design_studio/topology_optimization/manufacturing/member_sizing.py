@@ -124,9 +124,18 @@ def _clip_network_to_envelope(
     nodes: np.ndarray,
     members: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
+    """Clip a lattice network to an envelope with boundary conformal attachment.
+
+    Commercial beam lattice engines (3MF Beam Lattice, Materialise Magics, nTop)
+    anchor boundary-straddling struts by clipping the exterior endpoint to the boundary
+    intersection point rather than deleting struts with <67% occupancy. Deleting such struts
+    leaves a wide empty perimeter void between the lattice core and the CAD skin.
+    Retaining members with >=35% presence and clipping their outside endpoints ensures that
+    struts firmly terminate on the boundary surface with zero empty voids.
+    """
     if not len(members):
         return nodes[:0], members
-    parameters = np.linspace(0.0, 1.0, 9)
+    parameters = np.linspace(0.0, 1.0, 17)
     a = nodes[members[:, 0]]
     b = nodes[members[:, 1]]
     samples = (
@@ -136,15 +145,85 @@ def _clip_network_to_envelope(
     inside = _sample_envelope(envelope, samples.reshape((-1, 3))).reshape(
         (len(members), len(parameters))
     )
-    # The majority rule follows a topology boundary while tolerating the
-    # half-voxel error of a thresholded continuum envelope.
-    members = members[np.mean(inside, axis=1) >= 0.67]
-    if not len(members):
-        return nodes[:0], members
-    used = np.unique(members)
-    remap = np.full(len(nodes), -1, dtype=int)
+    inside_ratio = np.mean(inside, axis=1)
+    keep_mask = inside_ratio >= 0.35
+    if not np.any(keep_mask):
+        keep_mask = inside_ratio >= 0.25
+    if not np.any(keep_mask):
+        return nodes[:0], members[:0]
+
+    kept_members = members[keep_mask]
+    kept_inside = inside[keep_mask]
+    kept_a = a[keep_mask]
+    kept_b = b[keep_mask]
+
+    new_nodes_list = list(nodes)
+    new_members = []
+
+    for i, (m0, m1) in enumerate(kept_members):
+        ins = kept_inside[i]
+        pt_a = kept_a[i]
+        pt_b = kept_b[i]
+
+        idx_a = int(m0)
+        if not ins[0]:
+            first_idx = int(np.argmax(ins))
+            t_first = float(parameters[first_idx])
+            clipped_pt_a = pt_a * (1.0 - t_first) + pt_b * t_first
+            idx_a = len(new_nodes_list)
+            new_nodes_list.append(clipped_pt_a)
+
+        idx_b = int(m1)
+        if not ins[-1]:
+            last_idx = len(ins) - 1 - int(np.argmax(ins[::-1]))
+            t_last = float(parameters[last_idx])
+            clipped_pt_b = pt_a * (1.0 - t_last) + pt_b * t_last
+            idx_b = len(new_nodes_list)
+            new_nodes_list.append(clipped_pt_b)
+
+        if idx_a != idx_b:
+            new_members.append((min(idx_a, idx_b), max(idx_a, idx_b)))
+
+    if not new_members:
+        return nodes[:0], members[:0]
+
+    out_nodes = np.asarray(new_nodes_list, dtype=float)
+    out_members = np.asarray(new_members, dtype=int)
+
+    # Snap near-boundary nodes within 2% of the domain so boundary struts meet
+    # at shared boundary anchor points
+    from scipy.spatial import cKDTree
+    tree = cKDTree(out_nodes)
+    pairs = tree.query_pairs(0.02)
+    if pairs:
+        parent = np.arange(len(out_nodes))
+        def find(u: int) -> int:
+            path = []
+            while parent[u] != u:
+                path.append(u)
+                u = parent[u]
+            for p in path:
+                parent[p] = u
+            return u
+        for u, v in pairs:
+            ru, rv = find(u), find(v)
+            if ru != rv:
+                parent[ru] = rv
+        roots = np.array([find(u) for u in range(len(out_nodes))])
+        unique_roots, inverse = np.unique(roots, return_inverse=True)
+        merged_nodes = np.zeros((len(unique_roots), 3), dtype=float)
+        for u in range(len(unique_roots)):
+            merged_nodes[u] = np.mean(out_nodes[inverse == u], axis=0)
+        merged_members = inverse[out_members]
+        merged_members = merged_members[merged_members[:, 0] != merged_members[:, 1]]
+        merged_members = np.sort(merged_members, axis=1)
+        merged_members = np.unique(merged_members, axis=0)
+        out_nodes, out_members = merged_nodes, merged_members
+
+    used = np.unique(out_members)
+    remap = np.full(len(out_nodes), -1, dtype=int)
     remap[used] = np.arange(len(used))
-    return nodes[used], remap[members]
+    return out_nodes[used], remap[out_members]
 
 
 def _stabilize_clipped_network(

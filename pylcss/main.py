@@ -157,9 +157,10 @@ def main() -> NoReturn:
             )
             sys.exit(2)
         window = create_window(arguments.workspace)
+        window.showMaximized()
     else:
         window = StartPage(available)
-    window.showMaximized()
+        window.show()
     window.raise_()
     window.activateWindow()
     # Let Qt process its initial show/paint events before dismissing the splash.

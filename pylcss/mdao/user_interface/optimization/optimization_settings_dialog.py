@@ -61,8 +61,6 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
             "Stop when objective change is smaller than this value (e.g., 1e-6)."
         )
 
-        self.edit_atol = self._add_input("Abs. Tolerance:", "1e-8")
-
         self.chk_scaling = QtWidgets.QCheckBox("Enable Variable Scaling")
         self.chk_scaling.setChecked(True)
         self.form_layout.addRow("Scaling:", self.chk_scaling)
@@ -89,46 +87,8 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
         )
         self.edit_seed = self._add_input("Random Seed:", "42")
         self.edit_seed.setToolTip(
-            "Reproduces stochastic Differential Evolution, Nevergrad, NSGA-II, "
-            "and Multi-Start sampling."
+            "Reproduces stochastic Nevergrad, NSGA-II, and Multi-Start sampling."
         )
-
-        # --- Differential Evolution (DE) ---
-        self.grp_de_label = QtWidgets.QLabel("<b>Differential Evolution</b>")
-        self.grp_de_label.setContentsMargins(0, 15, 0, 5)
-        self.form_layout.addRow(self.grp_de_label)
-
-        self.edit_popsize = self._add_input("Population Size:", "15")
-
-        # Mutation Range (Min - Max)
-        self.edit_mut_min = QtWidgets.QLineEdit("0.5")
-        self.edit_mut_max = QtWidgets.QLineEdit("1.0")
-        self.lbl_mut_dash = QtWidgets.QLabel("-")
-        h_mut = QtWidgets.QHBoxLayout()
-        h_mut.addWidget(self.edit_mut_min)
-        h_mut.addWidget(self.lbl_mut_dash)
-        h_mut.addWidget(self.edit_mut_max)
-        self.lbl_mutation = QtWidgets.QLabel("Mutation Range:")
-        self.form_layout.addRow(self.lbl_mutation, h_mut)
-
-        self.edit_recomb = self._add_input("Recombination:", "0.7")
-
-        self.combo_de_strat = QtWidgets.QComboBox()
-        self.combo_de_strat.addItems(
-            ["best1bin", "rand1exp", "randtobest1bin", "currenttobest1bin"]
-        )
-        self.form_layout.addRow("Strategy:", self.combo_de_strat)
-
-        self.de_widgets = [
-            self.grp_de_label,
-            self.edit_popsize,
-            self.lbl_mutation,
-            self.edit_mut_min,
-            self.lbl_mut_dash,
-            self.edit_mut_max,
-            self.edit_recomb,
-            self.combo_de_strat,
-        ]
 
         # --- Nevergrad ---
         self.grp_ng_label = QtWidgets.QLabel("<b>Nevergrad</b>")
@@ -177,7 +137,7 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
 
         self.edit_ms_starts = self._add_input("Number of Starts:", "10")
         self.combo_ms_local = QtWidgets.QComboBox()
-        self.combo_ms_local.addItems(["SLSQP", "COBYLA", "trust-constr"])
+        self.combo_ms_local.addItems(["SLSQP"])
         self.form_layout.addRow("Local Solver:", self.combo_ms_local)
 
         self.ms_widgets = [self.grp_ms_label, self.edit_ms_starts, self.combo_ms_local]
@@ -200,60 +160,37 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
 
     def update_visibility(self, method):
         # Hide every solver-specific block first.
-        self._set_visible(self.de_widgets, False)
         self._set_visible(self.ng_widgets, False)
         self._set_visible(self.nsga_widgets, False)
         self._set_visible(self.ms_widgets, False)
 
-        scipy_methods = ("SLSQP", "COBYLA", "trust-constr")
+        scipy_methods = ("SLSQP",)
 
         # General fields are shown only for the solvers that actually
         # consume them, so the dialog never lists a parameter that does
         # nothing for the selected algorithm.
         uses_maxiter = method != "NSGA-II"  # NSGA-II uses Generations instead
-        uses_tol = method in scipy_methods or method in (
-            "Differential Evolution",
-            "Multi-Start",
-        )
-        uses_atol = method == "Differential Evolution"
+        uses_tol = method in scipy_methods or method == "Multi-Start"
 
         maxiter_label = {
             "Nevergrad": "Evaluation Budget:",
-            "Differential Evolution": "Max Generations:",
             "Multi-Start": "Iterations per Start:",
         }.get(method, "Max Iterations:")
-        tol_label = (
-            "Population Tolerance:"
-            if method == "Differential Evolution"
-            else "Termination Tolerance:"
-        )
+        tol_label = "Termination Tolerance:"
         self.form_layout.labelForField(self.edit_maxiter).setText(maxiter_label)
         self.form_layout.labelForField(self.edit_tol).setText(tol_label)
-        self.form_layout.labelForField(self.edit_atol).setText(
-            "Absolute Population Tolerance:"
-        )
-        self.form_layout.labelForField(self.edit_popsize).setText(
-            "Population Multiplier:"
-        )
-        self.edit_popsize.setToolTip(
-            "SciPy multiplier applied per free design variable; this is not the "
-            "total population count."
-        )
 
         self._set_visible([self.edit_maxiter], uses_maxiter)
         self._set_visible([self.edit_tol], uses_tol)
-        self._set_visible([self.edit_atol], uses_atol)
         # Variable scaling applies to every solver. Objective scaling is defined
         # per objective in the main table so mixed engineering units stay sound.
         self._set_visible([self.chk_scaling, self.combo_scaling_mode], True)
         self._set_visible(
             [self.edit_seed],
-            method in ("Differential Evolution", "Nevergrad", "NSGA-II", "Multi-Start"),
+            method in ("Nevergrad", "NSGA-II", "Multi-Start"),
         )
 
-        if method == "Differential Evolution":
-            self._set_visible(self.de_widgets, True)
-        elif method == "Nevergrad":
+        if method == "Nevergrad":
             self._set_visible(self.ng_widgets, True)
         elif method == "NSGA-II":
             self._set_visible(self.nsga_widgets, True)
@@ -276,7 +213,6 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
             str(s.get("maxiter", optimization_config.DEFAULT_MAX_ITERATIONS))
         )
         self.edit_tol.setText(str(s.get("tol", 1e-6)))
-        self.edit_atol.setText(str(s.get("atol", 1e-8)))
         self.chk_scaling.setChecked(s.get("scaling", True))
         scaling_mode = str(s.get("scaling_mode", "auto")).lower()
         scaling_index = self.combo_scaling_mode.findData(scaling_mode)
@@ -284,15 +220,6 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
         self.combo_scaling_mode.setEnabled(self.chk_scaling.isChecked())
         self.edit_con_margin.setText(str(s.get("constraint_margin", 0.0)))
         self.edit_seed.setText(str(s.get("seed", 42)))
-
-        self.edit_popsize.setText(str(s.get("popsize", 15)))
-
-        mut = s.get("mutation", (0.5, 1.0))
-        self.edit_mut_min.setText(str(mut[0]))
-        self.edit_mut_max.setText(str(mut[1]))
-
-        self.edit_recomb.setText(str(s.get("recombination", 0.7)))
-        self.combo_de_strat.setCurrentText(s.get("strategy", "best1bin"))
         self.combo_ng_opt.setCurrentText(s.get("optimizer_name", "NGOpt"))
 
         # NSGA-II
@@ -328,18 +255,10 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
                 optimization_config.DEFAULT_MAX_ITERATIONS,
             ),
             "tol": to_f(self.edit_tol.text(), 1e-6),
-            "atol": to_f(self.edit_atol.text(), 1e-8),
             "scaling": self.chk_scaling.isChecked(),
             "scaling_mode": self.combo_scaling_mode.currentData(),
             "constraint_margin": to_f(self.edit_con_margin.text(), 0.0),
             "seed": to_i(self.edit_seed.text(), 42),
-            "popsize": to_i(self.edit_popsize.text(), 15),
-            "mutation": (
-                to_f(self.edit_mut_min.text(), 0.5),
-                to_f(self.edit_mut_max.text(), 1.0),
-            ),
-            "recombination": to_f(self.edit_recomb.text(), 0.7),
-            "strategy": self.combo_de_strat.currentText(),
             "optimizer_name": self.combo_ng_opt.currentText(),
             # NSGA-II
             "nsga_popsize": to_i(self.edit_nsga_popsize.text(), 100),
@@ -364,34 +283,16 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
             errors.append("Iteration/evaluation budget must be at least 1.")
         if (
             not math.isfinite(settings["tol"])
-            or not math.isfinite(settings["atol"])
             or settings["tol"] <= 0
-            or settings["atol"] < 0
         ):
             errors.append(
-                "Tolerances must be positive (absolute tolerance may be zero)."
+                "Termination tolerance must be positive."
             )
         if (
             not math.isfinite(settings["constraint_margin"])
             or not 0 <= settings["constraint_margin"] < 1
         ):
             errors.append("Constraint safety margin must be in [0, 1).")
-
-        if self.current_method == "Differential Evolution":
-            mut_lo, mut_hi = settings["mutation"]
-            if settings["popsize"] < 1:
-                errors.append("Population multiplier must be at least 1.")
-            if (
-                not math.isfinite(mut_lo)
-                or not math.isfinite(mut_hi)
-                or not 0 <= mut_lo <= mut_hi < 2
-            ):
-                errors.append("Mutation range must satisfy 0 ≤ minimum ≤ maximum < 2.")
-            if (
-                not math.isfinite(settings["recombination"])
-                or not 0 <= settings["recombination"] <= 1
-            ):
-                errors.append("Recombination must be between 0 and 1.")
 
         if self.current_method == "NSGA-II":
             if settings["nsga_popsize"] < 4:

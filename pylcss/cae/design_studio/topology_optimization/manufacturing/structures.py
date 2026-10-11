@@ -61,6 +61,10 @@ class ManufacturingStructureOptions:
     # thickness is no longer a free control and this is what a whole-part mass
     # budget has to move instead. 1.0 builds exactly what the law asks for.
     member_scale: float = 1.0
+    # Adaptive preservation of sub-cell thin features (ribs, walls, tapered tips).
+    # When enabled, features narrower than what can sustain an open lattice cell
+    # transition to continuous solid material to eliminate empty voids.
+    adaptive_subcell_solid: bool = True
 
     def __post_init__(self) -> None:
         mode = _resolve_mode(self.mode)
@@ -97,6 +101,7 @@ class ManufacturingStructureOptions:
                 "size the structure from an explicit member thickness instead."
             )
         object.__setattr__(self, "variable_density", bool(self.variable_density))
+        object.__setattr__(self, "adaptive_subcell_solid", bool(getattr(self, "adaptive_subcell_solid", True)))
         is_lattice = self.mode != "solid"
         if is_lattice and self.cell_size_voxels < 3.0:
             raise ValueError("A lattice cell must span at least 3 voxels.")
@@ -176,6 +181,45 @@ def _boundary_skin(envelope: np.ndarray, thickness: float) -> np.ndarray:
     )
     inside_distance = ndi.distance_transform_edt(padded)[1:-1, 1:-1, 1:-1]
     return envelope & (inside_distance <= max(1.0, float(thickness)))
+
+
+def _run_lengths_axis(arr_3d: np.ndarray, axis: int) -> np.ndarray:
+    """Measure the 1D continuous solid span passing through each solid voxel along an axis."""
+    swapped = np.swapaxes(arr_3d, axis, -1)
+    fwd = np.zeros(swapped.shape, dtype=np.int32)
+    for i in range(swapped.shape[-1]):
+        fwd[..., i] = np.where(swapped[..., i], (fwd[..., i - 1] if i > 0 else 0) + 1, 0)
+    bwd = np.zeros(swapped.shape, dtype=np.int32)
+    for i in range(swapped.shape[-1] - 1, -1, -1):
+        bwd[..., i] = np.where(swapped[..., i], (bwd[..., i + 1] if i < swapped.shape[-1] - 1 else 0) + 1, 0)
+    return np.swapaxes(np.where(swapped, fwd + bwd - 1, 0), axis, -1)
+
+
+def _adaptive_subcell_solid_mask(
+    envelope: np.ndarray,
+    cell_size: float,
+    member_thickness: float,
+) -> np.ndarray:
+    """Identify thin walls, ribs, and features narrower than what can sustain a periodic lattice pore.
+
+    Commercial AM and topology optimization formulations (nTop, Materialise Magics, Altair OptiStruct)
+    distinguish bulk regions from sub-cell thin features. Where local feature thickness is smaller
+    than what can sustain an open unit cell pore (w <= w_threshold), attempting to tile a periodic
+    pore punches voids through the feature, producing disconnected specks or completely hollow ribs.
+    Such sub-cell regions adaptively transition to continuous solid material to ensure structural
+    continuity with zero empty spaces.
+    """
+    solid = np.asarray(envelope, dtype=bool)
+    if not np.any(solid) or np.all(solid):
+        return np.zeros_like(solid, dtype=bool)
+
+    rl_x = _run_lengths_axis(solid, 0)
+    rl_y = _run_lengths_axis(solid, 1)
+    rl_z = _run_lengths_axis(solid, 2)
+    min_span = np.where(solid, np.minimum(np.minimum(rl_x, rl_y), rl_z), 0)
+
+    w_threshold = max(2.5 * float(member_thickness), 0.85 * float(cell_size))
+    return solid & (min_span <= w_threshold)
 
 
 def _tpms_implicit(
@@ -548,9 +592,13 @@ def _honeycomb_lattice(
     distance_to_wall = np.maximum(
         0.0, inradius - np.max(projections, axis=0)
     )
-    half_wall = _strut_radius_field(
-        member_thickness, relative_density
-    )
+    if relative_density is not None:
+        dens = np.clip(np.asarray(relative_density, dtype=float), 0.02, 0.90)
+        half_wall = np.maximum(
+            0.25, (np.sqrt(3.0) / 4.0) * circumradius * dens
+        )
+    else:
+        half_wall = max(0.25, 0.5 * float(member_thickness))
     return distance_to_wall <= np.asarray(half_wall)
 
 
@@ -592,7 +640,7 @@ def _remove_floating_lattice(
         border_value=0,
     )
     labels, count = ndi.label(
-        core, structure=ndi.generate_binary_structure(3, 1)
+        core, structure=ndi.generate_binary_structure(3, 3)
     )
     if count <= 1:
         return core
@@ -654,7 +702,7 @@ def _connect_lattice_components(
     """
     from scipy import ndimage as ndi
 
-    connectivity = ndi.generate_binary_structure(3, 1)
+    connectivity = ndi.generate_binary_structure(3, 3)
     allowed = np.asarray(envelope, dtype=bool)
     # A copy, because the ligaments below are OR-ed in place and `np.asarray`
     # hands back the caller's own array when it is already boolean.
@@ -748,7 +796,7 @@ def _keep_load_bearing_components(
 
     source = np.asarray(manufactured, dtype=bool)
     labels, count = ndi.label(
-        source, structure=ndi.generate_binary_structure(3, 1)
+        source, structure=ndi.generate_binary_structure(3, 3)
     )
     if count <= 1:
         return source
@@ -791,7 +839,7 @@ def _attach_passive_interfaces(
     if not np.any(result) or not np.any(passive):
         return result
 
-    connectivity = ndi.generate_binary_structure(3, 1)
+    connectivity = ndi.generate_binary_structure(3, 3)
     labels, count = ndi.label(passive, structure=connectivity)
     dilation_iterations = max(1, int(np.ceil(0.5 * float(member_thickness))))
 
@@ -865,11 +913,11 @@ def _record_structure_diagnostics(
     built = int(np.count_nonzero(manufactured))
     _, components = ndi.label(
         np.asarray(manufactured, dtype=bool),
-        structure=ndi.generate_binary_structure(3, 1),
+        structure=ndi.generate_binary_structure(3, 3),
     )
     _, envelope_bodies = ndi.label(
         np.asarray(envelope, dtype=bool),
-        structure=ndi.generate_binary_structure(3, 1),
+        structure=ndi.generate_binary_structure(3, 3),
     )
     # A lattice reaching only a corner of its envelope is the failure this
     # measurement exists to catch: the relative density still looks plausible,
@@ -1012,7 +1060,14 @@ def build_manufacturing_field(
         # 2. Sizing the pitch to the part rather than to its bounding box fixes
         # both families at once, instead of special-casing one.
         thickness = _envelope_thickness_voxels(envelope)
-        if thickness > 0.0:
+        # A uniform infill domain can hold its requested periodic cell when filling a bulk solid.
+        # However, when the envelope has thin ribs (median thickness is a small fraction of the
+        # extents), capping cell pitch to rib thickness prevents under-resolved porous collapse.
+        if (
+            thickness > 0.0
+            and not np.all(envelope)
+            and (opts.variable_density or thickness < 0.65 * float(np.min(extents)))
+        ):
             largest_useful_cell = min(largest_useful_cell, thickness)
         # Shrinking the pitch to fit a rib is only worth doing while the cell
         # is still resolved. Below the family's own floor the surface pinches
@@ -1041,6 +1096,11 @@ def build_manufacturing_field(
             opts.skin_thickness_voxels * scale,
         )
         solid_zone = np.zeros_like(envelope, dtype=bool)
+        thin_feature_solid = (
+            _adaptive_subcell_solid_mask(envelope, cell_size, member)
+            if getattr(opts, "adaptive_subcell_solid", True)
+            else np.zeros_like(envelope, dtype=bool)
+        )
 
         if opts.variable_density:
             # The macro optimizer's physical density is the desired local
@@ -1056,7 +1116,11 @@ def build_manufacturing_field(
                 opts.maximum_relative_density,
             )
         else:
-            target_relative_density = None
+            target_relative_density = (
+                np.full_like(field, float(opts.target_relative_density))
+                if float(opts.target_relative_density or 0.0) > 0.0
+                else None
+            )
         shape = tuple(int(v) for v in field.shape)
         family = opts.family
         if family is not None and family.is_tpms:
@@ -1092,12 +1156,12 @@ def build_manufacturing_field(
         core = envelope & lattice
         core = _remove_floating_lattice(
             envelope,
-            core | solid_zone,
+            core | solid_zone | thin_feature_solid,
             skin,
             member,
         )
 
-        manufactured = envelope & (skin | core | solid_zone)
+        manufactured = envelope & (skin | core | solid_zone | thin_feature_solid)
         # Rejoin what trimming to the envelope broke apart, then drop only what
         # is too small to be a member. Doing it in this order matters: the
         # connectivity repair has to see every fragment, because a fragment is
@@ -1286,6 +1350,7 @@ def structure_options_from_values(
     maximum_relative_density: Any = 0.60,
     solid_transition_density: Any = 0.92,
     target_relative_density: Any = 0.0,
+    adaptive_subcell_solid: Any = True,
 ) -> ManufacturingStructureOptions:
     """Parse graph-property values with one consistent validation path."""
     return ManufacturingStructureOptions(
@@ -1298,6 +1363,7 @@ def structure_options_from_values(
         maximum_relative_density=float(maximum_relative_density or 0.60),
         solid_transition_density=float(solid_transition_density or 0.92),
         target_relative_density=float(target_relative_density or 0.0),
+        adaptive_subcell_solid=bool(adaptive_subcell_solid),
     )
 
 

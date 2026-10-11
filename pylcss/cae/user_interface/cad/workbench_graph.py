@@ -502,6 +502,8 @@ class WorkbenchGraphMixin:
                         self._show_bc_for_node(target_node)
                     except Exception:
                         logger.debug("Optional UI operation failed.", exc_info=True)
+                    if hasattr(self, "_update_results_panel_visibility"):
+                        self._update_results_panel_visibility(target_node)
                 else:
                     self.viewer.clear()
 

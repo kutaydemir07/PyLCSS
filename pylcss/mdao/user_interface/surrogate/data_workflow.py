@@ -29,101 +29,74 @@ class SurrogateDataMixin:
             self.stack_data.setCurrentIndex(1)
 
     def browse_file(self):
+        filter_str = (
+            "All Supported Data (*.csv *.tsv *.txt *.xlsx *.xls *.json *.parquet *.npy *.npz);;"
+            "CSV Files (*.csv);;"
+            "Text / TSV Files (*.tsv *.txt);;"
+            "Excel Workbooks (*.xlsx *.xls);;"
+            "JSON Data (*.json);;"
+            "Parquet Files (*.parquet);;"
+            "NumPy Arrays (*.npy *.npz);;"
+            "All Files (*)"
+        )
         fname, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Open Data File", "", "Data Files (*.csv *.json)"
+            self, "Open Data File", "", filter_str
         )
         if not fname:
             return
 
         try:
-            import pandas as pd
+            from pylcss.mdao.surrogate_modeling.data_importer import DataImporter
+            from .data_import_dialog import DataImportDialog
 
-            if fname.endswith(".json"):
-                df = pd.read_json(fname)
-            else:
-                df = pd.read_csv(fname)
+            df = DataImporter.load_file(fname)
 
-            # We need to identify inputs and outputs
-            # For now, we'll try to match with the selected node's inputs and output
+            # Node hint if a target node is already selected
             idx = self.combo_nodes.currentIndex()
-            if idx < 0:
-                QtWidgets.QMessageBox.warning(
-                    self, "Error", "Please select a target node first to match columns."
-                )
+            target_name_hint = None
+            if idx >= 0:
+                node = self.combo_nodes.itemData(idx)
+                if node:
+                    target_name_hint = node.get_property("var_name") or node.name()
+
+            # Open interactive column mapping and inspection dialog
+            dialog = DataImportDialog(
+                df=df,
+                filename=os.path.basename(fname),
+                target_name_hint=target_name_hint,
+                parent=self,
+            )
+            if dialog.exec() != QtWidgets.QDialog.Accepted or not dialog.result_data:
                 return
 
-            target_node = self.combo_nodes.itemData(idx)
+            X_tr, X_te, y_tr, y_te, in_cols, out_cols, stats = dialog.result_data
 
-            # Get input names from the graph connection logic or node properties
-            # This is tricky without the full graph context easily available in a simple way
-            # Let's try to get inputs from the node's input ports
-            # But wait, the surrogate models the WHOLE subgraph feeding into this node?
-            # Or just this node?
-            # Usually surrogate models replace a complex calculation.
-            # If it's a "Black Box" node, it has inputs.
-            # If it's an output node of a graph, it depends on system inputs.
+            self.X_train = X_tr
+            self.X_test = X_te
+            self.y_train = y_tr
+            self.y_test = y_te
+            self.input_names = list(in_cols)
+            self.output_names = list(out_cols)
 
-            # Let's assume the user knows what they are doing and the CSV has columns:
-            # inputs... and output
-
-            # Heuristic:
-            # 1. Find column matching target node name (or 'y', 'target', 'output')
-            # 2. All other numeric columns are inputs
-
-            target_col = None
-            possible_targets = [
-                target_node.name(),
-                target_node.get_property("var_name"),
-                "y",
-                "target",
-                "output",
-            ]
-
-            for t in possible_targets:
-                if t and t in df.columns:
-                    target_col = t
-                    break
-
-            if not target_col:
-                # Ask user to pick target column?
-                cols = list(df.columns)
-                item, ok = QtWidgets.QInputDialog.getItem(
-                    self,
-                    "Select Target Column",
-                    "Which column is the output?",
-                    cols,
-                    0,
-                    False,
-                )
-                if ok and item:
-                    target_col = item
-                else:
-                    return
-
-            # Prepare data
-            y = df[target_col].values
-            X_df = df.drop(columns=[target_col])
-
-            # Filter only numeric columns for X
-            X_df = X_df.select_dtypes(include=[np.number])
-            X = X_df.values
-
-            # Split
-            from sklearn.model_selection import train_test_split
-
-            self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
-                X, y, test_size=0.2, random_state=42
+            info_text = (
+                f"Loaded: {os.path.basename(fname)}\n"
+                f"{stats['valid_rows']} valid samples ({stats['n_train']} train / {stats['n_test']} test)\n"
+                f"Inputs ({len(in_cols)}): {', '.join(in_cols[:4])}{'...' if len(in_cols) > 4 else ''}\n"
+                f"Outputs ({len(out_cols)}): {', '.join(out_cols)}"
             )
-
-            self.lbl_file_info.setText(
-                f"Loaded: {os.path.basename(fname)}\n{len(df)} samples\n{X.shape[1]} inputs"
-            )
+            self.lbl_file_info.setText(info_text)
             self.btn_train.setEnabled(True)
             self.btn_adaptive.setEnabled(True)
-            self.lbl_metrics.setText("Data loaded. Ready to train.")
+            self.lbl_metrics.setText(
+                f"Data loaded successfully: {stats['valid_rows']} samples, "
+                f"{len(in_cols)} inputs, {len(out_cols)} outputs. Ready to train."
+            )
             self.update_data_table()
+            if hasattr(self, "update_training_summary"):
+                self.update_training_summary()
 
         except Exception as e:
+            logger.exception("Failed to load and map data file.")
             QtWidgets.QMessageBox.critical(self, "Load Error", str(e))
 
     def start_generation(self):
@@ -188,9 +161,11 @@ class SurrogateDataMixin:
         )
         self.progress.setValue(100)
         self.update_data_table()
+        if hasattr(self, "update_training_summary"):
+            self.update_training_summary()
 
     def update_data_table(self):
-        if self.X_train is None:
+        if self.X_train is None or not hasattr(self, "data_table") or self.data_table is None:
             return
 
         # Combine train and test for preview
@@ -209,9 +184,21 @@ class SurrogateDataMixin:
         )  # Limit to 1000 rows for performance
         self.data_table.setColumnCount(x_cols + y_cols)
 
-        headers = [f"Input {i + 1}" for i in range(x_cols)] + [
-            f"Output {i + 1}" if y_cols > 1 else "Output" for i in range(y_cols)
-        ]
+        in_names = getattr(self, "input_names", None)
+        out_names = getattr(self, "output_names", None)
+
+        headers = []
+        for i in range(x_cols):
+            if in_names and i < len(in_names):
+                headers.append(str(in_names[i]))
+            else:
+                headers.append(f"Input {i + 1}")
+        for k in range(y_cols):
+            if out_names and k < len(out_names):
+                headers.append(str(out_names[k]))
+            else:
+                headers.append(f"Output {k + 1}" if y_cols > 1 else "Output")
+
         self.data_table.setHorizontalHeaderLabels(headers)
 
         for i in range(min(rows, 1000)):
@@ -248,14 +235,18 @@ class SurrogateDataMixin:
         # need pre-generated tabular data, so the Train button can be enabled
         # immediately once a CAD file + target node are configured.
         if algo in ("Geom-DeepONet", "GINO"):
-            self.btn_train.setEnabled(True)
-            self.btn_adaptive.setEnabled(False)  # adaptive uses tabular spy data only
+            if hasattr(self, "btn_train"):
+                self.btn_train.setEnabled(True)
+            if hasattr(self, "btn_adaptive"):
+                self.btn_adaptive.setEnabled(False)  # adaptive uses tabular spy data only
             self._set_geom_visibility(algo)
         else:
             # Restore standard rule: enabled only if data is ready.
             ready = hasattr(self, "X_train") and self.X_train is not None
-            self.btn_train.setEnabled(ready)
-            self.btn_adaptive.setEnabled(ready)
+            if hasattr(self, "btn_train"):
+                self.btn_train.setEnabled(ready)
+            if hasattr(self, "btn_adaptive"):
+                self.btn_adaptive.setEnabled(ready)
 
     def _set_geom_visibility(self, algo: str) -> None:
         """Show only the architecture rows that apply to the selected

@@ -43,7 +43,7 @@ class CQ3DViewer(
     face_picking_requested = QtCore.Signal()
     result_field_changed = QtCore.Signal(str)
 
-    SCALAR_BAR_WIDTH = 0.10
+    SCALAR_BAR_WIDTH = 0.15
     SCALAR_BAR_RIGHT_MARGIN = 0.012
     SCALAR_BAR_X = 1.0 - SCALAR_BAR_WIDTH - SCALAR_BAR_RIGHT_MARGIN
 
@@ -55,6 +55,14 @@ class CQ3DViewer(
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
 
+        # Active theme detection
+        try:
+            from pylcss.user_interface.common.theme_manager import current_theme
+            active_theme = current_theme()
+        except Exception:
+            active_theme = "dark"
+        self._light_mode = str(active_theme).strip().lower() == "light"
+
         # --- View Orientation Toolbar ---
         self._build_view_toolbar()
 
@@ -63,8 +71,8 @@ class CQ3DViewer(
         self._picking_toolbar.setObjectName("picking_toolbar")
         self._picking_toolbar.setStyleSheet(
             "#picking_toolbar {"
-            "  background: rgba(30, 90, 180, 220);"
-            "  border-bottom: 2px solid #4a9eff;"
+            "  background: rgba(40, 42, 46, 220);"
+            "  border-bottom: 2px solid #d29922;"
             "}"
         )
         tb_layout = QtWidgets.QHBoxLayout(self._picking_toolbar)
@@ -92,7 +100,7 @@ class CQ3DViewer(
         )
         tb_layout.addWidget(self._pick_hint_lbl)
 
-        self._btn_lock = QtWidgets.QPushButton("🔒 Lock")
+        self._btn_lock = QtWidgets.QPushButton("Lock Pick")
         self._btn_lock.setCheckable(True)
         self._btn_lock.setChecked(True)
         self._btn_lock.setToolTip(
@@ -134,7 +142,10 @@ class CQ3DViewer(
 
         # Renderer
         self.renderer = vtk.vtkRenderer()
-        self.renderer.SetBackground(0.2, 0.2, 0.2)  # Dark Gray Background
+        if self._light_mode:
+            self.renderer.SetBackground(0.855, 0.88, 0.925)
+        else:
+            self.renderer.SetBackground(0.2, 0.2, 0.2)  # Dark Gray Background
         camera = self.renderer.GetActiveCamera()
         camera.ParallelProjectionOff()
         camera.SetPosition(1.0, -1.0, 1.0)
@@ -181,12 +192,13 @@ class CQ3DViewer(
         axes.SetConeRadius(0.08)
 
         # Style the labels
+        caption_color = (0.12, 0.14, 0.17) if self._light_mode else (1, 1, 1)
         for txt in [
             axes.GetXAxisCaptionActor2D(),
             axes.GetYAxisCaptionActor2D(),
             axes.GetZAxisCaptionActor2D(),
         ]:
-            txt.GetCaptionTextProperty().SetColor(1, 1, 1)
+            txt.GetCaptionTextProperty().SetColor(*caption_color)
             txt.GetCaptionTextProperty().SetFontFamilyToArial()
             txt.GetCaptionTextProperty().BoldOn()
             txt.GetCaptionTextProperty().ItalicOff()
@@ -280,7 +292,6 @@ class CQ3DViewer(
 
         # --- BC Overlay State ---
         self._bc_overlay_actors = []  # dedicated list for load/support overlay actors
-        self._light_mode = False
         self._cached_bc_data = None  # (constraint_faces, load_faces, load_vectors) – replayed after sim render
 
         # --- Crash Playback State ---
@@ -331,6 +342,7 @@ class CQ3DViewer(
         self.vtkWidget.GetRenderWindow().AddObserver(
             "EndEvent", lambda o, e: self._on_vtk_render()
         )
+        self.apply_theme(active_theme)
 
     # ------------------------------------------------------------------
     # view toolbar
@@ -535,19 +547,10 @@ class CQ3DViewer(
         self._btn_undeformed.toggled.connect(self._toggle_undeformed_overlay)
         self._add_toolbar_widget(self._btn_undeformed)
 
+        # Result field switching is managed via the node property inspector.
         self._field_label = QtWidgets.QLabel("Field")
-        self._add_toolbar_widget(self._field_label)
-        self._set_toolbar_widget_visible(self._field_label, False)
         self._field_combo = QtWidgets.QComboBox()
-        self._field_combo.setToolTip(
-            "Switch among fields already present in the solver result. "
-            "This does not re-run the analysis."
-        )
-        self._field_combo.setMinimumContentsLength(15)
-        self._field_combo.setMaximumWidth(230)
         self._field_combo.currentTextChanged.connect(self._switch_result_field)
-        self._add_toolbar_widget(self._field_combo)
-        self._set_toolbar_widget_visible(self._field_combo, False)
 
         # Deformation scale is a post-processing setting, not an analysis
         # input.  It re-renders the cached result and never touches the graph.
@@ -710,7 +713,6 @@ class CQ3DViewer(
     def _configure_result_fields(self, data):
         """Expose post-processing fields that are already cached in a result."""
         if not isinstance(data, dict) or data.get("type") in {
-            "crash",
             "crash_frame",
         }:
             self._set_toolbar_widget_visible(self._field_label, False)
@@ -719,56 +721,19 @@ class CQ3DViewer(
                 self._last_result_data = None
             return
 
-        fields = []
-        if data.get("stress") is not None:
-            fields.append("Von Mises Stress")
-        tensor = np.asarray(data.get("stress_tensor", []))
-        if tensor.ndim == 2 and tensor.shape[1] >= 6 and tensor.shape[0]:
-            fields.extend(
-                [
-                    "Maximum Principal Stress",
-                    "Minimum Principal Stress",
-                    "Stress XX",
-                    "Stress YY",
-                    "Stress ZZ",
-                    "Stress XY",
-                    "Stress YZ",
-                    "Stress ZX",
-                ]
-            )
-        if data.get("displacement") is not None:
-            fields.append("Displacement")
-        # One shape view for a TopOpt result: the B-rep and the recovered
-        # surface are the same geometry behind STEP and STL, so they share the
-        # "CAD" entry and the renderer falls back to the surface until the
-        # B-rep is available.
+        from .result_fields import available_result_fields
+        self._last_result_data = dict(data)
+        fields = available_result_fields(data)
+        if fields == ["Default View"]:
+            fields = []
         structure_options = data.get("structure_options")
-        is_lattice_structure = bool(
-            structure_options is not None
-            and getattr(structure_options, "mode", "solid") != "solid"
-        )
-        if data.get("type") == "topopt_voxel" and (
-            data.get("cad_shape") is not None
-            or data.get("shape") is not None
-            or data.get("recovered_shape") is not None
-        ):
-            fields.append(
-                "Manufactured Mesh" if is_lattice_structure else "CAD"
-            )
-        if data.get("density") is not None:
-            fields.append("Density")
-        validation = data.get("validation")
-        if (
-            data.get("type") == "topopt_voxel"
-            and isinstance(validation, dict)
-        ):
-            if validation.get("stress") is not None:
-                fields.append("Validated Von Mises Stress")
-            if validation.get("displacement") is not None:
-                fields.append("Validated Displacement")
+        structure_mode = structure_options.get("mode", "solid") if isinstance(structure_options, dict) else getattr(structure_options, "mode", "solid")
+        is_lattice_structure = structure_mode != "solid"
         if not fields:
             self._set_toolbar_widget_visible(self._field_label, False)
             self._set_toolbar_widget_visible(self._field_combo, False)
+            self._set_toolbar_widget_visible(self._scale_label, False)
+            self._set_toolbar_widget_visible(self._scale_combo, False)
             return
 
         self._last_result_data = dict(data)
@@ -799,9 +764,9 @@ class CQ3DViewer(
             self._field_combo.setCurrentText(current)
         finally:
             self._updating_field_selector = False
-        visible = len(fields) > 1
-        self._set_toolbar_widget_visible(self._field_label, visible)
-        self._set_toolbar_widget_visible(self._field_combo, visible)
+        # Field visualization mode is managed directly in the property inspector.
+        self._set_toolbar_widget_visible(self._field_label, False)
+        self._set_toolbar_widget_visible(self._field_combo, False)
 
         # Deformation scale is meaningful only when the result carries a
         # displacement field.
@@ -811,7 +776,15 @@ class CQ3DViewer(
 
     def _switch_result_field(self, field_name):
         """Re-render one cached result field without solving again."""
-        if self._updating_field_selector or not self._last_result_data:
+        if self._updating_field_selector:
+            return
+        if getattr(self, "_crash_base_data", None) and getattr(self, "_crash_frames", None):
+            self.result_field_changed.emit(str(field_name))
+            self._crash_base_data["visualization_mode"] = str(field_name)
+            self._crash_scalar_range = self._compute_crash_field_range(str(field_name))
+            self._render_crash_frame(self._crash_slider.value())
+            return
+        if not self._last_result_data:
             return
         # The workbench owns the live node result and any lazy CAD
         # reconstruction. Tell it about toolbar changes as well as rendering a
@@ -820,6 +793,8 @@ class CQ3DViewer(
         self.result_field_changed.emit(str(field_name))
         payload = dict(self._last_result_data)
         payload["visualization_mode"] = str(field_name)
+        from .result_fields import activate_modal_mode
+        activate_modal_mode(payload, field_name)
         self.render_simulation(payload)
 
     def _switch_deformation_scale(self, choice):
@@ -839,6 +814,10 @@ class CQ3DViewer(
         payload = dict(self._last_result_data)
         payload["deformation_scale"] = float(scale)
         payload["disp_scale"] = float(scale)
+        if self._crash_base_data and self._crash_frames:
+            self._crash_base_data["disp_scale"] = float(scale)
+            self._render_crash_frame(self._crash_slider.value())
+            return
         # Keep whichever field the user is currently looking at.
         payload["visualization_mode"] = (
             self._active_result_mode
@@ -878,6 +857,30 @@ class CQ3DViewer(
             logging.getLogger(__name__).debug(
                 "Optional UI operation failed.", exc_info=True
             )
+
+    def set_result_field(self, field_name: str):
+        """Switch the active 3-D simulation result field in the viewer."""
+        self._switch_result_field(field_name)
+
+    def set_deformation_scale(self, choice: str):
+        """Set display deformation scale exaggeration (e.g. 'Auto', '1x', '5x')."""
+        self._switch_deformation_scale(choice)
+
+    def set_undeformed_overlay(self, visible: bool):
+        """Toggle the undeformed wireframe overlay on the deformed result."""
+        btn = getattr(self, "_btn_undeformed", None)
+        if btn is not None and btn.isChecked() != bool(visible):
+            btn.setChecked(bool(visible))
+        else:
+            self._toggle_undeformed_overlay(visible)
+
+    def set_result_extrema(self, visible: bool):
+        """Toggle min/max crosshair tracking markers."""
+        btn = getattr(self, "_btn_extrema", None)
+        if btn is not None and btn.isChecked() != bool(visible):
+            btn.setChecked(bool(visible))
+        else:
+            self._toggle_result_extrema(visible)
 
     def _toggle_section_cut(self, visible):
         """Enable a display-only clipping plane on the active engineering actor."""

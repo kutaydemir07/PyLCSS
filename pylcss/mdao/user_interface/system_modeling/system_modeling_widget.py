@@ -53,26 +53,34 @@ def _mdo_toolbar_qss(theme_name: str) -> str:
     QToolBar {{
         background: {colors["bg_panel"]}; border: none;
         border-bottom: 1px solid {colors["border"]};
-        spacing: 4px; padding: 4px 8px;
+        spacing: 3px; padding: 4px 10px;
     }}
-    QToolBar::separator {{ width: 0px; margin: 0px; background: transparent; }}
+    QToolBar::separator {{
+        width: 1px; margin: 4px 6px;
+        background: {colors["border"]};
+    }}
     QToolButton {{
         background: transparent; color: {colors["text_main"]};
         border: 1px solid transparent; border-radius: 5px;
-        padding: 4px 7px; font-weight: 500; font-size: 12px;
+        padding: 4px 8px; font-weight: 500; font-size: 12px;
     }}
     QToolButton:hover {{
-        background: {colors["bg_input"]}; border: 1px solid {colors["primary"]};
+        background: {colors["bg_input"]}; border: 1px solid {colors["border"]};
         color: {colors["text_main"]};
     }}
     QToolButton:pressed {{ background: {colors["bg_dark"]}; }}
-    QLabel {{ color: {colors["text_dim"]}; font-weight: 600; font-size: 12px; }}
+    QToolButton:disabled {{
+        color: {colors["text_dim"]};
+        background: transparent;
+        border: 1px solid transparent;
+    }}
+    QLabel {{ color: {colors["text_dim"]}; font-weight: 600; font-size: 11px; }}
     QLineEdit {{
         background: {colors["bg_input"]}; border: 1px solid {colors["border"]};
         border-radius: 5px; padding: 3px 8px; color: {colors["text_main"]};
         selection-background-color: {colors["primary"]}; font-size: 12px;
     }}
-    QLineEdit:focus {{ border: 1px solid {colors["primary"]}; }}
+    QLineEdit:focus {{ border: 1.5px solid {colors["primary"]}; }}
 """
 
 
@@ -114,7 +122,7 @@ class ModelingWidget(QtWidgets.QWidget):
         self.main_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.main_splitter.addWidget(self.system_manager.panel)
         self.main_splitter.addWidget(self.system_manager.graph_area)
-        self.main_splitter.setSizes([200, 1200])  # Set initial proportions
+        self.main_splitter.setSizes([260, 1200])  # Set initial proportions
         self.main_splitter.setStretchFactor(0, 0)  # Left panel doesn't stretch
         self.main_splitter.setStretchFactor(1, 1)  # Right panel stretches
         self.layout.addWidget(self.main_splitter)
@@ -122,13 +130,13 @@ class ModelingWidget(QtWidgets.QWidget):
         # --- Toolbar ---
         self.toolbar = QtWidgets.QToolBar()
         self.toolbar.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
-        self.toolbar.setIconSize(QtCore.QSize(16, 16))
+        self.toolbar.setIconSize(QtCore.QSize(15, 15))
         self.toolbar.setStyleSheet(_mdo_toolbar_qss(current_theme()))
         self.toolbar.setMovable(False)
         self.layout.insertWidget(0, self.toolbar)
 
-        def _ico(name, color="#cdd2d9"):
-            return qta.icon(name, color=color)
+        def _ico(name):
+            return qta.icon(name, color=COLORS["text_main"], color_disabled=COLORS["text_dim"])
 
         self.action_save = QtGui.QAction(_ico("fa5s.save"), "Save", self)
         self.action_save.triggered.connect(self.save_graph)
@@ -146,18 +154,16 @@ class ModelingWidget(QtWidgets.QWidget):
         )
         self.action_examples.triggered.connect(self.load_example)
         self.toolbar.addAction(self.action_examples)
+        self.toolbar.addSeparator()
 
-        self.action_build = QtGui.QAction(
-            _ico("fa5s.hammer", COLORS["success"]), "Build", self
-        )
+        self.action_build = QtGui.QAction(_ico("fa5s.hammer"), "Build", self)
         self.action_build.triggered.connect(self.build_requested.emit)
         self.toolbar.addAction(self.action_build)
 
-        self.action_validate = QtGui.QAction(
-            _ico("fa5s.check-circle", COLORS["primary"]), "Validate", self
-        )
+        self.action_validate = QtGui.QAction(_ico("fa5s.check-circle"), "Validate", self)
         self.action_validate.triggered.connect(self.validate_graph)
         self.toolbar.addAction(self.action_validate)
+        self.toolbar.addSeparator()
 
         self.action_undo = QtGui.QAction(_ico("fa5s.undo"), "Undo", self)
         self.action_undo.setShortcut(QtGui.QKeySequence.Undo)
@@ -169,18 +175,15 @@ class ModelingWidget(QtWidgets.QWidget):
         self.action_redo.triggered.connect(self.redo)
         self.toolbar.addAction(self.action_redo)
 
-        self.action_delete = QtGui.QAction(
-            _ico("fa5s.trash-alt", COLORS["danger"]), "Delete", self
-        )
+        self.action_delete = QtGui.QAction(_ico("fa5s.trash-alt"), "Delete", self)
         self.action_delete.triggered.connect(self.delete_current)
         self.action_delete.setShortcut(QtGui.QKeySequence.Delete)
         self.action_delete.setShortcutContext(QtCore.Qt.WidgetWithChildrenShortcut)
         self.toolbar.addAction(self.action_delete)
+        self.toolbar.addSeparator()
 
         # Node-creation buttons
-        self.action_add_input = QtGui.QAction(
-            _ico("fa5s.sliders-h", COLORS["primary"]), "Design Var", self
-        )
+        self.action_add_input = QtGui.QAction(_ico("fa5s.sliders-h"), "Design Var", self)
         self.action_add_input.setToolTip(
             "Design Variable — an optimizer-controlled input with units and bounds"
         )
@@ -188,7 +191,7 @@ class ModelingWidget(QtWidgets.QWidget):
         self.toolbar.addAction(self.action_add_input)
 
         self.action_add_intermediate = QtGui.QAction(
-            _ico("fa5s.dot-circle", "#9aa3b2"), "Intermediate", self
+            _ico("fa5s.dot-circle"), "Intermediate", self
         )
         self.action_add_intermediate.setToolTip(
             "Intermediate Variable — route or rename a value between disciplines"
@@ -196,40 +199,46 @@ class ModelingWidget(QtWidgets.QWidget):
         self.action_add_intermediate.triggered.connect(self.add_intermediate_node)
         self.toolbar.addAction(self.action_add_intermediate)
 
-        self.action_add_output = QtGui.QAction(
-            _ico("fa5s.bullseye", "#3fc093"), "QoI", self
-        )
+        self.action_add_output = QtGui.QAction(_ico("fa5s.bullseye"), "QoI", self)
         self.action_add_output.setToolTip(
             "Quantity of Interest — a result, constraint, or optimization objective"
         )
         self.action_add_output.triggered.connect(self.add_output_node)
         self.toolbar.addAction(self.action_add_output)
 
-        self.action_add_function = QtGui.QAction(
-            _ico("fa5s.code", "#a98be0"), "Function", self
-        )
+        self.action_add_function = QtGui.QAction(_ico("fa5s.code"), "Function", self)
         self.action_add_function.setToolTip(
             "Function / Discipline — Python, FEA, impact, or TopOpt calculation"
         )
         self.action_add_function.triggered.connect(self.add_function_node)
         self.toolbar.addAction(self.action_add_function)
+        self.toolbar.addSeparator()
+
+        self.action_fit = QtGui.QAction(_ico("fa5s.expand"), "Fit", self)
+        self.action_fit.setToolTip("Fit graph view to all nodes (F)")
+        self.action_fit.setShortcut("F")
+        self.action_fit.triggered.connect(self.fit_to_view)
+        self.toolbar.addAction(self.action_fit)
+        self.toolbar.addSeparator()
 
         self._theme_action_icons = {
-            self.action_save: ("fa5s.save", "neutral"),
-            self.action_load: ("fa5s.folder-open", "neutral"),
-            self.action_build: ("fa5s.hammer", "success"),
-            self.action_validate: ("fa5s.check-circle", "primary"),
-            self.action_undo: ("fa5s.undo", "neutral"),
-            self.action_redo: ("fa5s.redo", "neutral"),
-            self.action_delete: ("fa5s.trash-alt", "danger"),
-            self.action_add_input: ("fa5s.sliders-h", "primary"),
-            self.action_add_intermediate: ("fa5s.dot-circle", "muted"),
-            self.action_add_output: ("fa5s.bullseye", "success"),
-            self.action_add_function: ("fa5s.code", "function"),
+            self.action_save: "fa5s.save",
+            self.action_load: "fa5s.folder-open",
+            self.action_examples: "fa5s.book-open",
+            self.action_build: "fa5s.hammer",
+            self.action_validate: "fa5s.check-circle",
+            self.action_undo: "fa5s.undo",
+            self.action_redo: "fa5s.redo",
+            self.action_delete: "fa5s.trash-alt",
+            self.action_add_input: "fa5s.sliders-h",
+            self.action_add_intermediate: "fa5s.dot-circle",
+            self.action_add_output: "fa5s.bullseye",
+            self.action_add_function: "fa5s.code",
+            self.action_fit: "fa5s.expand",
         }
 
         # Search Bar
-        lbl_search = QtWidgets.QLabel(" Search ")
+        lbl_search = QtWidgets.QLabel(" Search: ")
         self.toolbar.addWidget(lbl_search)
         self.search_bar = QtWidgets.QLineEdit()
         self.search_bar.setPlaceholderText("Find node...")
@@ -253,16 +262,10 @@ class ModelingWidget(QtWidgets.QWidget):
         self._active_theme = theme_name
         colors = THEMES[theme_name]
         self.toolbar.setStyleSheet(_mdo_toolbar_qss(theme_name))
-        role_colors = {
-            "neutral": colors["text_main"],
-            "muted": colors["text_dim"],
-            "primary": colors["primary"],
-            "success": colors["success"],
-            "danger": colors["danger"],
-            "function": "#7e6f99" if theme_name == "light" else "#a98be0",
-        }
-        for action, (icon_name, role) in self._theme_action_icons.items():
-            action.setIcon(qta.icon(icon_name, color=role_colors[role]))
+        icon_color = colors["text_main"]
+        icon_dim = colors["text_dim"]
+        for action, icon_name in self._theme_action_icons.items():
+            action.setIcon(qta.icon(icon_name, color=icon_color, color_disabled=icon_dim))
         if hasattr(self, "system_manager") and self.system_manager is not None:
             self.system_manager.apply_theme(theme_name)
         for system in self.system_manager.systems:
@@ -418,6 +421,22 @@ class ModelingWidget(QtWidgets.QWidget):
     def add_function_node(self):
         if self.current_graph:
             self.create_node_for_graph(self.current_graph, CustomBlockNode)
+
+    def fit_to_view(self):
+        """Fit the view to show all nodes in the current graph."""
+        if not self.current_graph:
+            return
+        selected = self.current_graph.selected_nodes()
+        if not selected:
+            all_nodes = self.current_graph.all_nodes()
+            if all_nodes:
+                for n in all_nodes:
+                    n.set_selected(True)
+                self.current_graph.fit_to_selection()
+                for n in all_nodes:
+                    n.set_selected(False)
+        else:
+            self.current_graph.fit_to_selection()
 
     def setup_context_menu_for_graph(self, graph):
         menu = graph.context_menu()

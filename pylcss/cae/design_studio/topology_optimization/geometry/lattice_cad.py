@@ -365,12 +365,21 @@ def lattice_cad_strategy(options: Any) -> str:
     One predicate, so the export path, the report and the UI cannot disagree
     about whether a given study has an exact analytic body available.
     """
-    from ..manufacturing.lattice_families import FAMILIES
+    from ..manufacturing.lattice_families import family_for, normalize_family_key
 
-    mode = getattr(options, "mode", "") if options is not None else ""
-    if not mode or mode == "solid":
+    if options is None:
         return "solid"
-    family = FAMILIES.get(mode)
+    if isinstance(options, str):
+        mode = options
+    elif isinstance(options, dict):
+        mode = options.get("mode") or options.get("structure_mode") or ""
+    else:
+        mode = getattr(options, "mode", None) or getattr(options, "structure_mode", None) or ""
+
+    canonical = normalize_family_key(str(mode))
+    if not canonical or canonical == "solid":
+        return "solid"
+    family = family_for(canonical)
     if family is not None and family.is_strut:
         return "beam"
     return "isosurface"

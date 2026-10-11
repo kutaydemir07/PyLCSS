@@ -2,14 +2,14 @@
 ; Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 #define AppName "PyLCSS"
-#define AppVersion "2.2.0"
+#define AppVersion "2.2.0.2"
 #define AppPublisher "Kutay Demir"
 #define StagingRoot "..\..\build\windows-installer\staging"
 #ifndef PythonArchiveName
 #define PythonArchiveName "python-3.12.10-embed-amd64.zip"
 #endif
 #ifndef OutputBaseFilename
-#define OutputBaseFilename "PyLCSS-2.2.0-Setup-x64"
+#define OutputBaseFilename "PyLCSS-2.2.0.2-Setup-x64"
 #endif
 
 [Setup]
@@ -62,6 +62,7 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 Name: "solvers"; Description: "Download optional engineering solver backends (separately licensed)"; GroupDescription: "Optional third-party components:"; Flags: checkablealone unchecked; Components: cae
 Name: "solvers\calculix"; Description: "CalculiX structural FEA solver (GPL v2 or later; separate terms)"; Flags: unchecked; Components: cae
 Name: "solvers\radioss"; Description: "OpenRadioss crash and impact solver (AGPL v3 or later; separate terms)"; Flags: unchecked; Components: cae
+Name: "solvers\amrto"; Description: "AMRTO CAD reconstruction tools (Instant Meshes, GMCG; separate terms)"; Flags: unchecked; Components: cae
 Name: "freecad"; Description: "FreeCAD CAD backend (LGPL v2.1; large download; its own installer and UAC prompt)"; GroupDescription: "Optional third-party components:"; Flags: unchecked; Components: cae
 
 [Files]
@@ -231,6 +232,13 @@ begin
       PythonExe,
       '"' + InstallerScript + '" --only radioss',
       'Installing OpenRadioss...',
+      False);
+
+  if WizardIsComponentSelected('cae') and WizardIsTaskSelected('solvers\amrto') then
+    RunAndWait(
+      PythonExe,
+      '"' + InstallerScript + '" --only amrto',
+      'Configuring AMRTO CAD reconstruction tools...',
       False);
 
   if WizardIsComponentSelected('cae') and WizardIsTaskSelected('freecad') then

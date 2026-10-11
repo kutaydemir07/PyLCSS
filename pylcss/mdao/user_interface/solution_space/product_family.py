@@ -81,7 +81,7 @@ class ProductFamilyMixin:
             # Other params
             weight = np.ones(len(dsl))
             parameters = None
-            solver_type = self.family_solver_combo.currentData()
+            solver_type = self.solver_combo.currentData()
 
             # Create progress dialog
             num_variants = len(self.problem.requirement_sets)
@@ -136,10 +136,7 @@ class ProductFamilyMixin:
 
             # Update family plots using the detailed plotting method
             self.plot_product_family(results)
-
-            # Display communality information if available
-            if "Communality" in results and results["Communality"] is not None:
-                self.display_communality_info(results["Communality"])
+            self.update_family_summary(results)
 
             # Switch to Product Family Analysis tab
             # Find the index of the Product Family Analysis tab
@@ -147,14 +144,42 @@ class ProductFamilyMixin:
                 if self.right_tabs.tabText(i) == "Product Family Analysis":
                     self.right_tabs.setCurrentIndex(i)
                     break
-
-            QtWidgets.QMessageBox.information(
-                self,
-                "Success",
-                f"Product family computation complete!\nComputed {len(self.problem.requirement_sets)} variants and platform.",
-            )
         else:
             QtWidgets.QMessageBox.warning(self, "Warning", "No valid results obtained.")
+
+    def update_family_summary(self, results):
+        """Fill the left-panel summary: platform width, share of design range, communality."""
+        dvs = self.problem.design_variables if self.problem else []
+        platform = results.get("Platform")
+        communality = results.get("Communality")
+        self.family_communality = communality
+        self.btn_family_details.setEnabled(
+            communality is not None and len(communality) > 0
+        )
+
+        self.family_summary_table.setRowCount(len(dvs))
+        feasible = 0
+        for i, dv in enumerate(dvs):
+            width_text, share_text = "none", "-"
+            if platform is not None and i < platform.shape[0]:
+                width = float(platform[i, 1] - platform[i, 0])
+                if width > 0:
+                    feasible += 1
+                    width_text = f"{width:.4g}"
+                    span = float(dv["max"]) - float(dv["min"])
+                    if span > 0:
+                        share_text = f"{100.0 * width / span:.0f}%"
+            comm_text = "-"
+            if communality is not None and i < len(communality):
+                comm_text = f"{float(communality[i]):.2f}"
+            for col, text in enumerate((dv["name"], width_text, share_text, comm_text)):
+                self.family_summary_table.setItem(i, col, QtWidgets.QTableWidgetItem(text))
+
+        self.family_summary_table.setVisible(bool(dvs))
+        variant_count = len([k for k in results if k not in ("Platform", "Platform_Infeasible", "Communality")])
+        self.lbl_family_summary.setText(
+            f"{variant_count} variants. Common platform exists for {feasible} of {len(dvs)} variables."
+        )
 
     def display_communality_info(self, communality):
         """Display communality information for design variables."""
@@ -173,20 +198,10 @@ class ProductFamilyMixin:
         title.setStyleSheet("font-size: 14px; font-weight: bold; margin-bottom: 10px;")
         layout.addWidget(title)
 
-        # Description
-        desc = QtWidgets.QLabel(
-            "Communality measures the degree to which each design variable is shared/common "
-            "across all product variants. A value of 1.0 indicates complete commonality "
-            "(same value/range across all variants), while lower values indicate differentiation."
-        )
-        desc.setWordWrap(True)
-        desc.setStyleSheet("margin-bottom: 15px;")
-        layout.addWidget(desc)
-
         # Table for communality values
         table = QtWidgets.QTableWidget()
-        table.setColumnCount(3)
-        table.setHorizontalHeaderLabels(["Variable", "Communality", "Interpretation"])
+        table.setColumnCount(2)
+        table.setHorizontalHeaderLabels(["Variable", "Communality"])
         table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
         table.setRowCount(len(communality))
 
@@ -204,17 +219,6 @@ class ProductFamilyMixin:
 
             # Communality value
             table.setItem(i, 1, QtWidgets.QTableWidgetItem(f"{comm_val:.4f}"))
-
-            # Interpretation
-            if comm_val >= 0.9:
-                interp = "High commonality"
-            elif comm_val >= 0.7:
-                interp = "Moderate commonality"
-            elif comm_val >= 0.5:
-                interp = "Low commonality"
-            else:
-                interp = "High differentiation"
-            table.setItem(i, 2, QtWidgets.QTableWidgetItem(interp))
 
         layout.addWidget(table)
 

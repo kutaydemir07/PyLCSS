@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pylcss"
-version = "2.2.0"
+version = "2.2.0.2"
 description = "Source-available desktop engineering design, simulation, sensitivity, and optimization workbench"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -86,6 +86,9 @@ cae = [
     "pymoto==2.0.1",
     "py7zr==0.20.8",
     "numba==0.63.1",
+    "geomdl>=5.3.1",
+    "pymeshlab==2025.7.post1",
+    "threadpoolctl==3.6.0",
 ]
 all = [
     "nevergrad==1.0.4",
@@ -109,6 +112,9 @@ all = [
     "pymoto==2.0.1",
     "py7zr==0.20.8",
     "numba==0.63.1",
+    "geomdl>=5.3.1",
+    "pymeshlab==2025.7.post1",
+    "threadpoolctl==3.6.0",
 ]
 
 

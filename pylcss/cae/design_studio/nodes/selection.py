@@ -111,13 +111,6 @@ class SelectFaceNode(CadQueryNode):
         super(SelectFaceNode, self).__init__()
         self.add_input("shape", color=(100, 255, 100))
         self.add_output("selection", color=(100, 200, 255))
-        # Compatibility-only port for graphs saved before the output was
-        # correctly named. A selection payload can contain CAD or mesh
-        # entities and is not necessarily a CadQuery Workplane.
-        legacy_output = self.add_output(
-            "workplane", display_name=False, color=(100, 200, 255)
-        )
-        legacy_output.view.setVisible(False)
         self.create_property(
             "entity_type",
             "Face",
@@ -680,10 +673,6 @@ class InteractiveSelectFaceNode(CadQueryNode):
         super(InteractiveSelectFaceNode, self).__init__()
         self.add_input("shape", color=(100, 255, 100))
         self.add_output("selection", color=(100, 200, 255))
-        legacy_output = self.add_output(
-            "workplane", display_name=False, color=(100, 200, 255)
-        )
-        legacy_output.view.setVisible(False)
 
         self.create_property(
             "entity_type",

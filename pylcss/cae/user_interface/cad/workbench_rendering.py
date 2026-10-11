@@ -9,6 +9,10 @@ import os
 
 from PySide6 import QtWidgets
 
+from pylcss.cae.design_studio.topology_optimization.integration.study_identity import (
+    is_density_study_class,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +51,8 @@ class WorkbenchRenderingMixin:
             return
 
         field = str(field_name)
+        from .result_fields import activate_modal_mode
+        activate_modal_mode(result, field)
         result["visualization_mode"] = field
         try:
             self.results.show_result(result)
@@ -63,26 +69,32 @@ class WorkbenchRenderingMixin:
             and result.get("shape") is None
             and isinstance(result.get("recovered_shape"), dict)
         ):
-            # Only an extrusion-constrained result has an exact B-rep to build.
-            # Anything else stays on its recovered surface rather than being
-            # approximated by smooth patches.
-            if str(result.get("extrusion_axis") or "none").strip().lower() not in {
-                "x",
-                "y",
-                "z",
-            }:
-                self.statusBar().showMessage(
-                    "No editable CAD body for this result: a general 3-D load "
-                    "path has no exact B-rep. Showing the recovered surface. "
-                    "Set the manufacturing process to Extruded for solid CAD."
-                )
-                return
             # The saved surface stays visible while reconstruction runs. This
             # is post-processing only and never executes the graph or solver.
             try:
                 self.properties._preview_topopt_cad(node)
             except Exception:
                 logger.exception("Could not start TopOpt CAD reconstruction.")
+
+    def _on_results_view_mode_requested(self, field_name: str):
+        """Handle 3-D view mode requested from ResultsPanel or popup dialog."""
+        if getattr(self, "viewer", None) is not None:
+            self.viewer.set_result_field(field_name)
+
+    def _on_results_undeformed_requested(self, visible: bool):
+        """Handle undeformed wireframe requested from ResultsPanel or popup dialog."""
+        if getattr(self, "viewer", None) is not None:
+            self.viewer.set_undeformed_overlay(visible)
+
+    def _on_results_extrema_requested(self, visible: bool):
+        """Handle min/max extrema markers requested from ResultsPanel or popup dialog."""
+        if getattr(self, "viewer", None) is not None:
+            self.viewer.set_result_extrema(visible)
+
+    def _on_results_deform_scale_requested(self, scale: str):
+        """Handle deformation exaggeration scale requested from ResultsPanel or popup dialog."""
+        if getattr(self, "viewer", None) is not None:
+            self.viewer.set_deformation_scale(scale)
 
     def _import_cad(self):
         """Prompt user for a geometry file, add an import node, and set its filepath."""
@@ -183,6 +195,7 @@ class WorkbenchRenderingMixin:
                                 "mesh_quality": getattr(obj, "quality_report", None),
                             }
                         )
+                    self._show_results_panel()
                 except Exception:
                     logger.debug("Optional UI operation failed.", exc_info=True)
         elif self._is_2d_sketch(obj):
@@ -222,6 +235,7 @@ class WorkbenchRenderingMixin:
             return ("shape",)
         if cls in (
             "SolverNode",
+            "ModalSolverNode",
             "FEAComponentNode",
             "TopologyOptVoxelNode",
             "LatticeOptVoxelNode",
@@ -431,6 +445,57 @@ class WorkbenchRenderingMixin:
             return node, result
         return None, None
 
+    def _is_results_relevant_node(self, node) -> bool:
+        """Return True if the node is a solver/study or measurement node."""
+        if node is None:
+            return False
+        class_name = getattr(node, "__class__", type(node)).__name__
+        if class_name in {
+            "SolverNode",
+            "ModalSolverNode",
+            "CrashSolverNode",
+            "TopologyOptVoxelNode",
+            "LatticeOptVoxelNode",
+            "LatticeInfillNode",
+        }:
+            return True
+        if is_density_study_class(class_name):
+            return True
+        measure_classes = getattr(self, "_MEASURE_NODE_CLASSES", ())
+        if class_name in measure_classes:
+            return True
+        last_res = getattr(node, "_last_result", None)
+        if isinstance(last_res, dict) and last_res.get("type") in {
+            "fea",
+            "modal",
+            "crash",
+            "external_solver",
+            "topopt_voxel",
+            "lattice_infill",
+        }:
+            return True
+        return False
+
+    def _show_results_panel(self):
+        """Reveal the 3D view mode selector panel upside in the inspector."""
+        results = getattr(self, "results", None)
+        if results is None:
+            return
+        if not results.isVisible():
+            results.setVisible(True)
+        if hasattr(results, "_header_bar"):
+            results._header_bar.setVisible(True)
+
+    def _update_results_panel_visibility(self, node=None):
+        """Toggle results panel based on whether the selected node produces results."""
+        results = getattr(self, "results", None)
+        if results is None:
+            return
+        if node is not None and self._is_results_relevant_node(node):
+            self._show_results_panel()
+        else:
+            results.setVisible(False)
+
     def _clear_selection_visuals(self):
         """Clear viewer-only state after the graph selection becomes empty."""
         self._last_rendered_node = None
@@ -448,6 +513,7 @@ class WorkbenchRenderingMixin:
             self.results.clear_results()
         except Exception:
             logger.debug("Could not clear the results panel", exc_info=True)
+        self._update_results_panel_visibility(None)
 
     def _on_node_selection_changed(self, selected, deselected):
         """Clear the 3-D view when the last selected graph node is unselected."""
@@ -487,6 +553,7 @@ class WorkbenchRenderingMixin:
             return
 
         self.properties.display_node(node)
+        self._update_results_panel_visibility(node)
 
         if self._is_topopt_result_consumer(node):
             own = getattr(node, "_last_result", None)

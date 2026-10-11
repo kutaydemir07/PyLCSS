@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 
 from PySide6 import QtWidgets
 
@@ -203,101 +202,6 @@ class WorkbenchActionMixin:
             self.timeline.add_event("3D view reset to default")
         except Exception:
             self.statusBar().showMessage("View reset")
-
-    def _generate_report(self):
-        """Generate a report from the model with node information."""
-        self.statusBar().showMessage("Building report...")
-        self.timeline.add_event("Report generation started")
-
-        # Collect model information
-        all_nodes = list(self.graph.all_nodes())
-        if not all_nodes:
-            QtWidgets.QMessageBox.information(
-                self, "Empty Model", "No nodes in the graph to report on."
-            )
-            self.statusBar().showMessage("No nodes to report")
-            return
-
-        # Build report content
-        report_lines = [
-            "=" * 60,
-            "CAD MODEL REPORT",
-            "=" * 60,
-            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            f"Project: {self.current_file or 'Unsaved'}",
-            "",
-            f"Total Nodes: {len(all_nodes)}",
-            "",
-            "NODE SUMMARY:",
-            "-" * 40,
-        ]
-
-        # Categorize nodes
-        node_types = {}
-        for node in all_nodes:
-            node_class = node.__class__.__name__
-            node_types[node_class] = node_types.get(node_class, 0) + 1
-
-        for node_type, count in sorted(node_types.items()):
-            report_lines.append(f"  {node_type}: {count}")
-
-        report_lines.extend(
-            [
-                "",
-                "NODE DETAILS:",
-                "-" * 40,
-            ]
-        )
-
-        for node in all_nodes:
-            report_lines.append(f"  [{node.__class__.__name__}] {node.name()}")
-            # Add key properties
-            try:
-                props = node.model.properties
-                for key, val in list(props.items())[:5]:  # First 5 properties
-                    if not key.startswith("_"):
-                        report_lines.append(f"      {key}: {val}")
-            except Exception:
-                logger.debug("Optional UI operation failed.", exc_info=True)
-
-        report_lines.append("\n" + "=" * 60)
-        report_text = "\n".join(report_lines)
-
-        # Show in a dialog
-        dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle("Model Report")
-        dialog.resize(600, 500)
-        layout = QtWidgets.QVBoxLayout(dialog)
-
-        text_edit = QtWidgets.QTextEdit()
-        text_edit.setReadOnly(True)
-        text_edit.setPlainText(report_text)
-        text_edit.setStyleSheet("font-family: Consolas, monospace; font-size: 11px;")
-        layout.addWidget(text_edit)
-
-        # Save button
-        btn_layout = QtWidgets.QHBoxLayout()
-        save_btn = QtWidgets.QPushButton("Save Report...")
-        close_btn = QtWidgets.QPushButton("Close")
-
-        def save_report():
-            fname, _ = QtWidgets.QFileDialog.getSaveFileName(
-                dialog, "Save Report", "model_report.txt", "Text Files (*.txt)"
-            )
-            if fname:
-                with open(fname, "w") as f:
-                    f.write(report_text)
-                self.statusBar().showMessage(f"Report saved to {fname}")
-
-        save_btn.clicked.connect(save_report)
-        close_btn.clicked.connect(dialog.accept)
-        btn_layout.addWidget(save_btn)
-        btn_layout.addWidget(close_btn)
-        layout.addLayout(btn_layout)
-
-        dialog.exec()
-        self.statusBar().showMessage("Report ready")
-        self.timeline.add_event("Report generated")
 
     def _validate_model(self):
         """Validate the current model for issues."""

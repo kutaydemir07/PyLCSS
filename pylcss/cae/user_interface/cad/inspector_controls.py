@@ -66,7 +66,13 @@ class InspectorSection(QtWidgets.QWidget):
 
         self.toggle = QtWidgets.QToolButton()
         self.toggle.setObjectName("InspectorSectionHeader")
-        self.toggle.setText(str(title))
+        clean_title = (
+            str(title)
+            .replace(" & ", " and ")
+            .replace("&", "&&")
+            .replace("_", " ")
+        )
+        self.toggle.setText(clean_title)
         self.toggle.setCheckable(True)
         self.toggle.setChecked(bool(expanded))
         self.toggle.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)

@@ -52,7 +52,7 @@ class PropertiesPanel(
             subcontrol-position: top left;
             left: 12px;
             padding: 0 4px;
-            color: #6fb3ff;
+            color: #d29922;
             font-weight: 700;
         }
         QLabel { color: #aab0b8; font-size: 11px; background: transparent; }
@@ -64,9 +64,9 @@ class PropertiesPanel(
             color: #eef1f5;
             min-height: 18px;
             min-width: 0px;
-            selection-background-color: #4a9eff;
+            selection-background-color: #d29922;
         }
-        QLineEdit:focus { border: 1px solid #4a9eff; background: #181b20; }
+        QLineEdit:focus { border: 1px solid #d29922; background: #181b20; }
         QLineEdit:disabled { color: #6b7178; background: #1a1c20; border-color: #2a2d33; }
 
         QComboBox {
@@ -82,7 +82,7 @@ class PropertiesPanel(
         QComboBox QAbstractItemView {
             background: #181b20;
             color: #eef1f5;
-            selection-background-color: #4a9eff;
+            selection-background-color: #d29922;
             border: 1px solid #313641;
             min-width: 130px;
         }
@@ -104,9 +104,9 @@ class PropertiesPanel(
             width: 16px; height: 16px; border-radius: 4px;
             border: 1px solid #3a3f48; background: #14161a;
         }
-        QCheckBox::indicator:hover { border: 1px solid #4a9eff; }
+        QCheckBox::indicator:hover { border: 1px solid #d29922; }
         QCheckBox::indicator:checked {
-            background: #4a9eff; border: 1px solid #4a9eff;
+            background: #d29922; border: 1px solid #d29922;
         }
         QCheckBox::indicator:disabled {
             border: 1px solid #2a2d33; background: #1a1c20;
@@ -117,7 +117,7 @@ class PropertiesPanel(
             border-radius: 6px; padding: 4px 6px; color: #d6dae0; font-weight: 600;
             min-width: 0px;
         }
-        QPushButton:hover { background: #323843; border-color: #4a9eff; color: #ffffff; }
+        QPushButton:hover { background: #323843; border-color: #d29922; color: #ffffff; }
         QPushButton:pressed { background: #2a2e35; }
     """
 
@@ -128,7 +128,6 @@ class PropertiesPanel(
                 "workflow_mode",
                 "design_goal",
                 "physics_mode",
-                "manufacturing_process",
                 "advanced_settings_visible",
             ),
         ),
@@ -141,24 +140,6 @@ class PropertiesPanel(
                 "enable_mass_scaling",
                 "assembly_connection",
                 "connection_tolerance",
-            ),
-        ),
-        (
-            "External Solver",
-            (
-                "external_",
-                "openradioss_",
-                "calculix_",
-                "run_external",
-                "deck_only",
-                "solver_backend",
-                "deck_path",
-                "engine_path",
-                "engine_executable_path",
-                "starter_path",
-                "work_dir",
-                "timeout_s",
-                "stress_scale_to_mpa",
             ),
         ),
         (
@@ -217,18 +198,10 @@ class PropertiesPanel(
             ),
         ),
         (
-            "Manufacturing",
+            "Lattice Definition",
             (
                 "structure_",
                 "lattice_",
-                "print_ready_",
-                "mesh_decimate_",
-                "surface_recovery_",
-                "symmetry",
-                "extrusion",
-                "overhang_",
-                "max_member_",
-                "pattern_",
                 "exclusion_",
                 "generate_cad_",
                 "cad_reconstruction_",
@@ -324,11 +297,7 @@ class PropertiesPanel(
     _NODE_PROPERTY_SECTIONS = {
         "BoxNode": "Geometry",
         "CylinderNode": "Geometry",
-        "TubeNode": "Geometry",
-        "CylindricalShellNode": "Geometry",
         "BooleanNode": "Geometry",
-        "ThroughHoleNode": "Geometry",
-        "FilletNode": "Geometry",
         "TransformNode": "Geometry",
         "LinearPatternNode": "Geometry",
         "AssemblyNode": "Geometry",
@@ -340,28 +309,27 @@ class PropertiesPanel(
         "VariableNode": "Value",
         "ExportStepNode": "Export",
         "ExportStlNode": "Export",
+        "MaterialNode": "Material",
+        "MeshNode": "Mesh",
+        "FEAComponentNode": "Assembly Component",
+        "ConstraintNode": "Support",
+        "LoadNode": "Load",
+        "PressureLoadNode": "Load",
+        "ImpactConditionNode": "Impact",
     }
 
     # Inspector properties are fallbacks for these ports. Once connected, the
     # graph owns the value and the fallback must not look editable.
     _DRIVEN_PROPERTY_PORTS = {
         "BoxNode": {
+            "length": "length",
+            "width": "width",
+            "height": "height",
             "length_x": "length",
             "width_y": "width",
             "height_z": "height",
         },
         "CylinderNode": {"diameter": "diameter", "length": "length"},
-        "TubeNode": {
-            "outer_diameter": "outer_diameter",
-            "wall_thickness": "wall_thickness",
-            "length": "length",
-        },
-        "CylindricalShellNode": {
-            "diameter": "diameter",
-            "length": "length",
-        },
-        "ThroughHoleNode": {"diameter": "diameter"},
-        "FilletNode": {"radius": "radius"},
         "MaterialNode": {
             "youngs_modulus": "youngs_modulus",
             "poissons_ratio": "poissons_ratio",
@@ -376,12 +344,26 @@ class PropertiesPanel(
             "force_x": "force_x",
             "force_y": "force_y",
             "force_z": "force_z",
+            "pressure": "pressure",
         },
         "PressureLoadNode": {"pressure": "pressure"},
         "ImportStepNode": {"filepath": "file"},
         "ImportStlNode": {"filepath": "file"},
         "CadQueryCodeNode": {
-            **{f"param_{index}_value": f"param_{index}" for index in range(1, 7)}
+            **{f"param_{index}_value": f"param_{index}" for index in range(1, 33)}
+        },
+        "FreeCadPartNode": {
+            **{f"param_{index}_value": f"param_{index}" for index in range(1, 33)}
+        },
+        "TransformNode": {
+            "translate_x": "translate_x",
+            "translate_y": "translate_y",
+            "translate_z": "translate_z",
+            "rotation_angle_deg": "rotation_angle_deg",
+        },
+        "LinearPatternNode": {
+            "count": "count",
+            "spacing": "spacing",
         },
     }
 
@@ -392,6 +374,20 @@ class PropertiesPanel(
             # Solver-backend selectors collapsed to a single backend.
             "solver_backend",
             "run_external_solver",
+            # External solver developer paths / scratch directories (auto-resolved).
+            "external_solver_path",
+            "external_work_dir",
+            "external_timeout_s",
+            "openradioss_starter_path",
+            "openradioss_engine_path",
+            "deck_only",
+            "deck_path",
+            "engine_path",
+            "engine_executable_path",
+            "starter_path",
+            "work_dir",
+            "timeout_s",
+            "stress_scale_to_mpa",
             # In-house topology-opt element choice (CalculiX uses C3D4 always).
             "element_type",
             # In-house crash-solver tuning knobs (OpenRadioss has its own).  The
@@ -445,6 +441,10 @@ class PropertiesPanel(
             "mesh_quality",
             "repair_surface",
             "allow_voxel_fallback",
+            # Retired heuristic keep-material controls (replaced by explicit CAD solid bodies)
+            "exclusion_scope",
+            "exclusion_thickness_mode",
+            "exclusion_thickness_mm",
             # Universal metadata is rendered in its own compact section.
             "description",
             "tags",
@@ -600,8 +600,7 @@ class PropertiesPanel(
         "physics_mode": "Physics solved by the topology study. Guided mode derives this from the design goal.",
         "formulation": "Density (SIMP) is robust and supports explicit lattice interpretation. "
         "Level Set evolves a crisp solid boundary and does not create an explicit lattice.",
-        "manufacturing_process": "Applies process defaults: build direction for additive, pull-out for moulding, "
-        "or a constant section for extrusion. Verify the selected direction on the model.",
+        "manufacturing_process": "Applies standard unrestricted topology optimization without directional constraints.",
         "load_aggregation": "Weighted Sum optimizes average weighted performance. Worst Case protects the least "
         "favourable connected load or operating case.",
         "load_pnorm_p": "Smooth maximum exponent for multiple load cases. Higher approaches a hard worst case "
@@ -617,24 +616,6 @@ class PropertiesPanel(
         "for final designs and required for lattice interpretations.",
         "validation_quality": "Standard performs one independent re-analysis. Mesh Convergence repeats it on a "
         "refined mesh to estimate discretization sensitivity.",
-        "print_ready_mesh": "Clean duplicate/degenerate triangles, smooth lightly, and optionally reduce triangles "
-        "after surface recovery without filling openings or deleting components. This is geometric cleanup, "
-        "not certification of printability.",
-        "mesh_decimate_ratio": "Fraction of recovered triangles retained. Keep 1.0 for analysis or small features.",
-        "surface_recovery_method": "VTK SDF is the volume-preserving default. Legacy marching cubes is retained "
-        "for comparison and older studies.",
-        "surface_quality": "Recovery resolution and feature-preserving smoothing policy. Professional uses "
-        "the finest supported recovery grid and strictest smoothing pass band.",
-        "symmetry": "Mirror the density field about the selected domain centre planes.",
-        "extrusion": "Force a constant topology section along this axis.",
-        "overhang_build_axis": "Additive build direction used by the self-support projection. Confirm it matches "
-        "the intended machine orientation.",
-        "overhang_angle_deg": "Minimum self-supporting overhang angle measured "
-        "from the build direction.",
-        "pull_out_axis": "One-sided mould/tool withdrawal direction. Removes undercuts shadowed along this axis.",
-        "max_member_size_voxels": "Maximum solid-member radius in voxels. Zero disables the constraint.",
-        "pattern_repeat": "Number of rotationally repeated topology sectors. One disables repetition.",
-        "pattern_axis": "Axis of the repeated rotational pattern.",
         "E0": "Solid material modulus used by the voxel optimizer (normally derived from the connected material).",
         "Emin": "Small void stiffness used to keep the voxel system solvable.",
         "nu": "Poisson's ratio used by the structured voxel analysis.",
@@ -740,10 +721,13 @@ class PropertiesPanel(
         "length_x": "Box length along X [mm].",
         "width_y": "Box width along Y [mm].",
         "height_z": "Box height along Z [mm].",
+        "length": "Length or axial dimension [mm]. A connected numeric input overrides this value.",
+        "width": "Width [mm]. A connected numeric input overrides this value.",
+        "height": "Height [mm]. A connected numeric input overrides this value.",
+        "param_count": "Number of parameter input ports exposed on the node.",
         "diameter": "Diameter [mm]. A connected numeric input overrides this value.",
         "outer_diameter": "Tube outside diameter [mm].",
         "wall_thickness": "Tube wall thickness [mm]; must be less than half the outside diameter.",
-        "length": "Axial length [mm]. A connected numeric input overrides this value.",
         "axis": "Principal axis used for creation or orientation.",
         "centered": "Center the primitive on the origin instead of starting at zero.",
         "operation": "Union joins material, Cut subtracts Tool from Base, and Intersect keeps their overlap.",
@@ -801,17 +785,18 @@ class PropertiesPanel(
         "engine_executable_path": "Override the auto-discovered OpenRadioss engine executable.",
         "work_dir": "Solver working directory. Empty creates an isolated temporary run directory.",
         "timeout_s": "Maximum external-solver wall time [s] before PyLCSS stops waiting.",
-        "cad_reconstruction_method": "Solid topology gets a B-rep only where the manufacturing constraint makes one exact: a faired profile spline for an explicit extrusion, or a height-field draw surface for a cast/moulded pull-out direction. Topology, above-cutoff point coverage, volume, surface deviation, and B-rep validity must pass. Any other process keeps its recovered surface; there is no faceted or freeform fallback.",
-        "cad_export_filename": "STEP filename for the reconstructed topology geometry.",
+        "cad_reconstruction_method": "Automated CAD model reconstruction via AMRTO (Ren et al., 2025): Marching Cubes triangular meshing, 4-RoSy Instant-Meshes quadrangulation, sparse quadrilateral layout division, Discrete Harmonic Mapping, and bicubic NURBS surface fitting sewn into a watertight B-rep solid.",
+        "cad_export_filename": "Destination path and filename for the exported model.",
+        "cad_export_format": "File format to export (STEP, STL, or 3MF).",
         "nelx": "Expert voxel count in X. Guided mode derives resolution automatically.",
         "nely": "Expert voxel count in Y. Guided mode derives resolution automatically.",
         "nelz": "Expert voxel count in Z. Guided mode derives resolution automatically.",
     }
 
     _PROPERTY_LABELS = {
-        "length_x": "Length X (mm)",
-        "width_y": "Width Y (mm)",
-        "height_z": "Height Z (mm)",
+        "length_x": "Length (mm)",
+        "width_y": "Width (mm)",
+        "height_z": "Height (mm)",
         "length": "Length (mm)",
         "width": "Width (mm)",
         "height": "Height (mm)",
@@ -837,7 +822,8 @@ class PropertiesPanel(
         "value_input": "Value",
         "filepath": "Source File",
         "fcstd_filename": "FreeCAD File",
-        "cad_export_filename": "STEP Export File",
+        "cad_export_filename": "File Name",
+        "cad_export_format": "Export As",
         "cad_reconstruction_method": "CAD Recovery Method",
         "element_size": "Element Size (mm)",
         "refinement_size": "Local Element Size (mm)",
@@ -847,7 +833,7 @@ class PropertiesPanel(
         "analysis_type": "Analysis Type",
         "assembly_connection": "Assembly Interfaces",
         "connection_tolerance_mm": "Bond Tolerance (mm)",
-        "component_name": "Body Name",
+        "component_name": "Component Name",
         "visualization": "Result Display",
         "deformation_scale": "Deformation Scale",
         "external_solver_path": "CalculiX Application",
@@ -956,10 +942,7 @@ class PropertiesPanel(
         "thermal_conductivity_min": "Void Thermal Conductivity (mW/mm/K)",
         "structural_weight": "Structural Objective Weight",
         "thermal_weight": "Thermal Objective Weight",
-        "mesh_decimate_ratio": "Surface Decimation Ratio",
         "minimum_member_size_mm": "Minimum Member Size (mm)",
-        "max_member_size_voxels": "Maximum Member Size (voxels)",
-        "pattern_repeat": "Pattern Repetitions",
         "validation_displacement_limit_mm": "Displacement Limit (mm)",
         "validation_yield_safety_factor": "Required Yield Safety Factor",
     }
@@ -1250,23 +1233,24 @@ class PropertiesPanel(
         cached_result = getattr(node, "_last_result", None)
         result_producer = node.__class__.__name__ in {
             "SolverNode",
+            "ModalSolverNode",
             "CrashSolverNode",
         } or is_density_study_class(node.__class__.__name__)
 
         if disabled:
             status_text, status_color = "Disabled", "#8b949e"
         elif error:
-            status_text, status_color = "Error", "#ff6b6b"
+            status_text, status_color = "Error", "#f85149"
         elif pending:
-            status_text, status_color = "Incomplete", "#ffb74d"
+            status_text, status_color = "Incomplete", "#e3b341"
         elif missing:
-            status_text, status_color = "Incomplete", "#ffb74d"
+            status_text, status_color = "Incomplete", "#e3b341"
         elif cached_result is not None and result_producer:
-            status_text, status_color = "Solved", "#bb86fc"
+            status_text, status_color = "Solved", "#9e8ac9"
         elif cached_result is not None:
-            status_text, status_color = "Done", "#66d17a"
+            status_text, status_color = "Done", "#3fb950"
         else:
-            status_text, status_color = "Ready", "#66d17a"
+            status_text, status_color = "Ready", "#3fb950"
         status = QtWidgets.QLabel(f"●  {status_text}")
         status.setStyleSheet(f"color:{status_color}; font-weight:700;")
         detail = str(error or pending or "")
@@ -1301,92 +1285,6 @@ class PropertiesPanel(
                 f"{name_edit.toolTip()}\nSchema: v{schema_version}"
             )
         self.props_layout.addWidget(frame)
-
-    def _build_connection_summary(self, node):
-        """Show typed input/output contracts and live connections."""
-        inputs = self._node_ports(node, "input")
-        outputs = self._node_ports(node, "output")
-        if not inputs and not outputs:
-            return
-
-        group = QtWidgets.QGroupBox("Connections")
-        layout = QtWidgets.QVBoxLayout(group)
-        layout.setContentsMargins(7, 7, 7, 7)
-        layout.setSpacing(5)
-        count_label = QtWidgets.QLabel(
-            f"{len(inputs)} input{'s' if len(inputs) != 1 else ''} · "
-            f"{len(outputs)} output{'s' if len(outputs) != 1 else ''}"
-        )
-        count_label.setStyleSheet("color:#7f8792; font-size:9px;")
-        layout.addWidget(count_label)
-
-        def add_port_row(port, direction):
-            descriptor = describe_port(node, port, direction)
-            connected = self._connected_port_names(port)
-            row = QtWidgets.QFrame()
-            row.setStyleSheet(
-                "QFrame { background:#191b20; border:1px solid #2c3037; "
-                "border-radius:5px; }"
-            )
-            row_layout = QtWidgets.QVBoxLayout(row)
-            row_layout.setContentsMargins(7, 5, 7, 5)
-            row_layout.setSpacing(2)
-
-            title_row = QtWidgets.QHBoxLayout()
-            direction_label = "IN" if direction == "input" else "OUT"
-            direction_color = "#64b5f6" if direction == "input" else "#4dd0e1"
-            title = QtWidgets.QLabel(
-                f"<span style='color:{direction_color}; font-weight:700'>"
-                f"{direction_label}</span>&nbsp;&nbsp;<b>{descriptor.label}</b>"
-            )
-            title.setTextFormat(QtCore.Qt.RichText)
-            title_row.addWidget(title, 1)
-            type_label = QtWidgets.QLabel(descriptor.data_type)
-            type_label.setStyleSheet(
-                "color:#b8c0ca; background:#292d34; border-radius:4px; "
-                "padding:2px 5px; font-size:9px;"
-            )
-            type_label.setToolTip(descriptor.description)
-            title_row.addWidget(type_label)
-            row_layout.addLayout(title_row)
-
-            if connected:
-                connection_text = "; ".join(connected)
-                connection_color = "#66d17a"
-            elif descriptor.required:
-                connection_text = "Required"
-                connection_color = "#ffb74d"
-            elif direction == "input":
-                connection_text = "Optional"
-                connection_color = "#7f8792"
-            else:
-                connection_text = "Unused"
-                connection_color = "#7f8792"
-            connection = QtWidgets.QLabel(connection_text)
-            connection.setWordWrap(True)
-            connection.setStyleSheet(
-                f"color:{connection_color}; font-size:9px; border:none;"
-            )
-            row_layout.addWidget(connection)
-            layout.addWidget(row)
-
-        def add_direction_heading(text):
-            heading = QtWidgets.QLabel(text)
-            heading.setStyleSheet(
-                "color:#8f98a5; font-size:9px; font-weight:700; "
-                "letter-spacing:0.7px; margin-top:3px;"
-            )
-            layout.addWidget(heading)
-
-        if inputs:
-            add_direction_heading("INPUTS")
-            for port in inputs:
-                add_port_row(port, "input")
-        if outputs:
-            add_direction_heading("OUTPUTS")
-            for port in outputs:
-                add_port_row(port, "output")
-        self.props_layout.addWidget(group)
 
     def _build_notes(self, node):
         """Add one optional human comment without repeating metadata fields."""
@@ -1455,12 +1353,18 @@ class PropertiesPanel(
                 self._build_topopt_definition_ui(node)
             elif node_class == "SolverNode":
                 self._build_fea_solver_ui(node)
+            elif node_class == "ModalSolverNode":
+                self._build_modal_solver_ui(node)
             elif node_class == "CrashSolverNode":
                 self._build_crash_solver_ui(node)
             elif node_class == "CadQueryCodeNode":
                 self._build_code_part_ui(node)
+            elif node_class == "FreeCadPartNode":
+                self._build_freecad_part_ui(node)
             elif node_class == "MaterialNode":
                 self._build_material_ui(node)
+            elif node_class == "MeshNode":
+                self._build_mesh_ui(node)
             elif node_class == "InteractiveSelectFaceNode":
                 self._build_interactive_select_ui(node)
             elif node_class == "SelectFaceNode":
@@ -1470,14 +1374,6 @@ class PropertiesPanel(
             else:
                 self._build_generic_ui(node)
             self._apply_driven_property_states(node)
-            # Contracts and documentation remain available but follow the
-            # engineering controls so selecting a node exposes its useful
-            # settings immediately, even in a narrow inspector.
-            if node_class not in {
-                "SolverNode",
-                "CrashSolverNode",
-            } and not is_density_study_class(node_class):
-                self._build_connection_summary(node)
             self._build_notes(node)
             self._compact_inspector_content(node_class)
         finally:
@@ -1496,13 +1392,14 @@ class PropertiesPanel(
             return
 
         preferred_open = {
-            "TopologyOptVoxelNode": {"Design Intent"},
-            "LatticeOptVoxelNode": {"Design Intent"},
-            "LatticeInfillNode": {"Lattice Infill Settings", "Result"},
+            "TopologyOptVoxelNode": {"Design Intent", "Export"},
+            "LatticeOptVoxelNode": {"Design Intent", "Export"},
+            "LatticeInfillNode": {"Lattice Infill Settings", "Result", "Export"},
             "SolverNode": {"Analysis"},
+            "ModalSolverNode": {"Natural Frequencies and Mode Shapes", "Properties"},
             "CrashSolverNode": {"Analysis"},
             "MaterialNode": {"Material"},
-            "FEAComponentNode": {"Body"},
+            "FEAComponentNode": {"Assembly Component"},
             "InteractiveSelectFaceNode": {"Geometry Type"},
             "SelectFaceNode": {"Selector", "Parameters"},
             "ConstraintNode": {"Support"},

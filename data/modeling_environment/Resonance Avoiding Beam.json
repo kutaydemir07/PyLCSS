@@ -4,6 +4,36 @@
   "_title": "Resonance-Avoiding Beam — Disconnected Frequency Bands",
   "_purpose": "Find robust beam dimensions that keep natural frequencies away from an operating excitation band while controlling mass.",
   "_fidelity": "Euler-Bernoulli analytical benchmark. Thick-beam effects, joints, damping, material scatter, and full modal FEA require downstream verification.",
+  "_visual_target": "Inspect disjoint solution boxes separating low-frequency sub-resonance and high-frequency supra-resonance regimes.",
+  "_engineering_decision": "Select rectangular beam cross-section (height, width) and span length that place fundamental bending natural frequencies safely outside a critical motor operating excitation band (45 Hz to 65 Hz) while minimizing structural mass.",
+  "_baseline": "Beam height = 45.0 mm, beam width = 25.0 mm, beam length = 800.0 mm, resulting in fundamental frequency = 78.5 Hz (+20.8% margin above excitation band) and mass = 2.43 kg.",
+  "_design_variables": [
+    "Beam height: 30.0 to 60.0 mm",
+    "Beam width: 15.0 to 35.0 mm",
+    "Beam span length: 600.0 to 1000.0 mm"
+  ],
+  "_load_cases": [
+    "Dynamic harmonic excitation band between 45.0 Hz and 65.0 Hz under clamped-free cantilever boundary conditions"
+  ],
+  "_requirements": [
+    {
+      "name": "Resonance Avoidance Margin",
+      "requirement": "Fundamental natural frequency must lie outside [45 Hz, 65 Hz] with >= 15% clearance (f1 < 38.25 Hz or f1 > 74.75 Hz)."
+    },
+    {
+      "name": "Max Bending Stress",
+      "requirement": "Static peak bending stress <= 150.0 MPa under 1.0 kN tip proof load."
+    },
+    {
+      "name": "Tip Deflection",
+      "requirement": "Static tip deflection <= 3.0 mm under proof load."
+    }
+  ],
+  "_deliverables": [
+    "Multimodal feasible solution boxes isolating low-frequency and high-frequency design branches",
+    "Frequency-mass trade space mapping",
+    "Recommended candidate beam geometry and verification modal parameters"
+  ],
   "_workflow": [
     "Discover the feasible regions above and below the forbidden frequency band.",
     "Retain separate multimodal boxes rather than bridging the resonance gap.",

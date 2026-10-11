@@ -12,7 +12,11 @@ from typing import Any
 
 import cadquery as cq
 
-from pylcss.cae.design_studio.core.base_node import CadQueryNode, resolve_numeric_input
+from pylcss.cae.design_studio.core.base_node import (
+    CadQueryNode,
+    is_shape,
+    resolve_numeric_input,
+)
 from pylcss.input_values import as_bool
 
 
@@ -79,23 +83,22 @@ class BoxNode(CadQueryNode):
     def run(self):
         self.clear_error()
         try:
+            raw_len = self.get_property("length_x")
+            if raw_len is None and self.has_property("length"):
+                raw_len = self.get_property("length")
             length = _positive(
                 "Length",
-                resolve_numeric_input(
-                    self.get_input("length"), self.get_property("length_x")
-                ),
+                resolve_numeric_input(self.get_input("length"), raw_len),
             )
+            raw_width = self.get_property("width_y")
             width = _positive(
                 "Width",
-                resolve_numeric_input(
-                    self.get_input("width"), self.get_property("width_y")
-                ),
+                resolve_numeric_input(self.get_input("width"), raw_width),
             )
+            raw_height = self.get_property("height_z")
             height = _positive(
                 "Height",
-                resolve_numeric_input(
-                    self.get_input("height"), self.get_property("height_z")
-                ),
+                resolve_numeric_input(self.get_input("height"), raw_height),
             )
             centered = as_bool(self.get_property("centered"))
             return cq.Workplane("XY").box(
@@ -156,122 +159,6 @@ class CylinderNode(CadQueryNode):
             return None
 
 
-class TubeNode(CadQueryNode):
-    """Create a hollow circular tube without scripted subtraction."""
-
-    __identifier__ = "com.cad.geometry.tube"
-    NODE_NAME = "Tube"
-
-    def __init__(self):
-        super().__init__()
-        for port in ("outer_diameter", "wall_thickness", "length"):
-            self.add_input(port, color=_NUMBER_COLOR)
-        self.add_output("shape", color=_SHAPE_COLOR)
-        self.create_property("outer_diameter", 40.0, widget_type="float")
-        self.create_property("wall_thickness", 2.0, widget_type="float")
-        self.create_property("length", 100.0, widget_type="float")
-        self.create_property(
-            "axis",
-            "X",
-            widget_type="combo",
-            items=["X", "Y", "Z"],
-        )
-        self.create_property("centered", True, widget_type="bool")
-
-    def run(self):
-        self.clear_error()
-        try:
-            outer = _positive(
-                "Outer diameter",
-                resolve_numeric_input(
-                    self.get_input("outer_diameter"),
-                    self.get_property("outer_diameter"),
-                ),
-            )
-            wall = _positive(
-                "Wall thickness",
-                resolve_numeric_input(
-                    self.get_input("wall_thickness"),
-                    self.get_property("wall_thickness"),
-                ),
-            )
-            length = _positive(
-                "Length",
-                resolve_numeric_input(self.get_input("length"), self.get_property("length")),
-            )
-            inner = outer - 2.0 * wall
-            if inner <= 0.0:
-                raise ValueError("Wall thickness must be less than half the diameter.")
-            direction = _axis_vector(str(self.get_property("axis") or "X"))
-            start = (
-                direction.multiply(-0.5 * length)
-                if as_bool(self.get_property("centered"))
-                else cq.Vector(0.0, 0.0, 0.0)
-            )
-            outside = cq.Solid.makeCylinder(0.5 * outer, length, start, direction)
-            inside = cq.Solid.makeCylinder(0.5 * inner, length, start, direction)
-            return _workplane_from_shape(outside.cut(inside))
-        except Exception as exc:
-            self.set_error(f"Tube creation failed: {exc}")
-            return None
-
-
-class CylindricalShellNode(CadQueryNode):
-    """Create a cylindrical midsurface for shell-element analysis."""
-
-    __identifier__ = "com.cad.geometry.cylindrical_shell"
-    NODE_NAME = "Cylindrical Shell"
-
-    def __init__(self):
-        super().__init__()
-        for port in ("diameter", "length"):
-            self.add_input(port, color=_NUMBER_COLOR)
-        self.add_output("shape", color=_SHAPE_COLOR)
-        self.create_property("diameter", 70.0, widget_type="float")
-        self.create_property("length", 180.0, widget_type="float")
-        self.create_property(
-            "axis",
-            "X",
-            widget_type="combo",
-            items=["X", "Y", "Z"],
-        )
-        self.create_property("centered", True, widget_type="bool")
-
-    def run(self):
-        self.clear_error()
-        try:
-            diameter = _positive(
-                "Diameter",
-                resolve_numeric_input(
-                    self.get_input("diameter"), self.get_property("diameter")
-                ),
-            )
-            length = _positive(
-                "Length",
-                resolve_numeric_input(self.get_input("length"), self.get_property("length")),
-            )
-            direction = _axis_vector(str(self.get_property("axis") or "X"))
-            start = (
-                direction.multiply(-0.5 * length)
-                if as_bool(self.get_property("centered"))
-                else cq.Vector(0.0, 0.0, 0.0)
-            )
-            temporary = cq.Solid.makeCylinder(
-                0.5 * diameter, length, start, direction
-            )
-            lateral_faces = [
-                face
-                for face in temporary.Faces()
-                if str(face.geomType()).upper() == "CYLINDER"
-            ]
-            if len(lateral_faces) != 1:
-                raise ValueError("Could not isolate the cylindrical midsurface.")
-            return _workplane_from_shape(lateral_faces[0])
-        except Exception as exc:
-            self.set_error(f"Cylindrical shell creation failed: {exc}")
-            return None
-
-
 class BooleanNode(CadQueryNode):
     """Union, subtract, or intersect two connected solids."""
 
@@ -281,7 +168,7 @@ class BooleanNode(CadQueryNode):
     def __init__(self):
         super().__init__()
         self.add_input("base", color=_SHAPE_COLOR)
-        self.add_input("tool", color=_SHAPE_COLOR)
+        self.add_input("tool", color=_SHAPE_COLOR, multi_input=True)
         self.add_output("shape", color=_SHAPE_COLOR)
         self.create_property(
             "operation",
@@ -293,119 +180,47 @@ class BooleanNode(CadQueryNode):
     def run(self):
         self.clear_error()
         base = self.get_input_shape("base")
-        tool = self.get_input_shape("tool")
-        if base is None or tool is None:
-            self.set_error("Connect both Base and Tool shapes to Boolean.")
+        if base is None:
+            self.set_error("Connect a Base shape to Boolean.")
             return None
+
+        connected_tools = self.get_input_list("tool")
+        tool_shapes = []
+        for item in connected_tools:
+            if item is None:
+                continue
+            if is_shape(item):
+                tool_shapes.append(_shape_value(item))
+            elif hasattr(item, "val"):
+                tool_shapes.append(item.val())
+            elif isinstance(item, (list, tuple)):
+                for sub in item:
+                    if is_shape(sub):
+                        tool_shapes.append(_shape_value(sub))
+        if not tool_shapes:
+            single = self.get_input_shape("tool")
+            if single is not None:
+                tool_shapes = [_shape_value(single)]
+
+        if not tool_shapes:
+            self.set_error("Connect at least one Tool shape to Boolean.")
+            return None
+
         try:
-            a, b = _shape_value(base), _shape_value(tool)
+            result = _shape_value(base)
             operation = str(self.get_property("operation") or "Union")
-            if operation == "Subtract":
-                result = a.cut(b)
-            elif operation == "Intersect":
-                result = a.intersect(b)
-            else:
-                result = a.fuse(b)
-            if result is None or result.isNull():
-                raise ValueError("The selected operation produced an empty solid.")
+            for t in tool_shapes:
+                if operation == "Subtract":
+                    result = result.cut(t)
+                elif operation == "Intersect":
+                    result = result.intersect(t)
+                else:
+                    result = result.fuse(t)
+                if result is None or result.isNull():
+                    raise ValueError("The selected operation produced an empty solid.")
             return _workplane_from_shape(result)
         except Exception as exc:
             self.set_error(f"Boolean operation failed: {exc}")
-            return None
-
-
-class ThroughHoleNode(CadQueryNode):
-    """Cut a dimensioned through-hole along a principal axis."""
-
-    __identifier__ = "com.cad.geometry.through_hole"
-    NODE_NAME = "Through Hole"
-
-    def __init__(self):
-        super().__init__()
-        self.add_input("shape", color=_SHAPE_COLOR)
-        self.add_input("diameter", color=_NUMBER_COLOR)
-        self.add_output("shape", color=_SHAPE_COLOR)
-        self.create_property("diameter", 10.0, widget_type="float")
-        self.create_property(
-            "axis",
-            "Z",
-            widget_type="combo",
-            items=["X", "Y", "Z"],
-        )
-        self.create_property("center_x", 0.0, widget_type="float")
-        self.create_property("center_y", 0.0, widget_type="float")
-        self.create_property("center_z", 0.0, widget_type="float")
-
-    def run(self):
-        self.clear_error()
-        source = self.get_input_shape("shape")
-        if source is None:
-            self.set_error("Connect a solid to Through Hole.")
-            return None
-        try:
-            diameter = _positive(
-                "Diameter",
-                resolve_numeric_input(
-                    self.get_input("diameter"), self.get_property("diameter")
-                ),
-            )
-            center = cq.Vector(
-                _finite("Center X", self.get_property("center_x")),
-                _finite("Center Y", self.get_property("center_y")),
-                _finite("Center Z", self.get_property("center_z")),
-            )
-            solid = _shape_value(source)
-            bounds = solid.BoundingBox()
-            length = max(bounds.xlen, bounds.ylen, bounds.zlen) * 3.0 + diameter
-            direction = _axis_vector(str(self.get_property("axis") or "Z"))
-            start = center - direction.multiply(0.5 * length)
-            cutter = cq.Solid.makeCylinder(0.5 * diameter, length, start, direction)
-            return _workplane_from_shape(solid.cut(cutter))
-        except Exception as exc:
-            self.set_error(f"Through-hole operation failed: {exc}")
-            return None
-
-
-class FilletNode(CadQueryNode):
-    """Apply a constant-radius fillet to a reproducible edge family."""
-
-    __identifier__ = "com.cad.geometry.fillet"
-    NODE_NAME = "Fillet"
-
-    def __init__(self):
-        super().__init__()
-        self.add_input("shape", color=_SHAPE_COLOR)
-        self.add_input("radius", color=_NUMBER_COLOR)
-        self.add_output("shape", color=_SHAPE_COLOR)
-        self.create_property("radius", 2.0, widget_type="float")
-        self.create_property(
-            "edges",
-            "All",
-            widget_type="combo",
-            items=["All", "Parallel X", "Parallel Y", "Parallel Z"],
-        )
-
-    def run(self):
-        self.clear_error()
-        source = self.get_input_shape("shape")
-        if source is None:
-            self.set_error("Connect a solid to Fillet.")
-            return None
-        try:
-            radius = _positive(
-                "Radius",
-                resolve_numeric_input(self.get_input("radius"), self.get_property("radius")),
-            )
-            selector = {
-                "Parallel X": "|X",
-                "Parallel Y": "|Y",
-                "Parallel Z": "|Z",
-            }.get(str(self.get_property("edges") or "All"))
-            workplane = _workplane_from_shape(source)
-            edges = workplane.edges(selector) if selector else workplane.edges()
-            return edges.fillet(radius)
-        except Exception as exc:
-            self.set_error(f"Fillet failed: {exc}")
             return None
 
 
@@ -418,6 +233,8 @@ class TransformNode(CadQueryNode):
     def __init__(self):
         super().__init__()
         self.add_input("shape", color=_SHAPE_COLOR)
+        for port in ("translate_x", "translate_y", "translate_z", "rotation_angle_deg"):
+            self.add_input(port, color=_NUMBER_COLOR)
         self.add_output("shape", color=_SHAPE_COLOR)
         self.create_property("translate_x", 0.0, widget_type="float")
         self.create_property("translate_y", 0.0, widget_type="float")
@@ -437,11 +254,21 @@ class TransformNode(CadQueryNode):
             self.set_error("Connect a solid to Transform.")
             return None
         try:
-            dx = _finite("Translation X", self.get_property("translate_x"))
-            dy = _finite("Translation Y", self.get_property("translate_y"))
-            dz = _finite("Translation Z", self.get_property("translate_z"))
+            dx = _finite(
+                "Translation X",
+                resolve_numeric_input(self.get_input("translate_x"), self.get_property("translate_x")),
+            )
+            dy = _finite(
+                "Translation Y",
+                resolve_numeric_input(self.get_input("translate_y"), self.get_property("translate_y")),
+            )
+            dz = _finite(
+                "Translation Z",
+                resolve_numeric_input(self.get_input("translate_z"), self.get_property("translate_z")),
+            )
             angle = _finite(
-                "Rotation angle", self.get_property("rotation_angle_deg")
+                "Rotation angle",
+                resolve_numeric_input(self.get_input("rotation_angle_deg"), self.get_property("rotation_angle_deg")),
             )
             result = _workplane_from_shape(source)
             if abs(angle) > 1e-12:
@@ -468,6 +295,8 @@ class LinearPatternNode(CadQueryNode):
     def __init__(self):
         super().__init__()
         self.add_input("shape", color=_SHAPE_COLOR)
+        for port in ("count", "spacing"):
+            self.add_input(port, color=_NUMBER_COLOR)
         self.add_output("shape", color=_SHAPE_COLOR)
         self.create_property("count", 2, widget_type="int")
         self.create_property("spacing", 20.0, widget_type="float")
@@ -486,10 +315,14 @@ class LinearPatternNode(CadQueryNode):
             self.set_error("Connect a solid to Linear Pattern.")
             return None
         try:
-            count = int(self.get_property("count") or 0)
+            raw_count = resolve_numeric_input(self.get_input("count"), self.get_property("count"))
+            count = int(raw_count or 0)
             if not 1 <= count <= 1000:
                 raise ValueError("Count must be between 1 and 1000.")
-            spacing = _finite("Spacing", self.get_property("spacing"))
+            spacing = _finite(
+                "Spacing",
+                resolve_numeric_input(self.get_input("spacing"), self.get_property("spacing")),
+            )
             vector = _axis_vector(str(self.get_property("axis") or "X"))
             original = _shape_value(source)
             parts = [

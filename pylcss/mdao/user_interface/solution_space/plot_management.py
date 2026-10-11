@@ -16,10 +16,20 @@ from pylcss.user_interface.common.text_utils import format_html
 from .plotting import (
     PlotWidget,
 )
+from .plotting_nd import Plot1DWidget, Plot3DWidget
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["SolutionPlotMixin"]
+
+
+class _LegendItem(QtWidgets.QWidget):
+    clicked = QtCore.Signal()
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() == QtCore.Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 class SolutionPlotMixin:
@@ -109,7 +119,7 @@ class SolutionPlotMixin:
                 y = cursor_y + r * (cell_h + cell_gap)
 
                 # Draw Sub-Title
-                sub_title = widget.lbl_title.text()
+                sub_title = widget.title_text
                 sub_font = QtGui.QFont("Segoe UI", int(cell_w * 0.05), QtGui.QFont.Bold)
                 painter.setFont(sub_font)
 
@@ -235,14 +245,13 @@ class SolutionPlotMixin:
             return
 
         self._plot_export_busy = True
-        self.btn_save_all.setEnabled(False)
+        self.act_save_all.setEnabled(False)
         try:
             # Prepare UI (hide buttons) for raster screenshot consistency
             for widget in self.plot_widgets:
                 widget.btn_remove.hide()
                 widget.btn_zoom.hide()
                 widget.btn_save.hide()
-                widget.lbl_title.hide()
 
             QtWidgets.QApplication.processEvents(
                 QtCore.QEventLoop.ExcludeUserInputEvents
@@ -329,13 +338,12 @@ class SolutionPlotMixin:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to save plots: {e}")
         finally:
             self._plot_export_busy = False
-            self.btn_save_all.setEnabled(True)
+            self.act_save_all.setEnabled(True)
             # Restore UI
             for widget in self.plot_widgets:
                 widget.btn_remove.show()
                 widget.btn_zoom.show()
                 widget.btn_save.show()
-                widget.lbl_title.show()
 
     def _on_plot_columns_changed(self, value):
         self.plot_columns = max(1, int(value))
@@ -344,36 +352,89 @@ class SolutionPlotMixin:
             self.plots_layout.takeAt(0)
         for i, widget in enumerate(self.plot_widgets):
             self.plots_layout.addWidget(
-                widget, i // self.plot_columns, i % self.plot_columns
+                widget,
+                i // self.plot_columns,
+                i % self.plot_columns,
+                QtCore.Qt.AlignTop,
             )
         self.plots_container.update()
 
-    def add_plot(self, x_name=None, y_name=None, do_resample=True):
-        if x_name is None or not isinstance(x_name, str):
+    def _plot_axis_indices(self):
+        """Sampling axes (inputs first, then outputs) for each plot, in plot order."""
+        num_inputs = len(self.inputs)
+        result = []
+        for widget in self.plot_widgets:
+            indices = []
+            for name in widget.axis_names:
+                if name in self.inputs:
+                    indices.append(self.inputs.index(name))
+                elif name in self.outputs:
+                    indices.append(num_inputs + self.outputs.index(name))
+            result.append(tuple(indices) or (0,))
+        return result
+
+    def add_plot(
+        self, x_name=None, y_name=None, do_resample=True, z_name=None, dimension=None
+    ):
+        # The button's clicked(bool) signal arrives as x_name, so non-strings mean "use the toolbar".
+        if dimension is None:
+            if isinstance(x_name, str):
+                dimension = 3 if z_name else (2 if y_name else 1)
+            else:
+                dimension = self.combo_dim.currentIndex() + 1
+        if not isinstance(x_name, str):
             x_name = self.combo_add_x.currentText()
-        if y_name is None or not isinstance(y_name, str):
+        if dimension >= 2 and not isinstance(y_name, str):
             y_name = self.combo_add_y.currentText()
-        if not x_name or not y_name:
+        if dimension >= 3 and not isinstance(z_name, str):
+            z_name = self.combo_add_z.currentText()
+        names = (x_name, y_name, z_name)[:dimension]
+        if not all(names):
             return
 
         # Allow plotting both inputs and outputs
         valid_vars = self.inputs + self.outputs
-        if x_name not in valid_vars or y_name not in valid_vars:
+        if any(name not in valid_vars for name in names):
             return
 
-        plot_widget = PlotWidget(x_name, y_name)
+        if dimension == 1:
+            plot_widget = Plot1DWidget(x_name)
+            plot_widget.setFixedHeight(240)
+        elif dimension == 2:
+            plot_widget = PlotWidget(x_name, y_name)
+            plot_widget.setFixedHeight(350)
+        else:
+            plot_widget = Plot3DWidget(names)
+            plot_widget.setFixedHeight(380)
         plot_widget.parent_widget = self
-        plot_widget.setFixedHeight(350)
         plot_widget.btn_remove.clicked.connect(lambda: self.remove_plot(plot_widget))
         plot_widget.plot()
         count = len(self.plot_widgets)
         row = count // self.plot_columns
         col = count % self.plot_columns
-        self.plots_layout.addWidget(plot_widget, row, col)
+        self.plots_layout.addWidget(plot_widget, row, col, QtCore.Qt.AlignTop)
         self.plot_widgets.append(plot_widget)
         self.plots_container.update()
         if do_resample:
             self._resample_current_view(silent=True)
+
+    def add_all_1d_plots(self):
+        """Add a 1D plot for every input and output that is not plotted in 1D yet."""
+        existing = {w.axis_names for w in self.plot_widgets}
+        names = [n for n in self.inputs + self.outputs if (n,) not in existing]
+        if not names:
+            return
+        if len(names) > 12:
+            answer = QtWidgets.QMessageBox.question(
+                self,
+                "Add 1D plots",
+                f"Add {len(names)} plots? Each one is sampled separately.",
+            )
+            if answer != QtWidgets.QMessageBox.Yes:
+                return
+        for name in names:
+            self.add_plot(name, dimension=1, do_resample=False)
+        self._resample_current_view(silent=True)
 
     def remove_plot(self, plot_widget):
         if plot_widget in self.plot_widgets:
@@ -386,7 +447,7 @@ class SolutionPlotMixin:
             for i, widget in enumerate(self.plot_widgets):
                 row = i // self.plot_columns
                 col = i % self.plot_columns
-                self.plots_layout.addWidget(widget, row, col)
+                self.plots_layout.addWidget(widget, row, col, QtCore.Qt.AlignTop)
 
             self.plots_container.update()
             self._resample_current_view(silent=True)
@@ -446,18 +507,24 @@ class SolutionPlotMixin:
         items = self.inputs + self.outputs
         self.combo_add_x.clear()
         self.combo_add_y.clear()
+        self.combo_add_z.clear()
         self.combo_add_x.addItems(items)
         self.combo_add_y.addItems(items)
+        self.combo_add_z.addItems(items)
         if self.combo_add_x.count() > 0:
             if len(self.inputs) >= 2:
                 self.combo_add_x.setCurrentText(self.inputs[0])
                 self.combo_add_y.setCurrentText(self.inputs[1])
+                self.combo_add_z.setCurrentText(
+                    self.inputs[2] if len(self.inputs) >= 3 else self.inputs[1]
+                )
             elif len(self.inputs) == 1:
                 self.combo_add_x.setCurrentText(self.inputs[0])
                 self.combo_add_y.setCurrentText(self.inputs[0])
+                self.combo_add_z.setCurrentText(self.inputs[0])
 
         if not self.plot_widgets:
-            self.add_plot()
+            self.add_plot(dimension=2)
 
         # Clear cached interpolation data when switching to Points mode
         viz_mode = self.combo_viz_mode.currentText()
@@ -508,22 +575,43 @@ class SolutionPlotMixin:
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(2)
         left_layout.setAlignment(QtCore.Qt.AlignTop)
-        self.add_legend_item("Good Design", "#00aa00", legend_layout=left_layout)
+        counts = self._legend_counts()
+        good_text = ""
+        if counts is not None:
+            total, good, per_qoi = counts
+            good_text = self._legend_count_text(good, total)
+        self.add_legend_item(
+            "Good Design",
+            "#00aa00",
+            legend_layout=left_layout,
+            key="__good__",
+            count_text=good_text,
+        )
 
         if self.problem and self.problem.quantities_of_interest:
-            qois_to_show = self.problem.quantities_of_interest
+            qois_to_show = list(self.problem.quantities_of_interest)
         else:
             qois_to_show = [{"name": name} for name in self.outputs]
+        if counts is not None:
+            # Most frequent violations first; sort is stable so ties keep QoI order.
+            qois_to_show.sort(key=lambda q: -per_qoi.get(q["name"], 0))
         for qoi in qois_to_show:
             if not qoi.get("show_in_legend", True):
                 continue
             name = qoi["name"]
             display_name = qoi.get("display_name", name)
             color = self.qoi_colors.get(name, "red")
+            count_text = (
+                self._legend_count_text(per_qoi.get(name, 0), total)
+                if counts is not None
+                else ""
+            )
             self.add_legend_item(
                 f"Violating {format_html(display_name)}",
                 color,
                 legend_layout=left_layout,
+                key=name,
+                count_text=count_text,
             )
         left_layout.addStretch()
         columns.addWidget(left_column, stretch=1)
@@ -570,19 +658,72 @@ class SolutionPlotMixin:
 
         self.legend_layout.addWidget(container)
 
-    def add_legend_item(self, name, color, legend_layout=None):
-        item = QtWidgets.QWidget()
+    @staticmethod
+    def _legend_count_text(count: int, total: int) -> str:
+        pct = 100.0 * count / total if total else 0.0
+        return f" <span style='color: gray;'>{count} ({pct:.0f}%)</span>"
+
+    def _legend_counts(self):
+        """Return (total, good, {qoi_name: first-violation count}) or None."""
+        samples = self.last_samples
+        qois = self.problem.quantities_of_interest if self.problem else None
+        if not isinstance(samples, dict) or not qois:
+            return None
+        try:
+            is_good = np.asarray(samples["is_good"]).ravel().astype(bool)
+            violation = np.asarray(samples["violation_idx"], dtype=float).ravel()
+            if len(violation) != len(is_good):
+                return None
+            bad = violation[~is_good]
+            bad = bad[np.isfinite(bad)].astype(int) % len(qois)
+            per_index = np.bincount(bad, minlength=len(qois))
+            per_qoi = {q["name"]: int(per_index[i]) for i, q in enumerate(qois)}
+            return len(is_good), int(is_good.sum()), per_qoi
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _style_legend_item(self, swatch, label, color, hidden):
+        if hidden:
+            swatch.setStyleSheet(
+                "background-color: transparent; border: 1px dashed #999; border-radius: 4px;"
+            )
+            label.setStyleSheet("font-size: 9pt; color: gray;")
+        else:
+            swatch.setStyleSheet(
+                f"background-color: {color}; border: 1px solid #666; border-radius: 4px;"
+            )
+            label.setStyleSheet("font-size: 9pt;")
+
+    def _toggle_legend_key(self, key, color, swatch, label):
+        if key in self.hidden_legend_keys:
+            self.hidden_legend_keys.discard(key)
+        else:
+            self.hidden_legend_keys.add(key)
+        self._style_legend_item(swatch, label, color, key in self.hidden_legend_keys)
+        for plot_widget in self.plot_widgets:
+            plot_widget.plot()
+
+    def add_legend_item(
+        self, name, color, legend_layout=None, key=None, count_text=""
+    ):
+        item = _LegendItem()
         layout = QtWidgets.QHBoxLayout(item)
         layout.setContentsMargins(5, 4, 5, 4)
         layout.setSpacing(10)
         lbl_color = QtWidgets.QLabel()
         lbl_color.setFixedSize(18, 18)
-        lbl_color.setStyleSheet(
-            f"background-color: {color}; border: 1px solid #666; border-radius: 4px;"
-        )
-        lbl_text = QtWidgets.QLabel(name)
+        lbl_text = QtWidgets.QLabel(f"{name}{count_text}")
         lbl_text.setTextFormat(QtCore.Qt.RichText)
-        lbl_text.setStyleSheet("font-size: 9pt;")
+        hidden = key is not None and key in self.hidden_legend_keys
+        self._style_legend_item(lbl_color, lbl_text, color, hidden)
+        if key is not None:
+            item.setCursor(QtCore.Qt.PointingHandCursor)
+            item.setToolTip("Click to show or hide these points")
+            item.clicked.connect(
+                lambda k=key, c=color, s=lbl_color, t=lbl_text: self._toggle_legend_key(
+                    k, c, s, t
+                )
+            )
         layout.addWidget(lbl_color)
         layout.addWidget(lbl_text)
         layout.addStretch()

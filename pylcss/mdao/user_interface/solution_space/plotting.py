@@ -11,6 +11,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from pylcss.user_interface.common.text_utils import format_html
 from pylcss.user_interface.common.theme_manager import COLORS
 from .plot_rendering import PlotRenderingMixin
+from .ui_setup import _secondary
 
 __all__ = [
     "ArrowLine",
@@ -187,20 +188,89 @@ class ArrowLine(pg.GraphicsObject):
         )
 
 
+class CurvedArrowLine(ArrowLine):
+    """Arrow drawn as an S-curve that leaves and enters nodes vertically."""
+
+    def _calculate_geometry(self):
+        start, end = self.start_pos, self.end_pos
+        dx, dy = end.x() - start.x(), end.y() - start.y()
+        dist = np.hypot(dx, dy)
+        if dist < 0.001:
+            self.valid = False
+            return
+        self.valid = True
+
+        bend = 0.5 * dy
+        # Direction the curve arrives with: vertical for layered edges.
+        if abs(dy) > 0.001:
+            ux, uy = 0.0, 1.0 if dy > 0 else -1.0
+        else:
+            ux, uy = dx / dist, dy / dist
+
+        tip_x = end.x() - ux * self.node_radius
+        tip_y = end.y() - uy * self.node_radius
+        base_x = tip_x - ux * self.head_len
+        base_y = tip_y - uy * self.head_len
+        px, py = -uy, ux
+        head_width = self.head_len * 0.5
+        self.arrow_points = [
+            (tip_x, tip_y),
+            (base_x + px * head_width, base_y + py * head_width),
+            (base_x - px * head_width, base_y - py * head_width),
+        ]
+
+        self.curve_path = QtGui.QPainterPath(QtCore.QPointF(start.x(), start.y()))
+        self.curve_path.cubicTo(
+            QtCore.QPointF(start.x(), start.y() + bend),
+            QtCore.QPointF(base_x, base_y - bend),
+            QtCore.QPointF(base_x, base_y),
+        )
+
+    def paint(self, p, *args):
+        if not self.valid:
+            return
+        pen = QtGui.QPen(self.color)
+        pen.setWidthF(self.line_width)
+        pen.setCosmetic(False)
+        pen.setCapStyle(QtCore.Qt.RoundCap)
+        p.setPen(pen)
+        p.setBrush(QtCore.Qt.NoBrush)
+        p.drawPath(self.curve_path)
+
+        p.setBrush(self.color)
+        p.setPen(QtCore.Qt.NoPen)
+        p.drawPolygon(
+            QtGui.QPolygonF([QtCore.QPointF(x, y) for x, y in self.arrow_points])
+        )
+
+    def boundingRect(self):
+        if not self.valid:
+            return QtCore.QRectF()
+        return self.curve_path.boundingRect().adjusted(-0.3, -0.3, 0.3, 0.3)
+
+
 class VariantRequirementsDialog(QtWidgets.QDialog):
     def __init__(self, variant_name, problem, parent=None):
         super().__init__(parent)
         self.variant_name = variant_name
         self.problem = problem
         self.setWindowTitle(f"Edit Requirements - {variant_name}")
-        self.resize(500, 400)
+        row_count = len(self.problem.quantities_of_interest)
+        self.resize(560, min(620, max(300, 200 + 36 * row_count)))
 
         layout = QtWidgets.QVBoxLayout(self)
 
         # Instructions
-        instructions = QtWidgets.QLabel("Define requirement bounds for this variant.")
-        instructions.setStyleSheet("font-weight: bold; margin-bottom: 10px;")
+        instructions = QtWidgets.QLabel(f"Requirement bounds for variant '{variant_name}'")
+        instructions.setStyleSheet("font-weight: bold;")
         layout.addWidget(instructions)
+        hint = QtWidgets.QLabel(
+            "Enter a number, -inf or inf (no limit). Bold values differ from the base requirements."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray;")
+        layout.addWidget(hint)
+        self._base = []
 
         # Table for QoI requirements
         self.req_table = QtWidgets.QTableWidget()
@@ -209,6 +279,11 @@ class VariantRequirementsDialog(QtWidgets.QDialog):
             ["QoI Name", "Unit", "Min Requirement", "Max Requirement"]
         )
         layout.addWidget(self.req_table)
+        header = self.req_table.horizontalHeader()
+        header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QtWidgets.QHeaderView.Stretch)
+        self.req_table.verticalHeader().setDefaultSectionSize(36)
 
         # Populate table
         self.req_table.setRowCount(len(self.problem.quantities_of_interest))
@@ -227,23 +302,82 @@ class VariantRequirementsDialog(QtWidgets.QDialog):
 
             min_edit = QtWidgets.QLineEdit(str(min_val))
             max_edit = QtWidgets.QLineEdit(str(max_val))
+            for edit in (min_edit, max_edit):
+                edit.setMinimumHeight(28)
+                edit.textChanged.connect(self._validate)
 
+            self._base.append((qoi["min"], qoi["max"]))
             self.req_table.setCellWidget(i, 2, min_edit)
             self.req_table.setCellWidget(i, 3, max_edit)
 
+        self.lbl_status = QtWidgets.QLabel()
+        self.lbl_status.setStyleSheet("color: #cf222e;")
+        layout.addWidget(self.lbl_status)
+
         # Buttons
         btn_layout = QtWidgets.QHBoxLayout()
+        self.btn_reset = _secondary(QtWidgets.QPushButton("Reset to base"))
+        self.btn_reset.setToolTip("Restore every bound to the base requirements")
+        self.btn_reset.clicked.connect(self._reset_to_base)
+        btn_layout.addWidget(self.btn_reset)
         btn_layout.addStretch()
         self.btn_ok = QtWidgets.QPushButton("OK")
+        self.btn_ok.setDefault(True)
         self.btn_ok.clicked.connect(self.accept)
-        self.btn_cancel = QtWidgets.QPushButton("Cancel")
+        self.btn_cancel = _secondary(QtWidgets.QPushButton("Cancel"))
         self.btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(self.btn_cancel)
         btn_layout.addWidget(self.btn_ok)
         layout.addLayout(btn_layout)
 
-        # Adjust table column widths
-        self.req_table.resizeColumnsToContents()
+        self._validate()
+
+    @staticmethod
+    def _parse(text):
+        try:
+            return float(text.strip())  # float() accepts -inf and inf
+        except ValueError:
+            return None
+
+    def _base_float(self, row, col):
+        try:
+            return float(self._base[row][col])
+        except (TypeError, ValueError):
+            return None
+
+    def _validate(self):
+        error = ""
+        for i in range(self.req_table.rowCount()):
+            min_edit = self.req_table.cellWidget(i, 2)
+            max_edit = self.req_table.cellWidget(i, 3)
+            lo, hi = self._parse(min_edit.text()), self._parse(max_edit.text())
+            bad_lo = bool(min_edit.text().strip()) and lo is None
+            bad_hi = bool(max_edit.text().strip()) and hi is None
+            crossed = lo is not None and hi is not None and lo > hi
+            if not error:
+                name = self.req_table.item(i, 0).text()
+                if bad_lo or bad_hi:
+                    error = f"{name}: enter a number, -inf or inf."
+                elif crossed:
+                    error = f"{name}: minimum is above maximum."
+            for col, edit, value, bad in (
+                (0, min_edit, lo, bad_lo or crossed),
+                (1, max_edit, hi, bad_hi or crossed),
+            ):
+                differs = value is not None and value != self._base_float(i, col)
+                edit.setStyleSheet(
+                    "QLineEdit { padding: 2px 6px;"
+                    + (" border: 1px solid #cf222e;" if bad else "")
+                    + (" font-weight: bold;" if differs else "")
+                    + " }"
+                )
+        self.lbl_status.setText(error)
+        self.btn_ok.setEnabled(not error)
+
+    def _reset_to_base(self):
+        for i, (base_min, base_max) in enumerate(self._base):
+            self.req_table.cellWidget(i, 2).setText(str(base_min))
+            self.req_table.cellWidget(i, 3).setText(str(base_max))
 
     def get_overrides(self):
         """Get the requirement overrides from the dialog."""
@@ -330,6 +464,7 @@ class PlotWidget(PlotRenderingMixin, QtWidgets.QWidget):
         super().__init__(parent)
         self.x_name = x_name
         self.y_name = y_name
+        self.axis_names = (x_name, y_name)
         self.samples = None  # Per-plot samples
         self.plotting = False
 
@@ -365,18 +500,19 @@ class PlotWidget(PlotRenderingMixin, QtWidgets.QWidget):
         # Controls (Simplified)
         ctrl_layout = QtWidgets.QHBoxLayout()
 
-        # Title Label
+        # Title shown inside the plot (kept in exports); no separate header label
         title = f"{format_html(y_name)} vs {format_html(x_name)}"
-        self.lbl_title = QtWidgets.QLabel(title)
-        self.lbl_title.setStyleSheet("font-weight: bold;")
+        self.title_text = title
 
-        self.btn_remove = QtWidgets.QPushButton("X")
-        self.btn_remove.setFixedSize(18, 18)
+        self.btn_remove = QtWidgets.QPushButton("\u2715")
+        self.btn_remove.setFixedSize(20, 18)
+        self.btn_remove.setToolTip("Remove this plot")
         self.btn_remove.setStyleSheet(
-            "background-color: #ff4444; color: white; font-weight: bold;"
+            "QPushButton { background: transparent; color: #666666; border: none;"
+            " padding: 0; min-width: 0; font-size: 11px; }"
+            " QPushButton:hover { color: #cf222e; }"
         )
 
-        ctrl_layout.addWidget(self.lbl_title)
         ctrl_layout.addStretch()
         ctrl_layout.addWidget(self.btn_remove)
 
@@ -413,10 +549,11 @@ class PlotWidget(PlotRenderingMixin, QtWidgets.QWidget):
         self.btn_zoom.clicked.connect(self.toggle_zoom)
         self.btn_zoom.setFixedHeight(18)
         self.btn_zoom.setStyleSheet(
-            "QPushButton { background-color:#5865F2; color:white; border:none;"
-            " padding:0 5px; border-radius:3px; font-size:10px; min-width:0; }"
-            " QPushButton:hover { background-color:#4752c4; }"
-            " QPushButton:pressed, QPushButton:checked { background-color:#383a40; }"
+            "QPushButton { background: transparent; color: #555555;"
+            " border: 1px solid #c8ccd0; padding: 0 6px; border-radius: 3px;"
+            " font-size: 10px; min-width: 0; }"
+            " QPushButton:hover { background: #eef0f3; }"
+            " QPushButton:checked { background: #d0d5dd; }"
         )
 
         self.btn_save = QtWidgets.QPushButton("Save")
@@ -424,14 +561,14 @@ class PlotWidget(PlotRenderingMixin, QtWidgets.QWidget):
         self.btn_save.clicked.connect(self.save_plot)
         self.btn_save.setFixedHeight(18)
         self.btn_save.setStyleSheet(
-            "QPushButton { background-color:#5865F2; color:white; border:none;"
-            " padding:0 5px; border-radius:3px; font-size:10px; min-width:0; }"
-            " QPushButton:hover { background-color:#4752c4; }"
-            " QPushButton:pressed { background-color:#383a40; }"
+            "QPushButton { background: transparent; color: #555555;"
+            " border: 1px solid #c8ccd0; padding: 0 6px; border-radius: 3px;"
+            " font-size: 10px; min-width: 0; }"
+            " QPushButton:hover { background: #eef0f3; }"
         )
 
-        ctrl_layout.insertWidget(2, self.btn_zoom)
-        ctrl_layout.insertWidget(3, self.btn_save)
+        ctrl_layout.insertWidget(1, self.btn_zoom)
+        ctrl_layout.insertWidget(2, self.btn_save)
 
         # Data reference
         self.parent_widget = None  # To access data

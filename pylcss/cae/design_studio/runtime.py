@@ -89,7 +89,7 @@ _OVERRIDEABLE_PROPERTIES = {
         "displacement_z_enabled",
     ),
     "com.cad.sim.load": (
-        "force_x", "force_y", "force_z", "gravity_accel",
+        "force_x", "force_y", "force_z", "pressure", "gravity_accel",
     ),
     "com.cad.topopt.load": ("force_x", "force_y", "force_z"),
     "com.cad.sim.pressure_load": ("pressure",),
@@ -664,12 +664,14 @@ def _load_graph(abs_path: str):
     from pylcss.cae.design_studio.session_persistence import (
         expand_guided_topology_session,
         migrate_lattice_topology_nodes,
+        sanitize_unregistered_nodes,
     )
 
     # Retype before expansion: which guided defaults a study is hydrated with
     # depends on whether it is a lattice study.
     migrate_lattice_topology_nodes(session_data)
     expand_guided_topology_session(session_data)
+    sanitize_unregistered_nodes(session_data)
     graph.clear_session()
     graph.deserialize_session(session_data)
     project_dir = str(Path(abs_path).resolve().parent)

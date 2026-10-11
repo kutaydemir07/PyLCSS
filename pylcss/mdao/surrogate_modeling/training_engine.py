@@ -28,6 +28,13 @@ from .training import (
     evaluate_model_predictions,
 )
 
+from .auto_surrogate import AutoSurrogateModel, AutoSurrogateStrategy
+from .custom_architecture import (
+    CustomArchitectureModel,
+    CustomArchitectureStrategy,
+    CustomNeuralNet,
+)
+
 if TORCH_AVAILABLE:
     from .geometry_training import GeomDeepONetStrategy, GINOStrategy
 else:
@@ -35,6 +42,11 @@ else:
     GeomDeepONetStrategy = None  # type: ignore[assignment,misc]
 
 __all__ = [
+    "AutoSurrogateModel",
+    "AutoSurrogateStrategy",
+    "CustomArchitectureModel",
+    "CustomArchitectureStrategy",
+    "CustomNeuralNet",
     "DILL_AVAILABLE",
     "JOBLIB_AVAILABLE",
     "QMC_AVAILABLE",

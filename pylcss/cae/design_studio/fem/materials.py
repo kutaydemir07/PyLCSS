@@ -82,6 +82,19 @@ class MaterialNode(CadQueryNode):
         # when this material feeds an impact study.
         add_impact_material_properties(self)
 
+    def set_property(self, name, value, push_undo=True):
+        super().set_property(name, value, push_undo=push_undo)
+        if name == 'preset' and value != 'Custom' and value in MATERIAL_DATABASE:
+            mat = MATERIAL_DATABASE[value]
+            if 'E' in mat:
+                super().set_property('youngs_modulus', float(mat['E']), push_undo=push_undo)
+            if 'nu' in mat:
+                super().set_property('poissons_ratio', float(mat['nu']), push_undo=push_undo)
+            if 'rho' in mat:
+                super().set_property('density', float(mat['rho']), push_undo=push_undo)
+            if 'k' in mat:
+                super().set_property('thermal_conductivity', float(mat['k']), push_undo=push_undo)
+
     def run(self):
         self.clear_error()
         # Check if using preset or custom

@@ -190,6 +190,8 @@ def run_calculix_static(
                         deformation_scale=deformation_scale,
                         analysis_type=effective_analysis_type,
                         constraints=constraints,
+                        loads=loads,
+                        material=material,
                     )
                     rho = float(material.get("rho", material.get("density", 0.0)))
                     if rho > 0.0 and "volume" in result_payload:

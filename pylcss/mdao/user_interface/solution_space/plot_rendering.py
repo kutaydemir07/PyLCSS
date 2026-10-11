@@ -356,6 +356,9 @@ class PlotRenderingMixin:
                 else:
                     # --- FAST VECTORIZED POINTS MODE ---
                     n_points = len(x_data)
+                    hidden_keys = getattr(
+                        self.parent_widget, "hidden_legend_keys", ()
+                    )
 
                     # 1. Create array of RGBA values (Default: Red for bad points)
                     # Shape: (N, 4), type: uint8 (0-255)
@@ -366,6 +369,8 @@ class PlotRenderingMixin:
                     # Safe because is_good is guaranteed 1D
                     if is_good is not None and np.any(is_good):
                         colors[is_good] = [0, 170, 0, 255]
+                        if "__good__" in hidden_keys:
+                            colors[is_good] = [0, 0, 0, 0]
 
                     # 3. Handle Violation Colors (Vectorized)
                     # Only process bad points that have a violation index
@@ -420,7 +425,12 @@ class PlotRenderingMixin:
                                                 # Convert hex to RGB
                                                 c = QtGui.QColor(hex_color)
                                                 rgb = np.array(
-                                                    [c.red(), c.green(), c.blue(), 255],
+                                                    [
+                                                        c.red(),
+                                                        c.green(),
+                                                        c.blue(),
+                                                        0 if q_name in hidden_keys else 255,
+                                                    ],
                                                     dtype=np.uint8,
                                                 )
 
@@ -444,6 +454,9 @@ class PlotRenderingMixin:
                         # Get mask for points with this color
                         # Now guaranteed to be 1D because inverse_indices is 1D
                         color_mask = inverse_indices == color_idx
+
+                        if int(unique_color[3]) == 0:
+                            continue  # category hidden via the legend
 
                         if np.any(color_mask):
                             # Extract points for this color
@@ -733,7 +746,7 @@ class PlotRenderingMixin:
 
         self.plot_item.setLabel("bottom", x_label)
         self.plot_item.setLabel("left", y_label)
-        self.plot_item.setTitle(f"{x_label_text} vs {y_label_text}")
+        self.plot_item.setTitle(f"{y_label_text} vs {x_label_text}")
 
         # X-Axis Requirements (Vertical Lines)
         qois = [q["name"] for q in self.parent_widget.problem.quantities_of_interest]

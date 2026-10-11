@@ -38,7 +38,7 @@ class SobolResult(TypedDict):
     confidence_first: FloatArray
     confidence_total: FloatArray
     confidence_second: FloatArray | None
-    s2_matrix: FloatArray
+    s2_matrix: FloatArray | None
     calc_second_order: bool
     method: Literal["Sobol"]
 

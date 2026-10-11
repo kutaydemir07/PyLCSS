@@ -250,7 +250,7 @@ try {
         $receipt = [ordered]@{
             product = "PyLCSS"
             workspaces = @($selectedWorkspaces)
-            version = "2.2.0"
+            version = "2.2.0.2"
             installed_at = (Get-Date).ToUniversalTime().ToString("o")
             python = (& $pythonExe --version 2>&1 | Out-String).Trim()
             runtime = $pythonRoot

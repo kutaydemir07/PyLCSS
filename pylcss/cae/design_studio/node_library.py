@@ -5,8 +5,8 @@
 
 from pylcss.cae.design_studio.nodes import (
     # GUI-native parametric geometry.
-    BoxNode, CylinderNode, TubeNode, CylindricalShellNode, BooleanNode, ThroughHoleNode,
-    FilletNode, TransformNode, LinearPatternNode,
+    BoxNode, CylinderNode, BooleanNode,
+    TransformNode, LinearPatternNode,
 
     # Optional expert geometry.
     CadQueryCodeNode,
@@ -26,7 +26,7 @@ from pylcss.cae.design_studio.nodes import (
 
     # FEA / Simulation.
     MaterialNode, MeshNode, FEAComponentNode, ConstraintNode, LoadNode, PressureLoadNode,
-    SolverNode, TopologyOptVoxelNode,
+    SolverNode, ModalSolverNode, TopologyOptVoxelNode,
 
     # Crash / Impact.
     ImpactConditionNode, CrashSolverNode,
@@ -49,11 +49,7 @@ NODE_CLASS_MAPPING = {
     # Geometry — GUI-native parametric modeling.
     'com.cad.geometry.box': BoxNode,
     'com.cad.geometry.cylinder': CylinderNode,
-    'com.cad.geometry.tube': TubeNode,
-    'com.cad.geometry.cylindrical_shell': CylindricalShellNode,
     'com.cad.geometry.boolean': BooleanNode,
-    'com.cad.geometry.through_hole': ThroughHoleNode,
-    'com.cad.geometry.fillet': FilletNode,
     'com.cad.geometry.transform': TransformNode,
     'com.cad.geometry.linear_pattern': LinearPatternNode,
 
@@ -88,6 +84,7 @@ NODE_CLASS_MAPPING = {
     'com.cad.sim.gravity':        LoadNode,
     'com.cad.sim.pressure_load':  PressureLoadNode,
     'com.cad.sim.solver':         SolverNode,
+    'com.cad.sim.modal_solver':   ModalSolverNode,
     'com.cad.sim.topopt_voxel':    TopologyOptVoxelNode,
     'com.cad.sim.lattice_voxel':   LatticeOptVoxelNode,
     'com.cad.sim.lattice_infill':  LatticeInfillNode,

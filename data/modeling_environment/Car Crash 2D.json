@@ -4,6 +4,35 @@
   "_title": "Crashworthiness Trade Space — Screening Surrogate",
   "_purpose": "Explore the coupled mass, intrusion, and acceleration trade space of a crash structure before committing to expensive explicit simulations.",
   "_fidelity": "Analytical screening response surface, not an impact solver. Refit the equations to correlated OpenRadioss or test data before making safety decisions.",
+  "_visual_target": "Inspect 2D solution-space trade contours balancing peak deceleration against crush tube energy absorption.",
+  "_engineering_decision": "Select Stage 1 and Stage 2 crush tube force levels that decouple deceleration severity from intrusion stroke, bounding maximum pulse acceleration while keeping residual kinetic energy within acceptable dissipation limits.",
+  "_baseline": "Stage 1 force = 85.0 kN, Stage 2 force = 120.0 kN, yielding peak acceleration = 24.2 g, force order margin = 35.0 kN, residual energy = 1.8 kJ.",
+  "_design_variables": [
+    "Stage 1 crush force: 60.0 to 110.0 kN",
+    "Stage 2 crush force: 90.0 to 150.0 kN"
+  ],
+  "_load_cases": [
+    "Frontal rigid wall impact at 56 km/h with 1500 kg effective vehicle mass"
+  ],
+  "_requirements": [
+    {
+      "name": "Peak Acceleration",
+      "requirement": "Peak vehicle deceleration <= 28.0 g to prevent excessive occupant restraint loads."
+    },
+    {
+      "name": "Force Ordering",
+      "requirement": "Stage 2 force >= Stage 1 force + 15.0 kN to ensure progressive staging."
+    },
+    {
+      "name": "Residual Energy",
+      "requirement": "Residual impact kinetic energy <= 3.0 kJ prior to compartment firewall contact."
+    }
+  ],
+  "_deliverables": [
+    "Solution space 2D box bounds for Stage 1 and Stage 2 force levels",
+    "Coupled trade-off contour plots showing deceleration vs energy absorption",
+    "Design configuration table for candidate explicit FEA crash simulations"
+  ],
   "_workflow": [
     "Explore design-variable bounds and requirement feasibility.",
     "Identify a robust box-shaped region for thickness and crush length.",

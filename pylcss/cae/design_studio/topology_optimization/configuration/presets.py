@@ -38,23 +38,10 @@ def migrate_design_goal(value: Any) -> Tuple[str, str | None]:
         return str(value or 'Lightweight Stiffness'), None
     return replacement, None
 INDUSTRIAL_MANUFACTURING_PROCESSES = (
-    'None',
-    'Additive',
-    'Cast / Moulded',
-    'Extruded',
-    'Symmetric',
-    'Additive + Symmetric',
-    'Extruded + Symmetric',
+    'Normal',
 )
-# Only a swept profile has an exact editable B-rep, so these are the presets
-# that hand a study a CAD body. Every other process is still a valid study;
-# its result is delivered as the recovered surface.
-EXTRUDED_MANUFACTURING_PROCESSES = ('Extruded', 'Extruded + Symmetric')
-SYMMETRIC_MANUFACTURING_PROCESSES = (
-    'Symmetric',
-    'Additive + Symmetric',
-    'Extruded + Symmetric',
-)
+EXTRUDED_MANUFACTURING_PROCESSES: Tuple[str, ...] = ()
+SYMMETRIC_MANUFACTURING_PROCESSES: Tuple[str, ...] = ()
 # Guided discretization ceiling. Not a fidelity choice: the grid is sized from
 # the study's physical feature lengths, and these two only stop a large model
 # from being refined past what is solvable in a sitting.
@@ -70,6 +57,8 @@ _GUIDED_TOTAL_CELL_BUDGET = 40_000
 
 def _choice(value: Any, choices: Tuple[str, ...], default: str) -> str:
     text = str(value or '').strip().lower().replace('_', ' ').replace('-', ' ')
+    if text in ('none', 'unrestricted', 'standard', 'normal', ''):
+        return 'Normal' if 'Normal' in choices else default
     if text == 'thermo mechanical':
         text = 'coupled structural + thermal'
     for choice in choices:
@@ -155,7 +144,7 @@ def _scaled_grid(
 
 def industrial_topopt_defaults(
     design_goal: Any = 'Lightweight Stiffness',
-    manufacturing_process: Any = 'None',
+    manufacturing_process: Any = 'Normal',
     *,
     nelx: Any = 30,
     nely: Any = 20,
@@ -168,7 +157,7 @@ def industrial_topopt_defaults(
     the Qt property panel without tying the solver backend to Qt.
     """
     goal = _choice(design_goal, INDUSTRIAL_DESIGN_GOALS, 'Lightweight Stiffness')
-    manufacturing = _choice(manufacturing_process, INDUSTRIAL_MANUFACTURING_PROCESSES, 'None')
+    manufacturing = _choice(manufacturing_process, INDUSTRIAL_MANUFACTURING_PROCESSES, 'Normal')
 
     # There is no fidelity dropdown. What used to be "Analysis Resolution"
     # bundled six settings across three unrelated concerns -- discretization,
@@ -198,8 +187,6 @@ def industrial_topopt_defaults(
         max_iter=120,
         tol=0.0035,
         density_cutoff=RECOVERY_ISO_VALUE,
-        mesh_decimate_ratio=1.00,
-        surface_quality='Professional',
     )
 
     settings: Dict[str, Any] = {
@@ -214,22 +201,12 @@ def industrial_topopt_defaults(
         # `load_aggregation` is deliberately absent: it is a user decision about
         # the load envelope, not something a fidelity or process preset owns.
         'stress_constraint': False,
-        'symmetry': 'None',
-        'extrusion': 'None',
-        'overhang_build_axis': 'None',
-        'pull_out_axis': 'None',
-        'max_member_size_voxels': 0.0,
-        'maximum_member_size_mm': 0.0,
-        'pattern_repeat': 1,
-        'pattern_axis': 'Y',
-        'print_ready_mesh': True,
         # The density field is the result an optimization engineer needs to
         # judge first.  CAD remains available as a result view, but a plain
         # shaded solid hides intermediate density and the retained/removed
         # material decision.
         'visualization': 'Density',
-        'surface_recovery_method': 'Volume-Preserving SDF (VTK)',
-        'exclusion_scope': 'All Loads and Supports',
+        'exclusion_scope': 'None',
         'exclusion_thickness_mode': 'Program Controlled',
         'exclusion_thickness_mm': 2.0,
         **quality_settings,
@@ -254,31 +231,6 @@ def industrial_topopt_defaults(
             optimizer='MMA',
             max_iter=max(int(settings['max_iter']), 120),
         )
-    if manufacturing in ('Additive', 'Additive + Symmetric'):
-        # No cutoff bump: raising the recovery iso value to shed thin features
-        # is a post-hoc trim of a design the optimizer already committed to, and
-        # it silently discards stiffness the compliance was measured with. The
-        # printable length scale belongs to `minimum_member_size_mm`, which acts
-        # during the solve, so the recovered shape stays the analyzed one.
-        settings.update(
-            overhang_build_axis='+Y',
-            print_ready_mesh=True,
-        )
-    if manufacturing == 'Cast / Moulded':
-        # A one-sided tool pulled in +Z. Undercut removal is what makes an
-        # optimized rib pattern on a housing actually demouldable.
-        settings.update(pull_out_axis='+Z', print_ready_mesh=True)
-    if manufacturing in EXTRUDED_MANUFACTURING_PROCESSES:
-        settings.update(extrusion='Z', print_ready_mesh=True)
-    if manufacturing in SYMMETRIC_MANUFACTURING_PROCESSES:
-        # Mirroring across the extrusion axis is vacuous: the density is
-        # averaged along that axis anyway, so the mirror has nothing to do.
-        # An extruded symmetric part has to mirror inside its profile.
-        settings.update(
-            symmetry='X'
-            if manufacturing in EXTRUDED_MANUFACTURING_PROCESSES
-            else 'Z'
-        )
 
     return settings
 
@@ -291,7 +243,7 @@ DEFAULT_LATTICE_STRUCTURE_MODE = 'Gyroid Lattice'
 
 def industrial_lattice_defaults(
     design_goal: Any = 'Lightweight Stiffness',
-    manufacturing_process: Any = 'None',
+    manufacturing_process: Any = 'Normal',
     *,
     nelx: Any = 30,
     nely: Any = 20,

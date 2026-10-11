@@ -232,7 +232,7 @@ class LoadNode(CadQueryNode):
     whole-mesh FEA load and therefore still requires one.
     """
     __identifier__ = 'com.cad.sim.load'
-    NODE_NAME = 'Force'
+    NODE_NAME = 'Load'
 
     def __init__(self):
         super().__init__()
@@ -244,14 +244,14 @@ class LoadNode(CadQueryNode):
         self.add_input('force_x', color=(255, 255, 0))
         self.add_input('force_y', color=(255, 255, 0))
         self.add_input('force_z', color=(255, 255, 0))
+        # Input for parametric surface pressure magnitude
+        self.add_input('pressure', color=(255, 255, 0))
 
         self.add_output('loads', color=(255, 255, 0))
 
-        # Load type selection — Moment and Remote Force removed: not yet implemented.
-        # They were listed in the dropdown but returned None with an error, giving users
-        # the impression they work.  Re-add them when implemented.
+        # Load type selection — supports Force, Pressure, Gravity, and Bearing Load.
         self.create_property('load_type', 'Force', widget_type='combo',
-                             items=['Force', 'Gravity'])
+                             items=['Force', 'Pressure', 'Gravity', 'Bearing Load'])
 
         # Keep string condition as fallback for backward compatibility
         self.create_property('condition', '', widget_type='text')
@@ -260,6 +260,10 @@ class LoadNode(CadQueryNode):
         self.create_property('force_x', 0.0, widget_type='float')
         self.create_property('force_y', 0.0, widget_type='float')
         self.create_property('force_z', 0.0, widget_type='float')
+        # Pressure values
+        self.create_property('pressure', 1.0, widget_type='float')
+        self.create_property('direction', 'Inward', widget_type='combo',
+                             items=['Inward', 'Outward'])
         # Hidden compatibility fields. Moment loads were never implemented.
         self.create_property('moment_x', 0.0, widget_type='float')
         self.create_property('moment_y', 0.0, widget_type='float')
@@ -268,19 +272,19 @@ class LoadNode(CadQueryNode):
         self.create_property('gravity_accel', 9810.0, widget_type='float')
         self.create_property('gravity_direction', '-Y', widget_type='combo',
                              items=['-Y', '-Z', '-X', '+Y', '+Z', '+X'])
+        # Multi-load case weighting for topology optimization
+        self.create_property('case_weight', 1.0, widget_type='float')
+        self.create_property('case_name', '', widget_type='text')
 
     def run(self):
         self.clear_error()
         mesh = self.get_input_value('mesh', None)
         target_wp = self.get_input_value('target_face', None)  # Not used for Gravity
 
-        # Resolve force inputs with fallback to properties
-        fx = self.get_input_value('force_x', 'force_x')
-        fy = self.get_input_value('force_y', 'force_y')
-        fz = self.get_input_value('force_z', 'force_z')
-
         load_type          = self.get_property('load_type')
         fallback_condition = self.get_property('condition')
+        case_weight        = float(self.get_property('case_weight') or 1.0)
+        case_name          = str(self.get_property('case_name') or '').strip()
 
         # ── Gravity body force: no face needed — acts on the whole body ──────────
         if load_type == 'Gravity':
@@ -296,14 +300,106 @@ class LoadNode(CadQueryNode):
                 'mesh':      mesh,
                 'accel':     accel,
                 'direction': self.get_property('gravity_direction'),
+                'weight':    case_weight,
+                'name':      case_name,
                 # Pre-solve viz: gravity uses a global body-force icon, no face
                 'viz': {'load_type': 'Gravity', 'direction': self.get_property('gravity_direction')},
             }
 
-        # ── Pressure load ───────────────────────────────────────────────────────
-        # NOTE: 'Pressure' is surfaced here for routing — actual assembly is done
-        # inside SolverNode.  LoadNode routes the face geometry and pressure value;
-        # SolverNode assembles the proper Neumann BC via FacetBasis.
+        # ── Pressure load: surface traction on selected face ───────────────────
+        if load_type == 'Pressure':
+            if target_wp is None:
+                self.set_error("Connect a selected target face to the pressure load.")
+                return None
+            if (
+                isinstance(target_wp, dict)
+                and str(target_wp.get('entity_type') or 'Face').title() != 'Face'
+            ):
+                self.set_error(
+                    "Pressure is a surface traction and requires a face selection; "
+                    "an edge or vertex has no loaded area."
+                )
+                return None
+            pressure = self.get_input_value('pressure', 'pressure')
+            try:
+                pressure = float(pressure)
+            except (TypeError, ValueError):
+                self.set_error("Pressure magnitude must be numeric.")
+                return None
+            if not np.isfinite(pressure) or pressure <= 0.0:
+                self.set_error("Pressure magnitude must be a finite value greater than zero.")
+                return None
+            face_objs = _target_face_objects(target_wp)
+            if not face_objs:
+                self.set_error("No faces found in target face input")
+                return None
+            direction = self.get_property('direction')
+            sign = 1.0 if direction == 'Inward' else -1.0
+            return {
+                'type': 'pressure',
+                'mesh': mesh,
+                'geometries': face_objs,
+                'geometry': face_objs[0],
+                'pressure': pressure * sign,
+                'weight': case_weight,
+                'name': case_name,
+                'viz': {
+                    'load_type': 'Pressure',
+                    'bbox': _selection_bbox(face_objs[0]),
+                    'color': '#ff00ff',
+                },
+            }
+
+        # ── Bearing Load: cosine compressive contact on cylindrical hole ───────
+        if load_type == 'Bearing Load':
+            if target_wp is None and not fallback_condition:
+                self.set_error("Connect a cylindrical target face or enter a condition for the bearing load.")
+                return None
+            fx = self.get_input_value('force_x', 'force_x')
+            fy = self.get_input_value('force_y', 'force_y')
+            fz = self.get_input_value('force_z', 'force_z')
+            try:
+                force_vec = np.asarray([fx, fy, fz], dtype=float)
+            except (TypeError, ValueError):
+                self.set_error("Bearing load force components must be numeric.")
+                return None
+            if not np.all(np.isfinite(force_vec)) or float(np.linalg.norm(force_vec)) <= 1e-12:
+                self.set_error("Bearing load must contain a finite, non-zero force vector.")
+                return None
+
+            face_objs = _target_face_objects(target_wp) if target_wp is not None else []
+            force_mag = float(np.linalg.norm(force_vec))
+            viz_faces = []
+            for f in face_objs:
+                if f is None:
+                    continue
+                center = _selection_center(f)
+                if center is not None:
+                    viz_faces.append({
+                        'center': center,
+                        'points': f.get('points') if isinstance(f, dict) else None,
+                    })
+
+            return {
+                'type': 'bearing_load',
+                'mesh': mesh,
+                'geometries': face_objs if face_objs else None,
+                'condition': fallback_condition if not face_objs else None,
+                'vector': force_vec.tolist(),
+                'weight': case_weight,
+                'name': case_name,
+                'viz': {
+                    'load_type': 'Bearing Load',
+                    'vector': force_vec.tolist(),
+                    'magnitude_N': force_mag,
+                    'faces': viz_faces,
+                },
+            }
+
+        # ── Force: vector components on selected face ──────────────────────────
+        fx = self.get_input_value('force_x', 'force_x')
+        fy = self.get_input_value('force_y', 'force_y')
+        fz = self.get_input_value('force_z', 'force_z')
 
         try:
             force_vec = np.asarray([fx, fy, fz], dtype=float)
@@ -325,6 +421,8 @@ class LoadNode(CadQueryNode):
                 'mesh': mesh,
                 'condition': fallback_condition,
                 'vector': force_vec.tolist(),
+                'weight': case_weight,
+                'name': case_name,
                 'viz': None,
             }
 
@@ -356,6 +454,8 @@ class LoadNode(CadQueryNode):
                 'mesh': mesh,
                 'geometries': face_objs,
                 'vector': force_vec,
+                'weight': case_weight,
+                'name': case_name,
                 # Pre-solve viewer overlay metadata — normalized direction + real magnitude
                 'viz': {
                     'load_type':   'Force',

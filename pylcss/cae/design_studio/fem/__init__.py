@@ -18,6 +18,7 @@ __all__ = [
     "MATERIAL_DATABASE",
     "MaterialNode",
     "MeshNode",
+    "ModalSolverNode",
     "OCCGeometry",
     "PressureLoadNode",
     "SolverNode",
@@ -47,6 +48,10 @@ _LAZY_EXPORTS = {
     ),
     "MaterialNode": ("pylcss.cae.design_studio.fem.materials", "MaterialNode"),
     "MeshNode": ("pylcss.cae.design_studio.fem.mesh", "MeshNode"),
+    "ModalSolverNode": (
+        "pylcss.cae.design_studio.fem.modal_solver",
+        "ModalSolverNode",
+    ),
     "OCCGeometry": ("pylcss.cae.design_studio.fem._helpers", "OCCGeometry"),
     "PressureLoadNode": (
         "pylcss.cae.design_studio.fem.boundary_conditions",

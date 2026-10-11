@@ -13,7 +13,8 @@ from .contracts import EvaluatableProblem, FloatArray, SampleBatch
 from .models import BoxSolutionSpace
 from .sampling import sample_box
 
-PlotPair = tuple[int, int]
+PlotAxes = tuple[int, ...]
+PlotPair = PlotAxes  # kept for callers that still pass (x, y) pairs
 
 
 def resample_solution_space(
@@ -67,30 +68,23 @@ def resample_solution_space(
     offset = np.zeros(dimension_count)
     samples_by_plot: list[SampleBatch] = []
 
-    for first_axis, second_axis in active_plots or ():
-        if first_axis < 0 or second_axis < 0:
+    for axes in active_plots or ():
+        axes = tuple(int(axis) for axis in axes)
+        if not axes or any(axis < 0 for axis in axes):
             raise ValueError("plot indices must not be negative")
 
+        # Axes beyond the design variables are outputs; they are never widened.
+        design_axes = [axis for axis in axes if axis < dimension_count]
         sample_bounds = bounds.copy()
-        if first_axis < dimension_count and second_axis < dimension_count:
+        if len(design_axes) == len(axes):
             if center_slice:
                 _fix_other_dimensions_at_center(
-                    sample_bounds, excluded={first_axis, second_axis}
+                    sample_bounds, excluded=set(design_axes)
                 )
-            sample_bounds[first_axis] = (
-                design_lower[first_axis],
-                design_upper[first_axis],
-            )
-            sample_bounds[second_axis] = (
-                design_lower[second_axis],
-                design_upper[second_axis],
-            )
-        else:
-            design_axis = first_axis if first_axis < dimension_count else second_axis
-            if design_axis >= dimension_count:
-                raise ValueError("each plot must include at least one design variable")
-            if center_slice:
-                _fix_other_dimensions_at_center(sample_bounds, excluded={design_axis})
+            for axis in design_axes:
+                sample_bounds[axis] = (design_lower[axis], design_upper[axis])
+        elif center_slice and design_axes:
+            _fix_other_dimensions_at_center(sample_bounds, excluded=set(design_axes))
 
         good, _count, bad, points, violations, qoi = sample_box(
             problem,

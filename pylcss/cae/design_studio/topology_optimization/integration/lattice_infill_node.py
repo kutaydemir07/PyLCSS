@@ -138,7 +138,13 @@ class LatticeInfillNode(LatticeOptVoxelNode):
         # connection that is silently ignored. `design_domain` is the body to
         # fill and is the only input.
         self.set_port_deletion_allowed(True)
-        for port_name in ("supports", "loads", "material"):
+        for port_name in (
+            "supports",
+            "loads",
+            "material",
+            "preserved_regions",
+            "obstacle_regions",
+        ):
             try:
                 self.delete_input(port_name)
             except Exception:  # pragma: no cover - port set varies by version
@@ -159,6 +165,7 @@ class LatticeInfillNode(LatticeOptVoxelNode):
         self.set_property("validate_after_optimize", False)
         self.set_property("visualization", "Manufactured Mesh")
         self.set_property("cad_export_filename", "lattice_infill.step")
+        self.set_property("cad_export_format", "STEP")
         # Expert, so no guided defaults rewrite the settings below and no
         # guided lattice interpretation is applied to a uniform field.
         self.set_property("workflow_mode", "Expert")
@@ -388,8 +395,8 @@ class LatticeInfillNode(LatticeOptVoxelNode):
         # Left independent, a Standard build was contoured at the Professional
         # cap and came back 2.1M triangles and a minute long for a three-cell
         # lattice — the control the user set governed half the chain. One
-        # setting, both stages.
-        self.set_property("surface_quality", quality_preset)
+        if self.has_property("surface_quality"):
+            self.set_property("surface_quality", quality_preset)
         logger.info(
             "Lattice infill build grid: %dx%dx%d voxels for a %.3g pitch "
             "(%.1f voxels per cell).",
@@ -459,7 +466,9 @@ class LatticeInfillNode(LatticeOptVoxelNode):
         recovery_time_s = time.perf_counter() - recovery_started
         stage("Checking the manufactured geometry")
         finalization_started = time.perf_counter()
-        output = finalize_topology_output(self, output_context, cancel_callback)
+        output = finalize_topology_output(
+            self, output_context, cancel_callback, progress_callback=progress_callback
+        )
         output["timing"] = {
             "optimization_s": 0.0,
             "recovery_s": float(recovery_time_s),

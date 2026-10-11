@@ -49,9 +49,12 @@ class BoundaryConditionInspectorMixin:
             combo.setCurrentText(current_label)
             combo.blockSignals(False)
             combo.currentTextChanged.connect(
-                lambda v: self.update_property(
-                    "constraint_type",
-                    support_labels.get(v, v),
+                lambda v: (
+                    self.update_property("constraint_type", support_labels.get(v, v)),
+                    QtCore.QTimer.singleShot(
+                        0,
+                        lambda n=node: self.display_node(n) if self.current_node is n else None,
+                    ),
                 )
             )
             lay.addRow("Support:", combo)
@@ -92,54 +95,28 @@ class BoundaryConditionInspectorMixin:
             grp.setLayout(lay)
             self.props_layout.addWidget(grp)
 
-            # Condition expression — used when no face is connected (e.g. all .cad examples)
-            cond_val = node.get_property("condition") or ""
-            try:
-                target_port = node.get_input("target_face")
-                has_target_geometry = bool(
-                    target_port and target_port.connected_ports()
-                )
-            except Exception:
-                has_target_geometry = False
-            if not has_target_geometry or cond_val:
-                grp2 = QtWidgets.QGroupBox("Coordinate Filter")
-                grp2.setToolTip(
-                    "Boolean expression over mesh-node coordinates x, y, z. "
-                    "Used only when no selection is connected."
-                )
-                lay2 = QtWidgets.QFormLayout()
-                edit = QtWidgets.QLineEdit(str(cond_val))
-                edit.setPlaceholderText("e.g. z < 0.01  or  (x < 1) & (y > 9)")
-                edit.editingFinished.connect(
-                    lambda: self.update_property("condition", edit.text())
-                )
-                lay2.addRow("Expression:", edit)
-                info = QtWidgets.QLabel(
-                    "Coordinates are in mm. Prefer an explicit face, edge, or "
-                    "vertex selection."
-                )
-                info.setStyleSheet("color:#888; font-size:10px;")
-                info.setWordWrap(True)
-                lay2.addRow(info)
-                grp2.setLayout(lay2)
-                self.props_layout.addWidget(grp2)
-
         elif node_class == "LoadNode":
             lt = node.get_property("load_type") or "Force"
             grp = QtWidgets.QGroupBox(
-                str(lt) if str(lt) in {"Force", "Gravity"} else "Force"
+                str(lt) if str(lt) in {"Force", "Pressure", "Gravity"} else "Load"
             )
             lay = QtWidgets.QFormLayout()
 
             combo = QtWidgets.QComboBox()
-            combo.addItems(["Force", "Gravity"])
+            combo.addItems(["Force", "Pressure", "Gravity"])
             combo.blockSignals(True)
             combo.setCurrentText(
-                str(lt) if str(lt) in ["Force", "Gravity"] else "Force"
+                str(lt) if str(lt) in ["Force", "Pressure", "Gravity"] else "Force"
             )
             combo.blockSignals(False)
             combo.currentTextChanged.connect(
-                lambda v: self.update_property("load_type", v)
+                lambda v: (
+                    self.update_property("load_type", v),
+                    QtCore.QTimer.singleShot(
+                        0,
+                        lambda n=node: self.display_node(n) if self.current_node is n else None,
+                    ),
+                )
             )
             lay.addRow("Type:", combo)
 
@@ -181,6 +158,36 @@ class BoundaryConditionInspectorMixin:
                 )
                 lay.addRow("Result:", dir_lbl)
 
+            elif lt == "Pressure":
+                press = float(node.get_property("pressure") or 1.0)
+                direct = str(node.get_property("direction") or "Inward")
+                spin_p = QtWidgets.QDoubleSpinBox()
+                spin_p.setRange(0.001, 1e8)
+                spin_p.setDecimals(3)
+                spin_p.setValue(press)
+                spin_p.setSuffix(" MPa")
+                spin_p.valueChanged.connect(
+                    lambda v: self.update_property("pressure", v)
+                )
+                self.property_widgets["pressure"] = spin_p
+                lay.addRow("Pressure:", spin_p)
+
+                combo_dir = QtWidgets.QComboBox()
+                combo_dir.addItems(["Inward (Compression)", "Outward (Tension)"])
+                combo_dir.blockSignals(True)
+                combo_dir.setCurrentText(
+                    "Inward (Compression)" if direct == "Inward" else "Outward (Tension)"
+                )
+                combo_dir.blockSignals(False)
+                combo_dir.currentTextChanged.connect(
+                    lambda v: self.update_property(
+                        "direction",
+                        "Inward" if "Inward" in v else "Outward",
+                    )
+                )
+                self.property_widgets["direction"] = combo_dir
+                lay.addRow("Direction:", combo_dir)
+
             elif lt == "Gravity":
                 grav_accel = float(node.get_property("gravity_accel") or 9810.0)
                 grav_dir = node.get_property("gravity_direction") or "-Y"
@@ -206,45 +213,46 @@ class BoundaryConditionInspectorMixin:
             grp.setLayout(lay)
             self.props_layout.addWidget(grp)
 
-            # Applied-to condition expression
-            cond_val = node.get_property("condition") or ""
-            try:
-                target_port = node.get_input("target_face")
-                has_target_geometry = bool(
-                    target_port and target_port.connected_ports()
+        elif node_class == "PressureLoadNode":
+            grp = QtWidgets.QGroupBox("Pressure")
+            lay = QtWidgets.QFormLayout()
+            press = float(node.get_property("pressure") or 1.0)
+            direct = str(node.get_property("direction") or "Inward")
+            spin_p = QtWidgets.QDoubleSpinBox()
+            spin_p.setRange(0.001, 1e8)
+            spin_p.setDecimals(3)
+            spin_p.setValue(press)
+            spin_p.setSuffix(" MPa")
+            spin_p.valueChanged.connect(
+                lambda v: self.update_property("pressure", v)
+            )
+            self.property_widgets["pressure"] = spin_p
+            lay.addRow("Pressure:", spin_p)
+
+            combo_dir = QtWidgets.QComboBox()
+            combo_dir.addItems(["Inward (Compression)", "Outward (Tension)"])
+            combo_dir.blockSignals(True)
+            combo_dir.setCurrentText(
+                "Inward (Compression)" if direct == "Inward" else "Outward (Tension)"
+            )
+            combo_dir.blockSignals(False)
+            combo_dir.currentTextChanged.connect(
+                lambda v: self.update_property(
+                    "direction",
+                    "Inward" if "Inward" in v else "Outward",
                 )
-            except Exception:
-                has_target_geometry = False
-            if lt != "Gravity" and (not has_target_geometry or cond_val):
-                grp2 = QtWidgets.QGroupBox("Coordinate Filter")
-                grp2.setToolTip(
-                    "Boolean expression over mesh-node coordinates x, y, z. "
-                    "Used only when no selection is connected."
-                )
-                lay2 = QtWidgets.QFormLayout()
-                edit = QtWidgets.QLineEdit(str(cond_val))
-                edit.setPlaceholderText("e.g. z > 19  or  (abs(z) < 1.5) & (x > 9)")
-                edit.editingFinished.connect(
-                    lambda: self.update_property("condition", edit.text())
-                )
-                lay2.addRow("Expression:", edit)
-                info = QtWidgets.QLabel(
-                    "Coordinates are in mm. Prefer an explicit face, edge, or "
-                    "vertex selection."
-                )
-                info.setStyleSheet("color:#888; font-size:10px;")
-                info.setWordWrap(True)
-                lay2.addRow(info)
-                grp2.setLayout(lay2)
-                self.props_layout.addWidget(grp2)
+            )
+            self.property_widgets["direction"] = combo_dir
+            lay.addRow("Direction:", combo_dir)
+            grp.setLayout(lay)
+            self.props_layout.addWidget(grp)
 
         # Preview is shared by support, force/gravity, and pressure.
         if node_class in ("ConstraintNode", "LoadNode", "PressureLoadNode"):
             btn_preview = QtWidgets.QPushButton("Preview in 3D")
             btn_preview.setToolTip(
                 "Run the CAD graph without launching a solver and highlight "
-                "the selected face, edge, or vertex. A coordinate-expression "
-                "condition has no exact CAD entity to highlight."
+                "the selected face, edge, or vertex."
             )
             btn_preview.setStyleSheet(
                 "QPushButton {"

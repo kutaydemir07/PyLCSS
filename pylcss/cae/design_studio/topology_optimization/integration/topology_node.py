@@ -102,6 +102,8 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
         # node was only ever a way to get more than one of each.
         self.add_input("supports", color=(255, 100, 100), multi_input=True)
         self.add_input("loads", color=(255, 255, 0), multi_input=True)
+        self.add_input("preserved_regions", color=(100, 200, 255), multi_input=True)
+        self.add_input("obstacle_regions", color=(255, 120, 120), multi_input=True)
         # Guided workflow
         self.create_property(
             "workflow_mode",
@@ -129,7 +131,7 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
         )
         self.create_property(
             "manufacturing_process",
-            "None",
+            "Normal",
             widget_type="combo",
             items=list(INDUSTRIAL_MANUFACTURING_PROCESSES),
         )
@@ -150,13 +152,13 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
         self.create_property("advanced_settings_visible", False, widget_type="bool")
         self.create_property(
             "exclusion_scope",
-            "All Loads and Supports",
+            "None",
             widget_type="combo",
             items=[
+                "None",
                 "All Loads and Supports",
                 "Loads Only",
                 "Supports Only",
-                "None",
             ],
         )
         self.create_property(
@@ -205,15 +207,18 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
         self.create_property("generate_cad_after_optimize", True, widget_type="bool")
         self.create_property(
             "cad_reconstruction_method",
-            "Auto",
+            "Auto (AMRTO)",
             widget_type="combo",
             items=[
-                "Auto",
-                "Smooth",
+                "Auto (AMRTO)",
+                "AMRTO",
             ],
         )
         self.create_property(
             "cad_export_filename", "topology_optimized.step", widget_type="string"
+        )
+        self.create_property(
+            "cad_export_format", "STEP", widget_type="string"
         )
         # Domain and recovery settings.
         self.create_property("nelx", 30, widget_type="int")
@@ -232,25 +237,6 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
                 "Density",
             ],
         )
-        # STL post-processing.
-        # When True, applies the trimesh print-ready pipeline (hole fill +
-        # light Humphrey smoothing + optional decimation) on top of marching cubes.
-        self.create_property("print_ready_mesh", True, widget_type="bool")
-        # 1.0 = no decimation; lower values reduce face count (requires
-        # `fast_simplification` to be installed — silently skipped otherwise).
-        self.create_property("mesh_decimate_ratio", 1.0, widget_type="float")
-        self.create_property(
-            "surface_recovery_method",
-            "Volume-Preserving SDF (VTK)",
-            widget_type="combo",
-            items=["Volume-Preserving SDF (VTK)", "Legacy Marching Cubes"],
-        )
-        self.create_property(
-            "surface_quality",
-            "Professional",
-            widget_type="combo",
-            items=["Standard", "High", "Professional"],
-        )
         self.create_property("E0", 1.0, widget_type="float")
         self.create_property("Emin", 1e-9, widget_type="float")
         self.create_property("nu", 0.3, widget_type="float")
@@ -261,6 +247,12 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
             "Auto",
             widget_type="combo",
             items=["Auto", "OC", "MMA", "GCMMA"],
+        )
+        self.create_property(
+            "load_case_mode",
+            "Multiple Independent Cases",
+            widget_type="combo",
+            items=["Multiple Independent Cases", "Simultaneous Superposition"],
         )
         self.create_property(
             "load_aggregation",
@@ -274,6 +266,34 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
         # stops once it holds for `convergence_patience` consecutive iterations.
         self.create_property("tol", 0.01, widget_type="float")
         self.create_property("convergence_patience", 5, widget_type="int")
+
+        # Manufacturing constraints (casting draw, extrusion, symmetry, AM overhang, member sizing)
+        self.create_property(
+            "draw_direction",
+            "None",
+            widget_type="combo",
+            items=["None", "+X", "-X", "+Y", "-Y", "+Z", "-Z"],
+        )
+        self.create_property(
+            "extrusion_axis",
+            "None",
+            widget_type="combo",
+            items=["None", "X", "Y", "Z"],
+        )
+        self.create_property(
+            "symmetry_plane",
+            "None",
+            widget_type="combo",
+            items=["None", "X", "Y", "Z", "XY", "XZ", "YZ", "XYZ"],
+        )
+        self.create_property(
+            "overhang_direction",
+            "None",
+            widget_type="combo",
+            items=["None", "+X", "-X", "+Y", "-Y", "+Z", "-Z"],
+        )
+        self.create_property("overhang_angle_deg", 45.0, widget_type="float")
+        self.create_property("max_member_size_mm", 0.0, widget_type="float")
 
         # Stress constraint (engineering surface only).
         # User sees: Enable + Yield Stress.  The qp-approach exponent q,
@@ -292,48 +312,6 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
         self.create_property("convection_coefficient", 0.0, widget_type="float")
         self.create_property("structural_weight", 1.0, widget_type="float")
         self.create_property("thermal_weight", 1.0, widget_type="float")
-        # Manufacturing constraints.
-        # `symmetry`: subset of {X,Y,Z} meaning "axes to mirror across the
-        # domain centre".  E.g. 'Y' = mirror plane XZ (left-right symmetric);
-        # 'XY' = mirror both X and Y.
-        self.create_property(
-            "symmetry",
-            "None",
-            widget_type="combo",
-            items=["None", "X", "Y", "Z", "XY", "XZ", "YZ", "XYZ"],
-        )
-        self.create_property(
-            "extrusion", "None", widget_type="combo", items=["None", "X", "Y", "Z"]
-        )
-        # AM build direction.  '+Y' means parts grow upward in +Y; voxels are
-        # only allowed if supported by a 3×3 neighbourhood of denser voxels
-        # in the layer below (45° self-supporting rule).
-        self.create_property(
-            "overhang_build_axis",
-            "None",
-            widget_type="combo",
-            items=["None", "+X", "-X", "+Y", "-Y", "+Z", "-Z"],
-        )
-        self.create_property("overhang_angle_deg", 45.0, widget_type="float")
-        # Mould withdrawal direction for a cast/moulded part. '+Z' means the
-        # tool is pulled in +Z, so no material may be shadowed along that axis
-        # and the design stays free of undercuts. This is what makes an
-        # optimized rib pattern on a housing demouldable.
-        self.create_property(
-            "pull_out_axis",
-            "None",
-            widget_type="combo",
-            items=["None", "+X", "-X", "+Y", "-Y", "+Z", "-Z"],
-        )
-        # Max member size — radius in voxels (0 = disabled); local-mean
-        # threshold defaults to 0.6 and isn't user-exposed (industry default).
-        self.create_property("max_member_size_voxels", 0.0, widget_type="float")
-        self.create_property("maximum_member_size_mm", 0.0, widget_type="float")
-        # N-fold rotational pattern. 1 = disabled.
-        self.create_property("pattern_repeat", 1, widget_type="int")
-        self.create_property(
-            "pattern_axis", "Y", widget_type="combo", items=["X", "Y", "Z"]
-        )
 
     # Property helpers.
 
@@ -387,6 +365,7 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
     def _run_embedded_cad_reconstruction(
         self,
         topo_output: dict[str, Any],
+        progress_callback: Any = None,
     ) -> Any:
         """Build a CAD body as an internal TopOpt study action."""
         from ..geometry.cad_reconstruction import reconstruct_topopt_cad
@@ -403,6 +382,7 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
             # single validated professional method. There is no mesh fallback.
             strategy = "auto"
         topo_payload = dict(topo_output or {})
+        export_steps_dir = getattr(self, "_export_steps_dir", None) or topo_payload.get("export_steps_dir")
         shape, report = reconstruct_topopt_cad(
             topo_payload,
             source_geometry="Recovered Shape",
@@ -415,6 +395,8 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
             # that per-triangle sewing is the wrong tool for the result.
             structure_options=getattr(self, "_last_structure_options", None),
             member_plan=getattr(self, "_last_member_plan", None),
+            export_steps_dir=export_steps_dir,
+            progress_callback=progress_callback,
         )
         self._last_cad_reconstruction_report = report
         return shape
@@ -466,11 +448,19 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
                 frac_box = _fraction_box(bbox, bounds)
                 bc.fixed_boxes.append((*frac_box, dofs))
 
-        for load in loads:
+        mode = str(self.get_property("load_case_mode") or "Multiple Independent Cases")
+        is_independent = (
+            mode == "Multiple Independent Cases"
+            and len(loads) > 1
+        )
+        bc.load_cases = []
+
+        for idx, load in enumerate(loads):
             if not isinstance(load, dict):
                 continue
             load_type = str(load.get("type") or "").lower()
-            if load_type == "force":
+            local_boxes = []
+            if load_type in ("force", "bearing_load"):
                 vector = load.get("vector")
                 try:
                     fx, fy, fz = (float(vector[0]), float(vector[1]), float(vector[2]))
@@ -485,17 +475,16 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
                     logger.warning(
                         "TopologyOptVoxelNode: connected force load did not "
                         "include selected geometry or bounding-box metadata; "
-                        "it cannot be "
-                        "mapped to voxel forces."
+                        "it cannot be mapped to voxel forces."
                     )
                     continue
                 scale = 1.0 / max(1, len(bboxes))
                 for bbox in bboxes:
                     frac_box = _fraction_box(bbox, bounds)
                     # Graph-selected load faces become distributed patch loads,
-                    # not mathematical point loads.  The same patch is also kept
+                    # not mathematical point loads. The same patch is also kept
                     # local so CAD face loads stay tied to their source face.
-                    bc.box_forces.append(
+                    local_boxes.append(
                         (*frac_box, fx * scale, fy * scale, fz * scale)
                     )
             elif load_type == "pressure":
@@ -511,13 +500,30 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
                     )
                     continue
                 for frac_box, fx, fy, fz in pressure_patches:
-                    bc.box_forces.append((*frac_box, fx, fy, fz))
+                    local_boxes.append((*frac_box, fx, fy, fz))
             else:
                 logger.debug(
                     "TopologyOptVoxelNode: load type %r is not supported by "
                     "the voxel optimiser.",
                     load_type,
                 )
+                continue
+
+            if not local_boxes:
+                continue
+
+            if is_independent:
+                c_name = str(load.get("name") or "").strip() or f"LC_{idx + 1}"
+                c_weight = float(load.get("weight") or 1.0)
+                bc.load_cases.append(
+                    LoadCase(
+                        name=c_name,
+                        weight=c_weight,
+                        box_forces=local_boxes,
+                    )
+                )
+            else:
+                bc.box_forces.extend(local_boxes)
 
     def _merge_graph_joints(
         self,

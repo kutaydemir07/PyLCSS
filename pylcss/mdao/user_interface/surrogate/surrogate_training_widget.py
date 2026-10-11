@@ -71,7 +71,8 @@ class SurrogateTrainingWidget(
     def apply_theme(self, _theme_name):
         """Keep engineering plots paper-white with dark, printable labels."""
         foreground = COLORS["chart_fg"]
-        for plot in (self.curve_plot, self.plot_widget, self.fi_plot):
+        plots = [p for p in (getattr(self, "curve_plot", None), getattr(self, "plot_widget", None)) if p is not None]
+        for plot in plots:
             plot.setBackground(COLORS["chart_bg"])
             item = plot.getPlotItem()
             for axis_name in ("left", "right", "top", "bottom"):
@@ -79,7 +80,8 @@ class SurrogateTrainingWidget(
                 axis.setPen(foreground)
                 axis.setTextPen(foreground)
             item.titleLabel.setAttr("color", foreground)
-        self.progress_text.setColor(foreground)
+        if hasattr(self, "progress_text") and self.progress_text is not None:
+            self.progress_text.setColor(foreground)
 
     def __init__(self, modeling_widget: QtWidgets.QWidget | None = None) -> None:
         super().__init__()

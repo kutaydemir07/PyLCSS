@@ -5,14 +5,10 @@
 
 from .backend_types import SolverResult
 from .nevergrad_backend import solve_with_nevergrad
-from .scipy_backend import (
-    run_goal_attainment_slsqp,
-    solve_with_differential_evolution,
-)
+from .scipy_backend import run_goal_attainment_slsqp
 
 __all__ = [
     "SolverResult",
     "run_goal_attainment_slsqp",
-    "solve_with_differential_evolution",
     "solve_with_nevergrad",
 ]

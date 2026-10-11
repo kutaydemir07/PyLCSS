@@ -41,45 +41,25 @@ SpyFunction = Callable[
 
 
 def create_evaluation_model(model_type: str) -> Any:
-    """Create an unfitted sklearn estimator without accessing GUI state."""
-    from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
-    from sklearn.gaussian_process import GaussianProcessRegressor
-    from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
-    from sklearn.neural_network import MLPRegressor
-
-    if model_type == "MLP Regressor":
-        return MLPRegressor(
-            hidden_layer_sizes=(128, 64),
-            max_iter=1000,
-            early_stopping=True,
-            random_state=42,
-        )
-    if model_type == "Random Forest":
-        return RandomForestRegressor(
-            n_estimators=200,
-            max_depth=None,
-            random_state=42,
-            n_jobs=-1,
-        )
-    if model_type == "Gradient Boosting":
-        return GradientBoostingRegressor(
-            n_estimators=200,
-            max_depth=5,
-            learning_rate=0.1,
-            random_state=42,
-        )
-    if model_type in ("Gaussian Process", "Gaussian Process (Kriging)"):
-        kernel = ConstantKernel() * Matern(nu=2.5) + WhiteKernel()
-        return GaussianProcessRegressor(
-            kernel=kernel,
-            n_restarts_optimizer=5,
-            random_state=42,
-        )
-    return MLPRegressor(
-        hidden_layer_sizes=(128, 64),
-        max_iter=1000,
-        random_state=42,
+    """Create an unfitted MDAO surrogate estimator without accessing GUI state."""
+    from pylcss.mdao.surrogate_modeling.mdao_algorithms import (
+        MdaoKPLSRegressor,
+        MdaoKrigingRegressor,
+        MdaoRBFRegressor,
+        MdaoSparsePCERegressor,
+        MdaoSVRRegressor,
     )
+
+    if "KPLS" in model_type:
+        return MdaoKPLSRegressor(n_comp=3, n_restarts=3)
+    if "RBF" in model_type:
+        return MdaoRBFRegressor(kernel="thin_plate_spline", smoothing=1e-4, degree=1)
+    if "PCE" in model_type or "Chaos" in model_type:
+        return MdaoSparsePCERegressor(degree=2, alpha=0.01)
+    if "SVR" in model_type:
+        return MdaoSVRRegressor(C=10.0, epsilon=0.05)
+    # Default for Auto Mode, Kriging, and general evaluation
+    return MdaoKrigingRegressor(kernel_type="matern52", n_restarts=4)
 
 
 class _EvaluationCancelled(RuntimeError):
@@ -138,10 +118,11 @@ class EvaluationWorker(QtCore.QThread):
                 )
             elif self.operation == "compare_models":
                 names = (
-                    "MLP Regressor",
-                    "Random Forest",
-                    "Gradient Boosting",
-                    "Gaussian Process",
+                    "Ordinary Kriging (Matern 5/2 ARD)",
+                    "KPLS (Kriging with Partial Least Squares)",
+                    "RBF (Polyharmonic Thin-Plate Spline)",
+                    "Sparse PCE (Legendre Chaos Expansion)",
+                    "Anisotropic epsilon-SVR",
                 )
                 factories = {
                     name: (lambda selected=name: create_evaluation_model(selected))

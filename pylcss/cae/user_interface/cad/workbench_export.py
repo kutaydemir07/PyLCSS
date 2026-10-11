@@ -46,7 +46,7 @@ class WorkbenchExportMixin:
             # instead of a scikit-fem 'mesh', so accept them explicitly.
             if rtype == "topopt_voxel":
                 return node
-            if result.get("mesh") is not None and rtype in {"fea", "crash"}:
+            if result.get("mesh") is not None and rtype in {"fea", "modal", "crash"}:
                 return node
         return None
 
@@ -73,7 +73,7 @@ class WorkbenchExportMixin:
             rtype = result.get("type") if isinstance(result, dict) else None
             if rtype in ("topopt_voxel",):
                 return 0
-            if rtype == "fea":
+            if rtype in {"fea", "modal"}:
                 return 1
             if rtype == "crash":
                 return 2

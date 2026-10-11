@@ -1326,11 +1326,68 @@
   ],
   "_copyright": "Copyright (c) 2026 Kutay Demir.",
   "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
-  "_result_store": {
-    "format": "HDF5",
-    "version": 1,
-    "file": "01_16mn_forging_press_frame.cad.results.h5",
-    "result_count": 4,
-    "saved_at": "2026-08-04T16:19:00.272815"
-  }
+  "_title": "16 MN Heavy Industrial Forging Press Frame",
+  "_purpose": "Structural verification of a 16 MN heavy forging press frame with hollow rectangular columns, tapered haunches, and reinforced crown beams under centered and eccentric forging loads.",
+  "_fidelity": "Linear elastic static FEA using CalculiX, solid continuum elements with fine haunch discretization, fixed foundation multipoint constraints.",
+  "_visual_target": "von Mises stress contour showing stress concentrations <= 280 MPa at column-haunch transitions, bed center deflection <= 0.85 mm, reaction forces balanced across foundation.",
+  "_engineering_decision": "Determine whether the continuous welded frame satisfies deflection limits (<= 0.85 mm at bed center) and yield allowable (von Mises <= 280 MPa) under 16 MN centered forging and 11.2:4.8 MN eccentric die-jam loading.",
+  "_baseline": "Unsolved structural example; run each solver branch to evaluate the requirements.",
+  "_design_variables": [
+    "L (Bed length): 3000 mm",
+    "D (Bed depth): 1800 mm",
+    "BED_H: 400 mm",
+    "CROWN_H: 500 mm",
+    "COLUMN_W: 400 mm",
+    "WALL: 60 mm"
+  ],
+  "_load_cases": [
+    "Centered 16.0 MN Forging",
+    "Left Eccentric 11.2 MN Load Case",
+    "Right Eccentric 4.8 MN Load Case",
+    "Transverse Jam 1.5 MN Load Case"
+  ],
+  "_requirements": [
+    {
+      "requirement": "Bed Center Deflection",
+      "target": "<= 0.85 mm",
+      "verification": "CalculiX nodal displacement UZ",
+      "baseline_status": "Not evaluated; run the stated verification."
+    },
+    {
+      "requirement": "Peak von Mises Stress",
+      "target": "<= 280 MPa",
+      "verification": "CalculiX elemental stress MISES",
+      "baseline_status": "Not evaluated; run the stated verification."
+    },
+    {
+      "requirement": "Column Haunch Stress",
+      "target": "<= 250 MPa",
+      "verification": "Haunch transition integration",
+      "baseline_status": "Not evaluated; run the stated verification."
+    },
+    {
+      "requirement": "Foundation Reaction Balance",
+      "target": ">= 0.85",
+      "verification": "Reaction force extraction",
+      "baseline_status": "Not evaluated; run the stated verification."
+    }
+  ],
+  "_deliverables": [
+    "Von Mises, principal and tensor stress fields",
+    "Displacement, reactions and available yield safety factors",
+    "Mesh quality and assembly component tables when available"
+  ],
+  "_workflow": [
+    "Generate parametric CadQuery frame geometry",
+    "Apply S355/S460 structural steel properties",
+    "Define bed base fixity and cylinder pad distributed loads",
+    "Run CalculiX static FEA solver",
+    "Inspect results in 3D viewer and Detailed Results Hub dialog",
+    "Open Results to inspect structural metrics, available contours, reactions and mesh quality."
+  ],
+  "_acceptance_criteria": [
+    "Maximum displacement <= 0.85 mm",
+    "von Mises stress within yield allowable",
+    "Zero solver convergence errors"
+  ]
 }

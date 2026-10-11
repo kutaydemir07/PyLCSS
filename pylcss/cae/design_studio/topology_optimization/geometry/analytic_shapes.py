@@ -9,7 +9,46 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from .recovery_grid import BoxRegion, CylinderRegion, _split_cylinder_region
+CylinderRegion = tuple[str, float, float, float, float, float]
+BoxRegion = tuple[float, float, float, float, float, float]
+
+
+def _split_cylinder_region(
+    cylinder: Sequence[object] | None,
+) -> Optional[tuple[str, float, float, float, float, float, float]]:
+    if cylinder is None or len(cylinder) < 6:
+        return None
+    axis, c0, c1, lo, hi, radius_a = cylinder[:6]
+    radius_b = cylinder[6] if len(cylinder) > 6 else radius_a
+    radius_a = float(radius_a)
+    radius_b = float(radius_b)
+    if radius_a <= 0.0 or radius_b <= 0.0:
+        return None
+    return (
+        str(axis or "z").lower(),
+        float(c0),
+        float(c1),
+        float(lo),
+        float(hi),
+        radius_a,
+        radius_b,
+    )
+
+
+def _voxel_origin_cell(
+    shape: tuple[int, int, int],
+    bounds: Optional[tuple[np.ndarray, np.ndarray]],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return physical origin and cell size for a structured voxel grid."""
+    shape_arr = np.maximum(np.asarray(shape, dtype=float), 1.0)
+    if bounds is not None:
+        mins, maxs = bounds
+        mins = np.asarray(mins, dtype=float)
+        maxs = np.asarray(maxs, dtype=float)
+        if mins.size >= 3 and maxs.size >= 3 and np.all(maxs[:3] > mins[:3]):
+            return mins[:3], (maxs[:3] - mins[:3]) / shape_arr
+    return -0.5 * shape_arr, np.ones(3, dtype=float)
+
 
 
 def smin(a: np.ndarray, b: np.ndarray, k: float) -> np.ndarray:
@@ -654,6 +693,7 @@ def _convert_legacy_to_physical_shapes(
     void_boxes: Sequence[BoxRegion] = (),
     solid_cylinders: Sequence[CylinderRegion] = (),
     void_cylinders: Sequence[CylinderRegion] = (),
+    joint_pin_cylinders: Sequence[CylinderRegion] = (),
 ) -> list[AnalyticShape]:
     """Convert legacy fractional boxes/cylinders or general dictionaries to physical shapes."""
     if bounds is None:
@@ -707,6 +747,31 @@ def _convert_legacy_to_physical_shapes(
 
     # Parse solid cylinders
     for cyl in solid_cylinders or ():
+        if isinstance(cyl, dict):
+            shape = _parse_shape_from_dict(cyl, bounds)
+            if shape is not None:
+                shapes.append(shape)
+        else:
+            parsed = _split_cylinder_region(cyl)
+            if parsed is not None:
+                axis_name, c0, c1, lo, hi, radius_a, radius_b = parsed
+                shapes.append(
+                    CylinderShape.from_legacy(
+                        axis_name=axis_name,
+                        c0=c0,
+                        c1=c1,
+                        lo=lo,
+                        hi=hi,
+                        radius_a=radius_a,
+                        radius_b=radius_b,
+                        mins=mins,
+                        span=span,
+                        is_solid=True,
+                    )
+                )
+
+    # Parse joint pin cylinders (treated as solid cylinders)
+    for cyl in joint_pin_cylinders or ():
         if isinstance(cyl, dict):
             shape = _parse_shape_from_dict(cyl, bounds)
             if shape is not None:

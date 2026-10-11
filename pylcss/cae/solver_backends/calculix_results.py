@@ -11,15 +11,98 @@ from typing import Any
 import numpy as np
 
 from pylcss.cae.solver_backends.frd_reader import read_frd
-from pylcss.cae.solver_backends.mesh import tet10_connectivity
+from pylcss.cae.solver_backends.mesh import mesh_to_tet4, tet10_connectivity
 from pylcss.cae.solver_backends.selection import (
     dict_geometries,
     nodes_matching_condition,
     nodes_matching_geometries,
+    tet_face_sets_for_geometries,
 )
 
 
 logger = logging.getLogger(__name__)
+
+
+def _compute_applied_forces(
+    mesh: Any,
+    loads: list[dict] | None,
+    material: dict | None,
+    total_volume: float,
+) -> np.ndarray:
+    """Compute resultant 3D vector of all external loads applied to the model."""
+    applied_force = np.zeros(3, dtype=float)
+    for load in loads or []:
+        if not isinstance(load, dict):
+            continue
+        ltype = str(load.get("type", "force") or "force").strip().lower()
+        if ltype in ("force", "bearing_load", "bearing"):
+            try:
+                vec = load.get("vector")
+                if vec is None:
+                    vec = [
+                        float(load.get("force_x", 0.0)),
+                        float(load.get("force_y", 0.0)),
+                        float(load.get("force_z", 0.0)),
+                    ]
+                v_arr = np.asarray(vec, dtype=float).reshape(-1)
+                if v_arr.size == 3 and np.all(np.isfinite(v_arr)):
+                    applied_force += v_arr
+            except Exception:
+                pass
+        elif ltype == "gravity":
+            try:
+                rho = 0.0
+                if material:
+                    rho = float(
+                        material.get("rho", material.get("density", 0.0)) or 0.0
+                    )
+                mass = float(total_volume * rho)
+                accel = float(load.get("accel", 9810.0))
+                dir_str = str(load.get("direction", "-Y") or "-Y").strip().upper()
+                dir_map = {
+                    "-X": np.array([-1.0, 0.0, 0.0]),
+                    "+X": np.array([1.0, 0.0, 0.0]),
+                    "-Y": np.array([0.0, -1.0, 0.0]),
+                    "+Y": np.array([0.0, 1.0, 0.0]),
+                    "-Z": np.array([0.0, 0.0, -1.0]),
+                    "+Z": np.array([0.0, 0.0, 1.0]),
+                }
+                dvec = dir_map.get(dir_str, np.array([0.0, -1.0, 0.0]))
+                applied_force += mass * accel * dvec
+            except Exception:
+                pass
+        elif ltype == "pressure":
+            try:
+                pressure_val = float(
+                    load.get("pressure", load.get("magnitude", 0.0)) or 0.0
+                )
+                geoms = dict_geometries(load)
+                if geoms and abs(pressure_val) > 1e-12:
+                    faces = tet_face_sets_for_geometries(mesh, geoms)
+                    if faces:
+                        pts, cells = mesh_to_tet4(mesh, [])
+                        local_faces = ((0, 1, 2), (0, 1, 3), (1, 2, 3), (0, 2, 3))
+                        opp_nodes = (3, 2, 0, 1)
+                        for elem_id, face_id in faces:
+                            cell = cells[elem_id - 1]
+                            f_idx = face_id - 1
+                            tri = cell[list(local_faces[f_idx])]
+                            p0 = pts[:, tri[0]]
+                            p1 = pts[:, tri[1]]
+                            p2 = pts[:, tri[2]]
+                            popp = pts[:, cell[opp_nodes[f_idx]]]
+                            c_face = (p0 + p1 + p2) / 3.0
+                            n_cross = np.cross(p1 - p0, p2 - p0)
+                            area = 0.5 * float(np.linalg.norm(n_cross))
+                            if area > 1e-16:
+                                n_unit = n_cross / np.linalg.norm(n_cross)
+                                if np.dot(n_unit, popp - c_face) < 0.0:
+                                    n_unit = -n_unit
+                                applied_force += pressure_val * area * n_unit
+            except Exception:
+                pass
+    return applied_force
+
 
 
 def _resolve_deformation_scale(
@@ -56,6 +139,8 @@ def _ingest_frd_into_result(
     deformation_scale: Any = "Auto",
     analysis_type: str = "Linear",
     constraints: list[dict] | None = None,
+    loads: list[dict] | None = None,
+    material: dict | None = None,
 ) -> dict:
     """Read CalculiX ``.frd`` output and shape it into the viewer's result dict.
 
@@ -194,6 +279,38 @@ def _ingest_frd_into_result(
 
     total_volume = float(np.sum(elem_vol))
 
+    # Static equilibrium verification
+    applied_force = _compute_applied_forces(mesh, loads, material, total_volume)
+    applied_magnitude = float(np.linalg.norm(applied_force))
+    reaction_magnitude = float(np.linalg.norm(reaction_force))
+    residual_force = applied_force + reaction_force
+    residual_magnitude = float(np.linalg.norm(residual_force))
+    ref_mag = max(applied_magnitude, reaction_magnitude, 1e-12)
+    equilibrium_error_pct = (
+        float((residual_magnitude / ref_mag) * 100.0) if ref_mag > 1e-9 else 0.0
+    )
+    equilibrium_balanced = bool(equilibrium_error_pct < 1.0)
+
+    # Factor of Safety calculation
+    yield_strength = 0.0
+    if material is not None:
+        try:
+            yield_strength = float(
+                material.get("yield_strength", material.get("yield_stress", 0.0)) or 0.0
+            )
+        except (TypeError, ValueError):
+            yield_strength = 0.0
+
+    safety_factor: np.ndarray | None = None
+    min_safety_factor: float | None = None
+    if yield_strength > 0.0 and vm.size:
+        safety_factor = np.where(
+            vm > 1e-12,
+            np.clip(yield_strength / np.maximum(vm, 1e-12), 0.01, 100.0),
+            100.0,
+        )
+        min_safety_factor = float(np.min(safety_factor))
+
     return {
         "type": "fea",
         "backend": "CalculiX",
@@ -201,10 +318,19 @@ def _ingest_frd_into_result(
         "displacement": flat_disp,
         "stress": vm,
         "stress_tensor": stress_tensor,
+        "safety_factor": safety_factor,
+        "min_safety_factor": min_safety_factor,
+        "yield_strength": yield_strength,
+        "applied_force": applied_force,
+        "applied_magnitude": applied_magnitude,
+        "reaction_force": reaction_force,
+        "reaction_magnitude": reaction_magnitude,
+        "residual_force": residual_force,
+        "residual_magnitude": residual_magnitude,
+        "equilibrium_error_pct": equilibrium_error_pct,
+        "equilibrium_balanced": equilibrium_balanced,
         "ener_nodal": ener_nodal,
         "nodal_force": nodal_force,
-        "reaction_force": reaction_force,
-        "reaction_magnitude": float(np.linalg.norm(reaction_force)),
         "reaction_node_ids": constrained_node_ids,
         "element_ener": elem_ener,
         "element_volumes": elem_vol,
@@ -220,3 +346,4 @@ def _ingest_frd_into_result(
         "frd_file": str(frd_path),
         "frd_steps": parsed.get("steps", []),
     }
+

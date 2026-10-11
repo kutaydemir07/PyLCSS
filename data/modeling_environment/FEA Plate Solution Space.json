@@ -4,6 +4,32 @@
   "_title": "Four-Bolt Proof-Pressure Cover — FEA-Coupled Robust Design",
   "_purpose": "Drive the matching 1.5 MPa Design Studio CalculiX study to balance cover thickness, center clearance, fastener diameter, stress, and displacement.",
   "_fidelity": "The linked CAD study is a quadratic, single-body static idealization with fixed bolt-bearing surfaces. Bolt preload, gasket contact, thermal gradients, and fatigue require a higher-fidelity model.",
+  "_visual_target": "Inspect CalculiX static stress and deflection contours mapped across the plate design parameter box.",
+  "_engineering_decision": "Determine robust tolerances for plate thickness, center port radius, and bolt circle diameter that ensure CalculiX proof-pressure stress and deflection remain safely within allowables across all manufacturing variations.",
+  "_baseline": "Plate thickness = 12.0 mm, center hole radius = 25.0 mm, bolt hole diameter = 10.5 mm, yielding von Mises stress = 184 MPa (allowable 220 MPa) and deflection = 0.42 mm.",
+  "_design_variables": [
+    "Cover plate thickness: 10.0 to 16.0 mm",
+    "Center hole radius: 20.0 to 30.0 mm",
+    "Bolt hole clearance diameter: 9.0 to 13.0 mm"
+  ],
+  "_load_cases": [
+    "1.5 MPa internal proof pressure across wetted circular face with four fixed bolt clamped boundary conditions"
+  ],
+  "_requirements": [
+    {
+      "name": "Max von Mises Stress",
+      "requirement": "Peak von Mises stress <= 220.0 MPa (Safety Factor >= 1.5 against 330 MPa yield)."
+    },
+    {
+      "name": "Peak Center Deflection",
+      "requirement": "Maximum center plate deflection <= 0.60 mm to maintain gasket seal integrity."
+    }
+  ],
+  "_deliverables": [
+    "Parametric solution box identifying feasible manufacturing thickness and hole tolerances",
+    "CalculiX FEA proof-pressure validation stress and displacement contours",
+    "Robustness sensitivity ranking of geometric tolerances"
+  ],
   "_workflow": [
     "Map the design variables to exposed Design Studio geometry controls.",
     "Evaluate stress and mass through the saved CalculiX workflow.",

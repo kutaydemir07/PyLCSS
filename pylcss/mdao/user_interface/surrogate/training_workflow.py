@@ -35,90 +35,6 @@ __all__ = ["SurrogateTrainingMixin"]
 
 
 class SurrogateTrainingMixin:
-    def toggle_debug_mode(self) -> None:
-        is_debug = self.radio_debug.isChecked()
-        self.btn_overfit1.setVisible(is_debug)
-        self.btn_overfit10.setVisible(is_debug)
-        self.btn_train.setVisible(not is_debug)
-        self.lbl_debug_warning.setVisible(is_debug)
-
-    def start_debug_training(self, num_samples: int) -> None:
-        idx = self.combo_nodes.currentIndex()
-        if idx < 0:
-            QtWidgets.QMessageBox.warning(self, "Error", "No node selected.")
-            return
-
-        target_node = self.combo_nodes.itemData(idx)
-        config = self.get_config()
-        config["debug_mode"] = True
-        config["num_samples"] = num_samples
-        config["validation_split"] = 0.0  # No validation
-        config["epochs"] = 10000  # High epochs for overfitting
-
-        self.btn_overfit1.setEnabled(False)
-        self.btn_overfit10.setEnabled(False)
-        self.btn_save.setEnabled(False)
-        self.curve_plot.clear()
-        self.plot_widget.clear()
-        self.train_losses = []
-        self.val_losses = []
-        self.epochs = []
-
-        # Recreate curves after clearing
-        self.train_curve = self.curve_plot.plot(
-            pen=pg.mkPen("r", width=2), name="Train Loss"
-        )
-        self.val_curve = self.curve_plot.plot(
-            pen=pg.mkPen("g", width=2), name="Val Loss"
-        )
-
-        self.tab_widget.setCurrentWidget(self.curve_tab)
-
-        # Show training message for debug mode (always PyTorch-like behavior)
-        self.progress_text.setText("Debug Training...\n(Overfitting test)")
-        self.progress_text.show()
-        # Set plot range to show the text
-        self.curve_plot.setXRange(-1, 1)
-        self.curve_plot.setYRange(-1, 1)
-
-        # Same preparation as start_training
-        try:
-            graph = self.modeling_widget.current_graph
-            nodes = graph.all_nodes()
-            input_nodes = [n for n in nodes if n.type_.startswith("com.pfd.input")]
-            output_nodes = [n for n in nodes if n.type_.startswith("com.pfd.output")]
-
-            builder = GraphBuilder(graph)
-            spy_code, spy_inputs, spy_outputs = builder.build_spy_model(
-                nodes, input_nodes, output_nodes, target_node.id, "spy_model"
-            )
-
-            input_bounds = []
-            for inp_node in input_nodes:
-                if inp_node.has_property("input_props"):
-                    props = inp_node.get_property("input_props")
-                    min_val = float(props.get("min", "0.0"))
-                    max_val = float(props.get("max", "10.0"))
-                else:
-                    min_val = float(inp_node.get_property("min"))
-                    max_val = float(inp_node.get_property("max"))
-                input_bounds.append((min_val, max_val))
-
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Preparation Error", str(e))
-            self.btn_overfit1.setEnabled(True)
-            self.btn_overfit10.setEnabled(True)
-            return
-
-        self.worker = TrainingWorker(
-            spy_code, spy_inputs, spy_outputs, input_bounds, num_samples, config
-        )
-        self.worker.progress_sig.connect(self.update_progress)
-        self.worker.loss_sig.connect(self.update_loss_plot)
-        self.worker.done_sig.connect(self.training_finished)
-        self.worker.start()
-        self.btn_stop.setEnabled(True)
-
     def stop_training(self):
         evaluation_worker = getattr(self, "evaluation_worker", None)
         if evaluation_worker is not None and evaluation_worker.isRunning():
@@ -176,44 +92,22 @@ class SurrogateTrainingMixin:
         algo = self.combo_algo.currentText()
         config = {"model_type": algo}
 
-        if algo == "MLP Regressor":
-            config["hidden_layers"] = self.txt_layers.text()
-            config["activation"] = self.combo_activ.currentText()
-            config["solver"] = self.combo_solver.currentText()
-            config["alpha"] = self.spin_alpha_mlp.value()
-            config["max_iter"] = self.spin_max_iter.value()
-            config["early_stopping"] = self.chk_early_stopping.isChecked()
+        if algo in ("Auto Mode (Scientific SOTA)", "Auto Mode (Recommended)", "Auto Mode"):
+            config["model_type"] = "Auto Mode (Scientific SOTA)"
+            if hasattr(self, "combo_auto_preset"):
+                config["auto_preset"] = self.combo_auto_preset.currentData() or "quick"
+                config["auto_metric"] = self.combo_auto_metric.currentData() or "R2"
+                config["auto_ensemble"] = self.chk_auto_ensemble.isChecked()
 
-        elif algo == "Random Forest":
-            config["n_estimators"] = self.spin_est_rf.value()
-            d = self.spin_depth_rf.value()
-            config["max_depth"] = d if d > 0 else None
-            config["min_samples_split"] = self.spin_min_split_rf.value()
-            config["min_samples_leaf"] = self.spin_min_leaf_rf.value()
-            config["bootstrap"] = self.chk_bootstrap_rf.isChecked()
-
-        elif algo == "Gradient Boosting":
-            config["n_estimators"] = self.spin_est_gb.value()
-            config["learning_rate"] = self.spin_lr_gb.value()
-            config["max_depth"] = self.spin_depth_gb.value()
-            config["subsample"] = self.spin_subsample_gb.value()
-            config["loss"] = self.combo_loss_gb.currentText()
-
-        elif algo == "Gaussian Process":
-            config["alpha"] = self.spin_alpha_gp.value()
-            config["n_restarts_optimizer"] = self.spin_restarts_gp.value()
-            config["normalize_y"] = self.chk_normalize_gp.isChecked()
-
-        elif algo == "Deep Neural Network (PyTorch)":
-            config["epochs"] = self.spin_epochs.value()
-            config["learning_rate"] = self.spin_lr_pytorch.value()
-            config["batch_size"] = self.spin_batch_size.value()
-            config["hidden_layers"] = self.txt_hidden_layers.text()
-            config["optimizer"] = self.combo_optimizer.currentText()
-            config["activation"] = self.combo_pt_activation.currentText()
-            config["dropout"] = self.spin_pt_dropout.value()
-            config["n_mc_samples"] = self.spin_mc_samples.value()
-
+        elif algo in (
+            "Your Own Architecture (Deep Learning)",
+            "Custom Architecture (Deep Learning)",
+            "Your Own Architecture",
+            "Custom Architecture",
+        ):
+            config["model_type"] = "Your Own Architecture (Deep Learning)"
+            if hasattr(self, "arch_builder"):
+                config.update(self.arch_builder.get_config())
         elif algo in ("Geom-DeepONet", "GINO"):
             # Geometric backbones drive the CAD pipeline directly; they need
             # the CAD path, solver kind, target nodal field, parameter bounds,
@@ -235,8 +129,8 @@ class SurrogateTrainingMixin:
             # input_names / input_bounds are populated by start_training from
             # the current spy-model context (same source the LHS data-gen uses).
 
-        # Add debug mode setting
-        config["debug_mode"] = self.radio_debug.isChecked()
+        # Default debug mode
+        config["debug_mode"] = False
         config["active_learning"] = self.active_learning_values()
 
         return config
@@ -255,7 +149,7 @@ class SurrogateTrainingMixin:
                     self,
                     "Error",
                     "Geometric surrogates need a CAD graph file.\n"
-                    "Pick one via 'Browse...' in the Model tab.",
+                    "Pick one via 'Browse...' in step 3 (Model).",
                 )
                 return
             if not config.get("field_name"):
@@ -295,10 +189,6 @@ class SurrogateTrainingMixin:
         self.train_losses = []
         self.val_losses = []
         self.epochs = []
-        self.tab_widget.setCurrentWidget(
-            self.curve_tab
-        )  # Switch to Learning Curves tab
-
         # Recreate curves after clearing
         self.train_curve = self.curve_plot.plot(
             pen=pg.mkPen("r", width=2), name="Train Loss"
@@ -307,18 +197,28 @@ class SurrogateTrainingMixin:
             pen=pg.mkPen("g", width=2), name="Val Loss"
         )
 
-        # Show training message for models without real-time loss curves
-        model_type = config.get("model_type", "MLP Regressor")
-        if model_type != "Deep Neural Network (PyTorch)":
+        # Show appropriate tab and message based on architecture
+        model_type = config.get("model_type", "Auto Mode (Scientific SOTA)")
+        is_neural = any(
+            k in model_type
+            for k in ("Custom", "Your Own", "PyTorch", "Architecture")
+        )
+
+        if is_neural:
+            self.tab_widget.setCurrentWidget(self.curve_tab)
+            self.progress_text.hide()
+        elif "Auto" in model_type:
+            self.tab_widget.setCurrentWidget(self.lb_tab)
             self.progress_text.setText(
-                f"Training {model_type}...\n(Learning curves available after completion)"
+                "Auto Mode Benchmarking Candidates...\n(Evaluating SOTA MDAO algorithms)"
             )
             self.progress_text.show()
-            # Set plot range to show the text
             self.curve_plot.setXRange(-1, 1)
             self.curve_plot.setYRange(-1, 1)
         else:
+            self.tab_widget.setCurrentWidget(self.parity_tab)
             self.progress_text.hide()
+            self.curve_plot.setYRange(-1, 1)
 
         # --- START WORKER (BACKGROUND THREAD) ---
         # For geometric backbones we pass placeholder (X, y) -- the strategy
@@ -349,8 +249,6 @@ class SurrogateTrainingMixin:
     def training_finished(self, model, metrics, error):
         self.btn_train.setEnabled(True)
         self.btn_adaptive.setEnabled(True)
-        self.btn_overfit1.setEnabled(True)
-        self.btn_overfit10.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.btn_stop.setText("Stop Training")
 
@@ -365,10 +263,8 @@ class SurrogateTrainingMixin:
         self.current_model = model
         self.current_metrics = metrics
         self.btn_save.setEnabled(True)
-        self.btn_run_cv.setEnabled(True)
-        self.btn_compare.setEnabled(True)
-        self.btn_feature_imp.setEnabled(True)
         self.progress.setValue(100)
+        self.update_training_summary()
 
         # --- FIX 1: Convert lists back to numpy arrays for plotting ---
         y_test = np.array(metrics["y_test"])
@@ -410,15 +306,33 @@ class SurrogateTrainingMixin:
             self.curve_plot.autoRange()
 
         # Update metrics text
-        msg = f"<b>Training Complete</b><br>RMSE: {metrics['RMSE']:.4f}<br>R² Score: {metrics['R2']:.4f}"
+        msg = f"<b>Training Complete</b><br>RMSE: {metrics['RMSE']:.4f}<br>R\u00b2 Score: {metrics['R2']:.4f}"
+        if "RMAE" in metrics:
+            msg += f"<br>RMAE (Relative Max Error): {metrics['RMAE']:.4f}"
+        if "champion_name" in metrics:
+            msg += f"<br>Champion: <b>{metrics['champion_name']}</b> ({metrics.get('champion_family', 'MDAO')})"
         if y_std is not None:
             msg += f"<br>Mean Uncertainty: {np.mean(y_std):.4f}"
 
         # Add warning if debug mode was used
         if metrics.get("debug_mode", False):
-            msg += "<br><span style='color: red; font-weight: bold;'>⚠️ DEBUG MODE - PERFECT SCORES EXPECTED<br>DO NOT USE FOR REAL DESIGN!</span>"
+            msg += "<br><span style='color: red; font-weight: bold;'>DEBUG MODE - PERFECT SCORES EXPECTED<br>DO NOT USE FOR REAL DESIGN!</span>"
 
         self.lbl_metrics.setText(msg)
+
+        # Populate AutoML Leaderboard if available
+        if "leaderboard" in metrics and hasattr(self, "lb_table"):
+            lb_data = metrics["leaderboard"]
+            self.lb_table.setRowCount(len(lb_data))
+            for row_idx, item in enumerate(lb_data):
+                self.lb_table.setItem(row_idx, 0, QtWidgets.QTableWidgetItem(str(item.get("rank", row_idx + 1))))
+                self.lb_table.setItem(row_idx, 1, QtWidgets.QTableWidgetItem(str(item.get("name", "-"))))
+                self.lb_table.setItem(row_idx, 2, QtWidgets.QTableWidgetItem(str(item.get("family", "-"))))
+                self.lb_table.setItem(row_idx, 3, QtWidgets.QTableWidgetItem(f"{item.get('r2', 0.0):.4f}"))
+                self.lb_table.setItem(row_idx, 4, QtWidgets.QTableWidgetItem(f"{item.get('rmse', 0.0):.4f}"))
+                self.lb_table.setItem(row_idx, 5, QtWidgets.QTableWidgetItem(f"{item.get('rmae', 0.0):.4f}"))
+                self.lb_table.setItem(row_idx, 6, QtWidgets.QTableWidgetItem(f"{item.get('fit_time', 0.0):.3f}"))
+            self.tab_widget.setCurrentWidget(self.lb_tab)
 
         # Handle multi-output visualization
         self.plot_widget.clear()
@@ -598,9 +512,7 @@ class SurrogateTrainingMixin:
             reply = QtWidgets.QMessageBox.warning(
                 self,
                 "Zero Dropout Warning",
-                "You are using PyTorch with 0% dropout. This will disable uncertainty estimation for adaptive sampling.\n\n"
-                "Adaptive training works by sampling points with high uncertainty. With dropout=0%, the model is deterministic and has zero uncertainty everywhere.\n\n"
-                "Consider:\n• Setting Dropout Rate > 0% (recommended: 0.1-0.2)\n• Using a different model type (Gaussian Process has built-in uncertainty)\n\n"
+                "PyTorch model has 0% dropout, so uncertainty estimation for adaptive sampling is disabled.\n\n"
                 "Continue anyway?",
                 QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
                 QtWidgets.QMessageBox.No,
@@ -701,6 +613,7 @@ class SurrogateTrainingMixin:
             self.update_data_table()
         self.btn_save.setEnabled(True)
         self.progress.setValue(100)
+        self.update_training_summary()
 
         # Update metrics display (similar to training_finished)
         msg = f"<b>Adaptive Training Complete</b><br>RMSE: {metrics['RMSE']:.4f}<br>R² Score: {metrics['R2']:.4f}"

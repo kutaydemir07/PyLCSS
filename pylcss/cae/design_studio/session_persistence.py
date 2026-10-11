@@ -34,6 +34,7 @@ _GUIDED_TOPOLOGY_BASE_PROPERTIES = frozenset(
         "visualization",
         "validate_after_optimize",
         "cad_export_filename",
+        "cad_export_format",
         "description",
         "tags",
         "notes",
@@ -92,6 +93,26 @@ _RETIRED_TOPOLOGY_PROPERTIES = frozenset(
         # Retired fidelity dropdowns, replaced by physical feature sizes.
         "quality_preset",
         "analysis_resolution",
+        # Retired extrusion property.
+        "extrusion",
+        # Retired manufacturing process and constraints.
+        "manufacturing_process",
+        "symmetry",
+        "overhang_build_axis",
+        "overhang_angle_deg",
+        "pull_out_axis",
+        "max_member_size_voxels",
+        "maximum_member_size_mm",
+        "pattern_repeat",
+        "pattern_axis",
+        # Retired mesh smoothing and artificial recovery choices.
+        "print_ready_mesh",
+        "mesh_decimate_ratio",
+        "surface_recovery_method",
+        "surface_quality",
+        # Retired lattice voxel option; current reconstruction resolves solid
+        # occupancy directly and the node no longer registers this property.
+        "adaptive_subcell_solid",
         # The robust dilated/nominal/eroded formulation and its thresholds.
         "robust_enabled",
         "robust_eta_offset",
@@ -165,8 +186,6 @@ def _guided_topology_property_names(
         names.update({"overhang_build_axis", "overhang_angle_deg"})
     if process == "cast / moulded":
         names.add("pull_out_axis")
-    if process == "extruded":
-        names.add("extrusion")
     if process in {"symmetric", "additive + symmetric"}:
         names.add("symmetry")
     if "stress" in goal:
@@ -264,6 +283,80 @@ def compact_design_studio_session(session: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
+def migrate_legacy_box_properties(session: dict[str, Any]) -> dict[str, Any]:
+    """Normalize interim BoxNode aliases to the registered x/y/z properties."""
+    nodes = session.get("nodes")
+    if not isinstance(nodes, dict):
+        return session
+    for record in nodes.values():
+        if not isinstance(record, dict):
+            continue
+        type_name = str(record.get("type_") or "")
+        if "BoxNode" in type_name or type_name.endswith(".box"):
+            custom = record.get("custom")
+            if isinstance(custom, dict):
+                for alias, registered_name in (
+                    ("length", "length_x"),
+                    ("width", "width_y"),
+                    ("height", "height_z"),
+                ):
+                    if alias in custom:
+                        if registered_name not in custom:
+                            custom[registered_name] = custom[alias]
+                        custom.pop(alias, None)
+    return session
+
+
+_LEGACY_PORT_RENAMES = {
+    "shape_out": "shape",
+    "mesh_out": "mesh",
+    "filepath_in": "file",
+    "shape_in": "shape",
+    "area_out": "area",
+    "workplane": "selection",
+    "assembly": "shape",
+    "part_1": "bodies",
+    "part_2": "bodies",
+    "part_3": "bodies",
+    "part_4": "bodies",
+}
+
+
+def migrate_legacy_ports_and_nodes(session: dict[str, Any]) -> dict[str, Any]:
+    """Clean up retired ports and legacy properties from saved sessions.
+
+    Migrates connections referencing retired ports (shape_out -> shape,
+    workplane -> selection, part_1..part_4 -> bodies, etc.) and pops retired
+    properties like fuse_parts on Group Bodies.
+    """
+    nodes = session.get("nodes")
+    if isinstance(nodes, dict):
+        for record in nodes.values():
+            if not isinstance(record, dict):
+                continue
+            type_name = str(record.get("type_") or "")
+            custom = record.get("custom")
+            if isinstance(custom, dict):
+                if "AssemblyNode" in type_name or type_name.endswith(".assembly"):
+                    custom.pop("fuse_parts", None)
+
+    connections = session.get("connections")
+    if isinstance(connections, list):
+        for conn in connections:
+            if not isinstance(conn, dict):
+                continue
+            in_info = conn.get("in")
+            if isinstance(in_info, list) and len(in_info) == 2:
+                if in_info[1] in _LEGACY_PORT_RENAMES:
+                    in_info[1] = _LEGACY_PORT_RENAMES[in_info[1]]
+            out_info = conn.get("out")
+            if isinstance(out_info, list) and len(out_info) == 2:
+                if out_info[1] in _LEGACY_PORT_RENAMES:
+                    out_info[1] = _LEGACY_PORT_RENAMES[out_info[1]]
+
+    return session
+
+
 def expand_guided_topology_session(session: dict[str, Any]) -> dict[str, Any]:
     """Hydrate derived Guided controls before NodeGraphQt deserialization.
 
@@ -273,6 +366,8 @@ def expand_guided_topology_session(session: dict[str, Any]) -> dict[str, Any]:
     goal, fidelity, process, physical sizes, and user-visible choices remain
     authoritative.
     """
+    session = migrate_legacy_box_properties(session)
+    session = migrate_legacy_ports_and_nodes(session)
     nodes = session.get("nodes")
     if not isinstance(nodes, dict):
         return session
@@ -310,3 +405,67 @@ def expand_guided_topology_session(session: dict[str, Any]) -> dict[str, Any]:
             )
         record["custom"] = {**resolved, **custom}
     return session
+
+
+def sanitize_unregistered_nodes(
+    session: dict[str, Any],
+    known_classes: dict[str, type] | None = None,
+) -> list[str]:
+    """Gracefully omit nodes and dangling connections that have no registered class.
+
+    If someone opens a .cad file that contains nodes that are no longer installed
+    or registered (e.g. retired convenience nodes or uninstalled plugins), this
+    strips those nodes and their connected wires cleanly from the session before
+    deserialization, allowing the rest of the project to open smoothly.
+
+    Returns:
+        List of omitted node display names/labels for user notification.
+    """
+    nodes = session.get("nodes")
+    if not isinstance(nodes, dict):
+        return []
+
+    if known_classes is None:
+        try:
+            from pylcss.cae.design_studio.node_library import NODE_CLASS_MAPPING
+
+            classes = set(NODE_CLASS_MAPPING.values())
+        except Exception:
+            return []
+    else:
+        classes = set(known_classes.values())
+
+    # Build the set of valid type strings
+    valid_types = {"nodeGraphQt.nodes.BackdropNode", "BackdropNode"}
+    for cls in classes:
+        valid_types.add(f"{cls.__identifier__}.{cls.__name__}")
+        valid_types.add(cls.__identifier__)
+        valid_types.add(cls.__name__)
+
+    omitted_ids: set[str] = set()
+    omitted_descriptions: list[str] = []
+
+    for node_id, node_data in list(nodes.items()):
+        if not isinstance(node_data, dict):
+            continue
+        type_str = str(node_data.get("type_", "")).strip()
+        if type_str not in valid_types:
+            omitted_ids.add(str(node_id))
+            node_name = str(node_data.get("name") or node_id)
+            omitted_descriptions.append(f"{node_name} ({type_str})")
+            del nodes[node_id]
+
+    if omitted_ids:
+        connections = session.get("connections")
+        if isinstance(connections, list):
+            cleaned_connections = []
+            for conn in connections:
+                if not isinstance(conn, dict):
+                    continue
+                out_id = str(conn.get("out", [""])[0])
+                in_id = str(conn.get("in", [""])[0])
+                if out_id not in omitted_ids and in_id not in omitted_ids:
+                    cleaned_connections.append(conn)
+            session["connections"] = cleaned_connections
+
+    return omitted_descriptions

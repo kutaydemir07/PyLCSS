@@ -333,12 +333,19 @@ _BOOLEAN_FUZZY_RETRIES = (1e-5, 1e-4, 1e-3)
 
 
 def _boolean_or_raise(result: Any, tool: Any, *, operation: str) -> Any:
-    """Run a CadQuery boolean and give a targeted failure message."""
+    """Run isolated CadQuery booleans and keep rejected operands unchanged."""
+    solid_input = hasattr(result, "Solids") and bool(result.Solids())
 
     def _run(fuzzy: float) -> Any:
+        # CadQuery's boolean wrapper does not enable OCC's NonDestructive
+        # mode. Even an invalid/empty result can modify input edge pcurves or
+        # tolerances, corrupting the fitted body retained by the caller.
+        # Fresh geometric copies also keep one fuzzy attempt from affecting
+        # the next; Shape.copy() copies geometry rather than sharing TShapes.
+        body, cutter = result.copy(), tool.copy()
         if operation == "fuse":
-            return result.fuse(tool, tol=fuzzy) if fuzzy else result.fuse(tool)
-        return result.cut(tool, tol=fuzzy) if fuzzy else result.cut(tool)
+            return body.fuse(cutter, tol=fuzzy) if fuzzy else body.fuse(cutter)
+        return body.cut(cutter, tol=fuzzy) if fuzzy else body.cut(cutter)
 
     last_error: Exception | None = None
     for fuzzy in (0.0, *_BOOLEAN_FUZZY_RETRIES):
@@ -350,6 +357,11 @@ def _boolean_or_raise(result: Any, tool: Any, *, operation: str) -> Any:
         if candidate is None:
             continue
         if hasattr(candidate, "isValid") and not candidate.isValid():
+            continue
+        # OCC can return a valid empty Compound after a failed boolean. A
+        # manufactured solid must retain solid geometry before accepting it.
+        if solid_input and (not candidate.Solids() or not candidate.Faces()):
+            last_error = RuntimeError(f"Analytic {operation} erased the solid body")
             continue
         if fuzzy:
             logger.info(
@@ -380,9 +392,12 @@ def _intersecting_tools(shape: Any, tools: list[Any]) -> list[Any]:
     retained: list[Any] = []
     for tool in tools:
         try:
-            common = shape.intersect(tool)
-            common_volume = abs(float(common.Volume()))
-            tool_volume = max(abs(float(tool.Volume())), 1.0)
+            # A common-volume pre-check is read-only from the caller's point
+            # of view. OCC may still update its operands before rejecting a
+            # detached feature, so isolate both geometries here as well.
+            common = shape.copy().intersect(tool.copy())
+            common_volume = abs(float(common.Volume(tol=1e-4)))
+            tool_volume = max(abs(float(tool.Volume(tol=1e-4))), 1.0)
             if common_volume <= max(1e-9, tool_volume * 1e-8):
                 logger.warning(
                     "Recovered Shape STEP: skipped a detached passive solid feature."
@@ -429,7 +444,7 @@ def _drop_boolean_sliver_solids(
     if len(solids) <= 1:
         return shape
     volumes = np.asarray(
-        [max(0.0, abs(float(solid.Volume()))) for solid in solids],
+        [max(0.0, abs(float(solid.Volume(tol=1e-4)))) for solid in solids],
         dtype=float,
     )
     largest = float(np.max(volumes)) if volumes.size else 0.0
@@ -451,6 +466,43 @@ def _drop_boolean_sliver_solids(
         threshold,
     )
     return kept[0] if len(kept) == 1 else cq.Compound.makeCompound(kept)
+
+
+def _coerce_to_solid(geom: Any) -> Any:
+    """Coerce arbitrary CadQuery/OCC geometry into a cq.Shape solid/compound."""
+    if geom is None:
+        return None
+    import cadquery as cq
+
+    if isinstance(geom, cq.Shape):
+        return geom
+    if hasattr(geom, "val") and callable(geom.val):
+        try:
+            val = geom.val()
+            if isinstance(val, cq.Shape):
+                return val
+        except Exception:
+            pass
+    if hasattr(geom, "toCompound") and callable(geom.toCompound):
+        try:
+            val = geom.toCompound()
+            if isinstance(val, cq.Shape):
+                return val
+        except Exception:
+            pass
+    if hasattr(geom, "wrapped"):
+        try:
+            return cq.Shape.cast(geom.wrapped)
+        except Exception:
+            pass
+    try:
+        from OCP.TopoDS import TopoDS_Shape
+
+        if isinstance(geom, TopoDS_Shape):
+            return cq.Shape.cast(geom)
+    except Exception:
+        pass
+    return None
 
 
 def _collect_passive_tools(
@@ -536,6 +588,19 @@ def _collect_passive_tools(
         )
         if tool is not None:
             cut_tools.append(tool)
+
+    passive_info = (
+        payload.get("passive_regions") if isinstance(payload, dict) else None
+    )
+    if isinstance(passive_info, dict):
+        for raw_shape in passive_info.get("explicit_solid_shapes", []):
+            tool = _coerce_to_solid(raw_shape)
+            if tool is not None:
+                solid_tools.append(tool)
+        for raw_shape in passive_info.get("explicit_void_shapes", []):
+            tool = _coerce_to_solid(raw_shape)
+            if tool is not None:
+                cut_tools.append(tool)
 
     return solid_tools, cut_tools, hardware_tools
 

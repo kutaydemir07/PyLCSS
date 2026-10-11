@@ -11,14 +11,14 @@ class FEAComponentNode(CadQueryNode):
     """Pair one analysis mesh with its material and engineering identity."""
 
     __identifier__ = "com.cad.sim.component"
-    NODE_NAME = "Body"
+    NODE_NAME = "Assembly Component"
 
     def __init__(self) -> None:
         super().__init__()
         self.add_input("mesh", color=(200, 100, 200))
         self.add_input("material", color=(200, 200, 200))
         self.add_output("component", color=(120, 190, 255))
-        self.create_property("component_name", "Body 1", widget_type="text")
+        self.create_property("component_name", "Component 1", widget_type="text")
 
     def run(self):
         self.clear_error()

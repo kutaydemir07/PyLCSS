@@ -108,18 +108,25 @@ def _requirements(value: Any) -> tuple[RequirementSummary, ...]:
 
 def _cad_capabilities(nodes: dict[str, Any]) -> tuple[str, ...]:
     types = {str(item.get("type_") or "") for item in nodes.values()}
+    customs = [item.get("custom", {}) for item in nodes.values() if isinstance(item.get("custom"), dict)]
     labels: list[str] = []
+    is_modal = any(t.startswith("com.cad.sim.modal_solver.") for t in types) or any(str(c.get("analysis_type", "")).lower() == "modal" for c in customs)
+    if is_modal:
+        labels.append("Modal / vibration analysis")
     checks = (
         ("com.cad.sim.solver", "Static FEA"),
         ("com.cad.sim.component", "Multi-body / multi-material"),
         ("com.cad.sim.pressure_load", "Pressure loading"),
         ("com.cad.sim.crash_solver", "Explicit impact"),
         ("com.cad.sim.topopt_voxel", "Topology optimization"),
-        ("com.cad.sim.lattice_voxel", "Lattice optimization"),
+        ("com.cad.sim.lattice_voxel", "Adaptive lattice optimization"),
+        ("com.cad.sim.lattice_infill", "Adaptive lattice infill"),
         ("com.cad.assembly", "Multiple CAD bodies"),
         ("com.cad.code_part", "Parametric code geometry"),
     )
     for prefix, label in checks:
+        if prefix == "com.cad.sim.solver" and is_modal:
+            continue
         if any(node_type == prefix or node_type.startswith(prefix + ".") for node_type in types):
             labels.append(label)
     return tuple(labels or ["Parametric modeling"])
@@ -145,6 +152,12 @@ def _load_cad_examples() -> list[ExampleSummary]:
             continue
         nodes = data.get("nodes") if isinstance(data.get("nodes"), dict) else {}
         connections = data.get("connections")
+        capabilities = list(_cad_capabilities(nodes))
+        region_ports = {c.get("in", [None, None])[1] for c in (connections or []) if isinstance(c, dict) and len(c.get("in", [])) > 1}
+        if "preserved_regions" in region_ports:
+            capabilities.append("Non-design solid bodies")
+        if "obstacle_regions" in region_ports:
+            capabilities.append("Obstacle / keep-out bodies")
         category = _CAD_CATEGORY_NAMES.get(
             path.parent.name,
             path.parent.name.replace("_", " ").title(),
@@ -177,7 +190,7 @@ def _load_cad_examples() -> list[ExampleSummary]:
                 deliverables=_text_list(data.get("_deliverables")),
                 workflow=_text_list(data.get("_workflow")),
                 acceptance_criteria=_text_list(data.get("_acceptance_criteria")),
-                capabilities=_cad_capabilities(nodes),
+                capabilities=tuple(capabilities),
                 node_count=len(nodes),
                 connection_count=(
                     len(connections) if isinstance(connections, list) else 0

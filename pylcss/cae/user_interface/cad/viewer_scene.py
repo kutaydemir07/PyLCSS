@@ -640,6 +640,50 @@ class SceneRenderingMixin:
         lut.Build()
         return lut
 
+    def _safety_factor_lut(self, min_val: float = 0.0, max_val: float = 3.0):
+        """Build engineering Safety Factor lookup table: red (<1), yellow (1..1.5), green/blue (>=1.5)."""
+        bands = getattr(self, "_contour_bands", None)
+        count = int(bands) if bands else 256
+        count = max(2, count)
+        lut = vtk.vtkLookupTable()
+        lut.SetNumberOfTableValues(count)
+        samples = (np.arange(count) + 0.5) / count if bands else np.linspace(
+            0.0, 1.0, count
+        )
+        span = max(float(max_val - min_val), 1e-6)
+        for index, t in enumerate(samples):
+            val = min_val + t * span
+            if val < 1.0:
+                rgb = (0.85, 0.10, 0.10)
+            elif val < 1.5:
+                u = (val - 1.0) / 0.5
+                rgb = (0.95, 0.35 + 0.50 * u, 0.08 + 0.02 * u)
+            elif val < 2.5:
+                u = (val - 1.5) / 1.0
+                rgb = (
+                    0.95 * (1.0 - u) + 0.15 * u,
+                    0.85 * (1.0 - u) + 0.75 * u,
+                    0.10 * (1.0 - u) + 0.25 * u,
+                )
+            elif val < 4.0:
+                u = (val - 2.5) / 1.5
+                rgb = (
+                    0.15 * (1.0 - u) + 0.05 * u,
+                    0.75 * (1.0 - u) + 0.40 * u,
+                    0.25 * (1.0 - u) + 0.85 * u,
+                )
+            else:
+                rgb = (0.05, 0.35, 0.85)
+            lut.SetTableValue(index, rgb[0], rgb[1], rgb[2], 1.0)
+        try:
+            lut.SetNanColor(0.55, 0.55, 0.58, 1.0)
+            lut.SetBelowRangeColor(0.85, 0.10, 0.10, 1.0)
+            lut.SetAboveRangeColor(0.05, 0.35, 0.85, 1.0)
+        except Exception:
+            pass
+        lut.Build()
+        return lut
+
     def _style_scalar_bar(self):
         """Give the VTK colour legend a flat, modern look.
 
@@ -1036,6 +1080,21 @@ class SceneRenderingMixin:
         # whole-shape tessellation if per-face isn't available.
         use_per_face = len(occ_faces) > 0
 
+        # Mesh the entire B-rep once with a tolerance in model units. Meshing
+        # each face using relative deflection can visibly coarsen large patches.
+        absolute_mesh = None
+        try:
+            from pylcss.cae.design_studio.topology_optimization.geometry.amrto_common import (
+                tessellate_cad_absolute,
+            )
+            box = topo_shape.BoundingBox()
+            diagonal = (box.xlen ** 2 + box.ylen ** 2 + box.zlen ** 2) ** .5
+            absolute_mesh = tessellate_cad_absolute(
+                topo_shape, max(1e-4, min(.1, diagonal * 1e-3)), .5, return_face_ranges=True,
+            )
+        except Exception:
+            logging.getLogger(__name__).debug("Absolute CAD display mesh unavailable", exc_info=True)
+
         if use_per_face:
             for face_idx, occ_face in enumerate(occ_faces):
                 face_pd = vtk.vtkPolyData()
@@ -1043,7 +1102,13 @@ class SceneRenderingMixin:
                 face_polys = vtk.vtkCellArray()
 
                 try:
-                    tri = occ_face.tessellate(tolerance=0.1, angularTolerance=0.2)
+                    if absolute_mesh is not None:
+                        vertices, mesh_triangles, ranges = absolute_mesh
+                        start, end, triangle_start, triangle_end = ranges[face_idx]
+                        tri = (vertices[start:end].tolist(),
+                               (mesh_triangles[triangle_start:triangle_end] - start).tolist())
+                    else:
+                        tri = occ_face.tessellate(tolerance=0.1, angularTolerance=0.2)
                     if isinstance(tri, dict):
                         verts = tri.get("vertices") or tri.get("verts") or []
                         triangles = tri.get("triangles") or tri.get("faces") or []
@@ -1058,8 +1123,9 @@ class SceneRenderingMixin:
                     local_pt_offset = face_points.GetNumberOfPoints()
 
                     for v in verts:
-                        combined_points.InsertNextPoint(v.x, v.y, v.z)
-                        face_points.InsertNextPoint(v.x, v.y, v.z)
+                        coordinates = (v.x, v.y, v.z) if hasattr(v, "x") else v
+                        combined_points.InsertNextPoint(*coordinates)
+                        face_points.InsertNextPoint(*coordinates)
 
                     for t in triangles:
                         # Combined mesh
@@ -1091,9 +1157,9 @@ class SceneRenderingMixin:
         else:
             # Fallback: whole-shape tessellation (no per-face picking)
             try:
-                triangulation = topo_shape.tessellate(
-                    tolerance=0.1, angularTolerance=0.2
-                )
+                triangulation = ((absolute_mesh[0].tolist(), absolute_mesh[1].tolist())
+                                 if absolute_mesh is not None else topo_shape.tessellate(
+                                     tolerance=0.1, angularTolerance=0.2))
                 if isinstance(triangulation, dict):
                     verts = triangulation.get("vertices") or triangulation.get("verts")
                     triangles = triangulation.get("triangles") or triangulation.get(
@@ -1113,7 +1179,8 @@ class SceneRenderingMixin:
             polys = vtk.vtkCellArray()
 
             for v in verts:
-                points.InsertNextPoint(v.x, v.y, v.z)
+                coordinates = (v.x, v.y, v.z) if hasattr(v, "x") else v
+                points.InsertNextPoint(*coordinates)
             for t in triangles:
                 polys.InsertNextCell(3)
                 polys.InsertCellPoint(t[0])
@@ -1142,7 +1209,9 @@ class SceneRenderingMixin:
             clean.SetTolerance(1e-8)
             normals.SetInputConnection(clean.GetOutputPort())
             normals.ConsistencyOn()
-            normals.AutoOrientNormalsOn()
+            # OCC face orientation already points out of material, including
+            # inward cavity boundaries. Preserve it during smooth shading.
+            normals.AutoOrientNormalsOff()
             normals.SplittingOn()
             normals.SetFeatureAngle(50.0)
         else:

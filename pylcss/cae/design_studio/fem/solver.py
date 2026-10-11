@@ -40,7 +40,7 @@ class SolverNode(CadQueryNode):
 
     def __init__(self):
         super().__init__()
-        self.add_input('mesh',        color=(200, 100, 200))
+        self.add_input('mesh',        color=(200, 100, 200), multi_input=True)
         self.add_input('material',    color=(200, 200, 200))
         self.add_input(
             'components',
@@ -57,7 +57,7 @@ class SolverNode(CadQueryNode):
         self.create_property('deck_only',            False, widget_type='checkbox')
         self.create_property('external_timeout_s',   3600.0, widget_type='float')
         self.create_property('visualization', 'Von Mises Stress', widget_type='combo',
-                             items=['Von Mises Stress', 'Displacement'])
+                             items=['Von Mises Stress', 'Displacement', 'Safety Factor'])
         self.create_property('deformation_scale', 'Auto', widget_type='combo',
                              items=['Auto', '1x', '5x', '10x', '50x', '100x', '200x'])
         # The constitutive model is explicit. A yield strength is retained as
@@ -95,7 +95,8 @@ class SolverNode(CadQueryNode):
         )
         from pylcss.input_values import as_bool, flatten_inputs
 
-        mesh = self.get_input_value('mesh', None)
+        mesh_list = [m for m in flatten_inputs(self.get_input_list('mesh')) if m is not None]
+        mesh = mesh_list[0] if len(mesh_list) == 1 else None
         material = self.get_input_value('material', None)
         component_list = flatten_inputs(self.get_input_list('components'))
         constraint_list = flatten_inputs(self.get_input_list('constraints'))
@@ -106,6 +107,17 @@ class SolverNode(CadQueryNode):
                 mesh = component.get('mesh')
                 material = component.get('material')
             component_list = []
+        elif not component_list and len(mesh_list) > 1:
+            # Auto-synthesize multi-body bonded assembly from connected meshes
+            component_list = [
+                {
+                    'type': 'fea_component',
+                    'name': f'Part_{i}',
+                    'mesh': m,
+                    'material': material,
+                }
+                for i, m in enumerate(mesh_list, 1)
+            ]
         logger.debug(
             "FEA Solver: mesh=%s, material=%s, components=%d, constraints=%d, loads=%d",
             mesh is not None, material is not None,

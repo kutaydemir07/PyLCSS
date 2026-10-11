@@ -273,9 +273,13 @@ class SalibBackend:
         )
         second_order = indices.get("S2")
         second_order_confidence = indices.get("S2_conf")
-        s2_matrix = _symmetric_second_order_matrix(
-            second_order,
-            problem["num_vars"],
+        s2_matrix = (
+            None
+            if second_order is None
+            else _symmetric_second_order_matrix(
+                second_order,
+                problem["num_vars"],
+            )
         )
 
         return {
@@ -442,11 +446,11 @@ class SalibBackend:
 def _symmetric_second_order_matrix(
     raw_values: object,
     variable_count: int,
-) -> FloatArray:
+) -> FloatArray | None:
     """Convert SALib's upper-triangular S2 output to a symmetric plot matrix."""
-    matrix = np.zeros((variable_count, variable_count), dtype=float)
     if raw_values is None:
-        return matrix
+        return None
+    matrix = np.zeros((variable_count, variable_count), dtype=float)
 
     raw = np.asarray(raw_values, dtype=float)
     if raw.shape != matrix.shape:

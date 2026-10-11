@@ -164,13 +164,15 @@ class SolutionSpaceWidget(
             "#42d4f4",  # Cyan
             "#f032e6",  # Magenta
             "#a9a9a9",  # Grey
-            "#fabebe",  # Pink
+            "#008080",  # Teal
             "#000075",  # Navy
             "#9a6324",  # Brown
             "#800000",  # Maroon
-            "#e6beff",  # Lavender
-            "#fffac8",  # Beige
+            "#6a5acd",  # Slate blue
+            "#bcbd22",  # Olive
         ]
+        # Legend entries the user has toggled off (QoI names or "__good__")
+        self.hidden_legend_keys: set[str] = set()
         self.input_units = {}
         self.output_units = {}
 

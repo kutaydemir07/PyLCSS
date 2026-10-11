@@ -38,30 +38,56 @@ class SolutionPersistenceMixin:
             item = self.family_plots_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        self.family_plot_widgets = []
 
-        # 2. Setup Colors for Variants
-        variant_names = sorted(
-            [
-                name
-                for name in results.keys()
-                if name not in ["Platform", "Platform_Infeasible", "Communality"]
-            ]
-        )
+        # 2. Setup Colors for Variants (same order as the variants table)
+        reserved = {"Platform", "Platform_Infeasible", "Communality"}
+        known = {name for name in results.keys() if name not in reserved}
+        table_order = []
+        for row in range(self.variant_table.rowCount()):
+            cell = self.variant_table.item(row, 0)
+            if cell is not None and cell.text() in known:
+                table_order.append(cell.text())
+        variant_names = table_order + sorted(known - set(table_order))
+        n_var = len(variant_names)
         var_colors = {}
         for i, name in enumerate(variant_names):
             var_colors[name] = self.default_colors[i % len(self.default_colors)]
 
+        # Shared legend: each variant colour appears once for all plots
+        while self.family_legend_layout.count():
+            legend_item = self.family_legend_layout.takeAt(0)
+            if legend_item.widget():
+                legend_item.widget().deleteLater()
+        for name in variant_names + ["PLATFORM"]:
+            color = "#00cc00" if name == "PLATFORM" else var_colors[name]
+            entry = QtWidgets.QWidget()
+            entry_layout = QtWidgets.QHBoxLayout(entry)
+            entry_layout.setContentsMargins(0, 0, 0, 0)
+            entry_layout.setSpacing(5)
+            swatch = QtWidgets.QLabel()
+            swatch.setFixedSize(14, 14)
+            swatch.setStyleSheet(
+                f"background-color: {color}; border: 1px solid #666; border-radius: 3px;"
+            )
+            entry_layout.addWidget(swatch)
+            entry_layout.addWidget(QtWidgets.QLabel(name))
+            self.family_legend_layout.addWidget(entry)
+
+        # One row per bar (variants + platform) plus room for title and axis
+        plot_height = int(min(520, max(200, 90 + 42 * (n_var + 1))))
+
         # 3. Create a Plot for EACH Design Variable
-        cols = 3
+        containers = []
         for i, dv in enumerate(self.problem.design_variables):
             # Container for layout
             container = QtWidgets.QWidget()
             vbox = QtWidgets.QVBoxLayout(container)
-            vbox.setContentsMargins(0, 10, 0, 20)  # Add spacing between plots
+            vbox.setContentsMargins(0, 4, 0, 8)
 
             # PyQtGraph Widget
             win = pg.GraphicsLayoutWidget()
-            win.setFixedHeight(220)  # Slightly taller for labels
+            win.setFixedHeight(plot_height)
             win.setBackground("w")
             vbox.addWidget(win)
 
@@ -81,10 +107,10 @@ class SolutionPersistenceMixin:
                 **{"font-size": "11pt", "font-weight": "bold", "color": "black"},
             )
 
-            # Y-Axis Labels (Variant Names)
+            # Y-Axis Labels: first variant on top, platform (the conclusion) at the bottom
             y_ticks = [(0, "PLATFORM")]
             for idx, name in enumerate(variant_names):
-                y_ticks.append((idx + 1, name))
+                y_ticks.append((n_var - idx, name))
 
             ax_left = p.getAxis("left")
             ax_left.setTicks([y_ticks])
@@ -93,7 +119,7 @@ class SolutionPersistenceMixin:
             p.getAxis("bottom").setPen("k")
             p.getAxis("bottom").setTextPen("k")
 
-            p.setYRange(-0.5, len(variant_names) + 0.5)
+            p.setYRange(-0.5, n_var + 0.9)
 
             # --- DRAWING BARS ---
             min_view = float("inf")
@@ -113,7 +139,7 @@ class SolutionPersistenceMixin:
 
                     bar = pg.BarGraphItem(
                         x0=[x_min],
-                        y=[idx + 1],
+                        y=[n_var - idx],
                         width=[x_max - x_min],
                         height=0.6,
                         brush=pg.mkBrush(color),
@@ -121,11 +147,11 @@ class SolutionPersistenceMixin:
                     )
                     p.addItem(bar)
 
-                    # Numeric Label
+                    # Range label sits above its bar so it cannot run off the plot edge
                     text = pg.TextItem(
-                        f"{x_min:.2f} - {x_max:.2f}", anchor=(0, 0.5), color="k"
+                        f"{x_min:.2f} - {x_max:.2f}", anchor=(0.5, 1.0), color="k"
                     )
-                    text.setPos(x_max, idx + 1)
+                    text.setPos((x_min + x_max) / 2, n_var - idx + 0.3)
                     p.addItem(text)
 
             # 2. Draw Platform (Intersection)
@@ -142,7 +168,7 @@ class SolutionPersistenceMixin:
                             x0=[p_min],
                             y=[0],
                             width=[p_max - p_min],
-                            height=0.8,
+                            height=0.6,
                             brush=pg.mkBrush("#00cc00"),
                             pen=pg.mkPen("k", width=2),
                         )
@@ -150,10 +176,10 @@ class SolutionPersistenceMixin:
 
                         text = pg.TextItem(
                             f"{p_min:.2f} - {p_max:.2f}",
-                            anchor=(0, 0.5),
+                            anchor=(0.5, 1.0),
                             color="#006600",
                         )
-                        text.setPos(p_max, 0)
+                        text.setPos((p_min + p_max) / 2, 0.3)
                         text.setFont(QtGui.QFont("Segoe UI", 10, QtGui.QFont.Bold))
                         p.addItem(text)
 
@@ -184,10 +210,9 @@ class SolutionPersistenceMixin:
                 status_text = "No Commonality"
                 status_color = "#cc0000"
 
-            # HTML Title: Name in Large Bold, Status smaller below
+            # The axis label already names the variable, so the title carries status only
             title_html = (
-                f"<span style='font-size: 14pt; font-weight: bold; color: black;'>{dv['name']}</span>"
-                f"<br><span style='font-size: 9pt; color: {status_color};'>{status_text}</span>"
+                f"<span style='font-size: 10pt; color: {status_color};'>{status_text}</span>"
             )
             p.setTitle(title_html)
 
@@ -199,13 +224,13 @@ class SolutionPersistenceMixin:
                     max_view = max(max_view, p_max)
 
                 width = max_view - min_view
-                padding = width * 0.1 if width > 0 else 1.0
-                p.setXRange(min_view - padding, max_view + padding * 3)
+                padding = width * 0.15 if width > 0 else 1.0
+                p.setXRange(min_view - padding, max_view + padding)
 
-            # Add to Grid Layout
-            row = i // cols
-            col = i % cols
-            self.family_plots_layout.addWidget(container, row, col)
+            containers.append(container)
+
+        self.family_plot_widgets = containers
+        self._layout_family_plots()
 
     def save_to_folder(self, folder_path):
         """Save solution space state to a folder."""
@@ -251,7 +276,7 @@ class SolutionPersistenceMixin:
             "last_samples": None,
             "dv_par_box": None,
             "qoi_colors": self.qoi_colors,
-            "design_plots": [(w.x_name, w.y_name) for w in self.plot_widgets],
+            "design_plots": [list(w.axis_names) for w in self.plot_widgets],
             "version": "1.0",
         }
 
@@ -592,8 +617,10 @@ class SolutionPersistenceMixin:
             design_plots = data.get("design_plots", [])
             if design_plots:
                 self.clear_all_plots()
-                for x_name, y_name in design_plots:
-                    self.add_plot(x_name, y_name)
+                for names in design_plots:
+                    # Older projects stored (x, y) pairs; newer ones hold 1 to 3 names.
+                    x_name, y_name, z_name = (list(names) + [None, None])[:3]
+                    self.add_plot(x_name, y_name, z_name=z_name)
 
             for pw in self.plot_widgets:
                 pw.plot()

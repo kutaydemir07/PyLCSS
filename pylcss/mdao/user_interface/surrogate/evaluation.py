@@ -35,22 +35,29 @@ class SurrogateEvaluationMixin:
         worker.cancelled_sig.connect(self._evaluation_cancelled)
         worker.finished.connect(worker.deleteLater)
         worker.finished.connect(self._evaluation_thread_stopped)
+        ctrl_list = [
+            getattr(self, name, None)
+            for name in (
+                "btn_train",
+                "btn_adaptive",
+                "btn_generate",
+                "btn_browse",
+                "btn_save",
+                "combo_algo",
+                "spin_cv_folds",
+            )
+        ]
         self._evaluation_control_states = [
             (control, control.isEnabled())
-            for control in (
-                self.btn_train,
-                self.btn_adaptive,
-                self.btn_generate,
-                self.btn_browse,
-                self.btn_save,
-                self.combo_algo,
-                self.spin_cv_folds,
-            )
+            for control in ctrl_list
+            if control is not None
         ]
         for control, _was_enabled in self._evaluation_control_states:
             control.setEnabled(False)
-        for button in (self.btn_run_cv, self.btn_compare, self.btn_feature_imp):
-            button.setEnabled(False)
+        for name in ("btn_run_cv", "btn_compare", "btn_feature_imp"):
+            btn = getattr(self, name, None)
+            if btn is not None:
+                btn.setEnabled(False)
         self.btn_stop.setText("Stop Evaluation")
         self.btn_stop.setEnabled(True)
         self.progress.setRange(0, 100)
@@ -67,11 +74,14 @@ class SurrogateEvaluationMixin:
             control.setEnabled(was_enabled)
         self._evaluation_control_states = []
         has_data = self.X_train is not None
-        self.btn_run_cv.setEnabled(has_data)
-        self.btn_compare.setEnabled(has_data)
-        self.btn_feature_imp.setEnabled(
-            self.current_model is not None and self.X_test is not None
-        )
+        if hasattr(self, "btn_run_cv"):
+            self.btn_run_cv.setEnabled(has_data)
+        if hasattr(self, "btn_compare"):
+            self.btn_compare.setEnabled(has_data)
+        if hasattr(self, "btn_feature_imp"):
+            self.btn_feature_imp.setEnabled(
+                self.current_model is not None and self.X_test is not None
+            )
         self.btn_stop.setText("Stop Training")
         self.btn_stop.setEnabled(False)
 

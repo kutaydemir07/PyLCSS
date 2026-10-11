@@ -850,6 +850,10 @@ class SimulationRenderingMixin:
         """
         if data is None:
             return
+        if getattr(self, "_crash_frames", None) and not (
+            isinstance(data, dict) and data.get("type") in {"crash", "crash_frame"}
+        ):
+            self.stop_crash_playback()
         if isinstance(data, (list, tuple)) and data:
             if not is_sub_render:
                 self._reset_scene_for_simulation()
@@ -919,13 +923,23 @@ class SimulationRenderingMixin:
                     cad_shape = data.get("shape")
                 if cad_shape is not None:
                     reconstruction = data.get("cad_reconstruction")
-                    smooth_freeform = bool(
-                        isinstance(reconstruction, dict)
-                        and reconstruction.get("method") == "Smooth Freeform"
+                    reconstruction_method = (
+                        str(reconstruction.get("method") or "").strip().lower()
+                        if isinstance(reconstruction, dict)
+                        else ""
+                    )
+                    # AMRTO sews separate NURBS charts into one CAD body.
+                    # Chart boundaries are fitting seams, so use the same
+                    # welded display normals as the legacy freeform route.
+                    # render_shape retains sharp feature normals and the
+                    # original OCC face mapping for picking.
+                    smooth_reconstruction = (
+                        reconstruction_method == "smooth freeform"
+                        or reconstruction_method.startswith("amrto")
                     )
                     cad_preview = data.get("cad_preview_mesh")
                     if (
-                        smooth_freeform
+                        smooth_reconstruction
                         and isinstance(cad_preview, dict)
                         and cad_preview.get("vertices") is not None
                         and cad_preview.get("faces") is not None
@@ -943,9 +957,9 @@ class SimulationRenderingMixin:
                         self.render_shape(
                             cad_shape,
                             initial_edge_visibility=(
-                                False if smooth_freeform else None
+                                False if smooth_reconstruction else None
                             ),
-                            smooth_across_faces=smooth_freeform,
+                            smooth_across_faces=smooth_reconstruction,
                         )
                         self._render_topopt_joint_overlays(data)
                         self.vtkWidget.GetRenderWindow().Render()
@@ -1158,6 +1172,21 @@ class SimulationRenderingMixin:
                         scalar_name = "MinPrincipal"
                         scalar_title = "Minimum Principal Stress (MPa)"
 
+            if visualization_mode == "Safety Factor":
+                sf_arr = data.get("safety_factor")
+                if sf_arr is None and stress is not None:
+                    sy = float(data.get("yield_strength", 0.0) or 0.0)
+                    if sy > 0.0:
+                        sf_arr = np.where(
+                            stress > 1e-12,
+                            np.clip(sy / np.maximum(stress, 1e-12), 0.01, 100.0),
+                            100.0,
+                        )
+                if sf_arr is not None:
+                    stress = np.asarray(sf_arr, dtype=float)
+                    scalar_name = "SafetyFactor"
+                    scalar_title = "Factor of Safety"
+
         if mesh is None:
             return
         self._active_result_mode = visualization_mode
@@ -1206,7 +1235,7 @@ class SimulationRenderingMixin:
                 disp_3n = displacement.reshape((3, n_points), order="F")
                 mag = np.linalg.norm(disp_3n, axis=0)
                 grid.GetPointData().AddArray(vtk_scalar_array(mag, "Displacement"))
-                if visualization_mode == "Displacement":
+                if visualization_mode == "Displacement" or data.get("type") == "modal":
                     grid.GetPointData().SetActiveScalars("Displacement")
 
         if cell_blocks:
@@ -1351,12 +1380,26 @@ class SimulationRenderingMixin:
                             lut,
                         )
                 elif scalar_name == "Displacement":
-                    _disp_title = (
-                        f"Displacement (mm)  [scale: {_def_scale:.0f}\u00d7]"
-                        if _def_scale != 1.0
-                        else "Displacement (mm)"
-                    )
+                    if data.get("type") == "modal":
+                        freq_hz = float(data.get("frequency_hz", 0.0) or 0.0)
+                        act_m = data.get("active_mode", 1)
+                        _disp_title = f"Mode {act_m} Shape ({freq_hz:.1f} Hz)"
+                    else:
+                        _disp_title = (
+                            f"Displacement mm  [scale: {_def_scale:.0f}\u00d7]"
+                            if _def_scale != 1.0
+                            else "Displacement mm"
+                        )
                     self._update_scalar_bar(_disp_title, min_val, max_val, lut)
+                elif scalar_name == "SafetyFactor":
+                    min_s = max(0.0, float(min_val) * 0.95)
+                    max_s = min(max(float(min_val) * 2.0, 3.0), 5.0)
+                    if max_s <= min_s + 0.1:
+                        max_s = min_s + 1.0
+                    mapper.SetScalarRange(min_s, max_s)
+                    lut = self._safety_factor_lut(min_s, max_s)
+                    mapper.SetLookupTable(lut)
+                    self._update_scalar_bar("Factor of Safety", min_s, max_s, lut)
                 else:
                     self._update_scalar_bar(
                         scalar_title,
@@ -1366,31 +1409,43 @@ class SimulationRenderingMixin:
                     )
 
             elif stress is not None and len(stress) > 0:
-                stress_display_clipped = False
-                if locked_scalar_range is not None:
-                    min_s, max_s = locked_scalar_range
+                if scalar_name == "SafetyFactor":
+                    min_sf = float(np.min(stress))
+                    min_s = max(0.0, min_sf * 0.95)
+                    max_s = min(max(min_sf * 2.0, 3.0), 5.0)
+                    if max_s <= min_s + 0.1:
+                        max_s = min_s + 1.0
+                    mapper.SetScalarRange(min_s, max_s)
+                    mapper.SetScalarModeToUsePointData()
+                    lut = self._safety_factor_lut(min_s, max_s)
+                    mapper.SetLookupTable(lut)
+                    self._update_scalar_bar("Factor of Safety", min_s, max_s, lut)
                 else:
-                    (
+                    stress_display_clipped = False
+                    if locked_scalar_range is not None:
+                        min_s, max_s = locked_scalar_range
+                    else:
+                        (
+                            min_s,
+                            max_s,
+                            stress_display_clipped,
+                        ) = _stress_display_range(stress, stress_location)
+
+                    if max_s - min_s < 1e-10:
+                        max_s = min_s + 1.0
+
+                    mapper.SetScalarRange(min_s, max_s)
+                    mapper.SetScalarModeToUsePointData()
+
+                    lut = self._result_lut()
+                    mapper.SetLookupTable(lut)
+
+                    self._update_scalar_bar(
+                        _stress_scalar_bar_title(stress_display_clipped),
                         min_s,
                         max_s,
-                        stress_display_clipped,
-                    ) = _stress_display_range(stress, stress_location)
-
-                if max_s - min_s < 1e-10:
-                    max_s = min_s + 1.0
-
-                mapper.SetScalarRange(min_s, max_s)
-                mapper.SetScalarModeToUsePointData()
-
-                lut = self._result_lut()
-                mapper.SetLookupTable(lut)
-
-                self._update_scalar_bar(
-                    _stress_scalar_bar_title(stress_display_clipped),
-                    min_s,
-                    max_s,
-                    lut,
-                )
+                        lut,
+                    )
 
         if (
             density is not None

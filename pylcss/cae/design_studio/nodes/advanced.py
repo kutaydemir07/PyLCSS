@@ -63,8 +63,6 @@ class ImportStepNode(CadQueryNode):
         self.create_property("filepath", "", widget_type="text")
         self.add_input("file")
         self.add_output("shape")
-        legacy_output = self.add_output("shape_out", display_name=False)
-        legacy_output.view.setVisible(False)
         self.set_color(100, 160, 100)
 
     def run(self, **kwargs):
@@ -98,18 +96,12 @@ class ImportStlNode(CadQueryNode):
         super().__init__()
         self.create_property("filepath", "", widget_type="text")
         self.add_input("file")
-        legacy_input = self.add_input("filepath_in", display_name=False)
-        legacy_input.view.setVisible(False)
         self.add_output("mesh")
-        legacy_output = self.add_output("mesh_out", display_name=False)
-        legacy_output.view.setVisible(False)
         self.set_color(100, 160, 100)
 
     def run(self, **kwargs):
         self.clear_error()
         incoming = resolve_any_input(self.get_input("file"))
-        if incoming is None:
-            incoming = resolve_any_input(self.get_input("filepath_in"))
         if isinstance(incoming, dict):
             incoming = incoming.get("file") or incoming.get("path")
         filepath = _resolve_data_path(
@@ -242,11 +234,7 @@ class SurfaceAreaNode(CadQueryNode):
     def __init__(self):
         super().__init__()
         self.add_input("shape")
-        legacy_input = self.add_input("shape_in", display_name=False)
-        legacy_input.view.setVisible(False)
         self.add_output("area")
-        legacy_output = self.add_output("area_out", display_name=False)
-        legacy_output.view.setVisible(False)
         self.set_color(120, 180, 120)
 
     def run(self, **kwargs):

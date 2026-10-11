@@ -59,8 +59,13 @@ class SurrogateTrainer:
             RandomForestStrategy,
             SurrogateModelStrategy,
         )
+        from .auto_surrogate import AutoSurrogateStrategy
 
+        auto_strat = AutoSurrogateStrategy()
         self.strategies: dict[str, SurrogateModelStrategy] = {
+            "Auto Mode (Scientific SOTA)": auto_strat,
+            "Auto Mode (Recommended)": auto_strat,
+            "Auto Mode": auto_strat,
             "MLP Regressor": MLPStrategy(),
             "Gaussian Process": GaussianProcessStrategy(),
             "Gaussian Process (Kriging)": GaussianProcessStrategy(),
@@ -68,6 +73,13 @@ class SurrogateTrainer:
             "Gradient Boosting": GradientBoostingStrategy(),
         }
         if TORCH_AVAILABLE:
+            from .custom_architecture import CustomArchitectureStrategy
+
+            custom_strat = CustomArchitectureStrategy()
+            self.strategies["Your Own Architecture (Deep Learning)"] = custom_strat
+            self.strategies["Your Own Architecture"] = custom_strat
+            self.strategies["Custom Architecture (Deep Learning)"] = custom_strat
+            self.strategies["Custom Architecture"] = custom_strat
             self.strategies["Deep Neural Network (PyTorch)"] = PyTorchStrategy(self)
             try:
                 from .geometry import TRIMESH_AVAILABLE

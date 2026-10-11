@@ -202,6 +202,87 @@ def _build_sets_and_step(
                         cload_lines.append(
                             f"{int(node_id)}, {dof_idx}, {float(value):.12g}"
                         )
+        elif ltype in ("bearing_load", "bearing"):
+            geoms = dict_geometries(load)
+            condition = str(load.get("condition", "") or "").strip()
+            if geoms:
+                node_ids = nodes_matching_geometries(mesh, geoms) + 1
+            elif condition:
+                node_ids = (
+                    nodes_matching_condition(
+                        mesh, condition, warnings, label=f"Bearing load {idx}"
+                    )
+                    + 1
+                )
+            else:
+                raise SolverBackendError(
+                    f"Bearing load {idx} has no selected cylindrical geometry or condition."
+                )
+            if len(node_ids) == 0:
+                raise SolverBackendError(
+                    f"Bearing load {idx} did not match any mesh nodes. Review the "
+                    "named selection and mesh tolerance before solving."
+                )
+            force = load_vector(load)
+            force_mag = float(np.linalg.norm(force))
+            if force_mag <= 1e-12:
+                raise SolverBackendError(
+                    f"Bearing load {idx} force vector magnitude is zero."
+                )
+            force_hat = force / force_mag
+
+            # Identify external boundary faces on selected cylindrical geometry
+            faces = tet_face_sets_for_geometries(mesh, geoms) if geoms else []
+            node_weights: dict[int, float] = {}
+
+            if faces:
+                pts, cells = mesh_to_tet4(mesh, [])
+                local_faces = ((0, 1, 2), (0, 1, 3), (1, 2, 3), (0, 2, 3))
+                opp_nodes = (3, 2, 0, 1)
+                for elem_id, face_id in faces:
+                    cell = cells[elem_id - 1]
+                    f_idx = face_id - 1
+                    tri = cell[list(local_faces[f_idx])]
+                    popp = pts[:, cell[opp_nodes[f_idx]]]
+                    p0 = pts[:, tri[0]]
+                    p1 = pts[:, tri[1]]
+                    p2 = pts[:, tri[2]]
+                    c_face = (p0 + p1 + p2) / 3.0
+                    n_cross = np.cross(p1 - p0, p2 - p0)
+                    area = 0.5 * float(np.linalg.norm(n_cross))
+                    if area <= 1e-16:
+                        continue
+                    n_unit = n_cross / np.linalg.norm(n_cross)
+                    # Inward normal pointing into solid element
+                    if np.dot(n_unit, popp - c_face) < 0.0:
+                        n_unit = -n_unit
+                    # Compressive cosine distribution: contact only where force pushes into solid
+                    cos_theta = float(np.dot(n_unit, force_hat))
+                    if cos_theta > 0.0:
+                        w_face = area * cos_theta
+                        share = w_face / 3.0
+                        for nid in tri:
+                            node_weights[int(nid)] = node_weights.get(int(nid), 0.0) + share
+
+            # Fallback if no faces had cos_theta > 0
+            if not node_weights or sum(node_weights.values()) <= 1e-16:
+                for nid in node_ids:
+                    node_weights[int(nid) - 1] = 1.0
+
+            total_w = float(sum(node_weights.values()))
+            if total_w > 1e-16:
+                for nid0, w in sorted(node_weights.items()):
+                    nodal_f = force * (float(w) / total_w)
+                    for dof_idx, value in enumerate(nodal_f, start=1):
+                        if abs(float(value)) > 1e-16:
+                            cload_lines.append(
+                                f"{int(nid0) + 1}, {dof_idx}, {float(value):.12g}"
+                            )
+                warnings.append(
+                    f"Bearing load {idx} applied as cosine compressive contact "
+                    f"distribution over {len(node_weights)} loaded nodes "
+                    f"(zero tension on back half)."
+                )
         elif ltype == "gravity":
             direction = str(load.get("direction", "-Y") or "-Y").strip().upper()
             dir_map = {

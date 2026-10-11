@@ -16,7 +16,7 @@ from numpy.typing import ArrayLike
 from ..evaluator import ModelEvaluator
 from ..models import FloatArray, OptimizationResult
 from ..parsing import parse_boolean
-from .backends import solve_with_differential_evolution, solve_with_nevergrad
+from .backends import solve_with_nevergrad
 from .base import BaseSolver, StepCallback
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ class _Candidate:
 
 
 class GlobalSolver(BaseSolver):
-    """Run Nevergrad or SciPy Differential Evolution."""
+    """Run Nevergrad black-box global optimization."""
 
     def solve(
         self,
@@ -53,20 +53,9 @@ class GlobalSolver(BaseSolver):
         callback: StepCallback | None = None,
     ) -> OptimizationResult:
         self._prepare_evaluator(evaluator)
-        method = str(self.settings.get("method", "Nevergrad"))
+        method = "Nevergrad"
         max_iterations = int(self.settings.get("maxiter", 1000))
         initial_physical = np.asarray(x0, dtype=float)
-        if (
-            method == "Differential Evolution"
-            and int(self.settings.get("num_workers", self.settings.get("workers", 1)))
-            != 1
-        ):
-            return _failed_result(
-                initial_physical,
-                "Differential Evolution requires one worker because in-process "
-                "engineering model callbacks are not safely picklable.",
-                evaluator.feasibility_tolerance,
-            )
         lower = np.asarray(
             [variable.min_val for variable in evaluator.vars],
             dtype=float,
@@ -197,41 +186,28 @@ class GlobalSolver(BaseSolver):
         backend_result: Any = None
         backend_error: Exception | None = None
         try:
-            if method == "Nevergrad":
-                with warnings.catch_warnings():
-                    warnings.filterwarnings(
-                        "ignore",
-                        message="overflow encountered in scalar multiply",
-                        category=RuntimeWarning,
-                    )
-                    warnings.filterwarnings(
-                        "ignore",
-                        message=r"Bounds are .* sigma away from each other.*",
-                        category=RuntimeWarning,
-                    )
-                    backend_result = solve_with_nevergrad(
-                        objective_wrapper,
-                        initial_solver,
-                        bounds,
-                        maxiter=max_iterations,
-                        constraints=constraints,
-                        callback=callback_wrapper,
-                        optimizer_name=self.settings.get("optimizer_name", "NGOpt"),
-                        num_workers=int(self.settings.get("num_workers", 1)),
-                        seed=self.settings.get("seed"),
-                    )
-            elif method == "Differential Evolution":
-                backend_result = solve_with_differential_evolution(
-                    objective_wrapper,
-                    bounds,
-                    constraints=constraints,
-                    maxiter=max_iterations,
-                    x0=initial_solver,
-                    callback=callback_wrapper,
-                    **self._differential_evolution_options(),
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="overflow encountered in scalar multiply",
+                    category=RuntimeWarning,
                 )
-            else:
-                raise ValueError(f"Unknown global method: {method}")
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r"Bounds are .* sigma away from each other.*",
+                    category=RuntimeWarning,
+                )
+                backend_result = solve_with_nevergrad(
+                    objective_wrapper,
+                    initial_solver,
+                    bounds,
+                    maxiter=max_iterations,
+                    constraints=constraints,
+                    callback=callback_wrapper,
+                    optimizer_name=self.settings.get("optimizer_name", "NGOpt"),
+                    num_workers=int(self.settings.get("num_workers", 1)),
+                    seed=self.settings.get("seed"),
+                )
         except Exception as exc:
             backend_error = exc
             logger.exception("%s backend failed.", method)
@@ -291,25 +267,7 @@ class GlobalSolver(BaseSolver):
             converged=backend_converged,
         )
 
-    def _differential_evolution_options(self) -> dict[str, Any]:
-        accepted = (
-            "strategy",
-            "popsize",
-            "tol",
-            "mutation",
-            "recombination",
-            "seed",
-            "polish",
-            "atol",
-            "workers",
-            "updating",
-        )
-        options = {key: self.settings[key] for key in accepted if key in self.settings}
-        if "num_workers" in self.settings:
-            options["workers"] = int(self.settings["num_workers"])
-        if int(options.get("workers", 1)) != 1:
-            options["updating"] = "deferred"
-        return options
+
 
 
 def _build_constraints(

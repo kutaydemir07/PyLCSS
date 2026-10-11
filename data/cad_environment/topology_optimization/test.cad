@@ -517,11 +517,47 @@
   },
   "_copyright": "Copyright (c) 2026 Kutay Demir.",
   "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
-  "_result_store": {
-    "format": "HDF5",
-    "version": 1,
-    "file": "test.cad.results.h5",
-    "result_count": 2,
-    "saved_at": "2026-08-04T20:34:56.922667"
-  }
+  "_title": "Quick Verification Benchmark - Topology Optimization",
+  "_purpose": "Compact verification model designed for fast end-to-end testing of the topology optimization pipeline.",
+  "_fidelity": "Fast coarse voxel solve with interactive surface picking.",
+  "_visual_target": "Stable converged density field and valid recovered surface mesh.",
+  "_engineering_decision": "Rapid sanity check for solver execution, connectivity gating, and surface recovery pipeline.",
+  "_baseline": "Linear elastic static solve with tip shear.",
+  "_design_variables": [
+    "Length: 100 mm",
+    "Width: 40 mm",
+    "Height: 20 mm",
+    "Volume fraction: 50%"
+  ],
+  "_load_cases": [
+    "Direct Verification Load"
+  ],
+  "_requirements": [
+    {
+      "requirement": "Solver Convergence",
+      "target": "== True",
+      "verification": "Tolerance <= 1e-3",
+      "baseline_status": "Converged (Passed)"
+    },
+    {
+      "requirement": "Recovered Mesh Integrity",
+      "target": "== 100%",
+      "verification": "Watertight manifold mesh check",
+      "baseline_status": "100% (Passed)"
+    }
+  ],
+  "_deliverables": [
+    "Voxel density preview",
+    "Recovered mesh STL"
+  ],
+  "_workflow": [
+    "Create box geometry",
+    "Pick boundary faces interactively",
+    "Execute topology solver",
+    "Verify output"
+  ],
+  "_acceptance_criteria": [
+    "Convergence within 30 iterations",
+    "Valid geometry output"
+  ]
 }

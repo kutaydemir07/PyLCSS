@@ -139,9 +139,9 @@ def make_work_dir(prefix: str, requested_dir: str | None) -> Path:
 
 
 def resolve_executable(
-    explicit: str | None,
-    env_vars: Sequence[str],
-    candidates: Sequence[str],
+    explicit: str | Path | None = None,
+    env_vars: Sequence[str] = (),
+    candidates: Sequence[str | Path] = (),
 ) -> str | None:
     """Resolve an executable from an override, config, environment, or PATH."""
     probes: list[str] = []
@@ -151,12 +151,20 @@ def resolve_executable(
     config = _load_solver_paths_config()
     probes.extend(config[name] for name in env_vars if config.get(name))
     probes.extend(os.environ[name] for name in env_vars if os.environ.get(name))
-    probes.extend(candidates)
+    probes.extend(str(c) for c in candidates)
 
     for probe in probes:
         expanded = os.path.expandvars(os.path.expanduser(probe))
-        if Path(expanded).is_file():
-            return str(Path(expanded).resolve())
+        p = Path(expanded)
+        if not p.is_absolute():
+            cand_root = (_EXTERNAL_SOLVERS_ROOT.parent / p).resolve()
+            if cand_root.is_file():
+                return str(cand_root)
+            cand_ext = (_EXTERNAL_SOLVERS_ROOT / p).resolve()
+            if cand_ext.is_file():
+                return str(cand_ext)
+        if p.is_file():
+            return str(p.resolve())
         found = shutil.which(expanded)
         if found:
             return str(Path(found).resolve())

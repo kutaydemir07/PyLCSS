@@ -94,7 +94,7 @@ class ImpactConditionNode(CadQueryNode):
     """
 
     __identifier__ = 'com.cad.sim.impact'
-    NODE_NAME = 'Impact Setup'
+    NODE_NAME = 'Impact Condition'
 
     def __init__(self):
         super().__init__()

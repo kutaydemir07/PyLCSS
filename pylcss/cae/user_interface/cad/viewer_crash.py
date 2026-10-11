@@ -277,7 +277,20 @@ class CrashPlaybackMixin:
             return frame.get("eps_p")
         elif viz_mode == "Failed Elements":
             return frame.get("failed")
+        elif viz_mode == "Deformed Animation":
+            return None
         return frame.get("stress_vm")
+
+    def _compute_crash_field_range(self, mode):
+        values = []
+        for frame in self._crash_frames:
+            field = self._crash_field_for_frame(frame, mode)
+            if field is not None and np.asarray(field).size:
+                values.extend([float(np.min(field)), float(np.max(field))])
+        if not values:
+            return (0.0, 1.0)
+        lo, hi = min(values), max(values)
+        return lo, hi if hi - lo > 1e-10 else lo + 1.0
 
     def _render_crash_frame(self, idx):
         """Render a single crash animation frame at the given index."""

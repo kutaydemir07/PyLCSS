@@ -15,7 +15,7 @@ Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 [![License](https://img.shields.io/badge/License-PolyForm_Shield_1.0.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-green.svg)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/Version-2.2.0-orange.svg)]()
+[![Version](https://img.shields.io/badge/Version-2.2.0.2-orange.svg)]()
 [![Slides](https://img.shields.io/badge/Slides-PDF-red.svg)](pylcss/user_interface/1773249914176.pdf)
 
 </div>
@@ -32,17 +32,18 @@ The core concept is the **Solution Space** approach for robust design: instead o
 
 ### Features
 
-- **Parametric CAD** — CadQuery and linked FreeCAD parts
-- **FEA** — CalculiX static analysis for single- and multi-body models
-- **Topology Optimization** — structural and thermal SIMP workflows with CAD/STL output
-- **Lattice Optimization** — variable-density gyroid, Schwarz primitive, BCC, octet, and honeycomb cells with STEP/STL/3MF output
-- **Impact** — OpenRadioss setup, execution, playback, and checks
-- **Solution Spaces** — feasible-region and product-family exploration
-- **Multi-Objective Optimization** — local, global, evolutionary, and multi-start solvers
-- **Sensitivity Analysis** — Sobol, Morris, FAST, and Delta
-- **Surrogate Models** — MLP, random forest, gradient boosting, and Gaussian process
-- **System Modelling** — graph-based functional architecture
-- **Black-Box Integration** — wrap external tools in an `evaluate(x)` function
+- **Parametric CAD** — CadQuery Python scripts and linked FreeCAD parametric parts
+- **FEA & Modal Analysis** — CalculiX static stress and natural frequency extraction with 3D mode shape eigenvector visualization
+- **Loads & Boundary Conditions** — Force, face pressure, gravity, bearing contact loads (cosine compressive traction), and multi-case weighting
+- **Topology Optimization** — Structural, thermal, and multibody SIMP workflows with automated AMRTO B-rep reconstruction (watertight STEP/IGES)
+- **Lattice Optimization** — Variable-density Gyroid, Schwarz Primitive, BCC, Octet, and Honeycomb cells with STEP, STL, and 3MF beam lattice output
+- **Impact & Crashworthiness** — OpenRadioss transient simulation, crashworthiness KPI dashboard (CFE, SEA, force, stroke), physical energy gates, and interactive time-history curves
+- **Solution Spaces** — Decoupled feasible intervals and product-family exploration with 1-D, 2-D, and 3-D interactive visualization
+- **Multi-Objective Optimization** — SLSQP, Nevergrad, Multi-Start, and NSGA-II Pareto optimization with objective normalization
+- **Sensitivity Analysis** — SOTA Sobol' global variance decomposition (Saltelli sequence sampling), $S_1$, $S_T$, and pairwise $S_2$ interaction heatmaps
+- **Surrogate AI & Auto Mode** — Scientific Auto Mode (Kriging ARD, KPLS, RBF splines, Sparse PCE, SVR, Goel-Haftka ensemble), custom deep learning architectures (ResNet, Fourier embeddings), and tabular data import
+- **System Modeling** — Graph-based functional architecture and linked Design Studio CAD study evaluation
+- **Black-Box Integration** — Wrap external tools and custom Python routines into reusable nodes
 
 Detailed documentation on node types, workflows, and solver configuration is available in the **Help** widget inside the application.
 
@@ -52,11 +53,11 @@ Detailed documentation on node types, workflows, and solver configuration is ava
 
 ### Windows installer
 
-Run `PyLCSS-2.2.0-Setup-x64.exe`. Setup displays the PyLCSS license and a
+Run `PyLCSS-2.2.0.2-Setup-x64.exe`. Setup displays the PyLCSS license and a
 separate third-party notice, then installs an isolated Python runtime, the
 selected Python packages, and Start Menu/desktop shortcuts. Choose **MDAO**,
 **CAE**, or **both** on the component selection page. CalculiX,
-OpenRadioss, and FreeCAD are downloaded only when their optional tasks are
+OpenRadioss, FreeCAD, and AMRTO are downloaded only when their optional tasks are
 selected. Normal startup is the terminal-free `PyLCSS.exe` at the application
 root. Installed copies check the official GitHub Releases feed at most once a
 day. When a newer stable version is available, the launcher offers to download
@@ -97,7 +98,7 @@ pip install -e ".[mdao]"
 # pip install -e ".[cae]"
 # pip install -e ".[mdao,cae]"
 
-# Optional: download CalculiX, OpenRadioss, FreeCAD (interactive)
+# Optional: download external tools (CalculiX, OpenRadioss, FreeCAD, AMRTO)
 python scripts/install_solvers.py
 
 python -m pylcss.main
@@ -120,7 +121,7 @@ source files are shipped together, but dependencies and launch choices follow
 the selected components. Removing a workspace selection during an upgrade
 hides it; previously downloaded packages are retained in the shared runtime.
 
-External solvers (CalculiX, OpenRadioss, FreeCAD) are optional. PyLCSS opens cleanly without them; solver nodes remain available for deck-only preparation and show their detected runtime status in the component-library tooltip. Attempting a full solve without the required executable reports a node error. The external tools are governed by their own upstream licenses (CalculiX: GPL, OpenRadioss: AGPL-3.0, FreeCAD: LGPL-2.1+).
+External solvers and tools (CalculiX, OpenRadioss, FreeCAD, AMRTO) are optional. PyLCSS opens cleanly without them; solver nodes remain available for deck-only preparation and show their detected runtime status in the component-library tooltip. Attempting a full solve without the required executable reports a node error. The external tools are governed by their own upstream licenses (CalculiX: GPL, OpenRadioss: AGPL-3.0, FreeCAD: LGPL-2.1+, AMRTO: Research License / BSD / MIT).
 
 ---
 

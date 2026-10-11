@@ -88,6 +88,8 @@ class CadQueryCodeNode(CadQueryNode):
 
     def __init__(self):
         super().__init__()
+        self.set_port_deletion_allowed(True)
+        self.create_property("param_count", 6, widget_type="int")
         for idx in range(1, 7):
             self.add_input(f"param_{idx}", color=(180, 180, 0))
         self.add_output("shape", color=(100, 255, 100))
@@ -107,9 +109,78 @@ class CadQueryCodeNode(CadQueryNode):
             self.create_property(f"param_{idx}_name", name, widget_type="text")
             self.create_property(f"param_{idx}_value", value, widget_type="float")
 
+    def get_param_count(self) -> int:
+        """Return the current number of active parameter ports."""
+        val = self.get_property("param_count")
+        if val is not None:
+            try:
+                return max(0, min(int(val), 32))
+            except (ValueError, TypeError):
+                pass
+        param_ports = [name for name in self.inputs().keys() if name.startswith("param_")]
+        return len(param_ports) if param_ports else 6
+
+    def set_param_count(self, count: int) -> None:
+        """Dynamically scale the number of parameter ports (0 to 32)."""
+        count = max(0, min(int(count), 32))
+        current = self.get_param_count()
+        if count == current and len([k for k in self.inputs().keys() if k.startswith("param_")]) == count:
+            return
+        self.set_property("param_count", count)
+        self._sync_param_ports(count)
+
+    def _sync_param_ports(self, count: int) -> None:
+        """Synchronize node input sockets and property slots with *count*."""
+        self.set_port_deletion_allowed(True)
+        # Add new ports if needed
+        for idx in range(1, count + 1):
+            port_name = f"param_{idx}"
+            if port_name not in self.inputs():
+                self.add_input(port_name, color=(180, 180, 0))
+            if not self.has_property(f"param_{idx}_name"):
+                self.create_property(f"param_{idx}_name", "", widget_type="text")
+            if not self.has_property(f"param_{idx}_value"):
+                self.create_property(f"param_{idx}_value", 0.0, widget_type="float")
+
+        # Remove excess ports if needed
+        for idx in range(count + 1, 33):
+            port_name = f"param_{idx}"
+            port = self.get_input(port_name)
+            if port is not None:
+                try:
+                    port.clear_connections()
+                except Exception:
+                    pass
+                try:
+                    self.delete_input(port)
+                except Exception:
+                    pass
+
+        if hasattr(self, "view") and self.view and hasattr(self.view, "draw_node"):
+            try:
+                self.view.draw_node()
+            except Exception:
+                pass
+
+    def set_ports(self, port_data):
+        super().set_ports(port_data)
+        for port in self.input_ports():
+            if port.name().startswith("param_"):
+                try:
+                    port.color = (180, 180, 0, 255)
+                except Exception:
+                    pass
+        shape_port = self.get_output("shape")
+        if shape_port:
+            try:
+                shape_port.color = (100, 255, 100, 255)
+            except Exception:
+                pass
+
     def _collect_parameters(self) -> dict[str, Any]:
         params: dict[str, Any] = {}
-        for idx in range(1, 7):
+        count = self.get_param_count()
+        for idx in range(1, count + 1):
             name = str(self.get_property(f"param_{idx}_name") or "").strip()
             if not name:
                 continue

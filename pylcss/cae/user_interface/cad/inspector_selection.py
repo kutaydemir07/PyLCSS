@@ -507,6 +507,7 @@ class SelectionInspectorMixin:
         upstream_nodes = [n for n in self._upstream_nodes_for(node) if n is not node]
         blocked_ids = {
             "com.cad.sim.solver",
+            "com.cad.sim.modal_solver",
             "com.cad.sim.crash_solver",
             "com.cad.sim.topopt_voxel",
             "com.cad.sim.lattice_voxel",

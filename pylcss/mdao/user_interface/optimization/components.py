@@ -12,11 +12,12 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from pylcss.config import SOLVER_DESCRIPTIONS, optimization_config
 
+from pylcss.user_interface.common.empty_state import EmptyStateOverlay
 from pylcss.user_interface.common.theme_manager import (
     THEMES,
     current_theme,
-    set_filled_button_icon,
 )
+from pylcss.user_interface.common.ui_kit import secondary_button
 from .optimization_settings_dialog import OptimizationSettingsDialog
 
 FEASIBILITY_TOL = 1e-6
@@ -60,11 +61,9 @@ class SolverSettingsWidget(QtWidgets.QWidget):
 
     def init_ui(self):
         layout = QtWidgets.QVBoxLayout(self)
-
-        # Group Box instead of Tabs
-        grp = QtWidgets.QGroupBox("Solver Setup")
-        form_layout = QtWidgets.QFormLayout(grp)
-        form_layout.setContentsMargins(10, 15, 10, 10)
+        layout.setContentsMargins(0, 0, 0, 0)
+        form_layout = QtWidgets.QFormLayout()
+        form_layout.setContentsMargins(0, 0, 0, 0)
 
         # 1. System Selection
         self.system_combo = QtWidgets.QComboBox()
@@ -78,8 +77,8 @@ class SolverSettingsWidget(QtWidgets.QWidget):
         self.combo_method.addItems(list(SOLVER_DESCRIPTIONS.keys()))
         self.combo_method.currentTextChanged.connect(self.on_method_changed)
 
-        self.btn_info = QtWidgets.QPushButton("?")
-        self.btn_info.setFixedWidth(25)
+        self.btn_info = secondary_button(QtWidgets.QPushButton("\u24d8"))
+        self.btn_info.setFixedWidth(32)
         self.btn_info.clicked.connect(self.show_algorithm_info)
         # The algorithm explanation lives on this button: hover for the one-liner,
         # click for full details. Keeps the left panel compact.
@@ -91,13 +90,13 @@ class SolverSettingsWidget(QtWidgets.QWidget):
         form_layout.addRow("Algorithm:", h_algo)
 
         # 3. Settings Button (The pop-up trigger)
-        self.btn_settings = QtWidgets.QPushButton("Advanced Settings")
-        set_filled_button_icon(self.btn_settings, "fa5s.sliders-h")
+        self.btn_settings = secondary_button(
+            QtWidgets.QPushButton("Advanced settings\u2026")
+        )
         self.btn_settings.clicked.connect(self.open_settings_dialog)
         form_layout.addRow("", self.btn_settings)
 
-        layout.addWidget(grp)
-        layout.addStretch()
+        layout.addLayout(form_layout)
 
     def on_method_changed(self, method_name):
         self._refresh_info_tooltip(method_name)
@@ -152,10 +151,7 @@ class SolverSettingsWidget(QtWidgets.QWidget):
     def _budget_key(method):
         return {
             "SLSQP": "local_maxiter",
-            "COBYLA": "local_maxiter",
-            "trust-constr": "local_maxiter",
             "Nevergrad": "nevergrad_budget",
-            "Differential Evolution": "de_maxiter",
             "Multi-Start": "ms_maxiter",
         }.get(str(method))
 
@@ -165,18 +161,12 @@ class SolverSettingsWidget(QtWidgets.QWidget):
             "maxiter": optimization_config.DEFAULT_MAX_ITERATIONS,
             "local_maxiter": optimization_config.DEFAULT_MAX_ITERATIONS,
             "nevergrad_budget": optimization_config.DEFAULT_NEVERGRAD_BUDGET,
-            "de_maxiter": optimization_config.DEFAULT_DE_GENERATIONS,
             "ms_maxiter": optimization_config.DEFAULT_MULTI_START_ITERATIONS,
             "tol": optimization_config.DEFAULT_TOLERANCE,
-            "atol": 1e-8,
             "scaling": True,
             "scaling_mode": "auto",
             "constraint_margin": 0.0,
             "seed": 42,
-            "popsize": 15,
-            "mutation": (0.5, 1.0),
-            "recombination": 0.7,
-            "strategy": "best1bin",
             "optimizer_name": "NGOpt",
             # NSGA-II defaults
             "nsga_popsize": 100,
@@ -219,40 +209,32 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.problem = None
+        self.objectives = []
+        self.constraints = []
         self.iteration_count = 0
         self.iter_data = []
         self.dv_items = {}
         self.cons_items = {}
         self.objs_items = {}
         self.optimization_method = ""
+        self._has_results = False
+        self._show_total_objective = True
         self.init_ui()
 
     def init_ui(self):
-        # 1. Total Objective
+        # 1. Problem formulation: what is about to be solved
+        self.problem_text = QtWidgets.QTextBrowser()
+        self.problem_text.setOpenExternalLinks(False)
+        self.problem_text.setStyleSheet("font-size: 11pt; padding: 10px;")
+        self.addTab(self.problem_text, "Formulation")
+        self._formulation_empty = EmptyStateOverlay(
+            self.problem_text.viewport(),
+            "Load a system model to see the optimization problem here.",
+            lambda: self.problem is None,
+        )
+
+        # 2. Live progress: the four plots share one grid
         self.plot_obj = self._create_plot("Total Objective", "Value")
-        self.addTab(self.plot_obj["widget"], "Total Objective")
-
-        # 2. Design Variables
-        self.plot_dv = self._create_plot(
-            "Design Variables",
-            "Value",
-            combo=True,
-            callback=self.update_dv_plot,
-            legend=True,
-        )
-        self.addTab(self.plot_dv["widget"], "Variables")
-
-        # 3. Constraints
-        self.plot_cons = self._create_plot(
-            "Constraints",
-            "Value",
-            combo=True,
-            callback=self.update_cons_plot,
-            legend=True,
-        )
-        self.addTab(self.plot_cons["widget"], "Constraints")
-
-        # 4. Individual Objectives
         self.plot_objs = self._create_plot(
             "Individual Objectives",
             "Value",
@@ -260,40 +242,138 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
             callback=self.update_objs_plot,
             legend=True,
         )
-        self.addTab(self.plot_objs["widget"], "Objectives")
+        self.plot_dv = self._create_plot(
+            "Design Variables",
+            "Value",
+            combo=True,
+            callback=self.update_dv_plot,
+            legend=True,
+        )
+        self.plot_cons = self._create_plot(
+            "Constraints",
+            "Value",
+            combo=True,
+            callback=self.update_cons_plot,
+            legend=True,
+        )
+        self._init_progress_tab()
 
-        # 5. Results (final solution summary)
+        # 3. Results (final solution summary)
         self._init_results_tab()
 
-        # 6. Problem Formulation (Text)
-        self.problem_text = QtWidgets.QTextBrowser()
-        self.problem_text.setOpenExternalLinks(False)
-        self.problem_text.setStyleSheet("font-size: 11pt; padding: 10px;")
-        self.addTab(self.problem_text, "Formulation")
+    def _all_panels(self):
+        return (self.plot_obj, self.plot_objs, self.plot_dv, self.plot_cons)
+
+    def _init_progress_tab(self):
+        self.progress_tab = QtWidgets.QWidget()
+        outer = QtWidgets.QVBoxLayout(self.progress_tab)
+
+        toolbar = QtWidgets.QHBoxLayout()
+        self.chk_log = QtWidgets.QCheckBox("Log scale (total objective)")
+        self.chk_log.setToolTip(
+            "Show the total objective on a logarithmic axis. Needs positive values."
+        )
+        self.chk_log.toggled.connect(self._toggle_log)
+        toolbar.addWidget(self.chk_log)
+        toolbar.addStretch()
+
+        self.btn_save_plots = QtWidgets.QToolButton()
+        self.btn_save_plots.setText("Save")
+        self.btn_save_plots.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        save_menu = QtWidgets.QMenu(self.btn_save_plots)
+        save_menu.addAction("All plots as one image...").triggered.connect(
+            self._save_progress_grid
+        )
+        save_menu.addSeparator()
+        for panel in self._all_panels():
+            save_menu.addAction(f"{panel['title']}...").triggered.connect(
+                lambda _checked=False, p=panel: self._save_plot(p["plot"], p["title"])
+            )
+        self.btn_save_plots.setMenu(save_menu)
+        toolbar.addWidget(self.btn_save_plots)
+        outer.addLayout(toolbar)
+
+        self.progress_grid_host = QtWidgets.QWidget()
+        self.progress_grid = QtWidgets.QGridLayout(self.progress_grid_host)
+        self.progress_grid.setContentsMargins(0, 0, 0, 0)
+        self.progress_grid.setSpacing(8)
+        outer.addWidget(self.progress_grid_host, 1)
+
+        run_hint = "Run the optimization to see {} here."
+        self._plot_empty = {}
+        for panel, what in (
+            (self.plot_obj, "the total objective"),
+            (self.plot_objs, "each objective"),
+            (self.plot_dv, "the design variables"),
+            (self.plot_cons, "the constraint values"),
+        ):
+            self._plot_empty[panel["title"]] = EmptyStateOverlay(
+                panel["plot"], run_hint.format(what), lambda: not self.iter_data
+            )
+        self._relayout_progress()
+        self.addTab(self.progress_tab, "Progress")
+
+    def _relayout_progress(self):
+        """Place the visible plots two per row."""
+        while self.progress_grid.count():
+            self.progress_grid.takeAt(0)
+        visible = []
+        for panel in self._all_panels():
+            shown = panel is not self.plot_obj or self._show_total_objective
+            panel["widget"].setVisible(shown)
+            if shown:
+                visible.append(panel)
+        for index, panel in enumerate(visible):
+            self.progress_grid.addWidget(panel["widget"], index // 2, index % 2)
+        for row in range(2):
+            self.progress_grid.setRowStretch(row, 1)
+        for col in range(2):
+            self.progress_grid.setColumnStretch(col, 1)
+
+    def set_total_objective_visible(self, visible):
+        """Pareto runs have no scalar total, so its plot is hidden."""
+        self._show_total_objective = bool(visible)
+        self._relayout_progress()
+
+    def show_progress(self):
+        self.setCurrentWidget(self.progress_tab)
+
+    def show_results(self):
+        self.setCurrentWidget(self.results_tab)
+
+    def _toggle_log(self, checked):
+        if checked and any(v <= 0 for v in getattr(self, "total_obj_data", [])):
+            self.chk_log.blockSignals(True)
+            self.chk_log.setChecked(False)
+            self.chk_log.blockSignals(False)
+            return
+        self.plot_obj["plot"].setLogMode(x=False, y=bool(checked))
+
+    def _save_progress_grid(self):
+        fname, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Plots", "optimization_progress.png", "Images (*.png)"
+        )
+        if fname:
+            self.progress_grid_host.grab().save(fname)
 
     def _create_plot(self, title, ylabel, combo=False, callback=None, legend=False):
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
 
-        # Header (Combo + Save Btn)
-        header = QtWidgets.QHBoxLayout()
         combo_box = None
         if combo:
+            header = QtWidgets.QHBoxLayout()
             header.addWidget(QtWidgets.QLabel("Show:"))
             combo_box = QtWidgets.QComboBox()
             combo_box.addItem("All")
             combo_box.currentTextChanged.connect(callback)
             header.addWidget(combo_box)
             header.addStretch()
+            layout.addLayout(header)
 
-        btn_save = QtWidgets.QPushButton("Save")
         theme = THEMES[current_theme()]
         plot_widget = pg.PlotWidget(background=theme["chart_bg"])
-        btn_save.clicked.connect(lambda: self._save_plot(plot_widget, title))
-        if not combo:
-            header.addStretch()
-        header.addWidget(btn_save)
-        layout.addLayout(header)
 
         # Plot Config
         plot_widget.showGrid(x=True, y=True, alpha=0.3)
@@ -348,6 +428,15 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
         self._update_formulation_text()
         self.clear_plots()
         self.reset_results()
+        for title, items, noun in (
+            ("Constraints", constraints, "constraints"),
+            ("Individual Objectives", objectives, "objectives"),
+        ):
+            self._plot_empty[title].set_text(
+                f"Run the optimization to see the {noun} here."
+                if items
+                else f"This model has no {noun}."
+            )
 
     def _populate_combos(self):
         if not self.problem:
@@ -422,6 +511,11 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
         self.pareto_table.hide()
         lay.addWidget(self.pareto_table)
         self.addTab(self.results_tab, "Results")
+        self._results_empty = EmptyStateOverlay(
+            self.results_table.viewport(),
+            "No results yet.\nRun the optimization to see the final design here.",
+            lambda: not self._has_results,
+        )
 
     def _set_result_status(self, text, color):
         self.lbl_result_status.setText(text)
@@ -431,7 +525,8 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
         )
 
     def reset_results(self):
-        self._render_results_table(None, None, {})
+        self.results_table.setRowCount(0)
+        self._has_results = False
         self._render_pareto_front([])
         self._set_result_status("Not run yet.", "#7f8c8d")
 
@@ -439,9 +534,11 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
         self._set_result_status("Optimizing…", "#2980b9")
 
     def update_results_live(self, data):
+        self._has_results = True
         self._render_results_table(data.get("x"), data.get("cost"), data.get("raw", {}))
 
     def set_results_final(self, result, status_text, color):
+        self._has_results = True
         raw = {**(result.objectives or {}), **(result.constraints or {})}
         self._render_results_table(result.x, result.cost, raw)
         self._render_pareto_front(result.pareto_front or [])
@@ -626,6 +723,8 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
             sign = 1.0 if obj.get("minimize", True) else -1.0
             total_obj += sign * obj.get("weight", 1.0) * val
         self.total_obj_data.append(total_obj)
+        if self.chk_log.isChecked() and total_obj <= 0:
+            self.chk_log.setChecked(False)  # log axis cannot show non-positive values
 
         # Update Simple Plots (Objective)
         self._update_simple_curve(

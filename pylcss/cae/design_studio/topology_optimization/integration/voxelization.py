@@ -920,21 +920,23 @@ def _non_design_region_masks(
     solid = np.zeros(shape, dtype=bool)
     void = np.zeros(shape, dtype=bool)
     for payload in payloads:
-        if (
-            not isinstance(payload, dict)
-            or str(payload.get("type") or "").lower() != "topology_non_design_region"
-        ):
-            raise ValueError(
-                "The non-design input accepts Topology Preserved Region nodes only."
-            )
-        geometry = payload.get("geometry")
+        if isinstance(payload, dict) and str(payload.get("type") or "").lower() == "topology_non_design_region":
+            geometry = payload.get("geometry")
+            region_type = str(payload.get("region_type") or "solid").lower()
+        elif isinstance(payload, dict) and "geometry" in payload:
+            geometry = payload.get("geometry")
+            region_type = str(payload.get("region_type") or "solid").lower()
+        else:
+            geometry = payload
+            region_type = "solid"
+
         mask = _mesh_design_domain_grid(geometry, bounds, nelx, nely, nelz)
         if mask is None or not np.any(mask):
             raise ValueError(
-                "A Topology Preserved Region could not be voxelized. Connect a closed "
-                "CAD solid, not an open face or surface."
+                "A Preserved or Obstacle CAD body could not be voxelized into the design grid. "
+                "Connect a closed CAD solid that intersects the design domain, not an open face or surface."
             )
-        if str(payload.get("region_type") or "solid").lower() == "void":
+        if region_type == "void":
             void |= np.asarray(mask, dtype=bool)
         else:
             solid |= np.asarray(mask, dtype=bool)

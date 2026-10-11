@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol
 
@@ -15,7 +16,7 @@ from pylcss.mdao.optimization.evaluator import ModelEvaluator
 from pylcss.mdao.optimization.models import Variable
 from pylcss.mdao.sensitivity import SensitivityAnalyzer
 
-__all__ = ["OutputRefreshWorker", "SensitivityWorker"]
+__all__ = ["EvalTimeWorker", "OutputRefreshWorker", "SensitivityWorker"]
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,39 @@ class SensitivityProblem(Protocol):
     parameters: Sequence[Mapping[str, Any]]
     quantities_of_interest: Sequence[Mapping[str, Any]]
     system_model: Callable[..., Mapping[str, Any]]
+
+
+class EvalTimeWorker(QtCore.QThread):
+    """Time a few model calls at the variable midpoints to estimate run time."""
+
+    done_sig = QtCore.Signal(float)
+
+    def __init__(
+        self,
+        problem: SensitivityProblem,
+        parent: QtCore.QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.problem = problem
+
+    def run(self) -> None:
+        try:
+            inputs = {
+                str(v["name"]): (float(v["min"]) + float(v["max"])) / 2.0
+                for v in self.problem.design_variables
+            }
+            inputs.update({str(p["name"]): p["value"] for p in self.problem.parameters})
+            durations = []
+            started = time.perf_counter()
+            for _ in range(3):
+                call_start = time.perf_counter()
+                self.problem.system_model(**inputs)
+                durations.append(time.perf_counter() - call_start)
+                if time.perf_counter() - started > 2.0:
+                    break
+            self.done_sig.emit(float(np.median(durations)))
+        except Exception:
+            logger.debug("Could not time the system model.", exc_info=True)
 
 
 class OutputRefreshWorker(QtCore.QThread):
@@ -66,7 +100,7 @@ class OutputRefreshWorker(QtCore.QThread):
 
 
 class SensitivityWorker(QtCore.QThread):
-    """Run Sobol, Morris, FAST, or Delta analysis away from the GUI thread."""
+    """Run Sobol global sensitivity analysis away from the GUI thread."""
 
     progress_sig = QtCore.Signal(int, str)
     done_sig = QtCore.Signal(object, object)
@@ -83,24 +117,27 @@ class SensitivityWorker(QtCore.QThread):
         calc_second_order: bool = False,
         random_seed: int = 42,
         batch: bool = False,
+        fixed_values: Mapping[str, float] | None = None,
         parent: QtCore.QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self.problem = problem
         self.output_name = str(output_name)
         self.n_samples = int(n_samples)
-        self.method = str(method)
+        self.method = "Sobol"
         self.n_trajectories = int(n_trajectories)
         self.morris_levels = int(morris_levels)
         self.calc_second_order = bool(calc_second_order)
         self.random_seed = int(random_seed)
         self.batch = bool(batch)
+        # Variables held at a fixed value instead of being sampled
+        self.fixed_values = {str(k): float(v) for k, v in (fixed_values or {}).items()}
 
     def run(self) -> None:
         try:
             results = self._analyze()
         except Exception as exc:
-            logger.exception("%s sensitivity analysis failed.", self.method)
+            logger.exception("Sobol sensitivity analysis failed.")
             self.done_sig.emit(None, str(exc))
         else:
             self.done_sig.emit(results, None)
@@ -111,8 +148,8 @@ class SensitivityWorker(QtCore.QThread):
         problem_definition = self._problem_definition()
         output_names = self._declared_output_names()
 
-        self.progress_sig.emit(0, f"Setting up {self.method} analysis...")
-        samples, morris_problem = self._generate_samples(
+        self.progress_sig.emit(0, "Setting up Sobol analysis...")
+        samples, _ = self._generate_samples(
             analyzer,
             problem_definition,
         )
@@ -125,17 +162,16 @@ class SensitivityWorker(QtCore.QThread):
 
         if self.isInterruptionRequested():
             raise RuntimeError("Sensitivity analysis cancelled.")
-        self.progress_sig.emit(80, "Analyzing sensitivity...")
+        self.progress_sig.emit(80, "Analyzing Sobol sensitivity...")
 
         if self.batch:
             result = analyzer.batch_analyze(
                 samples,
                 output_values,
                 problem_definition,
-                self.method,
+                "Sobol",
                 calc_second_order=self.calc_second_order,
                 seed=self.random_seed,
-                morris_num_levels=self.morris_levels,
             )
             self.progress_sig.emit(100, "Batch analysis complete.")
             return {"batch_results": result}
@@ -146,43 +182,23 @@ class SensitivityWorker(QtCore.QThread):
                 "quantity of interest."
             )
         values = output_values[self.output_name]
-        if self.method == "Sobol":
-            result = analyzer.analyze_sobol(
-                samples,
-                values,
-                problem_definition,
-                calc_second_order=self.calc_second_order,
-                seed=self.random_seed,
-            )
-        elif self.method == "Morris":
-            if morris_problem is None:
-                raise RuntimeError("Morris sampling metadata was not produced.")
-            _, result = analyzer.analyze_morris(
-                samples,
-                values,
-                morris_problem,
-                num_levels=self.morris_levels,
-                seed=self.random_seed,
-            )
-        elif self.method == "FAST":
-            result = analyzer.analyze_fast(
-                samples,
-                values,
-                problem_definition,
-                seed=self.random_seed,
-            )
-        elif self.method == "Delta":
-            result = analyzer.analyze_delta(
-                samples,
-                values,
-                problem_definition,
-                seed=self.random_seed,
-            )
-        else:
-            raise ValueError(f"Unsupported sensitivity method {self.method!r}.")
+        result = analyzer.analyze_sobol(
+            samples,
+            values,
+            problem_definition,
+            calc_second_order=self.calc_second_order,
+            seed=self.random_seed,
+        )
 
         self.progress_sig.emit(100, "Analysis complete.")
         return result
+
+    def _varied_variables(self):
+        return [
+            v
+            for v in self.problem.design_variables
+            if str(v["name"]) not in self.fixed_values
+        ]
 
     def _build_evaluator(self) -> ModelEvaluator:
         variables = [
@@ -191,12 +207,13 @@ class SensitivityWorker(QtCore.QThread):
                 min_val=float(variable["min"]),
                 max_val=float(variable["max"]),
             )
-            for variable in self.problem.design_variables
+            for variable in self._varied_variables()
         ]
         parameters = {
             str(parameter["name"]): parameter["value"]
             for parameter in self.problem.parameters
         }
+        parameters.update(self.fixed_values)
         return ModelEvaluator(
             self.problem.system_model,
             variables,
@@ -207,11 +224,11 @@ class SensitivityWorker(QtCore.QThread):
         )
 
     def _problem_definition(self) -> dict[str, Any]:
-        if not self.problem.design_variables:
-            raise ValueError("Sensitivity analysis needs at least one design variable.")
+        if not self._varied_variables():
+            raise ValueError("Sensitivity analysis needs at least one varied design variable.")
         names: list[str] = []
         bounds: list[list[float]] = []
-        for variable in self.problem.design_variables:
+        for variable in self._varied_variables():
             name = str(variable.get("name") or "").strip()
             if not name:
                 raise ValueError("Every design variable needs a name.")
@@ -246,38 +263,14 @@ class SensitivityWorker(QtCore.QThread):
         analyzer: SensitivityAnalyzer,
         problem_definition: dict[str, Any],
     ) -> tuple[np.ndarray, dict[str, Any] | None]:
-        self.progress_sig.emit(10, "Generating samples...")
-        if self.method == "Sobol":
-            samples = analyzer.generate_sobol_samples(
-                problem_definition,
-                self.n_samples,
-                calc_second_order=self.calc_second_order,
-                seed=self.random_seed,
-            )
-            return np.asarray(samples, dtype=float), None
-        if self.method == "Morris":
-            samples, metadata = analyzer.generate_morris_samples(
-                problem_definition,
-                self.n_trajectories,
-                num_levels=self.morris_levels,
-                seed=self.random_seed,
-            )
-            return np.asarray(samples, dtype=float), metadata
-        if self.method == "FAST":
-            samples = analyzer.generate_fast_samples(
-                problem_definition,
-                self.n_samples,
-                seed=self.random_seed,
-            )
-            return np.asarray(samples, dtype=float), None
-        if self.method == "Delta":
-            samples = analyzer.generate_delta_samples(
-                problem_definition,
-                self.n_samples,
-                seed=self.random_seed,
-            )
-            return np.asarray(samples, dtype=float), None
-        raise ValueError(f"Unsupported sensitivity method {self.method!r}.")
+        self.progress_sig.emit(10, "Generating Sobol samples (Saltelli sequence)...")
+        samples = analyzer.generate_sobol_samples(
+            problem_definition,
+            self.n_samples,
+            calc_second_order=self.calc_second_order,
+            seed=self.random_seed,
+        )
+        return np.asarray(samples, dtype=float), None
 
     def _evaluate_samples(
         self,

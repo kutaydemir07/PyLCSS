@@ -10,13 +10,13 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike
-from scipy.optimize import NonlinearConstraint, minimize
+from scipy.optimize import minimize
 
 from ..evaluator import ModelEvaluator
 from ..models import FloatArray, OptimizationResult
 from .base import BaseSolver, StepCallback
 
-SCIPY_LOCAL_METHODS = ("SLSQP", "COBYLA", "trust-constr")
+SCIPY_LOCAL_METHODS = ("SLSQP",)
 
 
 @dataclass
@@ -63,7 +63,7 @@ class ScipySolver(BaseSolver):
         # Freeze automatic objective scales at the documented initial design
         # before a numerical backend requests derivatives.
         evaluator.evaluate(solver_x0)
-        constraints = _build_constraints(evaluator, method, bounds)
+        constraints = _build_constraints(evaluator)
         if all(np.isclose(lower, upper) for lower, upper in bounds):
             _, raw_results, violation = evaluator.evaluate(solver_x0)
             if not evaluator.is_valid_result(raw_results):
@@ -123,12 +123,6 @@ class ScipySolver(BaseSolver):
             options["ftol"] = tolerance
             if "eps" in self.settings:
                 options["eps"] = float(self.settings["eps"])
-        elif method == "COBYLA":
-            options.update({"rhobeg": 0.5, "disp": False})
-        elif method == "trust-constr":
-            options["finite_diff_rel_step"] = float(
-                self.settings.get("finite_diff_rel_step", 1e-4)
-            )
 
         backend_result: Any = None
         failure_message: str | None = None
@@ -208,8 +202,6 @@ def _solver_coordinates(
 
 def _build_constraints(
     evaluator: ModelEvaluator,
-    method: str,
-    bounds: list[tuple[float, float]],
 ) -> list[Any]:
     constraints: list[Any] = []
     residual = _constraint_residual_function(evaluator)
@@ -220,34 +212,7 @@ def _build_constraints(
         for index in range(len(evaluator.cons))
     )
     if residual_count:
-        if method == "trust-constr":
-            constraints.append(
-                NonlinearConstraint(
-                    residual,
-                    np.zeros(residual_count),
-                    np.full(residual_count, np.inf),
-                )
-            )
-        else:
-            constraints.append({"type": "ineq", "fun": residual})
-
-    # Explicit COBYLA bounds work across the SciPy versions supported by PyLCSS.
-    if method == "COBYLA":
-        for index, (lower, upper) in enumerate(bounds):
-            if np.isfinite(lower):
-                constraints.append(
-                    {
-                        "type": "ineq",
-                        "fun": (lambda x, i=index, bound=lower: x[i] - bound),
-                    }
-                )
-            if np.isfinite(upper):
-                constraints.append(
-                    {
-                        "type": "ineq",
-                        "fun": (lambda x, i=index, bound=upper: bound - x[i]),
-                    }
-                )
+        constraints.append({"type": "ineq", "fun": residual})
     return constraints
 
 

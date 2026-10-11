@@ -228,7 +228,7 @@ def build_topology_output(
         density=density,
         target_volfrac=problem.volfrac,
     )
-    print_ready = as_bool(node.get_property("print_ready_mesh"))
+    print_ready = True
     guided_mode = (
         str(node.get_property("workflow_mode") or "Guided").strip().lower()
         == "guided"
@@ -249,7 +249,7 @@ def build_topology_output(
         if guided_mode
         else str(node.get_property("visualization") or "Density")
     )
-    decimate = float(node.get_property("mesh_decimate_ratio") or 1.0)
+    decimate = 1.0
     # Lattice dimensions given in model units win over the voxel-denominated
     # ones, because a voxel is a different physical length on every part.
     voxel_size = voxel_size_from_bounds(
@@ -283,17 +283,6 @@ def build_topology_output(
     if guided_mode and structure_options.mode == "solid":
         visualization_mode = "Surface"
     surface_requested = True
-    surface_backend = (
-        "legacy"
-        if str(node.get_property("surface_recovery_method") or "")
-        .strip()
-        .lower()
-        .startswith("legacy")
-        else "vtk_sdf"
-    )
-    surface_quality = str(
-        node.get_property("surface_quality") or "Professional"
-    )
     passive_solid_mask, passive_void_mask = passive_region_masks(
         tuple(int(v) for v in density.shape),
         solid_boxes=bc.solid_boxes,
@@ -443,14 +432,12 @@ def build_topology_output(
             solid_cylinders=bc.solid_cylinders,
             void_cylinders=bc.void_cylinders,
             joint_pin_cylinders=bc.joint_pin_cylinders,
-            extrusion_axis=mc.extrusion,
+            extrusion_axis=str(getattr(problem.mc, "extrusion", "none") or "none"),
             source_mask=design_domain,
             passive_solid_mask=passive_solid_mask,
             passive_void_mask=passive_void_mask,
             structure_options=structure_options,
             member_plan=member_plan,
-            surface_backend=surface_backend,
-            surface_quality=surface_quality,
         )
 
     # Key on the actual density bytes — not id(result.density), which Python's
@@ -461,12 +448,8 @@ def build_topology_output(
         hash(density_view.tobytes()),
         density_view.shape,
         recovery_cutoff,
-        print_ready,
-        decimate,
-        surface_backend,
-        surface_quality,
         structure_options,
-        str(mc.extrusion),
+        "none",
         str(bc.solid_boxes),
         str(bc.void_boxes),
         str(bc.solid_cylinders),
@@ -562,6 +545,24 @@ def build_topology_output(
                 )
         node._last_recovery_key = cache_key
         node._last_recovered_shape = recovered
+    requested_structure_options = structure_options
+    resolved_options = (
+        recovered.get("resolved_structure_options")
+        if isinstance(recovered, dict) else None
+    )
+    if isinstance(resolved_options, dict):
+        resolved_options = ManufacturingStructureOptions(**resolved_options)
+    if isinstance(resolved_options, ManufacturingStructureOptions) and resolved_options.mode != "solid":
+        # Recovery sizes actual walls/struts to the requested mass. Export and
+        # analysis-grid previews must use those same dimensions, rather than
+        # the unsized initial one-voxel member thickness.
+        structure_options = resolved_options
+        setattr(node, "_last_structure_options", structure_options)
+        manufactured_density = build_manufacturing_field(
+            density, density_cutoff, structure_options,
+            passive_solid_mask=passive_solid_mask,
+            passive_void_mask=passive_void_mask, member_plan=member_plan,
+        )
     if (
         isinstance(recovered, dict)
         and recovered.get("recovery_field_fallback")
@@ -675,6 +676,17 @@ def build_topology_output(
             return None
         return physical / limiting_voxel_edge
 
+    explicit_solid_shapes: list[Any] = []
+    explicit_void_shapes: list[Any] = []
+    for region in getattr(study, "non_design_regions", ()):
+        geom = region.get("geometry") if isinstance(region, dict) else region
+        rtype = str(region.get("region_type") or "solid").lower() if isinstance(region, dict) else "solid"
+        if geom is not None:
+            if rtype == "void":
+                explicit_void_shapes.append(geom)
+            else:
+                explicit_solid_shapes.append(geom)
+
     output: dict[str, Any] = {
         "type": "topopt_voxel",
         "design_goal": design_goal,
@@ -762,6 +774,7 @@ def build_topology_output(
         # payload means the viewer preview and the export worker route the same
         # way as the solve without each holding its own copy.
         "structure_options": structure_options,
+        "requested_structure_options": requested_structure_options,
         "member_plan": member_plan,
         "density_cutoff": density_cutoff,
         # The smooth-boundary viewer contours a field the same way recovery
@@ -890,7 +903,7 @@ def build_topology_output(
             "surface_quality_preset": (
                 recovered.get("surface_quality_preset")
                 if isinstance(recovered, dict)
-                else surface_quality
+                else "AMRTO"
             ),
             "material_fraction": manufactured_material_fraction,
             "volume": manufactured_volume,
@@ -1067,6 +1080,8 @@ def build_topology_output(
         "objective_full_run_change_pct": objective_full_run_change_pct,
         "change_history": result.change_history,
         "stress_history": result.stress_history,
+        "case_compliances": getattr(result, "case_compliances", {}),
+        "case_max_displacements": getattr(result, "case_max_displacements", {}),
         "thermal_compliance": (
             float(result.thermal_compliance_history[-1])
             if result.thermal_compliance_history
@@ -1115,6 +1130,8 @@ def build_topology_output(
             "joint_pin_cylinders": list(bc.joint_pin_cylinders),
             "explicit_solid_voxels": int(np.count_nonzero(explicit_passive_solid_mask)),
             "explicit_void_voxels": int(np.count_nonzero(explicit_passive_void_mask)),
+            "explicit_solid_shapes": explicit_solid_shapes,
+            "explicit_void_shapes": explicit_void_shapes,
             "automatic_exclusion_scope": study.automatic_exclusion_scope,
             "automatic_exclusion_thickness": (
                 study.automatic_exclusion_thickness
@@ -1124,7 +1141,7 @@ def build_topology_output(
     }
 
     if is_infill_study:
-        _apply_lattice_infill_reporting(node, output, recovered, structure_options)
+        _apply_lattice_infill_reporting(node, output, recovered, requested_structure_options)
 
     return TopologyOutputContext(
         payload=output,
@@ -1311,6 +1328,7 @@ def finalize_topology_output(
     node: Any,
     context: TopologyOutputContext,
     cancel_callback: CancelCallback | None,
+    progress_callback: Any = None,
 ) -> dict[str, Any]:
     """Run optional validation/CAD conversion and attach release warnings."""
     output = context.payload
@@ -1937,23 +1955,16 @@ def finalize_topology_output(
     # The minimal-surface and prismatic families are the ones with no compact
     # boundary representation -- a gyroid is not a union of quadrics -- so they
     # keep the mesh route and are released as STL.
-    has_extrusion_axis = str(output.get("extrusion_axis") or "none").strip().lower() in {
-        "x",
-        "y",
-        "z",
-    }
     analytic_lattice_cad = lattice_cad_strategy(structure_options) == "beam"
     eager_cad = bool(
         analytic_lattice_cad
-        or (
-            structure_options.mode == "solid"
-            and has_extrusion_axis
-            and output.get("recovered_shape") is not None
-        )
+        or (structure_options.mode == "solid" and output.get("recovered_shape") is not None)
     )
     if eager_cad:
         try:
-            cad_shape = node._run_embedded_cad_reconstruction(output)
+            cad_shape = node._run_embedded_cad_reconstruction(
+                output, progress_callback=progress_callback
+            )
             output["cad_shape"] = cad_shape
             output["shape"] = cad_shape
             output["visualization_mode"] = "CAD"
@@ -1964,7 +1975,7 @@ def finalize_topology_output(
                 solid = cad_shape.val() if hasattr(cad_shape, "val") else cad_shape
                 output["cad_reconstruction"] = reconstruction_report | {
                     "method": reconstruction_report.get(
-                        "method", "Recovered Shape"
+                        "method", "AMRTO"
                     ),
                     "valid": bool(solid.isValid())
                     if hasattr(solid, "isValid")
@@ -1975,7 +1986,7 @@ def finalize_topology_output(
                 }
             except Exception:
                 output["cad_reconstruction"] = reconstruction_report or {
-                    "method": "Recovered Shape",
+                    "method": "AMRTO",
                 }
             if output["cad_reconstruction"].get("valid") is False:
                 block(
@@ -1988,41 +1999,18 @@ def finalize_topology_output(
             logger.warning("TopologyOptVoxelNode: %s", msg)
             output["cad_error"] = str(exc)
             block("cad_reconstruction_failed", msg)
-            if analytic_lattice_cad and output.get("recovered_shape") is not None:
-                # The centrelines did not become a body, but the rasterized
-                # lattice is still there and is still what was optimized.
-                output["visualization_mode"] = "Manufactured Mesh"
-    elif (
-        output.get("recovered_shape") is not None
-        and structure_options.mode != "solid"
-    ):
+            if output.get("recovered_shape") is not None:
+                output["visualization_mode"] = (
+                    "Manufactured Mesh"
+                    if structure_options.mode != "solid"
+                    else "Surface"
+                )
+    elif output.get("recovered_shape") is not None:
         output["cad_reconstruction"] = {
-            "method": "Lattice mesh (no exact B-rep)",
+            "method": "Not requested",
             "skipped": True,
-            "editable": False,
-            "reason": (
-                "A minimal-surface or prismatic cell has no compact boundary "
-                "representation, so this result is released as STL rather than "
-                "as STEP. The strut families (BCC, Octet Truss) are "
-                "reconstructed exactly from their centrelines instead."
-            ),
+            "editable": None,
         }
-        output["visualization_mode"] = "Manufactured Mesh"
-    elif (
-        output.get("recovered_shape") is not None
-        and structure_options.mode == "solid"
-    ):
-        output["cad_reconstruction"] = {
-            "method": "Recovered surface (no exact B-rep)",
-            "skipped": True,
-            "editable": False,
-            "reason": (
-                "A general three-dimensional load path has no exact editable "
-                "B-rep. Constrain the study to an extrusion axis for a solid "
-                "CAD body, or take this surface as STL."
-            ),
-        }
-        output["visualization_mode"] = "Surface"
     elif output.get("recovered_shape") is not None:
         output["cad_reconstruction"] = {
             "method": "Not requested",

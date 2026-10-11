@@ -47,19 +47,18 @@ class FreeCadPartNode(CadQueryNode):
     __identifier__ = "com.cad.freecad_part"
     NODE_NAME = "FreeCAD Part"
 
-    # How many synthetic parameter ports we expose before requiring the user
-    # to flatten further -- matches CadQueryCodeNode for consistency.
+    # Initial synthetic parameter ports exposed before FreeCAD aliases are discovered.
     MAX_PARAMS = 8
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
+        self.set_port_deletion_allowed(True)
+        self.create_property("param_count", self.MAX_PARAMS, widget_type="int")
+
         # Synthetic parameter ports: optional inputs the optimizer can drive.
         for idx in range(1, self.MAX_PARAMS + 1):
             self.add_input(f"param_{idx}", color=(180, 180, 0))
-            # Materialise the slots up front.  FreeCAD aliases discovered on
-            # save replace these blank names, but visible generic sockets let
-            # users wire Parameters before or while authoring the document.
             self.create_property(f"param_{idx}_name", "", widget_type="text")
             self.create_property(f"param_{idx}_value", 0.0, widget_type="float")
         self.add_output("shape", color=(100, 255, 100))
@@ -76,6 +75,72 @@ class FreeCadPartNode(CadQueryNode):
             "Double-click this node to create or edit the part in FreeCAD, "
             "then save the document."
         )
+
+    def get_param_count(self) -> int:
+        """Return the current number of active parameter ports."""
+        val = self.get_property("param_count")
+        if val is not None:
+            try:
+                return max(0, min(int(val), 32))
+            except (ValueError, TypeError):
+                pass
+        param_ports = [name for name in self.inputs().keys() if name.startswith("param_")]
+        return len(param_ports) if param_ports else self.MAX_PARAMS
+
+    def set_param_count(self, count: int) -> None:
+        """Dynamically scale the number of parameter ports (0 to 32)."""
+        count = max(0, min(int(count), 32))
+        current = self.get_param_count()
+        if count == current and len([k for k in self.inputs().keys() if k.startswith("param_")]) == count:
+            return
+        self.set_property("param_count", count)
+        self._sync_param_ports(count)
+
+    def _sync_param_ports(self, count: int) -> None:
+        """Synchronize node input sockets and property slots with *count*."""
+        self.set_port_deletion_allowed(True)
+        for idx in range(1, count + 1):
+            port_name = f"param_{idx}"
+            if port_name not in self.inputs():
+                self.add_input(port_name, color=(180, 180, 0))
+            if not self.has_property(f"param_{idx}_name"):
+                self.create_property(f"param_{idx}_name", "", widget_type="text")
+            if not self.has_property(f"param_{idx}_value"):
+                self.create_property(f"param_{idx}_value", 0.0, widget_type="float")
+
+        for idx in range(count + 1, 33):
+            port_name = f"param_{idx}"
+            port = self.get_input(port_name)
+            if port is not None:
+                try:
+                    port.clear_connections()
+                except Exception:
+                    pass
+                try:
+                    self.delete_input(port)
+                except Exception:
+                    pass
+
+        if hasattr(self, "view") and self.view and hasattr(self.view, "draw_node"):
+            try:
+                self.view.draw_node()
+            except Exception:
+                pass
+
+    def set_ports(self, port_data):
+        super().set_ports(port_data)
+        for port in self.input_ports():
+            if port.name().startswith("param_"):
+                try:
+                    port.color = (180, 180, 0, 255)
+                except Exception:
+                    pass
+        shape_port = self.get_output("shape")
+        if shape_port:
+            try:
+                shape_port.color = (100, 255, 100, 255)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Public API
@@ -267,7 +332,8 @@ class FreeCadPartNode(CadQueryNode):
 
         values: dict[str, float] = {}
         has_connected_parameter = False
-        for slot in range(1, self.MAX_PARAMS + 1):
+        count = self.get_param_count()
+        for slot in range(1, count + 1):
             name = str(
                 self.get_property(f"param_{slot}_name") or ""
             ).strip()
@@ -306,8 +372,12 @@ class FreeCadPartNode(CadQueryNode):
         Existing slots are updated as well: this method is only called after
         conflict resolution has established that the FreeCAD save should win.
         """
+        # Automatically grow parameter sockets if FreeCAD has more aliases than current count
+        if len(fc_params) > self.get_param_count():
+            self.set_param_count(min(len(fc_params), 32))
+
         for slot, (name, value) in enumerate(fc_params.items(), start=1):
-            if slot > self.MAX_PARAMS:
+            if slot > self.get_param_count():
                 break
             name_prop = f"param_{slot}_name"
             val_prop = f"param_{slot}_value"

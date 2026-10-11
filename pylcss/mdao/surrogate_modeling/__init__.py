@@ -17,6 +17,24 @@ from .active_learning import (
     ActiveLearningError,
     ActiveLearningSelector,
 )
+from .data_importer import DataImporter
+from .auto_surrogate import AutoSurrogateModel, AutoSurrogateStrategy
+from .custom_architecture import (
+    CustomArchitectureModel,
+    CustomArchitectureStrategy,
+    CustomNeuralNet,
+    ResidualBlock,
+    FourierFeatureEmbedding,
+)
+from .mdao_algorithms import (
+    MdaoEnsembleOfSurrogates,
+    MdaoKPLSRegressor,
+    MdaoKrigingRegressor,
+    MdaoRBFRegressor,
+    MdaoSVRRegressor,
+    MdaoSparsePCERegressor,
+    compute_mdao_metrics,
+)
 from .validation import (
     CrossValidator,
     CVResult,
@@ -28,6 +46,21 @@ __all__ = [
     "CVResult",
     "ConfigurableNet",
     "CrossValidator",
+    "DataImporter",
+    "AutoSurrogateModel",
+    "AutoSurrogateStrategy",
+    "CustomArchitectureModel",
+    "CustomArchitectureStrategy",
+    "CustomNeuralNet",
+    "ResidualBlock",
+    "FourierFeatureEmbedding",
+    "MdaoEnsembleOfSurrogates",
+    "MdaoKPLSRegressor",
+    "MdaoKrigingRegressor",
+    "MdaoRBFRegressor",
+    "MdaoSVRRegressor",
+    "MdaoSparsePCERegressor",
+    "compute_mdao_metrics",
     "FeatureImportanceAnalyzer",
     "ModelComparator",
     "PyTorchWrapper",

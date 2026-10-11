@@ -67,7 +67,7 @@ class PickingMixin:
         self._rotation_locked = locked
         self._apply_rotation_lock(locked)
         if self._btn_lock is not None:
-            self._btn_lock.setText("🔒 Lock" if locked else "🔓 Rotate")
+            self._btn_lock.setText("Lock Pick" if locked else "Orbit View")
 
     def enable_picking_mode(self, multi_select=True):
         """Switch the viewer into face-selection picking mode."""

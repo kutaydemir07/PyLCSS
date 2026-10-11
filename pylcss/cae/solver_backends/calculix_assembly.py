@@ -84,16 +84,38 @@ def _safe_token(value: str, index: int) -> str:
 
 def _part_for_record(record: dict[str, Any], parts: list[PartLayout], label: str):
     source_mesh = record.get("mesh")
-    if source_mesh is None:
+    if source_mesh is not None:
+        for part in parts:
+            if source_mesh is part.mesh:
+                return part
         raise SolverBackendError(
-            f"{label} is not associated with a component mesh. Connect the "
-            "component's mesh to the support/load node."
+            f"{label} references a mesh that is not connected through an FEA Component."
         )
+
+    # Auto-detect matching part from selected geometry or coordinate condition
+    geometries = dict_geometries(record)
+    condition = str(record.get("condition", "") or "").strip()
+    matching_parts: list[tuple[PartLayout, int]] = []
     for part in parts:
-        if source_mesh is part.mesh:
-            return part
+        try:
+            if geometries:
+                nodes = nodes_matching_geometries(part.mesh, geometries)
+            elif condition:
+                nodes = nodes_matching_condition(part.mesh, condition, [], label=label)
+            else:
+                nodes = np.array([])
+            if nodes.size > 0:
+                matching_parts.append((part, int(nodes.size)))
+        except Exception:
+            continue
+
+    if matching_parts:
+        matching_parts.sort(key=lambda item: item[1], reverse=True)
+        return matching_parts[0][0]
+
     raise SolverBackendError(
-        f"{label} references a mesh that is not connected through an FEA Component."
+        f"{label} is not associated with a component mesh and does not match any connected part mesh. "
+        "Connect the component's mesh to the support/load node or select geometry on a connected part."
     )
 
 

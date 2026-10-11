@@ -38,13 +38,21 @@ class SystemManager(QtCore.QObject):
         self.systems_list.itemSelectionChanged.connect(self._on_system_selected)
 
         self.btn_add_system = QtWidgets.QPushButton("Add")
+        self.btn_add_system.setToolTip("Add a new subsystem")
         self.btn_add_system.clicked.connect(self.add_system)
         self.btn_remove_system = QtWidgets.QPushButton("Remove")
+        self.btn_remove_system.setToolTip("Remove selected subsystem")
         self.btn_remove_system.clicked.connect(self.remove_system)
         self.btn_rename_system = QtWidgets.QPushButton("Rename")
+        self.btn_rename_system.setToolTip("Rename selected subsystem")
         self.btn_rename_system.clicked.connect(self.rename_system)
 
+        # Button icons are styled with the unified palette in apply_theme()
+
         self.product_name = QtWidgets.QLineEdit("Product")
+        self.product_name.setPlaceholderText("Product name...")
+        self.product_name.setToolTip(f"Product: {self.product_name.text()}")
+        self.product_name.textChanged.connect(self._on_product_name_changed)
         self.panel = self._build_panel()
         from pylcss.user_interface.common.theme_manager import current_theme
         self.apply_theme(current_theme())
@@ -57,6 +65,10 @@ class SystemManager(QtCore.QObject):
 
         if create_default:
             self._add_system("Default System")
+
+    def _on_product_name_changed(self, text: str) -> None:
+        self.product_name.setToolTip(f"Product: {text}")
+        QtCore.QTimer.singleShot(0, lambda: self.product_name.setCursorPosition(0))
 
     def _build_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
@@ -92,7 +104,8 @@ class SystemManager(QtCore.QObject):
         button_layout.addWidget(self.btn_rename_system, 1)
         layout.addLayout(button_layout)
 
-        panel.setMaximumWidth(240)
+        panel.setMinimumWidth(260)
+        panel.setMaximumWidth(340)
         return panel
 
     def apply_theme(self, theme_name: str) -> None:
@@ -163,6 +176,15 @@ class SystemManager(QtCore.QObject):
         }}
         """
         self.panel.setStyleSheet(qss)
+        try:
+            import qtawesome as qta
+            btn_color = colors["text_main"]
+            btn_dim = colors["text_dim"]
+            self.btn_add_system.setIcon(qta.icon("fa5s.plus", color=btn_color, color_disabled=btn_dim))
+            self.btn_remove_system.setIcon(qta.icon("fa5s.trash-alt", color=btn_color, color_disabled=btn_dim))
+            self.btn_rename_system.setIcon(qta.icon("fa5s.edit", color=btn_color, color_disabled=btn_dim))
+        except Exception:
+            pass
 
 
 

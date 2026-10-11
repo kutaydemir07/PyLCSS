@@ -21,13 +21,13 @@ from PySide6 import QtCore, QtGui, QtWidgets
 THEMES = {
     "dark": {
         "bg_dark": "#1e1f22",
-        "bg_panel": "#2b2d31",
-        "bg_input": "#383a40",
+        "bg_panel": "#1e1f22",
+        "bg_input": "#282a2e",
         "primary": "#d29922",
         "primary_hover": "#e3b341",
         "text_main": "#ffffff",
         "text_dim": "#b5bac1",
-        "border": "#1e1f22",
+        "border": "#282a2e",
         "success": "#2ecc71",
         "danger": "#ed4245",
         "plot_bg": "#ffffff",
@@ -38,9 +38,9 @@ THEMES = {
         # charcoal.
         "chart_bg": "#ffffff",
         "chart_fg": "#24292f",
-        "graph_bg": "#232323",
-        "graph_grid": "#2d2d2d",
-        "viewer_bg": "#333333",
+        "graph_bg": "#181b22",
+        "graph_grid": "#334155",
+        "viewer_bg": "#222732",
     },
     "light": {
         "bg_dark": "#f4f6f8",
@@ -59,9 +59,9 @@ THEMES = {
         "plot_fg": "#344054",
         "chart_bg": "#ffffff",
         "chart_fg": "#344054",
-        "graph_bg": "#f4f6f8",
-        "graph_grid": "#d9dee5",
-        "viewer_bg": "#e7ecf2",
+        "graph_bg": "#ffffff",
+        "graph_grid": "#edf1f5",
+        "viewer_bg": "#f8fafc",
     },
 }
 
@@ -70,6 +70,7 @@ THEMES = {
 # pair lets each node type remain recognizable at a glance.  Dark-mode node
 # palettes continue to come from the node classes unchanged.
 LIGHT_SYSTEM_NODE_PALETTES = {
+    # MDAO nodes
     "com.pfd.input": (
         (244, 247, 250, 255),  # #f4f7fa
         (91, 127, 163, 255),  # #5b7fa3
@@ -90,7 +91,203 @@ LIGHT_SYSTEM_NODE_PALETTES = {
         (122, 134, 153, 255),  # #7a8699
         (52, 64, 84, 255),  # #344054
     ),
+    # CAE Parametric CAD & Geometry nodes (calm steel blue / slate)
+    "com.cad": (
+        (245, 247, 250, 255),
+        (85, 115, 150, 255),
+        (50, 65, 85, 255),
+    ),
+    "com.cad.code_part": (
+        (245, 247, 250, 255),
+        (85, 115, 150, 255),
+        (50, 65, 85, 255),
+    ),
+    "com.cad.freecad_part": (
+        (245, 247, 250, 255),
+        (85, 115, 150, 255),
+        (50, 65, 85, 255),
+    ),
+    "com.cad.geometry": (
+        (245, 247, 250, 255),
+        (85, 115, 150, 255),
+        (50, 65, 85, 255),
+    ),
+    "com.cad.assembly": (
+        (245, 247, 250, 255),
+        (85, 115, 150, 255),
+        (50, 65, 85, 255),
+    ),
+    "com.cad.import_step": (
+        (245, 247, 250, 255),
+        (85, 115, 150, 255),
+        (50, 65, 85, 255),
+    ),
+    "com.cad.import_stl": (
+        (245, 247, 250, 255),
+        (85, 115, 150, 255),
+        (50, 65, 85, 255),
+    ),
+    # CAE FEA & Mesh nodes (disciplined cobalt / navy blue)
+    "com.cad.sim.mesh": (
+        (244, 246, 252, 255),
+        (75, 110, 175, 255),
+        (45, 60, 90, 255),
+    ),
+    "com.cad.sim.material": (
+        (244, 246, 252, 255),
+        (75, 110, 175, 255),
+        (45, 60, 90, 255),
+    ),
+    "com.cad.sim.component": (
+        (244, 246, 252, 255),
+        (75, 110, 175, 255),
+        (45, 60, 90, 255),
+    ),
+    "com.cad.sim.solver": (
+        (244, 246, 252, 255),
+        (75, 110, 175, 255),
+        (45, 60, 90, 255),
+    ),
+    # CAE Boundary Conditions & Loads (disciplined warm terracotta)
+    "com.cad.sim.constraint": (
+        (253, 247, 245, 255),
+        (195, 95, 80, 255),
+        (90, 48, 42, 255),
+    ),
+    "com.cad.sim.load": (
+        (253, 247, 245, 255),
+        (195, 95, 80, 255),
+        (90, 48, 42, 255),
+    ),
+    "com.cad.sim.pressure_load": (
+        (253, 247, 245, 255),
+        (195, 95, 80, 255),
+        (90, 48, 42, 255),
+    ),
+    "com.cad.topopt.support": (
+        (253, 247, 245, 255),
+        (195, 95, 80, 255),
+        (90, 48, 42, 255),
+    ),
+    "com.cad.topopt.load": (
+        (253, 247, 245, 255),
+        (195, 95, 80, 255),
+        (90, 48, 42, 255),
+    ),
+    # CAE Topology & Lattice Optimization (warm amber gold matching MDAO primary)
+    "com.cad.sim.topopt_voxel": (
+        (253, 250, 242, 255),
+        (190, 140, 30, 255),
+        (95, 70, 25, 255),
+    ),
+    "com.cad.sim.lattice_voxel": (
+        (253, 250, 242, 255),
+        (190, 140, 30, 255),
+        (95, 70, 25, 255),
+    ),
+    "com.cad.sim.lattice_infill": (
+        (253, 250, 242, 255),
+        (190, 140, 30, 255),
+        (95, 70, 25, 255),
+    ),
+    # CAE Impact & Crash Dynamics (muted crimson)
+    "com.cad.sim.impact": (
+        (252, 245, 245, 255),
+        (180, 75, 65, 255),
+        (95, 42, 38, 255),
+    ),
+    "com.cad.sim.crash_solver": (
+        (252, 245, 245, 255),
+        (180, 75, 65, 255),
+        (95, 42, 38, 255),
+    ),
+    # CAE Parameters & Inputs (steel blue)
+    "com.cad.number": (
+        (244, 247, 250, 255),
+        (91, 127, 163, 255),
+        (52, 64, 84, 255),
+    ),
+    "com.cad.variable": (
+        (244, 247, 250, 255),
+        (91, 127, 163, 255),
+        (52, 64, 84, 255),
+    ),
+    "com.cad.select_face": (
+        (244, 247, 250, 255),
+        (91, 127, 163, 255),
+        (52, 64, 84, 255),
+    ),
+    # CAE Outputs & Exports (muted sage)
+    "com.cad.export_step": (
+        (244, 248, 245, 255),
+        (92, 133, 105, 255),
+        (52, 72, 60, 255),
+    ),
+    "com.cad.export_stl": (
+        (244, 248, 245, 255),
+        (92, 133, 105, 255),
+        (52, 72, 60, 255),
+    ),
+    "com.cad.analysis": (
+        (244, 248, 245, 255),
+        (92, 133, 105, 255),
+        (52, 72, 60, 255),
+    ),
 }
+
+DARK_SYSTEM_NODE_PALETTES = {
+    # MDAO nodes
+    "com.pfd.input": ((35, 35, 35, 255), (55, 177, 224, 255), (235, 247, 252, 255)),
+    "com.pfd.custom_block": ((35, 35, 35, 255), (148, 107, 220, 255), (242, 238, 250, 255)),
+    "com.pfd.output": ((35, 35, 35, 255), (63, 190, 143, 255), (235, 250, 244, 255)),
+    "com.pfd.intermediate": ((35, 35, 35, 255), (118, 130, 150, 255), (238, 241, 246, 255)),
+    # CAE Parametric CAD & Geometry nodes
+    "com.cad": ((35, 35, 35, 255), (90, 120, 160, 255), (235, 243, 250, 255)),
+    "com.cad.code_part": ((35, 35, 35, 255), (90, 120, 160, 255), (235, 243, 250, 255)),
+    "com.cad.freecad_part": ((35, 35, 35, 255), (90, 120, 160, 255), (235, 243, 250, 255)),
+    "com.cad.geometry": ((35, 35, 35, 255), (90, 120, 160, 255), (235, 243, 250, 255)),
+    "com.cad.assembly": ((35, 35, 35, 255), (90, 120, 160, 255), (235, 243, 250, 255)),
+    "com.cad.import_step": ((35, 35, 35, 255), (90, 120, 160, 255), (235, 243, 250, 255)),
+    "com.cad.import_stl": ((35, 35, 35, 255), (90, 120, 160, 255), (235, 243, 250, 255)),
+    # CAE FEA & Mesh nodes
+    "com.cad.sim.mesh": ((35, 35, 35, 255), (88, 125, 170, 255), (238, 242, 252, 255)),
+    "com.cad.sim.material": ((35, 35, 35, 255), (88, 125, 170, 255), (238, 242, 252, 255)),
+    "com.cad.sim.component": ((35, 35, 35, 255), (88, 125, 170, 255), (238, 242, 252, 255)),
+    "com.cad.sim.solver": ((35, 35, 35, 255), (88, 125, 170, 255), (238, 242, 252, 255)),
+    # CAE Boundary Conditions & Loads
+    "com.cad.sim.constraint": ((35, 35, 35, 255), (215, 110, 95, 255), (252, 244, 242, 255)),
+    "com.cad.sim.load": ((35, 35, 35, 255), (215, 110, 95, 255), (252, 244, 242, 255)),
+    "com.cad.sim.pressure_load": ((35, 35, 35, 255), (215, 110, 95, 255), (252, 244, 242, 255)),
+    "com.cad.topopt.support": ((35, 35, 35, 255), (215, 110, 95, 255), (252, 244, 242, 255)),
+    "com.cad.topopt.load": ((35, 35, 35, 255), (215, 110, 95, 255), (252, 244, 242, 255)),
+    # CAE Topology & Lattice Optimization
+    "com.cad.sim.topopt_voxel": ((35, 35, 35, 255), (210, 153, 34, 255), (252, 248, 238, 255)),
+    "com.cad.sim.lattice_voxel": ((35, 35, 35, 255), (210, 153, 34, 255), (252, 248, 238, 255)),
+    "com.cad.sim.lattice_infill": ((35, 35, 35, 255), (210, 153, 34, 255), (252, 248, 238, 255)),
+    # CAE Impact & Crash Dynamics
+    "com.cad.sim.impact": ((35, 35, 35, 255), (195, 80, 75, 255), (252, 242, 242, 255)),
+    "com.cad.sim.crash_solver": ((35, 35, 35, 255), (195, 80, 75, 255), (252, 242, 242, 255)),
+    # CAE Parameters & Inputs
+    "com.cad.number": ((35, 35, 35, 255), (55, 177, 224, 255), (235, 247, 252, 255)),
+    "com.cad.variable": ((35, 35, 35, 255), (55, 177, 224, 255), (235, 247, 252, 255)),
+    "com.cad.select_face": ((35, 35, 35, 255), (55, 177, 224, 255), (235, 247, 252, 255)),
+    # CAE Outputs & Exports
+    "com.cad.export_step": ((35, 35, 35, 255), (63, 190, 143, 255), (235, 250, 244, 255)),
+    "com.cad.export_stl": ((35, 35, 35, 255), (63, 190, 143, 255), (235, 250, 244, 255)),
+    "com.cad.analysis": ((35, 35, 35, 255), (63, 190, 143, 255), (235, 250, 244, 255)),
+}
+
+
+def _lookup_node_palette(identifier: str, palettes_dict: dict) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int], tuple[int, int, int, int]] | None:
+    """Find exact or longest-prefix match for a node identifier in a palette dictionary."""
+    if not identifier:
+        return None
+    if identifier in palettes_dict:
+        return palettes_dict[identifier]
+    for key in sorted(palettes_dict.keys(), key=len, reverse=True):
+        if identifier.startswith(key):
+            return palettes_dict[key]
+    return None
 
 # Every main workspace uses the same quiet light palette.  Keeping the entries
 # explicit preserves per-workspace object names while ensuring backgrounds,
@@ -215,7 +412,7 @@ QWidget {{
 }}
 
 QTabWidget::pane {{
-    border: 1px solid {c["bg_panel"]};
+    border: 1px solid {c["border"]};
     background-color: {c["bg_panel"]};
     border-radius: 5px;
 }}
@@ -267,7 +464,7 @@ QLabel:disabled {{ color: {c["text_dim"]}; }}
 QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox {{
     background-color: {c["bg_input"]};
     color: {c["text_main"]};
-    border: 1px solid {c["bg_dark"]};
+    border: 1px solid {c["border"]};
     border-radius: 3px;
     padding: 4px;
     selection-background-color: {c["primary"]};
@@ -275,7 +472,7 @@ QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox {{
 QLineEdit:focus, QTextEdit:focus {{ border: 1px solid {c["primary"]}; }}
 QTableWidget {{
     background-color: {c["bg_panel"]};
-    gridline-color: {c["bg_input"]};
+    gridline-color: {c["border"]};
     border: none;
 }}
 QTableWidget::item {{ padding: 5px; }}
@@ -302,7 +499,7 @@ QScrollBar::handle:vertical {{
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
 QGroupBox {{
-    border: 1px solid {c["bg_input"]};
+    border: 1px solid {c["border"]};
     border-radius: 5px;
     margin-top: 20px;
     font-weight: bold;
@@ -345,6 +542,7 @@ _LIGHT_QSS_MAP = {
     "#24272d": "#eef0f3",
     "#252525": "#ffffff",
     "#25272b": "#ffffff",
+    "#282a2e": "#eef0f3",
     "#282c33": "#ffffff",
     "#2a2a2a": "#ffffff",
     "#2b2b2b": "#ffffff",
@@ -628,69 +826,177 @@ def _node_widget_style_override(theme: str) -> str:
     if theme == "light":
         return """
 QGroupBox, _NodeGroupBox {
-  color: rgba(30, 41, 59, 255);
+  background: transparent;
+  background-color: transparent;
+  border: none;
+  margin-top: 15px;
+  margin-bottom: 2px;
+  padding: 0px;
+  color: #0f172a;
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
 }
-QGroupBox::title, QLabel, QCheckBox {
-  color: rgba(30, 41, 59, 255);
+QGroupBox::title, _NodeGroupBox::title {
+  subcontrol-origin: margin;
+  subcontrol-position: top center;
+  background: transparent;
+  color: #475569;
+  font-size: 8pt;
   font-weight: 600;
+  padding: 0px;
+}
+QLabel {
+  background: transparent;
+  color: #475569;
+  font-size: 8.5pt;
+  font-weight: 500;
+}
+QCheckBox {
+  background: transparent;
+  color: #1e293b;
+  font-size: 8.5pt;
+  font-weight: 500;
+  spacing: 6px;
 }
 QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox, QAbstractItemView {
-  background-color: rgba(255, 255, 255, 255);
-  border: 1px solid rgba(203, 213, 225, 255);
-  color: rgba(15, 23, 42, 255);
-  selection-background-color: rgba(210, 153, 34, 255);
-  selection-color: rgba(255, 255, 255, 255);
+  background-color: #ffffff;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  color: #0f172a;
+  font-size: 8.5pt;
+  padding: 3px 6px;
+  selection-background-color: #3b82f6;
+  selection-color: #ffffff;
+}
+QComboBox {
+  padding-right: 20px;
+}
+QComboBox::drop-down {
+  subcontrol-origin: padding;
+  subcontrol-position: top right;
+  width: 18px;
+  border: none;
+}
+QComboBox::down-arrow {
+  image: none;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid #64748b;
+  width: 0px;
+  height: 0px;
 }
 QLineEdit:focus, QTextEdit:focus, QComboBox:focus {
-  border: 1px solid rgba(210, 153, 34, 255);
+  border: 1.5px solid #2563eb;
+  background-color: #ffffff;
 }
 QLineEdit:read-only {
-  background-color: rgba(241, 245, 249, 255);
-  color: rgba(71, 85, 105, 255);
+  background-color: #f8fafc;
+  color: #475569;
+  border: 1px solid #e2e8f0;
 }
 QPushButton {
-  background-color: rgba(241, 245, 249, 255);
-  border: 1px solid rgba(203, 213, 225, 255);
-  color: rgba(30, 41, 59, 255);
+  background-color: #ffffff;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  color: #1e293b;
+  font-size: 8.5pt;
+  font-weight: 500;
+  padding: 4px 8px;
 }
 QPushButton:hover {
-  background-color: rgba(226, 232, 240, 255);
-  border-color: rgba(210, 153, 34, 255);
-  color: rgba(15, 23, 42, 255);
+  background-color: #f1f5f9;
+  border-color: #94a3b8;
+  color: #0f172a;
+}
+QPushButton:pressed {
+  background-color: #e2e8f0;
 }
 """
     else:
         return """
 QGroupBox, _NodeGroupBox {
-  color: rgba(248, 250, 252, 255);
+  background: transparent;
+  background-color: transparent;
+  border: none;
+  margin-top: 15px;
+  margin-bottom: 2px;
+  padding: 0px;
+  color: #f0f6fc;
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
 }
-QGroupBox::title, QLabel, QCheckBox {
-  color: rgba(248, 250, 252, 255);
+QGroupBox::title, _NodeGroupBox::title {
+  subcontrol-origin: margin;
+  subcontrol-position: top center;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 8pt;
   font-weight: 600;
+  padding: 0px;
+}
+QLabel {
+  background: transparent;
+  color: #cbd5e1;
+  font-size: 8.5pt;
+  font-weight: 500;
+}
+QCheckBox {
+  background: transparent;
+  color: #f1f5f9;
+  font-size: 8.5pt;
+  font-weight: 500;
+  spacing: 6px;
 }
 QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox, QAbstractItemView {
-  background-color: rgba(15, 22, 33, 255);
-  border: 1px solid rgba(51, 65, 85, 255);
-  color: rgba(255, 255, 255, 255);
-  selection-background-color: rgba(210, 153, 34, 255);
-  selection-color: rgba(255, 255, 255, 255);
+  background-color: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  color: #f0f6fc;
+  font-size: 8.5pt;
+  padding: 3px 6px;
+  selection-background-color: #1f6feb;
+  selection-color: #ffffff;
+}
+QComboBox {
+  padding-right: 20px;
+}
+QComboBox::drop-down {
+  subcontrol-origin: padding;
+  subcontrol-position: top right;
+  width: 18px;
+  border: none;
+}
+QComboBox::down-arrow {
+  image: none;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid #94a3b8;
+  width: 0px;
+  height: 0px;
 }
 QLineEdit:focus, QTextEdit:focus, QComboBox:focus {
-  border: 1px solid rgba(210, 153, 34, 255);
+  border: 1.5px solid #58a6ff;
+  background-color: #0d1117;
 }
 QLineEdit:read-only {
-  background-color: rgba(24, 32, 47, 255);
-  color: rgba(226, 232, 240, 255);
+  background-color: #0d1117;
+  color: #8b949e;
+  border: 1px solid #21262d;
 }
 QPushButton {
-  background-color: rgba(30, 41, 59, 255);
-  border: 1px solid rgba(51, 65, 85, 255);
-  color: rgba(255, 255, 255, 255);
+  background-color: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  color: #c9d1d9;
+  font-size: 8.5pt;
+  font-weight: 500;
+  padding: 4px 8px;
 }
 QPushButton:hover {
-  background-color: rgba(51, 65, 85, 255);
-  border-color: rgba(210, 153, 34, 255);
-  color: rgba(255, 255, 255, 255);
+  background-color: #30363d;
+  border-color: #8b949e;
+  color: #ffffff;
+}
+QPushButton:pressed {
+  background-color: #161b22;
 }
 """
 
@@ -811,7 +1117,10 @@ def retheme_node_graph(graph, theme: str | None = None) -> None:
     try:
         dark_canvas = getattr(graph, "_pylcss_dark_canvas_palette", None)
         if dark_canvas is None:
-            dark_canvas = (tuple(graph.background_color()), tuple(graph.grid_color()))
+            dark_canvas = (
+                QtGui.QColor(THEMES["dark"]["graph_bg"]).getRgb()[:3],
+                QtGui.QColor(THEMES["dark"]["graph_grid"]).getRgb()[:3],
+            )
             graph._pylcss_dark_canvas_palette = dark_canvas
         if chosen == "dark":
             graph_background, graph_grid = dark_canvas
@@ -820,31 +1129,44 @@ def retheme_node_graph(graph, theme: str | None = None) -> None:
             graph_grid = QtGui.QColor(c["graph_grid"]).getRgb()[:3]
         graph.set_background_color(*graph_background)
         graph.set_grid_color(*graph_grid)
+        try:
+            from NodeGraphQt.constants import ViewerEnum
+            graph.set_grid_mode(ViewerEnum.GRID_DISPLAY_LINES.value)
+        except Exception:
+            pass
         nodes = graph.all_nodes()
     except Exception:
         return
 
     for node in nodes:
+        identifier = (
+            getattr(node, "__identifier__", "")
+            or getattr(node, "type_", "")
+            or (node.__class__.__name__ if hasattr(node, "__class__") else "")
+        )
+        system_dark = _lookup_node_palette(identifier, DARK_SYSTEM_NODE_PALETTES)
         dark_palette = getattr(node, "_pylcss_dark_node_palette", None)
         if dark_palette is None:
-            try:
-                model = node.model
-                candidate = (
-                    tuple(model.color),
-                    tuple(model.border_color),
-                    tuple(model.text_color),
-                )
-                # If the first encounter is already in light mode, a freshly
-                # deserialized/default NodeGraph node can still be black. Save
-                # that as its dark palette before replacing it.
-                dark_palette = candidate
-                node._pylcss_dark_node_palette = candidate
-            except Exception:
-                continue
+            if system_dark is not None:
+                dark_palette = system_dark
+            else:
+                try:
+                    model = node.model
+                    candidate = (
+                        tuple(model.color),
+                        tuple(model.border_color),
+                        tuple(model.text_color),
+                    )
+                    # If the first encounter is already in light mode, a freshly
+                    # deserialized/default NodeGraph node can still be black. Save
+                    # that as its dark palette before replacing it.
+                    dark_palette = candidate
+                except Exception:
+                    continue
+            node._pylcss_dark_node_palette = dark_palette
 
         if chosen == "light":
-            identifier = getattr(node, "__identifier__", "")
-            light_palette = LIGHT_SYSTEM_NODE_PALETTES.get(identifier)
+            light_palette = _lookup_node_palette(identifier, LIGHT_SYSTEM_NODE_PALETTES)
             if light_palette is None:
                 body = (247, 248, 250, 255)
                 border = _harmonized_light_node_border(dark_palette[1])
@@ -852,11 +1174,16 @@ def retheme_node_graph(graph, theme: str | None = None) -> None:
             else:
                 body, border, text = light_palette
         else:
-            body, border, text = dark_palette
+            body, border, text = system_dark or dark_palette
         try:
-            node.set_property("color", body, push_undo=False)
-            node.set_property("border_color", border, push_undo=False)
-            node.set_property("text_color", text, push_undo=False)
+            try:
+                node.set_property("color", body, push_undo=False)
+                node.set_property("border_color", border, push_undo=False)
+                node.set_property("text_color", text, push_undo=False)
+            except TypeError:
+                node.set_property("color", body)
+                node.set_property("border_color", border)
+                node.set_property("text_color", text)
             _retheme_node_embedded_widgets(node, chosen)
             node.view.draw_node()
         except Exception:
@@ -886,6 +1213,12 @@ def _retheme_visible_widget(widget) -> None:
     try:
         if isinstance(widget, QtWidgets.QWidget) and widget.isVisible():
             retheme_widget_styles(widget)
+            apply_fn = getattr(widget, "apply_theme", None)
+            if callable(apply_fn):
+                try:
+                    apply_fn(_current_theme)
+                except Exception:
+                    pass
     except RuntimeError:
         pass
 
@@ -968,6 +1301,12 @@ def apply_theme(theme: str, *, persist: bool = True) -> str:
 
     for widget in app.topLevelWidgets():
         retheme_widget_styles(widget, chosen)
+        apply_fn = getattr(widget, "apply_theme", None)
+        if callable(apply_fn):
+            try:
+                apply_fn(chosen)
+            except Exception:
+                pass
     QtCore.QTimer.singleShot(100, lambda: _setup_app_text_eliding(app))
     return chosen
 

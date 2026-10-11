@@ -376,7 +376,31 @@ def _collect_graph_inputs(node: Any) -> TopologyGraphInputs | None:
     # the thermal study were removed with their nodes.
     constraint_list = _flatten(node.get_input_list("supports"))
     load_list = _flatten(node.get_input_list("loads"))
+    preserved_inputs = _flatten(node.get_input_list("preserved_regions"))
+    obstacle_inputs = _flatten(node.get_input_list("obstacle_regions"))
     non_design_payloads: list[Any] = []
+    for item in preserved_inputs:
+        if item is not None:
+            if isinstance(item, dict) and str(item.get("type", "")).lower() == "topology_non_design_region":
+                non_design_payloads.append(item)
+            else:
+                non_design_payloads.append({
+                    "type": "topology_non_design_region",
+                    "geometry": item,
+                    "region_type": "solid",
+                })
+    for item in obstacle_inputs:
+        if item is not None:
+            if isinstance(item, dict) and str(item.get("type", "")).lower() == "topology_non_design_region":
+                item_copy = dict(item)
+                item_copy["region_type"] = "void"
+                non_design_payloads.append(item_copy)
+            else:
+                non_design_payloads.append({
+                    "type": "topology_non_design_region",
+                    "geometry": item,
+                    "region_type": "void",
+                })
     thermal_sink_payloads: list[Any] = []
     thermal_load_payloads: list[Any] = []
     try:
@@ -473,23 +497,9 @@ def _prepare_domain(
         )
     except (TypeError, ValueError):
         node.set_error("Minimum solid and void sizes must be numeric.")
-        return None
-    extrusion_axis = {
-        "x": 0,
-        "y": 1,
-        "z": 2,
-    }.get(str(node.get_property("extrusion") or "none").lower())
-    planar_extrusion_axis = (
-        extrusion_axis
-        if guided_active
-        and _can_use_planar_extrusion_grid(
-            bc,
-            extrusion_axis,
-            node.get_property("physics_mode"),
-        )
-        else None
-    )
-    setattr(node, "_guided_planar_extrusion_axis", planar_extrusion_axis)
+    extrusion_axis = None
+    planar_extrusion_axis = None
+    setattr(node, "_guided_planar_extrusion_axis", None)
     if guided_active:
         # Guided mode owns its resolution and length scale. Legacy saved
         # element counts and voxel-radius values must never silently change a
@@ -865,33 +875,21 @@ def _build_problem(
     explicit_passive_solid_mask = domain.passive_solid_mask
     explicit_passive_void_mask = domain.passive_void_mask
     unitx, unity, unitz = domain.unitx, domain.unity, domain.unitz
-    try:
-        mc = ManufacturingConstraints(
-            symmetry=(str(node.get_property("symmetry") or "None")).lower(),
-            extrusion=(str(node.get_property("extrusion") or "None")).lower(),
-            overhang_build_axis=(
-                str(node.get_property("overhang_build_axis") or "None")
-            ).lower(),
-            overhang_angle_deg=float(
-                node.get_property("overhang_angle_deg") or 45.0
-            ),
-            pull_out_axis=(
-                str(node.get_property("pull_out_axis") or "None")
-            ).lower(),
-            max_member_size_voxels=float(
-                node.get_property("max_member_size_voxels") or 0.0
-            ),
-            max_member_size_physical=float(
-                node.get_property("maximum_member_size_mm") or 0.0
-            ),
-            pattern_repeat=int(node.get_property("pattern_repeat") or 1),
-            pattern_axis=(str(node.get_property("pattern_axis") or "Y")).lower(),
-        )
-    except (TypeError, ValueError):
-        node.set_error(
-            "Topology manufacturing settings must be numeric where required."
-        )
-        return None
+    draw_dir = str(node.get_property("draw_direction") or "none").strip().lower()
+    extr_axis = str(node.get_property("extrusion_axis") or "none").strip().lower()
+    sym_plane = str(node.get_property("symmetry_plane") or "none").strip().lower()
+    oh_dir = str(node.get_property("overhang_direction") or "none").strip().lower()
+    oh_angle = float(node.get_property("overhang_angle_deg") or 45.0)
+    max_member_mm = float(node.get_property("max_member_size_mm") or 0.0)
+
+    mc = ManufacturingConstraints(
+        symmetry=sym_plane,
+        extrusion=extr_axis,
+        overhang_build_axis=oh_dir,
+        overhang_angle_deg=oh_angle,
+        pull_out_axis=draw_dir,
+        max_member_size_physical=max_member_mm,
+    )
 
     stress_enabled = (
         as_bool(node.get_property("stress_constraint")) or minimum_mass_goal

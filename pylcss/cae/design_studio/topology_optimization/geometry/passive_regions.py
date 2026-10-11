@@ -10,8 +10,13 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from .analytic_shapes import _convert_legacy_to_physical_shapes, smax, smin
-from .recovery_grid import BoxRegion, CylinderRegion
+from .analytic_shapes import (
+    BoxRegion,
+    CylinderRegion,
+    _convert_legacy_to_physical_shapes,
+    smax,
+    smin,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +28,7 @@ def _apply_passive_density_regions(
     void_boxes: Sequence[BoxRegion] = (),
     solid_cylinders: Sequence[CylinderRegion] = (),
     void_cylinders: Sequence[CylinderRegion] = (),
+    joint_pin_cylinders: Sequence[CylinderRegion] = (),
     bounds: Optional[tuple[np.ndarray, np.ndarray]] = None,
     cell: Optional[np.ndarray] = None,
     spacing: Optional[np.ndarray] = None,
@@ -48,6 +54,7 @@ def _apply_passive_density_regions(
         void_boxes=void_boxes,
         solid_cylinders=solid_cylinders,
         void_cylinders=void_cylinders,
+        joint_pin_cylinders=joint_pin_cylinders,
     )
     if not shapes:
         return field
@@ -92,6 +99,7 @@ def _apply_passive_cylinder_sdf(
     void_boxes: Sequence[BoxRegion] = (),
     solid_cylinders: Sequence[CylinderRegion] = (),
     void_cylinders: Sequence[CylinderRegion] = (),
+    joint_pin_cylinders: Sequence[CylinderRegion] = (),
     bounds: Optional[tuple[np.ndarray, np.ndarray]] = None,
     cell: Optional[np.ndarray] = None,
     spacing: Optional[np.ndarray] = None,
@@ -121,6 +129,7 @@ def _apply_passive_cylinder_sdf(
         void_boxes=void_boxes,
         solid_cylinders=solid_cylinders,
         void_cylinders=void_cylinders,
+        joint_pin_cylinders=joint_pin_cylinders,
     )
     if not shapes:
         return signed_distance

@@ -54,7 +54,6 @@ class OptimizationConfig:
     DEFAULT_TOLERANCE: float = 1e-6
     DEFAULT_MAX_ITERATIONS: int = 1000
     DEFAULT_NEVERGRAD_BUDGET: int = 5000
-    DEFAULT_DE_GENERATIONS: int = 200
     DEFAULT_MULTI_START_ITERATIONS: int = 1000
     DEFAULT_PENALTY_WEIGHT: float = 1e6  # Scaled for typical engineering costs (was 1000.0)
     
@@ -280,24 +279,6 @@ SOLVER_DESCRIPTIONS = {
         'robustness': 'Medium',
         'when_to_use': 'A good first local method when finite-difference gradients are meaningful. Check convergence from more than one start when local minima are possible.'
     },
-    'COBYLA': {
-        'name': 'Constrained Optimization BY Linear Approximation',
-        'description': 'Local derivative-free optimizer using linear approximations',
-        'best_for': 'Modest-size continuous problems without reliable derivatives',
-        'supports_constraints': True,
-        'speed': 'Medium',
-        'robustness': 'Medium',
-        'when_to_use': 'Use when derivatives are unavailable. It is not a noise filter or global optimizer; verify feasibility and repeat from other starts.'
-    },
-    'trust-constr': {
-        'name': 'Trust Region Constrained',
-        'description': 'Local trust-region method for smooth constrained problems',
-        'best_for': 'Smooth constrained problems requiring tighter convergence control',
-        'supports_constraints': True,
-        'speed': 'Slow',
-        'robustness': 'Medium',
-        'when_to_use': 'Try when SLSQP struggles on a smooth problem. Finite-difference derivatives can still be costly or unreliable; verify final feasibility.'
-    },
     'Nevergrad': {
         'name': 'Nevergrad (NGOpt)',
         'description': 'Gradient-free meta-optimizer selecting among black-box strategies',
@@ -306,15 +287,6 @@ SOLVER_DESCRIPTIONS = {
         'speed': 'Slow',
         'robustness': 'Medium',
         'when_to_use': 'Use when local derivatives are not dependable. PyLCSS variables are continuous; this tab does not currently model categorical choices.'
-    },
-    'Differential Evolution': {
-        'name': 'Differential Evolution',
-        'description': 'Population-based stochastic search over finite bounds',
-        'best_for': 'Bounded multi-modal continuous landscapes',
-        'supports_constraints': True,
-        'speed': 'Very Slow',
-        'robustness': 'Medium',
-        'when_to_use': 'Use for bounded problems with suspected local minima. It offers no global-optimum guarantee; budget enough generations and repeat with another seed.'
     },
     'NSGA-II': {
         'name': 'Non-dominated Sorting Genetic Algorithm II',

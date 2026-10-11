@@ -63,6 +63,30 @@ class ModelBuildWorker(QtCore.QThread):
             self.result_signal.emit(model)
 
 
+class _PageMenuBar(QtWidgets.QMenuBar):
+    """Menu bar that underlines the checked page action and draws separators."""
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        super().paintEvent(event)
+        colors = THEMES[current_theme()]
+        painter = QtGui.QPainter(self)
+        for action in self.actions():
+            rect = self.actionGeometry(action)
+            if action.isSeparator():
+                painter.setPen(QtGui.QColor(colors["border"]))
+                x = rect.center().x()
+                painter.drawLine(x, rect.top() + 6, x, rect.bottom() - 6)
+            elif action.isCheckable() and action.isChecked():
+                painter.fillRect(
+                    rect.left() + 4,
+                    rect.bottom() - 2,
+                    rect.width() - 8,
+                    3,
+                    QtGui.QColor(colors["primary"]),
+                )
+        painter.end()
+
+
 class MainWindow(QtWidgets.QMainWindow):
     """
     MDAO workspace for system modeling and multidisciplinary optimization.
@@ -98,7 +122,8 @@ class MainWindow(QtWidgets.QMainWindow):
         )  # Ensure window can be resized smaller than default
 
         # Menu Bar
-        self.menu_bar = self.menuBar()
+        self.menu_bar = _PageMenuBar(self)
+        self.setMenuBar(self.menu_bar)
         self.file_menu = self.menu_bar.addMenu("File")
 
         self.action_save_project = QtGui.QAction("Save Project", self)
@@ -147,6 +172,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
         )
+        self.tabs.setStyleSheet("QTabWidget::pane { border: none; background: transparent; }")
 
         self.content_widget = QtWidgets.QWidget()
         self.content_layout = QtWidgets.QHBoxLayout(self.content_widget)
@@ -161,7 +187,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tab_index = self.tabs.addTab(
             self.modeling_widget,
             qta.icon("fa5s.project-diagram"),
-            "  Modeling Environment",
+            "  Modeling",
         )
         self.tabs.setTabToolTip(
             tab_index,
@@ -176,7 +202,7 @@ class MainWindow(QtWidgets.QMainWindow):
             modeling_widget=self.modeling_widget
         )
         tab_index = self.tabs.addTab(
-            self.surrogate_widget, qta.icon("fa5s.brain"), "  Surrogate Training"
+            self.surrogate_widget, qta.icon("fa5s.brain"), "  Surrogates"
         )
         self.tabs.setTabToolTip(
             tab_index,
@@ -210,7 +236,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tab_index = self.tabs.addTab(
             self.sensitivity_widget,
             qta.icon("fa5s.chart-bar"),
-            "  Sensitivity Analysis",
+            "  Sensitivity",
         )
         self.tabs.setTabToolTip(
             tab_index,
@@ -243,6 +269,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._page_actions = []
         self._page_action_group = QtGui.QActionGroup(self)
         self._page_action_group.setExclusive(True)
+        self.menu_bar.addSeparator()
         for index in range(self.tabs.count()):
             action = QtGui.QAction(self.tabs.tabText(index).strip(), self)
             action.setCheckable(True)
@@ -261,6 +288,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _set_theme(self, theme_name: str, *, persist: bool = True) -> None:
         """Apply a complete application theme, including non-Qt canvases."""
         theme_name = apply_theme(theme_name, persist=persist)
+        self.apply_theme(theme_name)
+
+    def apply_theme(self, theme_name: str) -> None:
+        """Apply theme to MDAO window components."""
         for name, action in self._theme_actions.items():
             action.setChecked(name == theme_name)
 
@@ -285,6 +316,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 continue
             retheme_node_graph(graph, theme_name)
 
+        if self.cad_widget is not None and hasattr(self.cad_widget, "apply_theme"):
+            try:
+                self.cad_widget.apply_theme(theme_name)
+            except Exception:
+                pass
+
         themed_components = (
             ("system modeling", self.modeling_widget),
             ("help", self.help_widget),
@@ -305,51 +342,91 @@ class MainWindow(QtWidgets.QMainWindow):
         retheme_widget_styles(self, theme_name)
 
     def _apply_workspace_palettes(self, theme_name: str) -> None:
-        """Apply one harmonious light workspace system without touching dark mode."""
+        """Apply a harmonious workspace palette across all tabs for the active theme."""
         light = str(theme_name).lower() == "light"
-        border = THEMES["light"]["border"]
-        text = THEMES["light"]["text_main"]
-        for index, workspace_palette in enumerate(LIGHT_WORKSPACE_PALETTES):
-            widget = self.tabs.widget(index)
-            if widget is None:
-                continue
-            object_name = workspace_palette["object_name"]
-            widget.setObjectName(object_name)
-            if not light:
-                widget.setStyleSheet("")
-                continue
-            background = workspace_palette["background"]
-            accent = workspace_palette["accent"]
-            accent_soft = workspace_palette["accent_soft"]
-            widget.setStyleSheet(
-                f"""
-                QWidget#{object_name} {{
-                    background: {background};
-                    color: {text};
-                }}
-                QWidget#{object_name} QGroupBox {{
-                    background: #ffffff;
-                    border-color: {border};
-                    color: {text};
-                }}
-                QWidget#{object_name} QGroupBox::title {{
-                    color: {accent};
-                }}
-                QWidget#{object_name} QTabWidget::pane {{
-                    background: #ffffff;
-                    border-color: {border};
-                }}
-                QWidget#{object_name} QTabBar::tab:selected {{
-                    color: {text};
-                    border-bottom-color: {accent};
-                }}
-                QWidget#{object_name} QHeaderView::section {{
-                    background: {accent_soft};
-                    color: {text};
-                    border-color: {border};
-                }}
-                """
-            )
+        if light:
+            border = THEMES["light"]["border"]
+            text = THEMES["light"]["text_main"]
+            for index, workspace_palette in enumerate(LIGHT_WORKSPACE_PALETTES):
+                widget = self.tabs.widget(index)
+                if widget is None:
+                    continue
+                object_name = workspace_palette["object_name"]
+                widget.setObjectName(object_name)
+                background = workspace_palette["background"]
+                accent = workspace_palette["accent"]
+                accent_soft = workspace_palette["accent_soft"]
+                widget.setStyleSheet(
+                    f"""
+                    QWidget#{object_name} {{
+                        background: {background};
+                        color: {text};
+                    }}
+                    QWidget#{object_name} QGroupBox {{
+                        background: #ffffff;
+                        border-color: {border};
+                        color: {text};
+                    }}
+                    QWidget#{object_name} QGroupBox::title {{
+                        color: {accent};
+                    }}
+                    QWidget#{object_name} QTabWidget::pane {{
+                        background: #ffffff;
+                        border-color: {border};
+                    }}
+                    QWidget#{object_name} QTabBar::tab:selected {{
+                        color: {text};
+                        border-bottom-color: {accent};
+                    }}
+                    QWidget#{object_name} QHeaderView::section {{
+                        background: {accent_soft};
+                        color: {text};
+                        border-color: {border};
+                    }}
+                    """
+                )
+        else:
+            c = THEMES["dark"]
+            for index, workspace_palette in enumerate(LIGHT_WORKSPACE_PALETTES):
+                widget = self.tabs.widget(index)
+                if widget is None:
+                    continue
+                object_name = workspace_palette["object_name"]
+                widget.setObjectName(object_name)
+                widget.setStyleSheet(
+                    f"""
+                    QWidget#{object_name} {{
+                        background: {c["bg_dark"]};
+                        color: {c["text_main"]};
+                    }}
+                    QWidget#{object_name} QGroupBox {{
+                        background: {c["bg_dark"]};
+                        border: 1px solid {c["border"]};
+                        color: {c["text_main"]};
+                    }}
+                    QWidget#{object_name} QGroupBox::title {{
+                        color: {c["primary"]};
+                    }}
+                    QWidget#{object_name} QTabWidget::pane {{
+                        background: {c["bg_dark"]};
+                        border: 1px solid {c["border"]};
+                    }}
+                    QWidget#{object_name} QTabBar::tab {{
+                        background: {c["bg_dark"]};
+                        color: {c["text_dim"]};
+                    }}
+                    QWidget#{object_name} QTabBar::tab:selected {{
+                        background: {c["bg_dark"]};
+                        color: {c["text_main"]};
+                        border-bottom: 2px solid {c["primary"]};
+                    }}
+                    QWidget#{object_name} QHeaderView::section {{
+                        background: {c["bg_dark"]};
+                        color: {c["text_main"]};
+                        border: 1px solid {c["border"]};
+                    }}
+                    """
+                )
 
     def _refresh_main_tab_chrome(
         self, theme_name: str, active_index: int | None = None
@@ -362,6 +439,7 @@ class MainWindow(QtWidgets.QMainWindow):
             font = action.font()
             font.setBold(index == active_index)
             action.setFont(font)
+        self.menu_bar.update()
 
     def _set_project_io_enabled(self, enabled: bool) -> None:
         self.action_save_project.setEnabled(enabled)

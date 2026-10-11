@@ -98,9 +98,9 @@ def _unify_same_domain_shape(shape: Any, merge_angle_deg: float = 0.0) -> Any:
     return shape
 
 
-def _solid_volume(shape: Any) -> Optional[float]:
+def _solid_volume(shape: Any, *, relative_tolerance: Optional[float] = None) -> Optional[float]:
     try:
-        return float(shape.Volume())
+        return float(shape.Volume(tol=relative_tolerance) if relative_tolerance is not None else shape.Volume())
     except Exception:
         return None
 

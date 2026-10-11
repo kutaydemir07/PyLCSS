@@ -9,466 +9,474 @@ from pylcss.user_interface.common.theme_manager import THEMES, current_theme
 
 
 _HTML_HEAD = """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-body { background:#1e1f22; color:#dce2eb; font-family:'Segoe UI',sans-serif;
-       font-size:13px; line-height:1.6; margin:20px 25px; }
-h1 { color:#d9a441; font-size:21px; border-bottom:1px solid #343943;
-     padding-bottom:8px; margin:0 0 12px; }
-h2 { color:#e7bd63; font-size:15px; margin:22px 0 7px; }
-p { margin:5px 0 10px; } ul,ol { margin:5px 0 12px 22px; padding:0; }
-li { margin:3px 0; } b { color:#f2f5f9; }
+body { background:#1e1f22; color:#dce2eb; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+       font-size:13px; line-height:1.65; margin:0; padding:20px 28px; }
+.doc-container { max-width:860px; margin:0 auto; }
+.crumb { color:#82b8ef; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
+h1 { color:#d9a441; font-size:22px; font-weight:700; border-bottom:1px solid #343943;
+     padding-bottom:10px; margin:0 0 16px; }
+h2 { color:#e7bd63; font-size:16px; font-weight:600; margin:24px 0 8px; border-bottom:1px solid #282c33; padding-bottom:4px; }
+h3 { color:#dce2eb; font-size:14px; font-weight:600; margin:16px 0 6px; }
+p { margin:6px 0 12px; }
+ul,ol { margin:6px 0 14px 22px; padding:0; }
+li { margin:4px 0; }
+b { color:#ffffff; font-weight:600; }
 code,pre { background:#15171b; border:1px solid #343943; border-radius:4px;
            font-family:'Consolas','Courier New',monospace; font-size:12px; }
-code { padding:1px 5px; } pre { padding:10px 13px; white-space:pre-wrap; }
-table { border-collapse:collapse; width:100%; margin:10px 0; }
-th { background:#282c33; color:#e7bd63; text-align:left; }
-th,td { border:1px solid #343943; padding:7px 9px; vertical-align:top; }
-tr:nth-child(even) td { background:#1a1c20; } a { color:#65aaf2; }
-.tip { background:#192844; border-left:3px solid #579bea; padding:9px 12px;
-       border-radius:0 4px 4px 0; margin:12px 0; }
-.warn { background:#322617; border-left:3px solid #d9a441; padding:9px 12px;
-        border-radius:0 4px 4px 0; margin:12px 0; }
+code { padding:2px 6px; color:#e6edf3; }
+pre { padding:10px 14px; white-space:pre-wrap; line-height:1.45; }
+table { border-collapse:collapse; width:100%; margin:12px 0 16px; }
+th { background:#282c33; color:#e7bd63; text-align:left; font-weight:600; }
+th,td { border:1px solid #343943; padding:8px 10px; vertical-align:top; }
+tr:nth-child(even) td { background:#1a1c20; }
+a { color:#65aaf2; text-decoration:none; }
+a:hover { text-decoration:underline; }
+kbd { background:#282c33; border:1px solid #484f58; border-radius:3px;
+      box-shadow:0 1px 0 rgba(0,0,0,0.3); font-family:Consolas,monospace;
+      font-size:11px; padding:2px 5px; color:#e6edf3; }
+.note { background:#16243b; border-left:3px solid #388bfd; padding:10px 14px;
+        border-radius:0 4px 4px 0; margin:14px 0; color:#dce2eb; }
+.tip { background:#122822; border-left:3px solid #3fb950; padding:10px 14px;
+       border-radius:0 4px 4px 0; margin:14px 0; color:#dce2eb; }
+.caution { background:#2e2210; border-left:3px solid #d29922; padding:10px 14px;
+           border-radius:0 4px 4px 0; margin:14px 0; color:#dce2eb; }
+.warn { background:#32191c; border-left:3px solid #f85149; padding:10px 14px;
+        border-radius:0 4px 4px 0; margin:14px 0; color:#dce2eb; }
+.badge { display:inline-block; font-size:10px; font-weight:600; padding:2px 7px;
+         border-radius:10px; margin-right:4px; }
 </style></head><body>"""
 
 
-def _page(body: str) -> str:
-    return _HTML_HEAD + body + "</body></html>"
+def _page(body: str, category: str = "") -> str:
+    crumb = f'<div class="crumb">{category}</div>' if category else ""
+    return _HTML_HEAD + '<div class="doc-container">' + crumb + body + "</div></body></html>"
 
 
 _PAGES: dict[str, str] = {
     "Start Here": _page("""
 <h1>Start Here</h1>
-<p>Open <b>PyLCSS</b> to choose a workspace. The chooser shows the workspaces
-available in your installation. Close the workspace window to return to the
-chooser; when started using a direct workspace shortcut, closing it exits.</p>
-<table><tr><th>Workspace</th><th>What you can do</th></tr>
-<tr><td><b>PyLCSS MDAO</b></td><td>System modeling, surrogate training,
-solution-space exploration, optimization, and sensitivity analysis.</td></tr>
-<tr><td><b>PyLCSS CAE</b></td><td>CAD, geometry selection, meshing, static FEA,
-impact, topology optimization, and lattice optimization.</td></tr></table>
-<h2>Start in MDAO</h2><ol>
-<li>Open Modeling Environment and add Design Variable, Function Block, and QoI nodes.</li>
-<li>Connect their ports and use <b>Validate</b>.</li>
-<li>Use <b>Build Model</b> to forward the compiled model to Solution Space and Optimization.</li>
-<li>Set requirements, objectives, and constraints in the target analysis tab.</li></ol>
-<h2>Start in CAE</h2><ol>
-<li>Create or open a geometry graph using the workbench toolbar.</li>
-<li>Add the mesh, materials, boundary conditions, and solver for your study.</li>
-<li>Select the desired terminal node and use <b>Run</b> or <b>F5</b>.</li>
-<li>Inspect results and save the study before exporting.</li></ol>
-<p>MDAO pages open from the top row beside File and View. CAE opens directly into the workbench.
-Use the MDAO <b>Help</b> action or CAE <b>Help &rarr; User Guide</b> for this guide.</p>
-"""),
+<p>Open <b>PyLCSS</b> to select a workspace. The chooser window shows the workspaces available in your installation. Close the workspace window to return to the chooser.</p>
+<table>
+<tr><th>Workspace</th><th>What You Can Do</th></tr>
+<tr><td><b>PyLCSS MDAO</b></td><td>System modeling, surrogate training, solution-space exploration, optimization, and sensitivity analysis.</td></tr>
+<tr><td><b>PyLCSS CAE</b></td><td>Parametric CAD, geometry selection, meshing, static FEA, modal analysis, impact simulation, topology optimization, and lattice optimization.</td></tr>
+</table>
+<h2>Start Work in MDAO</h2>
+<ol>
+<li>Open the <b>Modeling</b> tab.</li>
+<li>Add <b>Design Variable</b>, <b>Function Block</b>, and <b>QoI</b> nodes to the canvas.</li>
+<li>Connect the node ports and click <b>Validate</b>.</li>
+<li>Click <b>Build Model</b> to compile the system definition.</li>
+<li>Open the target analysis tab to start your investigation.</li>
+</ol>
+<h2>Start Work in CAE</h2>
+<ol>
+<li>Click <b>New</b> or <b>Open</b> on the workbench toolbar to load a CAD study.</li>
+<li>Add geometry, mesh, material, boundary conditions, and solver nodes.</li>
+<li>Select the terminal solver node.</li>
+<li>Press <kbd>F5</kbd> or click <b>Run</b>.</li>
+<li>Inspect results in the 3D viewport and save the study before export.</li>
+</ol>
+<div class="note"><b>Navigation note:</b> MDAO pages open from the top navigation row. CAE opens directly into the Design Studio workbench. Use the MDAO <b>Help</b> button or CAE <b>Help &rarr; User Guide</b> to open this guide.</div>
+""", "Getting Started"),
+
     "Installation and Workspaces": _page("""
 <h1>Installation and Workspaces</h1>
-<p>Run the Windows setup and choose <b>PyLCSS MDAO only</b>,
-<b>PyLCSS CAE only</b>, or <b>PyLCSS MDAO and CAE</b>. Setup installs a shared
-Python runtime and the packages needed by your selection.</p>
-<p>CalculiX, OpenRadioss, and FreeCAD are optional CAE components on the setup
-options page. Select only the external tools your workflows need.</p>
-<h2>Add another workspace</h2>
-<p>Run setup again and select both workspaces. An unavailable chooser button
-means that workspace is not installed. Reducing the selection hides the
-workspace; previously downloaded packages may remain in the shared runtime.</p>
-<h2>Launch options</h2>
-<p>The PyLCSS shortcut opens the chooser. The workspace shortcuts open MDAO or
-CAE directly. From a terminal:</p>
+<p>Run the Windows setup installer and choose one option: <b>PyLCSS MDAO only</b>, <b>PyLCSS CAE only</b>, or <b>PyLCSS MDAO and CAE</b>. Setup installs a shared Python runtime and required packages.</p>
+<p>CalculiX, OpenRadioss, FreeCAD, and AMRTO are optional external tools. Install only the external tools your workflows require.</p>
+<h2>Install External Solvers</h2>
+<p>For a source installation in an activated environment, run the solver installer script:</p>
+<pre>python scripts/install_solvers.py --only ccx
+python scripts/install_solvers.py --only radioss
+python scripts/install_solvers.py --only freecad
+python scripts/install_solvers.py --only amrto</pre>
+<h2>Launch Options</h2>
+<p>The main PyLCSS shortcut opens the workspace chooser. Dedicated shortcuts open MDAO or CAE directly. From a command prompt:</p>
 <pre>PyLCSS.exe --workspace mdao
 PyLCSS.exe --workspace cae</pre>
-<h2>Source installation</h2>
-<p>From the source folder in an activated Python environment, choose one:</p>
+<h2>Source Installation</h2>
+<p>From the repository root, install the desired workspace extras:</p>
 <pre>pip install -e ".[mdao]"
 pip install -e ".[cae]"
 pip install -e ".[mdao,cae]"</pre>
-<p>Start with <code>python -m pylcss.main</code>,
-<code>python -m pylcss.mdao</code>, or <code>python -m pylcss.cae</code>.</p>
-<p>A MDAO Function Block that evaluates a saved CAE study requires both
-workspaces and the external solver used by that study.</p>
-"""),
+<p>Start PyLCSS with <code>python -m pylcss.main</code>, <code>python -m pylcss.mdao</code>, or <code>python -m pylcss.cae</code>.</p>
+<div class="caution"><b>Dependency note:</b> A Function Block in MDAO that evaluates a saved CAE study requires both workspaces and the external solver configured for that study.</div>
+""", "Getting Started"),
+
     "Projects and Files": _page("""
 <h1>Projects and Files</h1>
-<h2>MDAO project folder</h2>
-<p>In MDAO, <b>File &rarr; Save Project</b> creates a folder named from the
-product and saves Modeling, Surrogate, Solution Space, Optimization, and
-Sensitivity state. <b>File &rarr; Load Project</b> restores that folder.
-Save CAE studies separately.</p>
-<h2>CAE study</h2>
-<p>The CAE workbench has <b>New</b>, <b>Open</b>, and <b>Save</b> toolbar actions.
-The graph and settings are stored in a <code>.cad</code> file; cached FEA,
-impact, topology, and remesh results are stored beside it in
-<code>.cad.results.h5</code>. Keep the study and its companion files together
-when moving or sharing a project.</p>
-<h2>Existing combined projects</h2>
-<p>Load the project folder in MDAO. To open its saved CAD work in CAE, use
-<b>Open</b> and select <code>design_studio.cad</code> from that folder.
-Keep linked CAD documents and other referenced input files accessible.</p>
-<h2>Computed results</h2>
-<p><b>Save Results</b> in CAE exports an already-computed result as JSON or HDF5;
-it does not run a solver. Geometry export uses the STEP or STL actions.</p>
-"""),
+<h2>MDAO Project Folder</h2>
+<p>In MDAO, select <b>File &rarr; Save Project</b>. This creates a folder named after the product and saves Modeling, Surrogates, Solution Space, Optimization, and Sensitivity state. Select <b>File &rarr; Load Project</b> to restore the project folder.</p>
+<h2>CAE Study Files</h2>
+<p>The CAE workbench stores the node graph and settings in a <code>.cad</code> file. Computed FEA, modal, impact, and topology results are stored beside it in a companion <code>.cad.results.h5</code> file. Always keep the study file and its companion HDF5 file together when moving projects.</p>
+<h2>Combined Workflows</h2>
+<p>Load the project folder in MDAO. To open linked CAD models in CAE, select <b>Open</b> on the CAE toolbar and choose <code>design_studio.cad</code> from that project folder.</p>
+<h2>Computed Results Export</h2>
+<p>Click <b>Save Results</b> in CAE to export computed results to JSON or HDF5. To export geometry, use the STEP, IGES, or STL actions.</p>
+""", "Getting Started"),
+
     "Interface": _page("""
-<h1>Interface</h1>
-<h2>MDAO navigation</h2>
-<p>Use Modeling Environment, Surrogate Training, Solution Space, Optimization,
-Sensitivity Analysis, and Help in the top row beside File and View.
-Click a name to open its page; the active page is shown in bold. CAD and simulation are in the
-separate CAE workspace.</p>
-<h2>CAE workbench layout</h2><ul>
-<li><b>Left:</b> searchable node library; double-click or drag an item.</li>
-<li><b>Center top:</b> 3D viewer for previews and results.</li>
-<li><b>Center bottom:</b> node graph.</li>
-<li><b>Right top:</b> inspector for the selected node.</li>
-<li><b>Right bottom:</b> Results for the selected node.</li></ul>
-<p>FEA, Impact, and Topology studies are built by connecting nodes in the graph;
-the inspector holds each node's settings. There is no separate Studies tab.</p>
-<h2>CAE shortcuts</h2><table>
-<tr><td>Run selected study or graph</td><td><code>F5</code></td></tr>
-<tr><td>Stop computation</td><td><code>Shift+F5</code></td></tr>
-<tr><td>Fit graph / Reset 3D view</td><td><code>F</code> / <code>R</code></td></tr>
-<tr><td>Undo / Redo</td><td><code>Ctrl+Z</code> / <code>Ctrl+Y</code></td></tr>
-<tr><td>Delete selected nodes</td><td><code>Delete</code></td></tr></table>
-<p>In MDAO, choose <b>View &rarr; Theme</b>. In CAE, use the <b>Theme</b> menu.
-Both workspaces support dark and light themes.</p>
-"""),
+<h1>Interface and Layout</h1>
+<h2>MDAO Navigation</h2>
+<p>Use the top navigation row to switch pages: <b>Modeling</b>, <b>Surrogates</b>, <b>Solution Space</b>, <b>Optimization</b>, <b>Sensitivity</b>, and <b>Help</b>. Click a name to open its page. An underline marks the active page.</p>
+<h2>CAE Workbench Layout</h2>
+<ul>
+<li><b>Page Navigation:</b> Top navigation row to switch between <b>Setup</b> (CAD modeling, node graph, and physics solvers) and <b>Results</b> (comprehensive data tables, convergence curves, and mechanical KPIs).</li>
+<li><b>Left Panel:</b> Dual-tab dock featuring the hierarchical <b>Study Tree</b> outliner and searchable <b>Library</b> catalog.</li>
+<li><b>Center Area:</b> Flexible workspace with <b>3D Focus</b>, <b>Split View</b> (Side-by-Side or Stacked), and <b>Graph Focus</b> layout modes.</li>
+<li><b>Right Panel:</b> Collapsible Inspector dock with node <b>Properties</b> and simulation <b>Results</b>.</li>
+</ul>
+<h2>Keyboard Shortcuts</h2>
+<table>
+<tr><th>Action</th><th>Shortcut</th></tr>
+<tr><td>Run selected study or node</td><td><kbd>F5</kbd></td></tr>
+<tr><td>Stop running computation</td><td><kbd>Shift</kbd> + <kbd>F5</kbd></td></tr>
+<tr><td>Fit graph / Reset 3D view</td><td><kbd>F</kbd> / <kbd>R</kbd></td></tr>
+<tr><td>Undo / Redo</td><td><kbd>Ctrl</kbd> + <kbd>Z</kbd> / <kbd>Ctrl</kbd> + <kbd>Y</kbd></td></tr>
+<tr><td>Delete selected nodes</td><td><kbd>Delete</kbd></td></tr>
+</table>
+<p>In MDAO, choose <b>View &rarr; Theme</b>. In CAE, use the <b>Theme</b> menu. Both workspaces support Dark and Light themes.</p>
+""", "Getting Started"),
+
     "Design Studio Overview": _page("""
 <h1>Design Studio Overview</h1>
-<p>Design Studio is the workbench inside PyLCSS CAE. It uses a saved node graph for parametric geometry, preparation,
-simulation, measurement, and export.</p>
-<h2>Geometry sources</h2><ul>
-<li>Native Box, Cylinder, Tube, shell, Boolean, hole, fillet, transform, and pattern nodes.</li>
-<li><b>Code Part</b> for CadQuery scripts and named scalar parameters.</li>
-<li><b>FreeCAD Part</b> for a node-owned FreeCAD document when FreeCAD is installed.</li>
-<li>STEP/IGES/BREP or surface-mesh import.</li></ul>
-<h2>Run behavior</h2>
-<p>With exactly one node selected, <b>Run</b> evaluates that node and its upstream
-dependencies. With no selection, one detected solver workflow runs directly;
-when several solver terminals exist, select the FEA, impact, or topology terminal
-to choose the workflow. Sibling workflows never run implicitly.</p>
-<div class="tip">Property edits perform a CAD-only preview. Expensive FEA, Impact,
-and Topology solves start only from the explicit Run action.</div>
-<h2>Solver branches</h2><ul>
-<li><b>Static FEA:</b> Netgen tetrahedral mesh plus CalculiX.</li>
-<li><b>Impact:</b> prepared mesh and OpenRadioss.</li>
-<li><b>Topology:</b> direct design domain with structural and/or thermal conditions.</li></ul>
-"""),
+<p>Design Studio is the parametric workbench inside PyLCSS CAE. It uses a node graph for parametric CAD, physics simulation, post-processing, and manufacturing export.</p>
+<h2>Geometry Sources</h2>
+<ul>
+<li><b>Parametric Solids:</b> Box, Cylinder, Tube, Torus, shell, Boolean, hole, fillet, and pattern nodes.</li>
+<li><b>Code Part:</b> CadQuery Python scripts with exposed scalar parameters.</li>
+<li><b>FreeCAD Part:</b> Node-owned FreeCAD parametric documents (when FreeCAD is installed).</li>
+<li><b>Import:</b> STEP, IGES, BREP, or surface mesh files.</li>
+</ul>
+<h2>Execution Behavior</h2>
+<p>With one node selected, click <b>Run</b> or press <kbd>F5</kbd> to evaluate that node and its upstream inputs. With no selection, the active solver workflow runs. Sibling solver branches never run implicitly.</p>
+<div class="tip"><b>Fast preview:</b> Property changes update a CAD-only preview. Heavy FEA, modal, impact, and topology calculations start only when you click Run.</div>
+<h2>Available Solvers</h2>
+<ul>
+<li><b>Static FEA:</b> CalculiX solid solver for linear and non-linear stress analysis.</li>
+<li><b>Modal Solver:</b> CalculiX natural frequency extraction and mode shape visualization.</li>
+<li><b>Impact:</b> OpenRadioss transient non-linear crash solver.</li>
+<li><b>Topology:</b> SIMP density optimization with automated AMRTO B-rep reconstruction.</li>
+<li><b>Lattice:</b> Homogenized cellular synthesis with 3MF beam and STEP export.</li>
+</ul>
+""", "CAE — CAD and Simulation"),
+
     "Geometry Selection": _page("""
-<h1>Faces, Edges, and Vertices</h1>
-<p>Boundary conditions reference CAD through <b>Select Geometry</b> or
-<b>Pick Geometry</b>. Choose Face, Edge, or Vertex in the node;
-the selection and geometric summaries are saved in the graph.</p><ol>
-<li>Connect the upstream CAD shape to Select Geometry.</li>
-<li>Choose the entity type. For the interactive node, click its viewer-pick button.</li>
-<li>Select one or more entities and accept the selection.</li>
-<li>Connect the selector output to a support, force, pressure, impact, or topology condition.</li>
-<li>Select any condition or solver node to inspect the persistent 3D overlay.</li></ol>
-<p>Supports and concentrated loads accept faces, edges, or vertices. Pressure
-requires an area and therefore accepts faces only. Mesh vertices can be selected
-geometrically; CAD edges should be selected before remeshing because an
-unstructured mesh does not preserve stable CAD-edge identity.</p>
-<div class="warn">Raw entity indices can change when upstream topology changes.
-Direction, nearest-point, box, tag, or interactive geometric selection is more stable.</div>
-"""),
+<h1>Geometry Selection</h1>
+<p>Boundary conditions reference CAD surfaces and curves through <b>Select Geometry</b> or <b>Pick Geometry</b> nodes. Choose <b>Face</b>, <b>Edge</b>, or <b>Vertex</b>.</p>
+<h2>Selection Procedure</h2>
+<ol>
+<li>Connect the upstream CAD shape to <b>Select Geometry</b>.</li>
+<li>Choose the entity type. For interactive picking, click the 3D pick button.</li>
+<li>Select one or more entities in the 3D viewport and accept the selection.</li>
+<li>Connect the selection output to a support, load, or condition node.</li>
+<li>Select any condition or solver node to inspect the persistent 3D overlay.</li>
+</ol>
+<h2>Connection Rules</h2>
+<p>Supports and point loads accept faces, edges, or vertices. Pressure loads require an area and accept faces only. Bearing loads require cylindrical internal faces.</p>
+<div class="warn"><b>Selection stability:</b> Upstream CAD modifications can renumber raw entity indices. Direction filters, nearest-point filters, bounding boxes, or interactive picks provide more stable references.</div>
+""", "CAE — CAD and Simulation"),
+
     "Meshing": _page("""
 <h1>Meshing</h1>
-<p><b>Netgen</b> imports STEP through OpenCASCADE and generates solid tetrahedral
-or shell-surface meshes. Local sizing is supported on selected CAD faces.
-Tet10 converts the linear volume mesh to quadratic C3D10 connectivity.</p>
-<table><tr><th>Mesh</th><th>Use</th></tr>
-<tr><td>Tet (C3D4)</td><td>Fast preliminary solid studies; refine and check convergence.</td></tr>
-<tr><td>Tet10 (C3D10)</td><td>Preferred for stress and bending in static solid FEA.</td></tr>
-<tr><td>Shell triangles</td><td>OpenRadioss thin-wall models; the CAD input must already be the intended midsurface.</td></tr></table>
-<p>The node rejects collapsed elements and reports mean-ratio quality. Passing
-that check is not proof of accuracy: inspect poor-element locations and perform
-a mesh-convergence study on decision quantities.</p>
-<div class="warn">Meshing the boundary of a thick solid as Shell does not extract
-a physical midsurface and can duplicate skins or cap openings. Use a surface
-geometry such as Cylindrical Shell or an imported/prepared midsurface.</div>
-"""),
+<p>The <b>Mesh</b> node uses Netgen through OpenCASCADE to create solid tetrahedral or shell meshes. Local sizing is supported on selected CAD faces.</p>
+<table>
+<tr><th>Mesh Type</th><th>Element Type</th><th>Recommended Application</th></tr>
+<tr><td><b>Tet (Linear)</b></td><td>C3D4</td><td>Fast preliminary checks and coarse screening.</td></tr>
+<tr><td><b>Tet10 (Quadratic)</b></td><td>C3D10</td><td>Static solid stress, bending, and modal frequency analysis.</td></tr>
+<tr><td><b>Shell Triangles</b></td><td>S3 / Thin Shell</td><td>OpenRadioss crash models. The CAD input must be a true midsurface.</td></tr>
+</table>
+<p>The node rejects collapsed elements and calculates mean-ratio quality. Always inspect element quality and perform mesh convergence studies on key design values.</p>
+<div class="warn"><b>Midsurface warning:</b> Meshing the outer skin of a thick solid as a Shell does not extract a physical midsurface. Use dedicated midsurface geometry or import shell sheets.</div>
+""", "CAE — CAD and Simulation"),
+
     "Static FEA": _page("""
 <h1>Static FEA</h1>
-<p>Static Solver runs CalculiX.</p>
-<h2>Required connections</h2><table>
-<tr><th>Input</th><th>Connect</th></tr>
-<tr><td><code>mesh</code></td><td>Mesh output using Tet or Tet10 solid elements</td></tr>
-<tr><td><code>material</code></td><td>Material output</td></tr>
-<tr><td><code>components</code></td><td>Body outputs for assemblies</td></tr>
-<tr><td><code>constraints</code></td><td>One or more Support outputs</td></tr>
-<tr><td><code>loads</code></td><td>Force or Pressure; optional only for a nonzero prescribed displacement</td></tr></table>
-<h2>Building the study</h2>
-<p>Add Body, Support, Force, and Pressure nodes from the node library and connect
-them to the solver inputs above. If the solver has a mesh, connect it to the
-condition as well. Connect Select Geometry or Pick Geometry to finish the
-condition. Supports and total forces can use a face, edge, or vertex; pressure
-requires a face. Gravity needs no geometry selection. CalculiX availability is
-shown in the node library.</p>
-<h2>Settings</h2><ul>
-<li>Linear, Nonlinear (Geometric), and Nonlinear (Plastic) analysis types.</li>
-<li>Von Mises stress or displacement visualization with display-only deformation scale.</li>
-<li><b>Deck only</b> writes the input without launching CalculiX.</li></ul>
-<h2>Implemented CalculiX subset</h2>
-<p>PyLCSS currently validates 3D C3D4/C3D10 static solids with isotropic
-elasticity, optional bilinear plasticity, geometric nonlinearity, translational
-supports/prescribed displacement, nodal force, face pressure, and gravity.
-It imports displacement and stress from FRD results.</p>
-<div class="warn">This is not the complete CalculiX feature set. Shells, beams,
-contact, modal, buckling, transient dynamics, thermal coupling, composites,
-pretension, cyclic symmetry, and user materials are not graph-built FEA
-features. Use an external deck/tool for those studies. Always check reactions,
-units, mesh convergence, and solver logs.</div>
-"""),
+<p>The <b>Static Solver</b> node runs CalculiX for structural stress and displacement analysis.</p>
+<h2>Required Connections</h2>
+<table>
+<tr><th>Input Port</th><th>Connected Source</th></tr>
+<tr><td><code>mesh</code></td><td>Solid tetrahedral mesh using Tet (C3D4) or Tet10 (C3D10) elements</td></tr>
+<tr><td><code>material</code></td><td>Material definition with elastic modulus and Poisson's ratio</td></tr>
+<tr><td><code>constraints</code></td><td>One or more Support nodes</td></tr>
+<tr><td><code>loads</code></td><td>Force, Pressure, Bearing Load, or Gravity nodes</td></tr>
+<tr><td><code>components</code></td><td>Optional Body outputs for assemblies</td></tr>
+</table>
+<h2>Supported Load Types</h2>
+<ul>
+<li><b>Force:</b> Concentrated force vector $(F_x, F_y, F_z)$ applied to selected entities.</li>
+<li><b>Pressure:</b> Uniform normal surface traction on selected faces (Inward or Outward).</li>
+<li><b>Bearing Load:</b> Compressive cosine contact distribution on cylindrical faces. It models pin contact with zero tension on the back half.</li>
+<li><b>Gravity:</b> Volumetric body acceleration applied across the full model.</li>
+<li><b>Load Case Weighting:</b> Set <code>case_weight</code> and <code>case_name</code> for multi-case structural studies.</li>
+</ul>
+<h2>Solver Settings</h2>
+<p>Select <b>Linear</b>, <b>Nonlinear (Geometric)</b>, or <b>Nonlinear (Plastic)</b> in the inspector. Select <b>Deck only</b> to export the CalculiX <code>.inp</code> deck without launching the solver.</p>
+""", "CAE — CAD and Simulation"),
+
+    "Modal Analysis": _page("""
+<h1>Modal Analysis</h1>
+<p>The <b>Modal Solver</b> node runs CalculiX natural frequency extraction and mode shape vibration analysis.</p>
+<h2>Required Connections</h2>
+<table>
+<tr><th>Input Port</th><th>Connected Source</th></tr>
+<tr><td><code>mesh</code></td><td>Solid tetrahedral mesh (Tet10 quadratic solid recommended)</td></tr>
+<tr><td><code>material</code></td><td>Material with Young's modulus, Poisson's ratio, and mass density (&rho;)</td></tr>
+<tr><td><code>constraints</code></td><td>Support nodes defining fixed or constrained degrees of freedom</td></tr>
+</table>
+<h2>Inspector Settings</h2>
+<ul>
+<li><b>Number of Modes (<code>num_modes</code>):</b> The count of natural frequencies to calculate (default 6).</li>
+<li><b>Active Mode (<code>active_mode</code>):</b> The mode index displayed in the 3D viewport.</li>
+<li><b>Deformation Scale:</b> Visual scaling multiplier (<code>Auto</code>, <code>1x</code>, <code>5x</code>, <code>10x</code>, <code>50x</code>, <code>100x</code>).</li>
+<li><b>Deck Only:</b> Generates the CalculiX <code>*FREQUENCY</code> input deck without executing the solver.</li>
+</ul>
+<h2>Interactive Mode Shape Table</h2>
+<p>After a run, the inspector displays the <b>Natural Frequencies & Mode Shapes</b> table listing Mode number, Frequency in Hertz (Hz), Angular frequency (rad/s), and Period (s).</p>
+<div class="tip"><b>Interactive preview:</b> Click any row in the table to display that mode shape eigenvector in the 3D viewport immediately.</div>
+""", "CAE — CAD and Simulation"),
+
     "Impact": _page("""
 <h1>Impact and Crashworthiness</h1>
-<p>Impact Solver runs an OpenRadioss transient study.</p>
-<h2>Required connections</h2><table>
-<tr><th>Input</th><th>Connect</th></tr>
-<tr><td><code>mesh</code></td><td>Mesh output; solid or shell as appropriate</td></tr>
-<tr><td><code>impact_material</code></td><td>Impact Material output</td></tr>
-<tr><td><code>impact</code></td><td>Impact Setup output</td></tr>
-<tr><td><code>constraints</code></td><td>Support when the scenario requires a fixed specimen</td></tr></table>
-<h2>Building the study</h2>
-<p>Add Impact Setup and Support nodes from the node library and connect them to
-the solver inputs above. OpenRadioss availability is shown in the node
-library.</p>
-<h2>Impact scenarios</h2><ul>
-<li><b>Fixed specimen + moving impactor:</b> requires impact face and rear support.</li>
-<li><b>Moving body + fixed wall:</b> requires neither impact face nor support.</li>
-<li><b>Prescribed moving wall:</b> requires impact face but not support.</li></ul>
-<p>Velocity is mm/ms (numerically m/s); impactor/sled mass is defined on the
-Impact Setup; End Time is ms. Mass scaling trades
-physical inertia accuracy for a larger stable time step.</p>
-<h2>Results</h2>
-<p>Choose the displayed field and the deformation scale on the Impact Solver
-itself (<b>Result Display</b> and <b>Deformation Scale</b>); switching either
-one redraws the cached result without solving again. Peak crushing force,
-acceleration, specific energy absorption, mass, and energy-balance error are
-listed in the Results panel after a run.</p>
-<h2>Implemented OpenRadioss subset</h2>
-<p>The graph builder covers one shell or Tet4 part with isotropic
-elastic-plastic kinematic material, optional Cowper-Symonds rate response and
-calibrated element deletion, translational SPC, initial velocity or planar
-rigid-wall impact, automatic single-surface contact, and global energy/mass
-history checks.</p>
-<div class="warn">Material presets are starting values, not validated production
-cards. Calibrate the actual alloy, thickness, rate, hardening, and failure law.
-The graph builder does not cover general multi-part interfaces, spotwelds,
-composites, airbags, ALE/SPH/CFD, occupant models, or arbitrary rigid bodies.
-Use OpenRadioss Deck for those models. Treat energy creation above 2%, final
-energy loss beyond roughly 15%, or mass change above 1% as investigation flags,
-not automatic proof of validity.</div>
-<p><b>OpenRadioss Deck</b> runs an existing deck and does not use the graph-built study.</p>
-"""),
+<p>The <b>Impact Solver</b> node runs dynamic transient impact simulations with OpenRadioss.</p>
+<h2>Scenario Setup</h2>
+<ul>
+<li><b>Fixed specimen + moving impactor:</b> Requires impact face selection and rear support.</li>
+<li><b>Moving body + fixed wall:</b> Specify body velocity; supports are not required.</li>
+<li><b>Prescribed moving wall:</b> Requires impact face selection; rear support is not required.</li>
+</ul>
+<p>Velocity uses mm/ms (numerically equivalent to m/s); mass is defined on Impact Setup; End Time uses ms.</p>
+<h2>Crash Performance Indicators (KPIs)</h2>
+<p>The Results panel computes standard vehicle crashworthiness metrics:</p>
+<ul>
+<li><b>Crash Force Efficiency (CFE):</b> Ratio of mean crushing force to peak force ($F_{\\text{mean}} / F_{\\text{peak}}$). Displays qualitative status: &ge;70% Excellent (Progressive Buckling), &ge;50% Good, &lt;50% Low Efficiency.</li>
+<li><b>Specific Energy Absorption (SEA):</b> Absorbed energy per unit mass in kJ/kg ($E_{\\text{abs}} / \\text{mass}$).</li>
+<li><b>Peak Crushing Force ($F_{\\text{peak}}$) & Mean Force ($F_{\\text{mean}}$):</b> Displayed in kN.</li>
+<li><b>Useful Crush Stroke & Absorbed Energy:</b> Total deformation distance (mm) and energy (kJ).</li>
+<li><b>Eroded Elements:</b> Number of failed elements removed by constitutive criteria.</li>
+</ul>
+<h2>Solution Quality and Energy Gates</h2>
+<p>The solver qualifies the explicit solution through automated physical checks:</p>
+<ul>
+<li><b>Energy Balance Error:</b> Must remain &le; 5% for a qualified solution.</li>
+<li><b>Hourglass Energy Ratio:</b> Must remain &le; 10% of total energy.</li>
+<li><b>Hourglass + Contact Energy:</b> Combined artificial dissipation must remain &le; 15%.</li>
+<li><b>Added Mass Ratio:</b> Mass scaling added mass must remain &le; 1%.</li>
+</ul>
+<div class="tip"><b>Interactive curves:</b> Click <b>View Time-History Curves</b> to open the interactive chart dialog for force-displacement ($F$-$d$), energy components, and deceleration pulses.</div>
+""", "CAE — CAD and Simulation"),
+
     "Topology Optimization": _page("""
 <h1>Topology Optimization</h1>
-<p>The Topology Solver works directly from a CAD design domain. Do not insert the
-standard FEA Mesh node before it.</p>
-<h2>Building the study</h2>
-<p>Connect design domain, material, and the structural, multibody, or thermal
-inputs on the node. The connected <b>Design domain</b> is the optimizable source
-body. Add Fixed Support, Force, Passive Region, Joint, Load Case, Heat Sink, and
-Heat Load nodes from the node library. A Passive Region takes a closed CAD solid
-and preserves it as material or void.</p>
-<h2>Common setups</h2><ul>
-<li><b>Structural:</b> domain + material + topology support + topology force.</li>
-<li><b>Multibody:</b> domain + material + joints and load cases.</li>
-<li><b>Thermal:</b> domain + material + temperature boundary + heat input.</li>
-<li><b>Thermo-mechanical:</b> structural and thermal conditions.</li></ul>
-<p>The same inspector owns goal, material budget, formulation, manufacturing,
-optional CalculiX validation, CAD reconstruction, and visualization.</p>
-<p>The result is a solid envelope: it is reconstructed automatically after a
-run, STEP exports that CAD body directly, and STL tessellates the same body, so
-both formats represent the same result. Volume Remesh makes a volume mesh for
-downstream validation.</p>
-<p>For a graded cellular result, use the <b>Lattice Solver</b> instead. It is a
-separate node because it is a separate design problem, not a different way of
-displaying this one.</p>
-"""),
+<p>The <b>Topology Solver</b> optimizes solid material distribution directly from a CAD design domain using the SIMP method.</p>
+<h2>Study Configuration</h2>
+<p>Connect the design domain, material, supports, forces, passive regions, and joints. A <b>Passive Region</b> node protects critical CAD volumes as solid material or void clearance.</p>
+<h2>Automated AMRTO CAD Reconstruction</h2>
+<p>Topology results are reconstructed into B-rep CAD models using <b>AMRTO</b> (Automated CAD Model Reconstruction of Topology Optimization Result, Ren et al., 2025). The fitted faces are sewn into a solid and checked for closure and geometry accuracy:</p>
+<ol>
+<li><b>Triangular Surface:</b> Recovers and smooths the optimized density boundary.</li>
+<li><b>Field-Aligned Remeshing:</b> Generates quadrilateral meshes using Instant Meshes.</li>
+<li><b>Sparse Layouts:</b> Uses generalized motorcycle graphs to create disk patches.</li>
+<li><b>Harmonic Mapping:</b> Parameterizes each patch and samples its surface.</li>
+<li><b>NURBS Fitting:</b> Fits multi-resolution B-spline patches with shared boundaries.</li>
+<li><b>Watertight B-rep Export:</b> Exports directly to standard <b>STEP</b> and <b>IGES</b> CAD formats.</li>
+</ol>
+<p>Use <b>Volume Remesh</b> to create a solid tetrahedral mesh for downstream CalculiX validation.</p>
+""", "CAE — CAD and Simulation"),
+
     "Lattice Optimization": _page("""
 <h1>Lattice Optimization</h1>
-<p>The <b>Lattice Solver</b> takes the same study definition as the Topology
-Solver &mdash; design domain, material, supports, forces, passive regions,
-joints, load cases and thermal conditions &mdash; and optimizes a
-variable-density cellular structure instead of a solid envelope.</p>
-<h2>Why it is its own node</h2>
-<p>SIMP penalization and the Heaviside projection exist to drive the density
-field to fully solid or fully empty. A graded lattice <i>is</i> the intermediate
-density, so the two work against each other: a penalized, projected field
-reaches full density throughout the structure, every voxel clears the
-solid-transition threshold, and no lattice is generated at all. The lattice
-study therefore solves the selected cell's homogenized law and keeps the graded
-field, which is what sizes the explicit cells.</p>
-<h2>Cell families</h2>
+<p>The <b>Lattice Solver</b> optimizes variable-density cellular structures across a continuous design space.</p>
+<h2>Cell Families</h2>
 <ul>
-<li><b>Sheet TPMS</b> &mdash; Gyroid is the general-purpose default and Schwarz
-Primitive provides straight channels for flow and heat-transfer studies.</li>
-<li><b>Strut lattices</b> &mdash; BCC is a common compliant metal-AM cell and
-Octet Truss is the stretch-dominated structural reference. These can have
-their member diameters sized against axial stress and buckling.</li>
-<li><b>Honeycomb</b> &mdash; an extruded prismatic cell for strongly directional
-stiffness.</li>
+<li><b>Strut Lattices (BCC, Octet Truss):</b> Compliant or stretch-dominated truss structures with member diameter grading.</li>
+<li><b>Sheet TPMS (Gyroid, Schwarz Primitive):</b> Continuous triply periodic minimal surfaces for multifunctional stiffness and fluid flow.</li>
+<li><b>Honeycomb:</b> Extruded prismatic cells providing high directional stiffness.</li>
 </ul>
-<p>The new-study catalogue is intentionally limited to these five established
-choices. Diamond and other specialist cells from earlier releases remain loadable for saved
-project compatibility. Most public families are two-scale: the part is optimized against that cell's
-measured homogenized anisotropic stiffness, then the density field is converted
-back into explicit cells. Honeycomb has no cubic homogenized tensor and keeps
-the isotropic continuum surrogate; the study report says which law was used.
-Cell orientation is fixed to the global axes. Printability, drainage and the
-manufactured geometry must be validated in every case.</p>
-<h2>Setting the cell</h2>
-<p><b>Guided</b> derives a family-safe cell pitch, wall or member thickness,
-skin and density grading from the analysis grid. <b>Manual</b> exposes those
-dimensions in model units, which is what a printer capability &mdash; minimum
-feature size, powder evacuation &mdash; is actually stated in, together with a
-target relative density: the one number that says what the part will weigh, and
-the one that cell pitch and member thickness do not predict between them.</p>
-<h2>Results and export</h2>
-<p>A lattice is delivered as an explicit manufactured mesh and exports as STL.
-BCC and Octet additionally have an exact analytic B-rep built from their
-centrelines &mdash; one quadric per member, one ball per node &mdash; so they
-also export as STEP, and as a <b>3MF beam lattice</b>: nodes and beams with
-per-end radii, which the AM tool chain reads natively and which is a few
-hundred kilobytes where the same body as STEP is megabytes. A minimal-surface
-or honeycomb cell has no compact boundary representation and stays a mesh.</p>
-<p>The built-in voxel check does not resolve member bending, joint stress,
-fatigue or process defects. Validate the explicit manufactured geometry with an
-appropriate beam or solid model before engineering release.</p>
-"""),
+<p>Optimization uses homogenized anisotropic elasticity tensors. The density field is converted into explicit cellular geometry after convergence.</p>
+<h2>Cell Sizing Modes</h2>
+<p><b>Guided Mode</b> calculates pitch, wall thickness, and skin thickness from grid bounds. <b>Manual Mode</b> exposes physical dimensions in millimeters together with a target relative density.</p>
+<h2>Results and Export</h2>
+<ul>
+<li><b>Manufactured Mesh:</b> High-resolution STL mesh for additive manufacturing.</li>
+<li><b>3MF Beam Lattice:</b> Node-and-beam network with per-end radii for AM software tools.</li>
+<li><b>B-rep STEP / IGES:</b> Strut lattices export analytic B-rep STEP models. TPMS and honeycomb cellular models are reconstructed into watertight B-rep CAD models using the AMRTO pipeline.</li>
+</ul>
+""", "CAE — CAD and Simulation"),
+
     "Units and Solvers": _page("""
-<h1>Units and External Solvers</h1><table>
-<tr><th>Quantity</th><th>Unit</th></tr>
-<tr><td>Length and displacement</td><td>mm</td></tr>
-<tr><td>Force</td><td>N</td></tr>
-<tr><td>Stress, pressure, Young's modulus</td><td>MPa = N/mm<sup>2</sup></td></tr>
-<tr><td>Density</td><td>tonne/mm<sup>3</sup>; steel about <code>7.85e-9</code></td></tr>
-<tr><td>Impact time / velocity</td><td>ms / mm/ms</td></tr></table>
-<h2>Optional installations</h2><p>In Windows setup, select CAE and the required
-external solver options. For a source installation, run:</p><pre>python scripts/install_solvers.py --only ccx
+<h1>Units and Solvers</h1>
+<h2>Engineering Units</h2>
+<table>
+<tr><th>Quantity</th><th>Unit</th><th>Standard Convention</th></tr>
+<tr><td>Length and Displacement</td><td>mm</td><td>Model geometry coordinates</td></tr>
+<tr><td>Force</td><td>N</td><td>Point loads, reactions, contact force</td></tr>
+<tr><td>Stress, Pressure, Modulus</td><td>MPa</td><td>1 MPa = 1 N/mm<sup>2</sup></td></tr>
+<tr><td>Mass Density (&rho;)</td><td>tonne/mm<sup>3</sup></td><td>Steel is approximately 7.85 &times; 10<sup>-9</sup></td></tr>
+<tr><td>Impact Time and Velocity</td><td>ms and mm/ms</td><td>1 mm/ms = 1 m/s</td></tr>
+</table>
+<h2>External Solvers Installation</h2>
+<p>Install external tools using the setup utility script:</p>
+<pre>python scripts/install_solvers.py --only ccx
 python scripts/install_solvers.py --only radioss
-python scripts/install_solvers.py --only freecad</pre>
-<p>PyLCSS starts without them. Solver nodes can prepare decks, but a full solve
-requires the executable. Library tooltips show detection status.</p>
-"""),
+python scripts/install_solvers.py --only freecad
+python scripts/install_solvers.py --only amrto</pre>
+<p>PyLCSS detects solvers automatically. Check node library tooltips to inspect detection status.</p>
+""", "CAE — CAD and Simulation"),
+
     "Modeling Environment": _page("""
-<h1>Modeling Environment</h1><table>
-<tr><th>Node</th><th>Role</th></tr>
-<tr><td>Design Variable</td><td>Input with value, bounds, and unit</td></tr>
-<tr><td>Intermediate</td><td>Named value between calculations</td></tr>
-<tr><td>Function Block</td><td>Python calculation or linked Design Studio solver</td></tr>
-<tr><td>QoI</td><td>Result, requirement, constraint, or objective</td></tr></table>
-<h2>Workflow</h2><ol>
-<li>Create or select a system.</li><li>Add nodes and connect ports.</li>
-<li>Double-click nodes to edit configuration.</li><li>Use <b>Validate</b>.</li>
-<li>Use <b>Build Model</b> to forward it to Solution Space and Optimization.</li></ol>
-<p>A Design Studio Function Block reads a saved <code>.cad</code> graph, maps
-inputs to exposed parameters, and calls the chosen FEA, Impact, or Topology terminal.
-Install both MDAO and CAE to use this connection.</p>
-"""),
+<h1>Modeling Environment</h1>
+<p>The <b>Modeling</b> tab builds multidisciplinary system graphs from interconnected functional blocks.</p>
+<table>
+<tr><th>Node Type</th><th>Role and Function</th></tr>
+<tr><td><b>Design Variable</b></td><td>Input parameter with nominal value, lower bound, upper bound, and engineering unit</td></tr>
+<tr><td><b>Intermediate</b></td><td>Calculated internal quantity passed between functional blocks</td></tr>
+<tr><td><b>Function Block</b></td><td>Python calculation block or linked PyLCSS Design Studio CAD study</td></tr>
+<tr><td><b>QoI</b></td><td>Quantity of Interest representing system performance, requirements, or constraints</td></tr>
+</table>
+<h2>Workflow Procedure</h2>
+<ol>
+<li>Create or load a system model.</li>
+<li>Add nodes and connect compatible output-to-input ports.</li>
+<li>Double-click nodes to configure equations or parameters.</li>
+<li>Click <b>Validate</b> to check for graph cycles and type mismatches.</li>
+<li>Click <b>Build Model</b> to compile and publish the system to downstream analysis tabs.</li>
+</ol>
+<p>A Design Studio Function Block links a saved <code>.cad</code> file, maps variables to CAD parameters, and executes the target solver terminal.</p>
+""", "MDAO — System Workflows"),
+
     "Surrogate Training": _page("""
-<h1>Surrogate Training</h1><ol>
-<li>Select a Function Block from Modeling Environment.</li>
-<li>Generate samples or upload CSV/JSON.</li>
-<li>Choose an available algorithm and configure it.</li>
-<li>Train and inspect metrics, parity, learning curves, cross-validation, and feature importance.</li>
-<li>Save only when error is acceptable for the intended decision.</li></ol>
-<p>Core choices are MLP Regressor, Random Forest, Gradient Boosting, and Gaussian
-Process. PyTorch and geometry-aware choices appear only with their dependencies.</p>
-<div class="warn">Debug overfit modes intentionally train and test on the same tiny
-data. They test the pipeline, not predictive accuracy.</div>
-"""),
+<h1>Surrogate Training</h1>
+<p>The <b>Surrogates</b> tab replaces expensive simulation runs with fast mathematical response surfaces.</p>
+<h2>Scientific Auto Mode</h2>
+<p>Auto Mode benchmarks and optimizes state-of-the-art surrogate modeling architectures:</p>
+<ul>
+<li><b>Ordinary and Universal Kriging:</b> Gaussian process regression with anisotropic ARD.</li>
+<li><b>KPLS:</b> Kriging by Partial Least Squares for high-dimensional models.</li>
+<li><b>Radial Basis Functions (RBF):</b> Thin Plate and Polyharmonic splines with polynomial drift.</li>
+<li><b>Sparse PCE:</b> Sparse Orthogonal Polynomial Chaos Expansion.</li>
+<li><b>Support Vector Regression (SVR):</b> Anisotropic &epsilon;-insensitive SVR.</li>
+<li><b>Goel-Haftka Ensemble:</b> Optimal convex combination minimizing cross-validation error covariance.</li>
+</ul>
+<h2>Deep Learning Architectures</h2>
+<p>Design neural networks using the visual architecture editor:</p>
+<ul>
+<li><b>Residual Blocks:</b> Deep skip connections for stable gradient propagation.</li>
+<li><b>Fourier Feature Embeddings:</b> Random Fourier features for high-frequency physics responses.</li>
+<li><b>PyTorch Script Compilation:</b> Compile and train user-defined PyTorch network classes.</li>
+</ul>
+<h2>Data Import Wizard</h2>
+<p>Click <b>Import Data</b> to load external CSV or JSON datasets. The dialog provides delimiter detection, column mapping, header validation, and data preview.</p>
+""", "MDAO — System Workflows"),
+
     "Solution Space": _page("""
 <h1>Solution Space</h1>
-<p>This tab samples a compiled model and finds regions satisfying all QoI limits.</p><ol>
-<li>Build a model.</li><li>Review variables and QoIs.</li>
-<li>Define lower and/or upper QoI requirements.</li>
-<li>Choose sample count and compute.</li>
-<li>Inspect plots, data, and feasible box; export when needed.</li></ol>
-<p><b>Multi-Modal</b> searches separated feasible regions. <b>Product Family</b>
-compares variants and common-platform choices.</p>
-<p>Method background: <a href="https://doi.org/10.1002/nme.4450">Computing solution spaces for robust design</a>.</p>
-"""),
+<p>The <b>Solution Space</b> tab calculates decoupled intervals and feasible regions where all QoI requirements are met.</p>
+<h2>Workflow Steps</h2>
+<ol>
+<li>Select a compiled system model.</li>
+<li>Review variables and QoI definitions.</li>
+<li>Set lower and upper performance requirements on each QoI.</li>
+<li>Select sample size and compute the solution space.</li>
+<li>Inspect feasible design boxes and export results.</li>
+</ol>
+<h2>Multi-Dimensional Visualization</h2>
+<ul>
+<li><b>1-D Interval Views:</b> Visualizes feasible bounds on individual parameters.</li>
+<li><b>2-D Scatter Plots:</b> Interactive scatter plots with editable box boundaries.</li>
+<li><b>3-D Projected Boxes:</b> 3-variable projected bounding boxes rendered in pyqtgraph without OpenGL dependencies.</li>
+<li><b>Multi-Modal Discovery:</b> Identifies disconnected feasible regions.</li>
+<li><b>Product Family Design:</b> Compares shared platform components against model variants.</li>
+</ul>
+""", "MDAO — System Workflows"),
+
     "Optimization": _page("""
-<h1>Optimization</h1><ol>
-<li>Select a compiled system.</li><li>Choose QoI objectives and direction.</li>
-<li>Configure constraints and variable bounds.</li>
-<li>Choose an algorithm and settings.</li>
-<li>Run and inspect objective, variable, constraint, and Pareto plots.</li></ol>
-<table><tr><th>Algorithm</th><th>Typical use</th></tr>
-<tr><td>SLSQP</td><td>Smooth constrained local problems</td></tr>
-<tr><td>COBYLA</td><td>Derivative-free local search with inequality constraints</td></tr>
-<tr><td>trust-constr</td><td>Smooth nonlinear constrained problems</td></tr>
-<tr><td>Differential Evolution / Nevergrad</td><td>Bounded stochastic or black-box search</td></tr>
-<tr><td>NSGA-II</td><td>Multiple objectives and a sampled Pareto-front approximation</td></tr>
-<tr><td>Multi-Start</td><td>Repeated local search from multiple starts</td></tr></table>
-<p>For scalar multi-objective runs, each objective is divided by an explicit
-reference scale or by its frozen initial-design magnitude before weights are
-applied. This prevents kilograms, pascals, and millimetres from competing only
-because of unit size. Stochastic methods expose a reproducible random seed.
-NSGA-II uses Pareto dominance; its displayed compromise is the normalized
-utopia-distance point and is not an automatically preferred engineering design.</p>
-<div class="warn">Optimization does not validate the model. Re-evaluate the final
-design, constraints, neighbouring points, and—when stochastic—more than one seed.</div>
-"""),
+<h1>Optimization</h1>
+<p>The <b>Optimization</b> tab solves single-objective and multi-objective constrained design problems.</p>
+<h2>Supported Algorithms</h2>
+<table>
+<tr><th>Algorithm</th><th>Classification</th><th>Recommended Use</th></tr>
+<tr><td><b>SLSQP</b></td><td>Gradient-based local</td><td>Smooth, continuous engineering problems with non-linear constraints.</td></tr>
+<tr><td><b>Nevergrad</b></td><td>Stochastic global</td><td>Bounded black-box, noisy, or non-smooth response spaces.</td></tr>
+<tr><td><b>Multi-Start</b></td><td>Multi-point local</td><td>Non-convex response surfaces with multiple local optima.</td></tr>
+<tr><td><b>NSGA-II</b></td><td>Evolutionary Pareto</td><td>Multi-objective trade-off studies generating Pareto-optimal fronts.</td></tr>
+</table>
+<h2>Objective Scaling</h2>
+<p>In multi-objective optimization, objectives are normalized by their initial magnitude or explicit reference scales before weights are applied. This prevents unit discrepancies from biasing the search.</p>
+<div class="caution"><b>Verification note:</b> Optimization does not validate the underlying model. Always re-evaluate optimal points, active constraints, and multiple random seeds.</div>
+""", "MDAO — System Workflows"),
+
     "Sensitivity Analysis": _page("""
-<h1>Sensitivity Analysis</h1><ol>
-<li>Build the system model.</li><li>Select method and output.</li>
-<li>Set base sample size or Morris trajectories.</li>
-<li>Run and inspect method-specific plots and tables.</li></ol>
-<table><tr><th>Method</th><th>Behavior</th></tr>
-<tr><td>Sobol</td><td>First, total, and optional second-order variance effects</td></tr>
-<tr><td>Morris</td><td>Low-cost elementary-effect screening</td></tr>
-<tr><td>eFAST</td><td>Fourier-based first-order and total-order effects</td></tr>
-<tr><td>Delta</td><td>Moment-independent distributional sensitivity</td></tr></table>
-<p>Sobol uses scrambled Saltelli-compatible sampling and a power-of-two base
-size; second-order interactions are optional. Morris exposes trajectories and
-an even grid level. FAST enforces its minimum sample requirement. Every
-stochastic method exposes a seed and rejects non-finite or constant responses.</p>
-<p>Available methods depend on installed dependencies. Use the UI's exact
-evaluation estimate for the selected method and variable count. Sensitivity
-indices describe the chosen input distributions and bounds, not universal
-causality; repeat or inspect confidence intervals before decisions.</p>
-"""),
+<h1>Sensitivity Analysis</h1>
+<p>The <b>Sensitivity</b> tab performs global sensitivity analysis using <b>Sobol variance decomposition</b> with Saltelli sequence sampling. It identifies influential design variables and quantifies parameter interactions.</p>
+<h2>Estimated Indices</h2>
+<table>
+<tr><th>Index</th><th>Symbol</th><th>Description</th></tr>
+<tr><td><b>First-Order Index</b></td><td>S<sub>1</sub></td><td>Main direct contribution of an individual variable to output variance without interactions.</td></tr>
+<tr><td><b>Total-Order Index</b></td><td>S<sub>T</sub></td><td>Total contribution of a variable, including all higher-order interactions.</td></tr>
+<tr><td><b>Second-Order Index</b></td><td>S<sub>2</sub></td><td>Pairwise coupling variance between pairs of variables (optional).</td></tr>
+</table>
+<h2>Configuration Steps</h2>
+<ol>
+<li>Select the target output, or select <b>All outputs</b> to run a shared sample design.</li>
+<li>Select a power-of-2 base sample size (256, 1024, or 4096).</li>
+<li>Enable <b>Calculate second-order interactions</b> if you require pairwise coupling data.</li>
+<li>Set an optional integer random seed for reproducible sampling.</li>
+<li>Click <b>Run Analysis</b>.</li>
+</ol>
+<h2>Visualizations and Results</h2>
+<ul>
+<li><b>Main & Total Effects Bar Chart:</b> Shows S<sub>1</sub> and S<sub>T</sub> indices with 95% confidence intervals.</li>
+<li><b>S<sub>2</sub> Interaction Heatmap:</b> Visualizes the symmetric pairwise coupling matrix between design variables.</li>
+<li><b>Ranked Sensitivity Table:</b> Ranks variables by total-order importance (S<sub>T</sub>) and highlights dominant factors.</li>
+</ul>
+<div class="note"><b>Sample budget note:</b> The total number of model evaluations is $N \\times (2D + 2)$ with second-order interactions, or $N \\times (D + 2)$ for first and total order only, where $D$ is the number of design variables.</div>
+""", "MDAO — System Workflows"),
+
     "Security and Trusted Files": _page("""
 <h1>Security and Trusted Files</h1>
-<p>Design Studio projects can include CadQuery Code nodes. Their Python executes
-with your user permissions when the graph is previewed or solved. PyLCSS asks
-for trust before executing code from a newly opened external project.</p>
-<p>Serialized joblib, pickle, dill, and PyTorch model files can also execute code
-during loading. Open projects, scripts, model files, plugins, and solver decks
-only from sources you trust. Inspect Code nodes before approving execution.</p>
-<div class="warn">A file extension is not a security boundary. Do not open an
-unknown .cad or serialized model merely because it looks like ordinary data.</div>
-"""),
+<p>Design Studio models can include custom Python code inside <b>Code Part</b> nodes. This code executes with user system permissions during evaluation.</p>
+<p>PyLCSS asks for user confirmation before executing code from an external project.</p>
+<h2>Serialized Model Safety</h2>
+<p>Files serialized with joblib, pickle, dill, or PyTorch can execute code during loading. Open project files, custom scripts, model weights, and solver decks only from trusted sources.</p>
+<div class="warn"><b>Security warning:</b> File extensions do not form a security boundary. Always inspect Code nodes before approving execution.</div>
+""", "Support"),
+
     "Troubleshooting": _page("""
 <h1>Troubleshooting</h1>
-<h2>A workspace is unavailable</h2><p>Run setup again and include the required
-workspace. For a source installation, install its corresponding package extra.</p>
-<h2>Where is CAD in MDAO?</h2><p>Close MDAO to return to the chooser, then open CAE.
-If you used a direct workspace shortcut, open the main PyLCSS shortcut instead.</p>
-<h2>A linked CAE model fails in MDAO</h2><p>Check that both workspaces are installed,
-the referenced .cad file is accessible, and its required external solver is installed.</p>
-<h2>Solver will not start</h2><ul>
-<li>Hover the solver in the library for detection detail.</li>
-<li>Use Deck Only if you only need an input deck.</li></ul>
-<h2>Connected study still fails</h2><ul>
-<li>Give each FEA condition its required mesh and geometry selection.</li>
-<li>For FEA, provide support and load unless displacement drives the model.</li>
-<li>For a fixed-specimen impact, provide impact face and support.</li></ul>
-<h2>Wrong branch runs</h2><p>Select exactly the terminal node, then press F5.</p>
-<h2>3D viewer is empty</h2><p>Run a geometry node first. Entity picking also requires
-an upstream shape and a completed preview.</p>
-"""),
+<h2>Workspace is Unavailable</h2>
+<p>Run setup again and select the missing workspace. For source installations, install the corresponding extras package (<code>.[mdao]</code> or <code>.[cae]</code>).</p>
+<h2>Cannot Find CAD in MDAO</h2>
+<p>Close MDAO to return to the workspace chooser, then click PyLCSS CAE. Or use the dedicated CAE desktop shortcut.</p>
+<h2>Solver Does Not Start</h2>
+<ul>
+<li>Hover over the solver node in the library to inspect executable detection paths.</li>
+<li>Verify external solver installations using <code>python scripts/install_solvers.py</code>.</li>
+<li>Check <b>Deck Only</b> to verify that the input deck generates correctly.</li>
+</ul>
+<h2>FEA Study Fails</h2>
+<ul>
+<li>Verify that the solid mesh connects to the solver node.</li>
+<li>Check that boundary supports eliminate all rigid body degrees of freedom.</li>
+<li>Confirm that pressure loads connect to valid face selections.</li>
+</ul>
+<h2>3D Viewport is Blank</h2>
+<p>Run the upstream CAD geometry node before opening downstream condition nodes. Interactive picking requires an evaluated geometry preview.</p>
+""", "Support"),
+
     "About": _page("""
 <h1>About PyLCSS</h1>
-<p><b>PyLCSS 2.2.0</b> is a source-available desktop environment for system
-modeling, parametric CAD, simulation, solution-space exploration, optimization,
-sensitivity analysis, and surrogate modeling. Its MDAO and CAE workspaces can
-be installed separately or together.</p>
+<p><b>PyLCSS 2.2.0.2</b> is an integrated engineering desktop software platform for parametric CAD, structural FEA, modal vibration, crash simulation, topology optimization, surrogate modeling, solution spaces, and multidisciplinary design optimization.</p>
 <p>Copyright &copy; 2026 Kutay Demir.</p>
-<p>Licensed under the <b>PolyForm Shield License 1.0.0</b>. See LICENSE and NOTICE.</p>
-"""),
+<p>Licensed under the <b>PolyForm Shield License 1.0.0</b>. See LICENSE and NOTICE files.</p>
+""", "Support"),
 }
 
 _NAV = [
-    ("Getting Started", ["Start Here", "Installation and Workspaces", "Projects and Files", "Interface"]),
+    (
+        "Getting Started",
+        ["Start Here", "Installation and Workspaces", "Projects and Files", "Interface"],
+    ),
     (
         "CAE — CAD and Simulation",
         [
@@ -476,6 +484,7 @@ _NAV = [
             "Geometry Selection",
             "Meshing",
             "Static FEA",
+            "Modal Analysis",
             "Impact",
             "Topology Optimization",
             "Lattice Optimization",
@@ -512,7 +521,7 @@ class HelpWidget(QtWidgets.QWidget):
                 background:{colors["bg_panel"]}; color:{colors["text_main"]};
                 border:none; outline:0; font-size:12px;
             }}
-            QTreeWidget::item {{ padding:4px 6px; color:{colors["text_main"]}; }}
+            QTreeWidget::item {{ padding:5px 7px; color:{colors["text_main"]}; border-radius:4px; }}
             QTreeWidget::item:selected {{
                 background:{colors["primary"]}; color:{selected_text};
             }}
@@ -521,7 +530,7 @@ class HelpWidget(QtWidgets.QWidget):
             }}
             QLineEdit {{
                 background:{colors["bg_input"]}; border:1px solid {colors["border"]};
-                border-radius:5px; color:{colors["text_main"]}; padding:6px 8px;
+                border-radius:5px; color:{colors["text_main"]}; padding:6px 9px; font-size:12px;
             }}
             QLineEdit:focus {{ border-color:{colors["primary"]}; }}
         """
@@ -533,17 +542,20 @@ class HelpWidget(QtWidgets.QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
+        self._splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal, self)
+        self._splitter.setHandleWidth(1)
+
         self._sidebar = QtWidgets.QWidget()
         self._sidebar.setObjectName("helpSidebar")
-        self._sidebar.setFixedWidth(230)
+        self._sidebar.setMinimumWidth(200)
         side_layout = QtWidgets.QVBoxLayout(self._sidebar)
-        side_layout.setContentsMargins(9, 11, 9, 9)
-        side_layout.setSpacing(7)
+        side_layout.setContentsMargins(10, 12, 10, 10)
+        side_layout.setSpacing(8)
         self._title = QtWidgets.QLabel("PyLCSS Help")
         side_layout.addWidget(self._title)
 
         self._search = QtWidgets.QLineEdit()
-        self._search.setPlaceholderText("Search help")
+        self._search.setPlaceholderText("Search help...")
         self._search.setClearButtonEnabled(True)
         self._search.textChanged.connect(self._filter_tree)
         side_layout.addWidget(self._search)
@@ -557,12 +569,14 @@ class HelpWidget(QtWidgets.QWidget):
         self._browser = QtWidgets.QTextBrowser()
         self._browser.setOpenExternalLinks(True)
         self._browser.setFrameShape(QtWidgets.QFrame.NoFrame)
-        self._divider = QtWidgets.QFrame()
-        self._divider.setFrameShape(QtWidgets.QFrame.VLine)
-        self._divider.setFixedWidth(1)
-        root.addWidget(self._sidebar)
-        root.addWidget(self._divider)
-        root.addWidget(self._browser, 1)
+
+        self._splitter.addWidget(self._sidebar)
+        self._splitter.addWidget(self._browser)
+        self._splitter.setSizes([240, 810])
+        self._splitter.setCollapsible(0, False)
+        self._splitter.setCollapsible(1, False)
+
+        root.addWidget(self._splitter)
 
         self._build_tree()
         first = self._tree.topLevelItem(0).child(0)
@@ -615,14 +629,16 @@ class HelpWidget(QtWidgets.QWidget):
         self._browser.verticalScrollBar().setValue(0)
 
     @staticmethod
-    def _themed_html(html, theme):
+    def _themed_html(html: str, theme: str) -> str:
         if str(theme).lower() != "light":
             return html
         colors = THEMES["light"]
         light_css = f"""
 body {{ background:#ffffff; color:{colors["text_main"]}; }}
+.crumb {{ color:{colors["primary"]}; }}
 h1 {{ color:{colors["primary"]}; border-bottom-color:{colors["border"]}; }}
-h2 {{ color:{colors["primary_hover"]}; }}
+h2 {{ color:{colors["primary_hover"]}; border-bottom-color:#e1e4e8; }}
+h3 {{ color:{colors["text_main"]}; }}
 b {{ color:{colors["text_main"]}; }}
 code,pre {{
     background:{colors["bg_dark"]}; border-color:{colors["border"]};
@@ -632,18 +648,30 @@ th {{ background:#e8edf3; color:{colors["text_main"]}; }}
 th,td {{ border-color:{colors["border"]}; }}
 tr:nth-child(even) td {{ background:#f7f8fa; }}
 a {{ color:{colors["primary"]}; }}
-.tip {{
+kbd {{
+    background:#f6f8fa; border-color:{colors["border"]};
+    color:{colors["text_main"]}; box-shadow:0 1px 0 rgba(0,0,0,0.1);
+}}
+.note {{
     background:#edf3f8; border-left-color:{colors["primary"]};
     color:{colors["text_main"]};
 }}
+.tip {{
+    background:#eaf8ed; border-left-color:#1a7f37;
+    color:{colors["text_main"]};
+}}
+.caution {{
+    background:#fff9e6; border-left-color:#b08800;
+    color:{colors["text_main"]};
+}}
 .warn {{
-    background:#fff7e8; border-left-color:{colors["danger"]};
+    background:#fff1f0; border-left-color:{colors["danger"]};
     color:{colors["text_main"]};
 }}
 """
         return html.replace("</style>", light_css + "</style>", 1)
 
-    def apply_theme(self, theme):
+    def apply_theme(self, theme: str) -> None:
         """Refresh HTML colors and navigation accents."""
         theme = str(theme).lower()
         self._active_theme = theme
@@ -656,7 +684,10 @@ a {{ color:{colors["primary"]}; }}
         self._browser.setStyleSheet(
             f"background:{colors['bg_panel']}; color:{colors['text_main']}; border:none;"
         )
-        self._divider.setStyleSheet(f"color:{colors['border']};")
+        if hasattr(self, "_splitter"):
+            self._splitter.setStyleSheet(
+                f"QSplitter::handle {{ background: {colors['border']}; width: 1px; }}"
+            )
         section_color = colors["primary"] if theme == "light" else "#82b8ef"
         for index in range(self._tree.topLevelItemCount()):
             self._tree.topLevelItem(index).setForeground(0, QtGui.QColor(section_color))

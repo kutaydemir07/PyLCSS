@@ -4,6 +4,41 @@
     "_title": "Two-Stage Gearbox Platform — Modular Multidisciplinary Design",
     "_purpose": "Coordinate packaging, clearances, transmission ratio, shaft layout, and four gear-strength margins across six discipline systems.",
     "_fidelity": "Architecture-level standards-inspired model. Detailed tooth contact, bearing life, shaft deflection, housing FEA, lubrication, thermal balance, noise, and manufacturing tolerances require specialist verification.",
+    "_visual_target": "Inspect multidisciplinary interaction graph and feasible solution box covering ISO 6336 gear durability margins.",
+    "_engineering_decision": "Coordinate module 1 and 2 tooth counts, normal modules, helix angles, shaft centre distances, and bearing positions to satisfy overall transmission ratio and envelope packaging while maintaining safety factors >= 1.4 for root and flank strength on all four gears.",
+    "_baseline": "Stage 1 ratio = 3.45, Stage 2 ratio = 2.82, overall ratio = 9.73, all four gear root safeties >= 1.52, flank safeties >= 1.44, shaft center distance packaging within housing allowance.",
+    "_design_variables": [
+        "Stage 1 gear tooth counts (z1, z2) and normal module mn1 (2.0 to 4.0 mm)",
+        "Stage 2 gear tooth counts (z3, z4) and normal module mn2 (3.0 to 6.0 mm)",
+        "Helix angles beta1 and beta2 (0.0 to 25.0 deg)",
+        "Shaft center distances and bearing span coordinates"
+    ],
+    "_load_cases": [
+        "Nominal input torque = 250 Nm at motor speed 3000 rpm under continuous industrial duty cycle"
+    ],
+    "_requirements": [
+        {
+            "name": "Overall Transmission Ratio",
+            "requirement": "Nominal gear ratio i_total = 9.5 to 10.2 (-2% / +5% target band)."
+        },
+        {
+            "name": "Gear Tooth Root Safety",
+            "requirement": "Tooth root bending fatigue safety SF >= 1.40 on all 4 gears (DIN 3990 / ISO 6336)."
+        },
+        {
+            "name": "Gear Tooth Flank Safety",
+            "requirement": "Tooth contact flank durability safety SH >= 1.35 on all 4 gears."
+        },
+        {
+            "name": "Internal Clearance",
+            "requirement": "Minimum shaft and gear clash clearance s_H >= 12.0 mm across housing interior."
+        }
+    ],
+    "_deliverables": [
+        "Coupled multidisciplinary solution space across 6 engineering subsystems",
+        "Feasible discrete gear tooth counts and standardized normal module catalogue picks",
+        "Gear rating datasheet with ISO 6336 root and flank safety factors and shaft bearing reaction loads"
+    ],
     "_workflow": [
         "Compile six discipline graphs into one coupled system model.",
         "Inspect the dependency graph and shared-variable ownership before solving.",

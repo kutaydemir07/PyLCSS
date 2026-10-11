@@ -164,12 +164,14 @@ class WorkbenchProjectMixin:
             from pylcss.cae.design_studio.session_persistence import (
                 expand_guided_topology_session,
                 migrate_lattice_topology_nodes,
+                sanitize_unregistered_nodes,
             )
 
             # Retype before expansion: which guided defaults a study is
             # hydrated with depends on whether it is a lattice study.
             migrate_lattice_topology_nodes(session_data)
             expand_guided_topology_session(session_data)
+            omitted_nodes = sanitize_unregistered_nodes(session_data)
 
             self.graph.clear_session()
             self.graph.deserialize_session(session_data)
@@ -188,12 +190,27 @@ class WorkbenchProjectMixin:
                 logger.debug("Optional UI operation failed.", exc_info=True)
 
             self.timeline.add_event(f"Opened project: {fname}")
+            if omitted_nodes:
+                notice = (
+                    f"Notice: {len(omitted_nodes)} unrecognized or retired "
+                    f"node(s) omitted ({', '.join(omitted_nodes)})"
+                )
+                self.timeline.add_event(notice)
+                logger.warning(
+                    "Project %s loaded with omitted nodes: %s", fname, omitted_nodes
+                )
+
+            omitted_suffix = (
+                f" ({len(omitted_nodes)} unregistered node(s) omitted)"
+                if omitted_nodes
+                else ""
+            )
             result_suffix = (
                 f" ({restored_results} saved result set(s) restored)"
                 if restored_results
                 else ""
             )
-            self.statusBar().showMessage(f"Opened: {fname}{result_suffix}")
+            self.statusBar().showMessage(f"Opened: {fname}{result_suffix}{omitted_suffix}")
             loaded_successfully = True
         except Exception:
             self.current_file = previous_file

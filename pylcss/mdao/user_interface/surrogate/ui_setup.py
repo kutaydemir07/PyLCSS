@@ -12,49 +12,120 @@ from PySide6 import QtCore, QtWidgets
 from pylcss.mdao.surrogate_modeling.training_engine import (
     TORCH_AVAILABLE,
 )
-from pylcss.user_interface.common.theme_manager import (
-    COLORS,
-    set_filled_button_icon,
-)
+from pylcss.user_interface.common.theme_manager import COLORS
+from pylcss.user_interface.common.ui_kit import CollapsibleSection as _CollapsibleSection
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["SurrogateUiMixin"]
 
 
+class _StopButton(QtWidgets.QPushButton):
+    """Stop button that reports enabled/text changes so the progress row can follow."""
+
+    state_changed = QtCore.Signal()
+
+    def changeEvent(self, event: QtCore.QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QtCore.QEvent.EnabledChange:
+            self.state_changed.emit()
+
+    def setText(self, text: str) -> None:
+        super().setText(text)
+        self.state_changed.emit()
+
+
+class _EmptyStateOverlay(QtCore.QObject):
+    """Centered hint shown over a plot until it holds data."""
+
+    def __init__(self, plot_widget: pg.PlotWidget, text: str) -> None:
+        super().__init__(plot_widget)
+        self._plot = plot_widget
+        self._label = QtWidgets.QLabel(text, plot_widget)
+        self._label.setAlignment(QtCore.Qt.AlignCenter)
+        self._label.setWordWrap(True)
+        self._label.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
+        self._label.setStyleSheet(
+            "color: gray; font-size: 11pt; background: transparent;"
+        )
+        plot_widget.installEventFilter(self)
+        # pyqtgraph has no single signal for clear()/plot(), so poll cheaply.
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(400)
+        self._timer.timeout.connect(self.refresh)
+        self._timer.start()
+        self.refresh()
+
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() == QtCore.QEvent.Resize:
+            self._label.setGeometry(self._plot.rect())
+        return False
+
+    def refresh(self) -> None:
+        has_data = False
+        for item in self._plot.listDataItems():
+            x, _ = item.getData()
+            if x is not None and len(x) > 0:
+                has_data = True
+                break
+        self._label.setGeometry(self._plot.rect())
+        self._label.setVisible(not has_data)
+        if not has_data:
+            self._label.raise_()
+
+
 class SurrogateUiMixin:
     def setup_ui(self) -> None:
         layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+
+        # Main horizontal splitter between configuration and visualization
+        self.main_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.main_splitter.setChildrenCollapsible(False)
+        layout.addWidget(self.main_splitter)
 
         # --- LEFT PANEL: Configuration ---
         config_panel = QtWidgets.QWidget()
-        config_panel.setFixedWidth(380)
+        config_panel.setMinimumWidth(380)
         config_layout = QtWidgets.QVBoxLayout(config_panel)
         config_layout.setContentsMargins(0, 0, 0, 0)
+        config_layout.setSpacing(4)
+        self.main_splitter.addWidget(config_panel)
 
-        layout.addWidget(config_panel)
+        # One scrollable column of collapsible steps: target -> data -> model -> training.
+        scroll_steps = QtWidgets.QScrollArea()
+        scroll_steps.setWidgetResizable(True)
+        scroll_steps.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        scroll_steps.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        scroll_steps.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll_steps.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        scroll_steps.setAutoFillBackground(False)
 
-        # Sub-tabs: Data / Model / Training -- mirrors the solution-space
-        # left-panel pattern so the workflow reads top-to-bottom: pick data,
-        # pick model, train.
-        self.left_tabs = QtWidgets.QTabWidget()
-        config_layout.addWidget(self.left_tabs)
+        steps_content = QtWidgets.QWidget()
+        steps_layout = QtWidgets.QVBoxLayout(steps_content)
+        steps_layout.setContentsMargins(6, 6, 6, 6)
+        steps_layout.setSpacing(8)
+        scroll_steps.setWidget(steps_content)
+        config_layout.addWidget(scroll_steps, 1)
 
-        tab_data = QtWidgets.QWidget()
-        data_layout = QtWidgets.QVBoxLayout(tab_data)
-        self.left_tabs.addTab(tab_data, "Data")
+        self.sec_target = _CollapsibleSection("1  Target node")
+        self.sec_data = _CollapsibleSection("2  Data")
+        self.sec_model = _CollapsibleSection("3  Model")
+        self.sec_train = _CollapsibleSection("4  Training options")
+        for _sec in (self.sec_target, self.sec_data, self.sec_model, self.sec_train):
+            steps_layout.addWidget(_sec)
+        steps_layout.addStretch()
+        self.sec_train.set_expanded(False)
 
-        tab_model = QtWidgets.QWidget()
-        model_layout = QtWidgets.QVBoxLayout(tab_model)
-        self.left_tabs.addTab(tab_model, "Model")
-
-        tab_training = QtWidgets.QWidget()
-        training_layout = QtWidgets.QVBoxLayout(tab_training)
-        self.left_tabs.addTab(tab_training, "Training")
+        target_layout = self.sec_target.body_layout
+        data_layout = self.sec_data.body_layout
+        model_layout = self.sec_model.body_layout
+        training_layout = self.sec_train.body_layout
 
         # 1. Node Selection
-        grp_node = QtWidgets.QGroupBox("Target Node")
+        grp_node = QtWidgets.QWidget()
         l_node = QtWidgets.QVBoxLayout(grp_node)
+        l_node.setContentsMargins(0, 0, 0, 0)
         self.combo_nodes = QtWidgets.QComboBox()
         self.combo_nodes.setToolTip(
             "Select the target node (output variable) to create a surrogate model for. The surrogate will predict this output based on the input variables."
@@ -66,11 +137,12 @@ class SurrogateUiMixin:
         self.btn_refresh.clicked.connect(self.refresh_nodes)
         l_node.addWidget(self.combo_nodes)
         l_node.addWidget(self.btn_refresh)
-        data_layout.addWidget(grp_node)
+        target_layout.addWidget(grp_node)
 
         # 2. Data Source
-        grp_data = QtWidgets.QGroupBox("Data Source")
+        grp_data = QtWidgets.QWidget()
         l_data = QtWidgets.QVBoxLayout(grp_data)
+        l_data.setContentsMargins(0, 0, 0, 0)
 
         # Source Selection
         src_layout = QtWidgets.QHBoxLayout()
@@ -94,8 +166,7 @@ class SurrogateUiMixin:
         self.spin_samples.setSingleStep(500)
         l_gen.addRow("Sample Count:", self.spin_samples)
 
-        self.btn_generate = QtWidgets.QPushButton(" Generate Data")
-        set_filled_button_icon(self.btn_generate, "fa5s.magic")
+        self.btn_generate = QtWidgets.QPushButton("Generate Data")
         self.btn_generate.clicked.connect(self.start_generation)
         l_gen.addRow(self.btn_generate)
         self.stack_data.addWidget(p_gen)
@@ -104,8 +175,7 @@ class SurrogateUiMixin:
         p_upload = QtWidgets.QWidget()
         l_upload = QtWidgets.QVBoxLayout(p_upload)
 
-        self.btn_browse = QtWidgets.QPushButton(" Browse CSV/JSON...")
-        set_filled_button_icon(self.btn_browse, "fa5s.folder-open")
+        self.btn_browse = QtWidgets.QPushButton("Browse CSV/JSON...")
         self.btn_browse.clicked.connect(self.browse_file)
         l_upload.addWidget(self.btn_browse)
 
@@ -117,241 +187,29 @@ class SurrogateUiMixin:
 
         l_data.addWidget(self.stack_data)
         data_layout.addWidget(grp_data)
-        data_layout.addStretch()
 
         # 3. Model Architecture
-        grp_arch = QtWidgets.QGroupBox("Model Architecture")
+        grp_arch = QtWidgets.QWidget()
         l_arch = QtWidgets.QFormLayout(grp_arch)
+        l_arch.setContentsMargins(0, 0, 0, 0)
 
         self.combo_algo = QtWidgets.QComboBox()
         model_options = [
-            "MLP Regressor",
-            "Random Forest",
-            "Gradient Boosting",
-            "Gaussian Process",
+            "Auto Mode (Scientific SOTA)",
         ]
         if TORCH_AVAILABLE:
-            model_options.append("Deep Neural Network (PyTorch)")
-        # Geometric backbones require torch + trimesh; check at construction time.
-        try:
-            from pylcss.mdao.surrogate_modeling.geometry import (
-                TRIMESH_AVAILABLE as _TRIMESH_OK,
-            )
-        except ImportError:
-            _TRIMESH_OK = False
-        if TORCH_AVAILABLE and _TRIMESH_OK:
-            model_options.append("Geom-DeepONet")
-            model_options.append("GINO")
+            model_options.append("Your Own Architecture (Deep Learning)")
         self.combo_algo.addItems(model_options)
         self.combo_algo.setToolTip(
-            "Choose the machine learning algorithm for the surrogate model:\n"
-            "• MLP Regressor: Neural network with configurable layers\n"
-            "• Random Forest: Ensemble of decision trees\n"
-            "• Gradient Boosting: Sequential tree boosting\n"
-            "• Gaussian Process: Probabilistic kernel-based model"
-            + ("\n• Deep Neural Network: PyTorch MLP" if TORCH_AVAILABLE else "")
-            + (
-                "\n• Geom-DeepONet: Geometry-aware operator (CAD per query)"
-                if (TORCH_AVAILABLE and _TRIMESH_OK)
-                else ""
-            )
-            + (
-                "\n• GINO: FNO on SDF background grid"
-                if (TORCH_AVAILABLE and _TRIMESH_OK)
-                else ""
-            )
+            "Choose surrogate modeling workflow:\n"
+            "- Auto Mode (Scientific SOTA): Automatic multi-model benchmarking and champion selection across peer-reviewed MDAO algorithms (Kriging, KPLS, Polyharmonic RBF, Sparse PCE, SVR, Goel-Haftka Ensembles)\n"
+            "- Your Own Architecture (Deep Learning): Visual or PyTorch deep learning architecture builder (Residual blocks, Fourier embeddings, LayerNorm, MC Dropout)"
         )
         self.combo_algo.currentIndexChanged.connect(self.update_hyperparams)
         l_arch.addRow("Algorithm:", self.combo_algo)
 
         # Dynamic Hyperparameters Stack
         self.stack_params = QtWidgets.QStackedWidget()
-
-        # --- MLP Params ---
-        p_mlp = QtWidgets.QWidget()
-        f_mlp = QtWidgets.QFormLayout(p_mlp)
-
-        self.txt_layers = QtWidgets.QLineEdit("(100, 50)")
-
-        self.combo_activ = QtWidgets.QComboBox()
-        self.combo_activ.addItems(["relu", "tanh", "logistic", "identity"])
-        self.combo_activ.setToolTip(
-            "Activation function for neural network layers:\n• relu: Rectified Linear Unit (most common)\n• tanh: Hyperbolic tangent\n• logistic: Sigmoid function\n• identity: Linear activation"
-        )
-
-        self.combo_solver = QtWidgets.QComboBox()
-        self.combo_solver.addItems(["adam", "lbfgs", "sgd"])
-        self.combo_solver.setToolTip(
-            "Optimization algorithm for training:\n• adam: Adaptive moment estimation (recommended)\n• lbfgs: Limited-memory BFGS (good for small datasets)\n• sgd: Stochastic gradient descent"
-        )
-
-        self.spin_alpha_mlp = QtWidgets.QDoubleSpinBox()
-        self.spin_alpha_mlp.setRange(0.00001, 10.0)
-        self.spin_alpha_mlp.setValue(0.0001)
-        self.spin_alpha_mlp.setDecimals(5)
-
-        self.spin_max_iter = QtWidgets.QSpinBox()
-        self.spin_max_iter.setRange(100, 100000)
-        self.spin_max_iter.setValue(5000)
-        self.spin_max_iter.setSingleStep(500)
-
-        self.chk_early_stopping = QtWidgets.QCheckBox("Early Stopping")
-        self.chk_early_stopping.setChecked(False)
-
-        f_mlp.addRow("Hidden Layers:", self.txt_layers)
-        f_mlp.addRow("Activation:", self.combo_activ)
-        f_mlp.addRow("Solver:", self.combo_solver)
-        f_mlp.addRow("Alpha (L2 Penalty):", self.spin_alpha_mlp)
-        f_mlp.addRow("Max Iterations:", self.spin_max_iter)
-        f_mlp.addRow("", self.chk_early_stopping)
-        self.stack_params.addWidget(p_mlp)
-
-        # --- RF Params ---
-        p_rf = QtWidgets.QWidget()
-        f_rf = QtWidgets.QFormLayout(p_rf)
-
-        self.spin_est_rf = QtWidgets.QSpinBox()
-        self.spin_est_rf.setRange(10, 5000)
-        self.spin_est_rf.setValue(100)
-
-        self.spin_depth_rf = QtWidgets.QSpinBox()
-        self.spin_depth_rf.setRange(0, 1000)
-        self.spin_depth_rf.setValue(0)
-        self.spin_depth_rf.setSpecialValueText("None")
-
-        self.spin_min_split_rf = QtWidgets.QSpinBox()
-        self.spin_min_split_rf.setRange(2, 100)
-        self.spin_min_split_rf.setValue(2)
-
-        self.spin_min_leaf_rf = QtWidgets.QSpinBox()
-        self.spin_min_leaf_rf.setRange(1, 100)
-        self.spin_min_leaf_rf.setValue(1)
-
-        self.chk_bootstrap_rf = QtWidgets.QCheckBox("Bootstrap")
-        self.chk_bootstrap_rf.setChecked(True)
-
-        f_rf.addRow("Estimators:", self.spin_est_rf)
-        f_rf.addRow("Max Depth:", self.spin_depth_rf)
-        f_rf.addRow("Min Samples Split:", self.spin_min_split_rf)
-        f_rf.addRow("Min Samples Leaf:", self.spin_min_leaf_rf)
-        f_rf.addRow("", self.chk_bootstrap_rf)
-        self.stack_params.addWidget(p_rf)
-
-        # --- GB Params ---
-        p_gb = QtWidgets.QWidget()
-        f_gb = QtWidgets.QFormLayout(p_gb)
-
-        self.spin_est_gb = QtWidgets.QSpinBox()
-        self.spin_est_gb.setRange(10, 5000)
-        self.spin_est_gb.setValue(100)
-
-        self.spin_lr_gb = QtWidgets.QDoubleSpinBox()
-        self.spin_lr_gb.setRange(0.001, 1.0)
-        self.spin_lr_gb.setValue(0.1)
-        self.spin_lr_gb.setSingleStep(0.01)
-
-        self.spin_depth_gb = QtWidgets.QSpinBox()
-        self.spin_depth_gb.setRange(1, 100)
-        self.spin_depth_gb.setValue(3)
-
-        self.spin_subsample_gb = QtWidgets.QDoubleSpinBox()
-        self.spin_subsample_gb.setRange(0.1, 1.0)
-        self.spin_subsample_gb.setValue(1.0)
-        self.spin_subsample_gb.setSingleStep(0.1)
-
-        self.combo_loss_gb = QtWidgets.QComboBox()
-        self.combo_loss_gb.addItems(
-            ["squared_error", "absolute_error", "huber", "quantile"]
-        )
-        self.combo_loss_gb.setToolTip(
-            "Loss function for gradient boosting:\n• squared_error: Mean squared error\n• absolute_error: Mean absolute error\n• huber: Huber loss (robust to outliers)\n• quantile: Quantile regression"
-        )
-
-        f_gb.addRow("Estimators:", self.spin_est_gb)
-        f_gb.addRow("Learning Rate:", self.spin_lr_gb)
-        f_gb.addRow("Max Depth:", self.spin_depth_gb)
-        f_gb.addRow("Subsample:", self.spin_subsample_gb)
-        f_gb.addRow("Loss Function:", self.combo_loss_gb)
-        self.stack_params.addWidget(p_gb)
-
-        # --- GP Params ---
-        p_gp = QtWidgets.QWidget()
-        f_gp = QtWidgets.QFormLayout(p_gp)
-
-        self.spin_alpha_gp = QtWidgets.QDoubleSpinBox()
-        self.spin_alpha_gp.setRange(1e-10, 1e-1)
-        self.spin_alpha_gp.setValue(1e-6)
-        self.spin_alpha_gp.setSingleStep(1e-7)
-        self.spin_alpha_gp.setDecimals(10)
-
-        self.spin_restarts_gp = QtWidgets.QSpinBox()
-        self.spin_restarts_gp.setRange(0, 100)
-        self.spin_restarts_gp.setValue(15)
-
-        self.chk_normalize_gp = QtWidgets.QCheckBox("Normalize Y")
-        self.chk_normalize_gp.setChecked(True)
-
-        f_gp.addRow("Alpha (noise):", self.spin_alpha_gp)
-        f_gp.addRow("Optimizer Restarts:", self.spin_restarts_gp)
-        f_gp.addRow("", self.chk_normalize_gp)
-        self.stack_params.addWidget(p_gp)
-
-        # --- PyTorch Params ---
-        p_pytorch = QtWidgets.QWidget()
-        f_pytorch = QtWidgets.QFormLayout(p_pytorch)
-
-        self.spin_lr_pytorch = QtWidgets.QDoubleSpinBox()
-        self.spin_lr_pytorch.setRange(1e-6, 1.0)
-        self.spin_lr_pytorch.setValue(0.01)
-        self.spin_lr_pytorch.setSingleStep(0.001)
-        self.spin_lr_pytorch.setDecimals(6)
-        f_pytorch.addRow("Learning Rate:", self.spin_lr_pytorch)
-
-        self.spin_batch_size = QtWidgets.QSpinBox()
-        self.spin_batch_size.setRange(8, 2048)
-        self.spin_batch_size.setValue(32)
-        self.spin_batch_size.setSingleStep(8)
-        f_pytorch.addRow("Batch Size:", self.spin_batch_size)
-
-        self.txt_hidden_layers = QtWidgets.QLineEdit("64, 64")
-        f_pytorch.addRow("Hidden Layers:", self.txt_hidden_layers)
-
-        self.combo_optimizer = QtWidgets.QComboBox()
-        self.combo_optimizer.addItems(["Adam", "SGD", "RMSprop", "Adagrad"])
-        self.combo_optimizer.setToolTip(
-            "PyTorch optimizer algorithm:\n• Adam: Adaptive moment estimation (recommended)\n• SGD: Stochastic gradient descent\n• RMSprop: Root mean square propagation\n• Adagrad: Adaptive gradient algorithm"
-        )
-        f_pytorch.addRow("Optimizer:", self.combo_optimizer)
-
-        self.combo_pt_activation = QtWidgets.QComboBox()
-        self.combo_pt_activation.addItems(["ReLU", "Tanh", "Sigmoid", "LeakyReLU"])
-        self.combo_pt_activation.setToolTip(
-            "Activation function for PyTorch neural network:\n• ReLU: Rectified Linear Unit (most common)\n• Tanh: Hyperbolic tangent\n• Sigmoid: Logistic function\n• LeakyReLU: Leaky version of ReLU"
-        )
-        f_pytorch.addRow("Activation:", self.combo_pt_activation)
-
-        self.spin_pt_dropout = QtWidgets.QDoubleSpinBox()
-        self.spin_pt_dropout.setRange(0.0, 0.9)
-        self.spin_pt_dropout.setValue(0.1)  # Default to 0.1 for uncertainty estimation
-        self.spin_pt_dropout.setSingleStep(0.1)
-        f_pytorch.addRow("Dropout Rate:", self.spin_pt_dropout)
-
-        self.spin_epochs = QtWidgets.QSpinBox()
-        self.spin_epochs.setRange(10, 100000)
-        self.spin_epochs.setValue(2000)
-        self.spin_epochs.setSingleStep(500)
-        f_pytorch.addRow("Epochs:", self.spin_epochs)
-
-        self.spin_mc_samples = QtWidgets.QSpinBox()
-        self.spin_mc_samples.setRange(10, 1000)
-        self.spin_mc_samples.setValue(50)
-        self.spin_mc_samples.setSingleStep(10)
-        self.spin_mc_samples.setToolTip(
-            "Number of Monte Carlo samples for uncertainty quantification.\nHigher values give more accurate uncertainty estimates but take longer."
-        )
-        f_pytorch.addRow("MC Samples:", self.spin_mc_samples)
-
-        self.stack_params.addWidget(p_pytorch)
 
         # --- Geom-DeepONet / GINO shared params (geometric backbones) ---
         # Both backbones need: CAD graph path + solver kind + nodal field name +
@@ -472,84 +330,123 @@ class SurrogateUiMixin:
             _lbl.setVisible(False)
             _w.setVisible(False)
         self._geom_page_index = self.stack_params.addWidget(p_geom)
+
+        # --- Auto Mode Params ---
+        p_auto = QtWidgets.QWidget()
+        f_auto = QtWidgets.QFormLayout(p_auto)
+        f_auto.setContentsMargins(4, 6, 4, 6)
+        f_auto.setSpacing(8)
+
+        lbl_auto_info = QtWidgets.QLabel(
+            "Auto Mode benchmarks peer-reviewed MDAO surrogate architectures "
+            "(Kriging with ARD, KPLS, Polyharmonic RBF, Sparse Legendre PCE, "
+            "Anisotropic SVR, and Goel-Haftka Convex Ensembles) to identify the optimal surrogate."
+        )
+        lbl_auto_info.setWordWrap(True)
+        lbl_auto_info.setStyleSheet("color: #b0b0b0; font-size: 8.5pt; padding-bottom: 4px;")
+        f_auto.addRow(lbl_auto_info)
+
+        self.combo_auto_preset = QtWidgets.QComboBox()
+        self.combo_auto_preset.addItem("Quick (Kriging, RBF, PCE, SVR)", "quick")
+        self.combo_auto_preset.addItem("Standard (+ KPLS, Matern 3/2)", "standard")
+        self.combo_auto_preset.addItem("Thorough (Full search & Ensembling)", "thorough")
+        self.combo_auto_preset.setToolTip(
+            "Search Presets:\n"
+            "- Quick: Fast evaluation of 4 core SOTA models (Kriging, RBF, PCE, SVR)\n"
+            "- Standard: Adds high-dimensional KPLS and Matern 3/2 rough response\n"
+            "- Thorough: Adds degree-3 PCE, Gaussian Kriging, and full Goel-Haftka ensemble"
+        )
+        f_auto.addRow("Search Preset:", self.combo_auto_preset)
+
+        self.combo_auto_metric = QtWidgets.QComboBox()
+        self.combo_auto_metric.addItem("R2 Score (Maximize)", "R2")
+        self.combo_auto_metric.addItem("RMSE (Minimize)", "RMSE")
+        self.combo_auto_metric.addItem("MAE (Minimize)", "MAE")
+        self.combo_auto_metric.addItem("RMAE (Constraint Safety)", "RMAE")
+        self.combo_auto_metric.setToolTip(
+            "Optimization Metric for Champion Selection:\n"
+            "- R2: Maximize coefficient of determination (overall fit)\n"
+            "- RMSE: Minimize root mean squared error (penalizes large residuals)\n"
+            "- MAE: Minimize mean absolute error (robust against outliers)\n"
+            "- RMAE: Minimize relative maximum absolute error (critical for constraint safety)"
+        )
+        f_auto.addRow("Primary Metric:", self.combo_auto_metric)
+
+        self.chk_auto_ensemble = QtWidgets.QCheckBox("Enable Goel-Haftka Optimal Ensemble")
+        self.chk_auto_ensemble.setToolTip(
+            "Solves quadratic programming min error covariance across top candidate models to create an optimal convex ensemble."
+        )
+        self.chk_auto_ensemble.setChecked(True)
+        f_auto.addRow("", self.chk_auto_ensemble)
+
+        self._auto_page_index = self.stack_params.addWidget(p_auto)
+
+        # --- Custom Architecture Params ---
+        p_custom = QtWidgets.QWidget()
+        l_custom = QtWidgets.QVBoxLayout(p_custom)
+        l_custom.setContentsMargins(0, 0, 0, 0)
+
+        from .architecture_builder_widget import ArchitectureBuilderWidget
+
+        self.arch_builder = ArchitectureBuilderWidget()
+        l_custom.addWidget(self.arch_builder)
+
+        self._custom_page_index = self.stack_params.addWidget(p_custom)
+
         # Map algorithm display name -> stack page index. Used by
         # update_hyperparams to switch the hyperparam panel.
         self._algo_to_page = {
-            "MLP Regressor": 0,
-            "Random Forest": 1,
-            "Gradient Boosting": 2,
-            "Gaussian Process": 3,
-            "Deep Neural Network (PyTorch)": 4,
+            "Auto Mode (Scientific SOTA)": self._auto_page_index,
+            "Auto Mode (Recommended)": self._auto_page_index,
+            "Auto Mode": self._auto_page_index,
+            "Your Own Architecture (Deep Learning)": self._custom_page_index,
+            "Custom Architecture (Deep Learning)": self._custom_page_index,
+            "Your Own Architecture": self._custom_page_index,
+            "Custom Architecture": self._custom_page_index,
             "Geom-DeepONet": self._geom_page_index,
             "GINO": self._geom_page_index,
         }
+        self.update_hyperparams(self.combo_algo.currentIndex())
 
         l_arch.addRow(self.stack_params)
+        model_layout.addWidget(grp_arch)
 
-        # Make the architecture section scrollable
-        scroll_arch = QtWidgets.QScrollArea()
-        scroll_arch.setWidget(grp_arch)
-        scroll_arch.setWidgetResizable(True)
-        scroll_arch.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        scroll_arch.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        scroll_arch.setMaximumHeight(400)  # Limit height to make it manageable
-        # Make background transparent to match theme
-        scroll_arch.setStyleSheet(
-            "QScrollArea { background: transparent; border: none; }"
+        # 4. Action Buttons (pinned below the tabs so they stay visible on every tab)
+        self.lbl_train_hint = QtWidgets.QLabel()
+        self.lbl_train_hint.setWordWrap(True)
+        self.lbl_train_hint.setStyleSheet("color: gray; font-style: italic; padding: 0 6px;")
+        config_layout.addWidget(self.lbl_train_hint)
+
+        self.btn_train = QtWidgets.QPushButton("Train Model")
+        self.btn_train.setStyleSheet("font-weight: bold; font-size: 10pt; padding: 10px;")
+        self.btn_train.setToolTip(
+            "Train the surrogate model using the configured architecture and training dataset."
         )
-        scroll_arch.setAutoFillBackground(False)
+        self.btn_train.clicked.connect(self.start_training)
+        self.btn_train.setEnabled(False)  # Disabled until data is ready
+        config_layout.addWidget(self.btn_train)
 
-        model_layout.addWidget(scroll_arch)
-        model_layout.addStretch()
-
-        # 3.5. Training Mode
-        grp_mode = QtWidgets.QGroupBox("Training Mode")
-        l_mode = QtWidgets.QVBoxLayout(grp_mode)
-        self.radio_standard = QtWidgets.QRadioButton("Standard")
-        self.radio_debug = QtWidgets.QRadioButton("Debug (Sanity Check)")
-        self.radio_debug.setToolTip(
-            "WARNING: Debug mode trains and tests on the same data, guaranteeing perfect scores.\nThis is ONLY for sanity checking - NEVER use debug models for real engineering design!"
+        self.btn_save = QtWidgets.QPushButton("Save and Attach to Node")
+        self.btn_save.setStyleSheet("padding: 8px;")
+        self.btn_save.setToolTip(
+            "Persist the trained surrogate model and connect it to the target system node."
         )
-        self.radio_standard.setChecked(True)
-        self.radio_standard.toggled.connect(self.toggle_debug_mode)
-        self.radio_debug.toggled.connect(self.toggle_debug_mode)
-        l_mode.addWidget(self.radio_standard)
-        l_mode.addWidget(self.radio_debug)
-        training_layout.addWidget(grp_mode)
+        self.btn_save.setEnabled(False)
+        self.btn_save.clicked.connect(self.save_model)
+        config_layout.addWidget(self.btn_save)
 
-        # Debug Mode Warning Label
-        self.lbl_debug_warning = QtWidgets.QLabel(
-            "⚠️ VALIDATION DISABLED - DO NOT USE FOR DESIGN ⚠️"
+        # 5. Active-learning configuration (Collapsible Advanced Section)
+        self.grp_active = QtWidgets.QGroupBox("Adaptive Sampling (Active Learning)")
+        self.grp_active.setCheckable(True)
+        self.grp_active.setChecked(False)
+        self.grp_active.setToolTip(
+            "Optional: Iterative sampling to query new simulation points where surrogate uncertainty is highest."
         )
-        self.lbl_debug_warning.setStyleSheet("""
-            QLabel {
-                background-color: #ff4444;
-                color: white;
-                font-weight: bold;
-                font-size: 12pt;
-                padding: 8px;
-                border-radius: 4px;
-                border: 2px solid #cc0000;
-            }
-        """)
-        self.lbl_debug_warning.setVisible(False)
-        self.lbl_debug_warning.setWordWrap(True)
-        training_layout.addWidget(self.lbl_debug_warning)
+        l_active_grp = QtWidgets.QVBoxLayout(self.grp_active)
+        active_margins = l_active_grp.contentsMargins()
 
-        # Debug Buttons (initially hidden)
-        self.btn_overfit1 = QtWidgets.QPushButton("Overfit 1 Sample")
-        self.btn_overfit1.clicked.connect(lambda: self.start_debug_training(1))
-        self.btn_overfit1.setVisible(False)
-        training_layout.addWidget(self.btn_overfit1)
-
-        self.btn_overfit10 = QtWidgets.QPushButton("Overfit 10 Samples")
-        self.btn_overfit10.clicked.connect(lambda: self.start_debug_training(10))
-        self.btn_overfit10.setVisible(False)
-        training_layout.addWidget(self.btn_overfit10)
-
-        # 4. Active-learning configuration
-        grp_active = QtWidgets.QGroupBox("Active Learning")
-        l_active = QtWidgets.QFormLayout(grp_active)
+        self.widget_active_content = QtWidgets.QWidget()
+        l_active = QtWidgets.QFormLayout(self.widget_active_content)
         self._al_random_state = 42
         self._al_gp_restarts = 3
 
@@ -597,80 +494,46 @@ class SurrogateUiMixin:
         self.spin_al_rounds.valueChanged.connect(self._update_active_budget_label)
         self.spin_al_batch.valueChanged.connect(self._update_active_budget_label)
         self._update_active_budget_label()
-        training_layout.addWidget(grp_active)
 
-        # 5. Action Buttons
-        self.btn_train = QtWidgets.QPushButton(" Train Model")
-        set_filled_button_icon(self.btn_train, "fa5s.cogs")
-        self.btn_train.setStyleSheet("font-weight: bold; padding: 8px;")
-        self.btn_train.setToolTip(
-            "Train the chosen machine learning algorithm using the available data."
-        )
-        self.btn_train.clicked.connect(self.start_training)
-        self.btn_train.setEnabled(False)  # Disabled until data is ready
-        training_layout.addWidget(self.btn_train)
-
-        self.btn_save = QtWidgets.QPushButton(" Save and Attach to Node")
-        set_filled_button_icon(self.btn_save, "fa5s.save")
-        self.btn_save.setEnabled(False)
-        self.btn_save.clicked.connect(self.save_model)
-        training_layout.addWidget(self.btn_save)
-
-        self.btn_adaptive = QtWidgets.QPushButton(
-            " Adaptive Training (Active Learning)"
-        )
+        self.btn_adaptive = QtWidgets.QPushButton("Run Adaptive Training")
         self.btn_adaptive.setToolTip(
-            "Train surrogate model using adaptive sampling to focus on high-uncertainty regions"
+            "Iteratively execute simulations at points of maximum model uncertainty."
         )
         self.btn_adaptive.clicked.connect(self.start_adaptive_training)
         self.btn_adaptive.setEnabled(False)  # Disabled until data is ready
-        training_layout.addWidget(self.btn_adaptive)
+        l_active.addRow(self.btn_adaptive)
 
-        training_layout.addStretch()
+        l_active_grp.addWidget(self.widget_active_content)
+        def _toggle_active(on: bool) -> None:
+            self.widget_active_content.setVisible(on)
+            # Collapse the empty body so an unchecked group is just its title.
+            if on:
+                l_active_grp.setContentsMargins(active_margins)
+            else:
+                l_active_grp.setContentsMargins(0, 0, 0, 0)
+
+        _toggle_active(False)
+        self.grp_active.toggled.connect(_toggle_active)
+
+        training_layout.addWidget(self.grp_active)
 
         # --- RIGHT PANEL: Visualization ---
         viz_panel = QtWidgets.QWidget()
         viz_layout = QtWidgets.QVBoxLayout(viz_panel)
 
         # Metrics
-        self.lbl_metrics = QtWidgets.QLabel("Status: Ready to train.")
+        self.lbl_metrics = QtWidgets.QLabel(
+            "No dataset yet. Generate or upload data to begin."
+        )
         self.lbl_metrics.setStyleSheet(
-            "background-color: #333; color: #fff; padding: 10px; border-radius: 4px;"
+            "background-color: #1e1f22; border: 1px solid #282a2e; color: #b5bac1; padding: 10px; border-radius: 4px;"
         )
         viz_layout.addWidget(self.lbl_metrics)
 
         # Tabs for plots
         self.tab_widget = QtWidgets.QTabWidget()
 
-        # Tab 1: Learning Curves
-        self.curve_tab = QtWidgets.QWidget()
-        curve_layout = QtWidgets.QVBoxLayout(self.curve_tab)
-        self.curve_plot = pg.PlotWidget(title="Learning Curves")
-        self.curve_plot.setBackground(COLORS["chart_bg"])
-        self.curve_plot.setLabel("left", "Loss (MSE)")
-        self.curve_plot.setLabel("bottom", "Epoch/Iteration")
-        self.curve_plot.showGrid(x=True, y=True)
-        self.curve_plot.addLegend()
-        self.train_curve = self.curve_plot.plot(
-            pen=pg.mkPen("r", width=2), name="Train Loss"
-        )
-        self.val_curve = self.curve_plot.plot(
-            pen=pg.mkPen("g", width=2), name="Val Loss"
-        )
-        # Add text item for progress messages
-        self.progress_text = pg.TextItem(
-            "", anchor=(0.5, 0.5), color=COLORS["chart_fg"]
-        )
-        self.progress_text.setPos(0, 0)  # Center of data coordinates
-        self.curve_plot.addItem(self.progress_text)
-        curve_layout.addWidget(self.curve_plot)
-        self.tab_widget.addTab(self.curve_tab, "Learning Curves")
-        self.tab_widget.setTabToolTip(
-            0,
-            "Training loss curves (MSE) - Real-time for PyTorch, post-training for MLP Regressor",
-        )
-
-        # Tab 2: Parity Plot
+        # Tab 1: Parity Plot (Universal validation for all algorithms)
         self.parity_tab = QtWidgets.QWidget()
         parity_layout = QtWidgets.QVBoxLayout(self.parity_tab)
         self.plot_widget = pg.PlotWidget(title="Parity Plot (Predicted vs Actual)")
@@ -679,83 +542,159 @@ class SurrogateUiMixin:
         self.plot_widget.setLabel("bottom", "Actual")
         self.plot_widget.showGrid(x=True, y=True)
         parity_layout.addWidget(self.plot_widget)
+        self._parity_empty = _EmptyStateOverlay(
+            self.plot_widget,
+            "No results yet.\nGenerate data, then press Train Model.",
+        )
         self.tab_widget.addTab(self.parity_tab, "Parity Plot")
-
-        # Tab 3: Data Preview
-        self.data_tab = QtWidgets.QWidget()
-        data_layout = QtWidgets.QVBoxLayout(self.data_tab)
-        self.data_table = QtWidgets.QTableWidget()
-        data_layout.addWidget(self.data_table)
-        self.tab_widget.addTab(self.data_tab, "Data Preview")
-
-        # Tab 4: Cross-Validation Results
-        self.cv_tab = QtWidgets.QWidget()
-        cv_layout = QtWidgets.QVBoxLayout(self.cv_tab)
-        self.cv_table = QtWidgets.QTableWidget()
-        self.cv_table.setColumnCount(5)
-        self.cv_table.setHorizontalHeaderLabels(
-            ["Model", "R² Mean", "R² Std", "RMSE Mean", "MAE Mean"]
+        self.tab_widget.setTabToolTip(
+            0,
+            "Accuracy validation: Predicted vs Actual test targets along the 1:1 diagonal line with uncertainty confidence bounds.",
         )
-        self.cv_table.horizontalHeader().setStretchLastSection(True)
-        cv_layout.addWidget(self.cv_table)
 
-        cv_btn_layout = QtWidgets.QHBoxLayout()
-        self.btn_run_cv = QtWidgets.QPushButton(" Run Cross-Validation")
-        set_filled_button_icon(self.btn_run_cv, "fa5s.crosshairs")
-        self.btn_run_cv.setToolTip(
-            "Evaluate current model with K-Fold cross-validation"
+        # Tab 2: AutoML Leaderboard (Multi-model tournament results)
+        self.lb_tab = QtWidgets.QWidget()
+        lb_layout = QtWidgets.QVBoxLayout(self.lb_tab)
+        self.lb_table = QtWidgets.QTableWidget()
+        self.lb_table.setColumnCount(7)
+        self.lb_table.setHorizontalHeaderLabels(
+            ["Rank", "Algorithm Candidate", "MDAO Family", "R2 Score", "RMSE", "RMAE", "Fit Time (s)"]
         )
-        self.btn_run_cv.clicked.connect(self._run_cross_validation)
-        self.btn_run_cv.setEnabled(False)
-        cv_btn_layout.addWidget(self.btn_run_cv)
-
-        self.btn_compare = QtWidgets.QPushButton(" Compare All Models")
-        set_filled_button_icon(self.btn_compare, "fa5s.balance-scale")
-        self.btn_compare.setToolTip(
-            "Compare all available algorithms on the current dataset"
+        lb_header = self.lb_table.horizontalHeader()
+        lb_header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
+        lb_header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
+        lb_layout.addWidget(self.lb_table)
+        self.tab_widget.addTab(self.lb_tab, "Leaderboard")
+        self.tab_widget.setTabToolTip(
+            1,
+            "Scientific tournament comparison across peer-reviewed MDAO algorithms.",
         )
-        self.btn_compare.clicked.connect(self._compare_models)
-        self.btn_compare.setEnabled(False)
-        cv_btn_layout.addWidget(self.btn_compare)
 
-        self.spin_cv_folds = QtWidgets.QSpinBox()
-        self.spin_cv_folds.setRange(2, 20)
-        self.spin_cv_folds.setValue(5)
-        self.spin_cv_folds.setPrefix("Folds: ")
-        cv_btn_layout.addWidget(self.spin_cv_folds)
-
-        cv_layout.addLayout(cv_btn_layout)
-        self.tab_widget.addTab(self.cv_tab, "Cross-Validation")
-
-        # Tab 5: Feature Importance
-        self.fi_tab = QtWidgets.QWidget()
-        fi_layout = QtWidgets.QVBoxLayout(self.fi_tab)
-        self.fi_plot = pg.PlotWidget(title="Feature Importance")
-        self.fi_plot.setBackground(COLORS["chart_bg"])
-        self.fi_plot.setLabel("left", "Importance")
-        self.fi_plot.setLabel("bottom", "Feature")
-        self.fi_plot.showGrid(x=True, y=True, alpha=0.3)
-        fi_layout.addWidget(self.fi_plot)
-
-        self.btn_feature_imp = QtWidgets.QPushButton(" Compute Feature Importance")
-        set_filled_button_icon(self.btn_feature_imp, "fa5s.sort-amount-down")
-        self.btn_feature_imp.setToolTip("Permutation-based feature importance analysis")
-        self.btn_feature_imp.clicked.connect(self._compute_feature_importance)
-        self.btn_feature_imp.setEnabled(False)
-        fi_layout.addWidget(self.btn_feature_imp)
-        self.tab_widget.addTab(self.fi_tab, "Feature Importance")
+        # Tab 3: Training Curves (Loss vs Epoch for iterative neural networks)
+        self.curve_tab = QtWidgets.QWidget()
+        curve_layout = QtWidgets.QVBoxLayout(self.curve_tab)
+        self.curve_plot = pg.PlotWidget(title="Training Curves (Epoch vs MSE Loss)")
+        self.curve_plot.setBackground(COLORS["chart_bg"])
+        self.curve_plot.setLabel("left", "Loss (MSE)")
+        self.curve_plot.setLabel("bottom", "Epoch")
+        self.curve_plot.showGrid(x=True, y=True)
+        self.curve_plot.addLegend()
+        self.train_curve = self.curve_plot.plot(
+            pen=pg.mkPen("r", width=2), name="Train Loss"
+        )
+        self.val_curve = self.curve_plot.plot(
+            pen=pg.mkPen("g", width=2), name="Val Loss"
+        )
+        self.progress_text = pg.TextItem(
+            "", anchor=(0.5, 0.5), color=COLORS["chart_fg"]
+        )
+        self.progress_text.setPos(0, 0)
+        self.curve_plot.addItem(self.progress_text)
+        curve_layout.addWidget(self.curve_plot)
+        self._curve_empty = _EmptyStateOverlay(
+            self.curve_plot,
+            "Loss curves appear here while a neural architecture trains.",
+        )
+        self.tab_widget.addTab(self.curve_tab, "Training Curves")
+        self.tab_widget.setTabToolTip(
+            2,
+            "Loss curves over epochs (applicable to iterative Deep Learning / PyTorch architectures).",
+        )
 
         viz_layout.addWidget(self.tab_widget)
 
         # Progress and Stop
-        progress_layout = QtWidgets.QHBoxLayout()
+        self.progress_row = QtWidgets.QWidget()
+        progress_layout = QtWidgets.QHBoxLayout(self.progress_row)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
         self.progress = QtWidgets.QProgressBar()
-        self.btn_stop = QtWidgets.QPushButton("Stop Training")
+        self.btn_stop = _StopButton("Stop Training")
         self.btn_stop.clicked.connect(self.stop_training)
         self.btn_stop.setEnabled(False)
         progress_layout.addWidget(self.progress)
         progress_layout.addWidget(self.btn_stop)
-        viz_layout.addLayout(progress_layout)
+        viz_layout.addWidget(self.progress_row)
+        self.btn_stop.state_changed.connect(self._sync_progress_row)
+        self.progress.valueChanged.connect(self._sync_progress_row)
+        self._sync_progress_row()
 
-        layout.addWidget(config_panel)
-        layout.addWidget(viz_panel)
+        self.main_splitter.addWidget(viz_panel)
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setSizes([450, 750])
+
+        # Keep the step headers (state mark + summary) in sync with the workflow
+        self.combo_nodes.currentIndexChanged.connect(self.update_training_summary)
+        self.combo_algo.currentIndexChanged.connect(self.update_training_summary)
+        self.grp_active.toggled.connect(self.update_training_summary)
+        self.spin_al_rounds.valueChanged.connect(self.update_training_summary)
+        self.update_training_summary()
+
+    def _sync_progress_row(self) -> None:
+        """Show progress and Stop only while a task is running."""
+        stop = self.btn_stop
+        running = stop.isEnabled() or stop.text() == "Stopping..."
+        busy = 0 < self.progress.value() < 100
+        self.progress_row.setVisible(running or busy)
+        stop.setVisible(running)
+
+    def update_training_summary(self) -> None:
+        """Refresh step summaries and state marks; expand the next step when one completes."""
+        if not hasattr(self, "sec_train"):
+            return
+        node_txt = self.combo_nodes.currentText()
+        algo_txt = self.combo_algo.currentText()
+        X_train = getattr(self, "X_train", None)
+        has_data = X_train is not None
+
+        if has_data:
+            X_test = getattr(self, "X_test", None)
+            n_total = len(X_train) + (len(X_test) if X_test is not None else 0)
+            shape = getattr(X_train, "shape", ())
+            n_inputs = shape[1] if len(shape) > 1 else 1
+            data_txt = f"{n_total} samples, {n_inputs} inputs"
+        else:
+            data_txt = "No dataset loaded"
+
+        trained = getattr(self, "current_model", None) is not None
+        if trained:
+            train_txt = "Model trained"
+        elif self.grp_active.isChecked():
+            train_txt = f"Adaptive sampling, {self.spin_al_rounds.value()} rounds"
+        else:
+            train_txt = "Standard training"
+
+        steps = (
+            ("target", self.sec_target, bool(node_txt), node_txt or "No node selected"),
+            ("data", self.sec_data, has_data, data_txt),
+            ("model", self.sec_model, bool(algo_txt), algo_txt or "None selected"),
+            ("train", self.sec_train, trained, train_txt),
+        )
+        previous = getattr(self, "_step_states", {})
+        states = {}
+        current_assigned = False
+        for key, section, done, text in steps:
+            if done:
+                state = "done"
+            elif not current_assigned:
+                state = "current"
+                current_assigned = True
+            else:
+                state = "todo"
+            states[key] = state
+            section.set_state(state)
+            section.set_summary(text)
+            if key == "train":
+                continue  # optional step stays collapsed unless the user opens it
+            if state != previous.get(key):
+                if state == "done":
+                    section.set_expanded(False)
+                elif state == "current":
+                    section.set_expanded(True)
+        self._step_states = states
+
+        if hasattr(self, "lbl_train_hint"):
+            self.lbl_train_hint.setText(
+                "" if has_data else "Generate or upload data in step 2 to enable training."
+            )
+            self.lbl_train_hint.setVisible(not has_data)

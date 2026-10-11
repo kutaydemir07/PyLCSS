@@ -8,12 +8,77 @@ import logging
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
+from pylcss.user_interface.common.empty_state import EmptyStateOverlay
+from pylcss.user_interface.common.ui_kit import (
+    secondary_button as _secondary,
+    segment_qss as _segment_qss,
+)
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["SolutionUiMixin"]
+
+
+class _ResizeWatcher(QtCore.QObject):
+    """Calls back (debounced) whenever the watched widget is resized."""
+
+    def __init__(self, target, callback):
+        super().__init__(target)
+        self._timer = QtCore.QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(120)
+        self._timer.timeout.connect(callback)
+        target.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QtCore.QEvent.Resize:
+            self._timer.start()
+        return False
+
+
+class _RangeBarDelegate(QtWidgets.QStyledItemDelegate):
+    """Paint the solution-space interval inside the design-space interval."""
+
+    _MIN_DS, _MAX_DS, _MIN_SOL, _MAX_SOL = 2, 3, 4, 5
+
+    @staticmethod
+    def _value(index, column):
+        try:
+            return float(index.model().index(index.row(), column).data())
+        except (TypeError, ValueError):
+            return None
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        low = self._value(index, self._MIN_DS)
+        high = self._value(index, self._MAX_DS)
+        if low is None or high is None or high <= low:
+            return
+        rect = option.rect.adjusted(6, 0, -6, 0)
+        bar = QtCore.QRectF(rect.left(), rect.center().y() - 3, rect.width(), 6)
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QColor(128, 128, 128, 80))
+        painter.drawRoundedRect(bar, 3, 3)
+        sol_low = self._value(index, self._MIN_SOL)
+        sol_high = self._value(index, self._MAX_SOL)
+        if sol_low is not None and sol_high is not None:
+            span = high - low
+            start = min(max((sol_low - low) / span, 0.0), 1.0)
+            end = min(max((sol_high - low) / span, 0.0), 1.0)
+            if end >= start:
+                fill = QtCore.QRectF(
+                    bar.left() + start * bar.width(),
+                    bar.top(),
+                    max(2.0, (end - start) * bar.width()),
+                    bar.height(),
+                )
+                painter.setBrush(QtGui.QColor("#3b82f6"))
+                painter.drawRoundedRect(fill, 3, 3)
+        painter.restore()
 
 
 class SolutionUiMixin:
@@ -26,6 +91,23 @@ class SolutionUiMixin:
         # --- Left Panel: Configuration ---
         self.config_panel = QtWidgets.QWidget()
         config_layout = QtWidgets.QVBoxLayout(self.config_panel)
+        config_layout.setSpacing(8)
+
+        self.config_panel.setMinimumWidth(430)
+
+        # One optimizer choice shared by Single-box, Multi-Modal and Product Family runs
+        solver_row = QtWidgets.QHBoxLayout()
+        solver_row.addWidget(QtWidgets.QLabel("Optimizer:"))
+        self.solver_combo = QtWidgets.QComboBox()
+        self.solver_combo.addItem("SLSQP (fast)", "goal_attainment")
+        self.solver_combo.addItem("Nevergrad (robust)", "nevergrad")
+        self.solver_combo.setToolTip(
+            "Optimization solver used by every method:\n"
+            "- SLSQP: fast and reliable (recommended)\n"
+            "- Nevergrad: gradient-free with native constraint support"
+        )
+        solver_row.addWidget(self.solver_combo, stretch=1)
+        config_layout.addLayout(solver_row)
 
         # Config Tabs
         self.config_tabs = QtWidgets.QTabWidget()
@@ -46,7 +128,7 @@ class SolutionUiMixin:
         self.system_combo.currentIndexChanged.connect(self.on_system_changed)
         sys_layout.addWidget(self.system_combo, stretch=1)
 
-        self.btn_view_code = QtWidgets.QPushButton("Code")
+        self.btn_view_code = _secondary(QtWidgets.QPushButton("Code"))
         self.btn_view_code.setFixedWidth(50)
         self.btn_view_code.clicked.connect(self.view_source_code)
         sys_layout.addWidget(self.btn_view_code)
@@ -57,24 +139,8 @@ class SolutionUiMixin:
         actions_group = QtWidgets.QGroupBox("Analysis Controls")
         actions_layout = QtWidgets.QVBoxLayout(actions_group)
 
-        # Row 1: Project Actions
-        row1 = QtWidgets.QHBoxLayout()
-        self.btn_save = QtWidgets.QPushButton("Save Project")
-        self.btn_load = QtWidgets.QPushButton("Load Project")
-        self.btn_save.clicked.connect(self.save_project)
-        self.btn_load.clicked.connect(self.load_project)
-        row1.addWidget(self.btn_save)
-        row1.addWidget(self.btn_load)
-        actions_layout.addLayout(row1)
-
-        # Row 2: Solver & Samples
+        # Samples (project save/load lives in the File menu)
         row2 = QtWidgets.QHBoxLayout()
-        self.solver_combo = QtWidgets.QComboBox()
-        self.solver_combo.addItem("SLSQP", "goal_attainment")
-        self.solver_combo.addItem("Nevergrad", "nevergrad")
-        self.solver_combo.setToolTip("Choose optimization solver")
-        row2.addWidget(self.solver_combo, stretch=1)
-
         self.sample_size_spin = QtWidgets.QSpinBox()
         self.sample_size_spin.setRange(10, 100000)
         self.sample_size_spin.setValue(300)
@@ -83,11 +149,10 @@ class SolutionUiMixin:
             "Points to sample per Resample/Compute — one model evaluation each. "
             "Start small (e.g. 10–100) for a quick probe before a large run."
         )
-        row2.addWidget(self.sample_size_spin)
+        row2.addWidget(self.sample_size_spin, stretch=1)
         actions_layout.addLayout(row2)
 
-        # Row 3: Compute Buttons
-        row3 = QtWidgets.QHBoxLayout()
+        # Primary action
         self.btn_compute_feasible = QtWidgets.QPushButton("Compute Solution Space")
         self.btn_compute_feasible.clicked.connect(
             lambda: self.run_computation(
@@ -95,30 +160,30 @@ class SolutionUiMixin:
             )
         )
         self.btn_compute_feasible.setEnabled(False)
-        row3.addWidget(self.btn_compute_feasible)
+        actions_layout.addWidget(self.btn_compute_feasible)
 
-        self.chk_include_optimization = QtWidgets.QCheckBox("Opt.")
-        self.chk_include_optimization.setToolTip("Include Optimization Objectives")
+        self.chk_include_optimization = QtWidgets.QCheckBox(
+            "Include optimization objectives"
+        )
+        self.chk_include_optimization.setToolTip(
+            "Also optimize the objectives when computing the solution space."
+        )
         self.chk_include_optimization.setEnabled(False)
-        row3.addWidget(self.chk_include_optimization)
-        actions_layout.addLayout(row3)
+        actions_layout.addWidget(self.chk_include_optimization)
 
-        # Row 4: Refinement
-        row4 = QtWidgets.QHBoxLayout()
-        self.btn_resample = QtWidgets.QPushButton("Resample")
+        # Refinement
+        self.btn_resample = _secondary(QtWidgets.QPushButton("Resample"))
         self.btn_resample.clicked.connect(self._resample_current_view)
         self.btn_resample.setEnabled(False)
-        row4.addWidget(self.btn_resample)
+        actions_layout.addWidget(self.btn_resample)
 
-        self.chk_center_slice = QtWidgets.QCheckBox("Center Slice")
+        self.chk_center_slice = QtWidgets.QCheckBox("Center slice")
         self.chk_center_slice.setToolTip(
             "Fix non-plotted design variables to the center of the current box "
             "when resampling 2D plots."
         )
         self.chk_center_slice.toggled.connect(lambda: self.trigger_debounced_resample())
-        row4.addWidget(self.chk_center_slice)
-
-        actions_layout.addLayout(row4)
+        actions_layout.addWidget(self.chk_center_slice)
 
         model_layout.addWidget(actions_group)
 
@@ -127,11 +192,26 @@ class SolutionUiMixin:
 
         # Design Variables Table
         self.dv_table = QtWidgets.QTableWidget()
-        self.dv_table.setColumnCount(6)
+        self.dv_table.setColumnCount(7)
         self.dv_table.setHorizontalHeaderLabels(
-            ["Name", "Unit", "Min (DS)", "Max (DS)", "Min (Sol)", "Max (Sol)"]
+            ["Name", "Unit", "Min (DS)", "Max (DS)", "Min (Sol)", "Max (Sol)", "Range"]
         )
         self.dv_table.itemChanged.connect(self.on_dv_table_changed)
+        dv_header = self.dv_table.horizontalHeader()
+        dv_header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
+        dv_header.setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+        dv_header.setSectionResizeMode(6, QtWidgets.QHeaderView.Fixed)
+        self.dv_table.setColumnWidth(6, 70)
+        self.dv_table.setItemDelegateForColumn(6, _RangeBarDelegate(self.dv_table))
+        # Solution-space cells change without a cell-level signal for the bar, so repaint periodically.
+        self._dv_range_timer = QtCore.QTimer(self)
+        self._dv_range_timer.setInterval(500)
+        self._dv_range_timer.timeout.connect(
+            lambda: self.dv_table.viewport().update()
+            if self.dv_table.isVisible()
+            else None
+        )
+        self._dv_range_timer.start()
         self.vars_tabs.addTab(self.dv_table, "Design Variables")
 
         # QoI Table
@@ -151,6 +231,9 @@ class SolutionUiMixin:
             ]
         )
         self.qoi_table.itemChanged.connect(self.on_qoi_table_changed)
+        self.qoi_table.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeToContents
+        )
         self.vars_tabs.addTab(self.qoi_table, "Quantities of Interest")
 
         model_layout.addWidget(self.vars_tabs)
@@ -161,18 +244,6 @@ class SolutionUiMixin:
         # Solution Spaces canvas and this tab only changes the box overlay/view.
         tab_multimodal = QtWidgets.QWidget()
         multimodal_layout = QtWidgets.QVBoxLayout(tab_multimodal)
-
-        method_group = QtWidgets.QGroupBox("Multi-Modal Method")
-        method_form = QtWidgets.QFormLayout(method_group)
-
-        self.mm_solver_combo = QtWidgets.QComboBox()
-        self.mm_solver_combo.addItem("SLSQP", "goal_attainment")
-        self.mm_solver_combo.addItem("Nevergrad", "nevergrad")
-        self.mm_solver_combo.setToolTip(
-            "Choose the optimizer used by the deflation-based feasible-basin search."
-        )
-        method_form.addRow("Optimizer", self.mm_solver_combo)
-        multimodal_layout.addWidget(method_group)
 
         self.btn_compute_multimodal = QtWidgets.QPushButton(
             "Compute Multi-Modal Spaces"
@@ -192,14 +263,16 @@ class SolutionUiMixin:
         view_layout.addLayout(branch_row)
 
         sample_row = QtWidgets.QHBoxLayout()
-        sample_row.addWidget(QtWidgets.QLabel("Plot sample size"))
+        sample_row.addWidget(QtWidgets.QLabel("Plot samples"))
         self.mm_plot_sample_size_spin = QtWidgets.QSpinBox()
         self.mm_plot_sample_size_spin.setRange(10, 100_000)
         self.mm_plot_sample_size_spin.setValue(300)
         self.mm_plot_sample_size_spin.setSingleStep(10)
         self.mm_plot_sample_size_spin.setPrefix("N=")
         sample_row.addWidget(self.mm_plot_sample_size_spin, stretch=1)
-        self.btn_resample_multimodal = QtWidgets.QPushButton("Refresh Plots")
+        self.btn_resample_multimodal = _secondary(
+            QtWidgets.QPushButton("Refresh Plots")
+        )
         self.btn_resample_multimodal.setEnabled(False)
         self.btn_resample_multimodal.clicked.connect(
             lambda: self.resample_multimodal(silent=False)
@@ -207,7 +280,9 @@ class SolutionUiMixin:
         sample_row.addWidget(self.btn_resample_multimodal)
         view_layout.addLayout(sample_row)
 
-        self.lbl_multimodal_info = QtWidgets.QLabel("No Multi-Modal result yet.")
+        self.lbl_multimodal_info = QtWidgets.QLabel(
+            "No Multi-Modal result yet. Press Compute Multi-Modal Spaces."
+        )
         self.lbl_multimodal_info.setWordWrap(True)
         view_layout.addWidget(self.lbl_multimodal_info)
 
@@ -218,6 +293,9 @@ class SolutionUiMixin:
         )
         self.multibox_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.multibox_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.multibox_table.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.Stretch
+        )
         self.multibox_table.setMaximumHeight(180)
         self.multibox_table.cellClicked.connect(self.on_multibox_table_clicked)
         view_layout.addWidget(self.multibox_table)
@@ -237,14 +315,20 @@ class SolutionUiMixin:
         self.variant_table = QtWidgets.QTableWidget()
         self.variant_table.setColumnCount(2)
         self.variant_table.setHorizontalHeaderLabels(["Variant Name", "Description"])
+        self.variant_table.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.Stretch
+        )
         variant_layout.addWidget(self.variant_table)
 
         btn_variant_layout = QtWidgets.QHBoxLayout()
-        self.btn_add_variant = QtWidgets.QPushButton("Add Variant")
+        self.btn_add_variant = _secondary(QtWidgets.QPushButton("Add"))
+        self.btn_add_variant.setToolTip("Add a product variant")
         self.btn_add_variant.clicked.connect(self.add_variant)
-        self.btn_remove_variant = QtWidgets.QPushButton("Remove Variant")
+        self.btn_remove_variant = _secondary(QtWidgets.QPushButton("Remove"))
+        self.btn_remove_variant.setToolTip("Remove the selected variant")
         self.btn_remove_variant.clicked.connect(self.remove_variant)
-        self.btn_edit_variant = QtWidgets.QPushButton("Edit Requirements")
+        self.btn_edit_variant = _secondary(QtWidgets.QPushButton("Requirements\u2026"))
+        self.btn_edit_variant.setToolTip("Edit the requirements of the selected variant")
         self.btn_edit_variant.clicked.connect(self.edit_variant_requirements)
         btn_variant_layout.addWidget(self.btn_add_variant)
         btn_variant_layout.addWidget(self.btn_remove_variant)
@@ -252,24 +336,6 @@ class SolutionUiMixin:
         variant_layout.addLayout(btn_variant_layout)
 
         family_layout.addWidget(variant_group)
-
-        # Solver Selection for Product Family
-        solver_group = QtWidgets.QGroupBox("Solver Options")
-        solver_layout = QtWidgets.QVBoxLayout(solver_group)
-
-        # Solver Selection
-        family_solver_layout = QtWidgets.QHBoxLayout()
-        family_solver_layout.addWidget(QtWidgets.QLabel("Solver:"))
-        self.family_solver_combo = QtWidgets.QComboBox()
-        self.family_solver_combo.addItem("SLSQP (fast)", "goal_attainment")
-        self.family_solver_combo.addItem("Nevergrad (robust)", "nevergrad")
-        self.family_solver_combo.setToolTip(
-            "Choose optimization solver:\n- SLSQP: Fast and reliable (recommended)\n- Nevergrad: Gradient-free optimization with native constraint support"
-        )
-        family_solver_layout.addWidget(self.family_solver_combo)
-        solver_layout.addLayout(family_solver_layout)
-
-        family_layout.addWidget(solver_group)
 
         # Compute Button
         self.btn_compute_family = QtWidgets.QPushButton("Compute Product Family")
@@ -280,9 +346,62 @@ class SolutionUiMixin:
         self.btn_compute_family.setEnabled(False)
         family_layout.addWidget(self.btn_compute_family)
 
+        # Result summary (replaces the modal popups that used to follow a run)
+        self.lbl_family_summary = QtWidgets.QLabel("No result yet.")
+        self.lbl_family_summary.setWordWrap(True)
+        family_layout.addWidget(self.lbl_family_summary)
+
+        self.family_summary_table = QtWidgets.QTableWidget()
+        self.family_summary_table.setColumnCount(4)
+        self.family_summary_table.setHorizontalHeaderLabels(
+            ["Variable", "Platform width", "Share of range", "Communality"]
+        )
+        self.family_summary_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers
+        )
+        self.family_summary_table.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.Stretch
+        )
+        self.family_summary_table.setVisible(False)
+        family_layout.addWidget(self.family_summary_table, stretch=1)
+
+        self.family_communality = None
+        self.btn_family_details = _secondary(
+            QtWidgets.QPushButton("Communality details\u2026")
+        )
+        self.btn_family_details.setEnabled(False)
+        self.btn_family_details.clicked.connect(
+            lambda: self.display_communality_info(self.family_communality)
+        )
+        family_layout.addWidget(self.btn_family_details)
+
         family_layout.addStretch()
 
         self.config_tabs.addTab(tab_family, "Product Family")
+
+        # Methods read as a segmented switch; the hidden tab bar keeps the page logic.
+        self.config_tabs.tabBar().hide()
+        method_row = QtWidgets.QWidget()
+        method_layout = QtWidgets.QHBoxLayout(method_row)
+        method_layout.setContentsMargins(0, 0, 0, 0)
+        method_layout.setSpacing(0)
+        self._method_group = QtWidgets.QButtonGroup(self)
+        self._method_group.setExclusive(True)
+        method_labels = ("Single box", "Multi-modal", "Product family")
+        for index, label in enumerate(method_labels):
+            button = QtWidgets.QPushButton(label)
+            button.setCheckable(True)
+            button.setChecked(index == 0)
+            button.setStyleSheet(
+                _segment_qss(index == 0, index == len(method_labels) - 1)
+            )
+            self._method_group.addButton(button, index)
+            method_layout.addWidget(button)
+        self._method_group.idClicked.connect(self.config_tabs.setCurrentIndex)
+        self.config_tabs.currentChanged.connect(
+            lambda index: self._method_group.button(index).setChecked(True)
+        )
+        config_layout.insertWidget(config_layout.indexOf(self.config_tabs), method_row)
 
         # Connect config tab changes to mode switching
         self.config_tabs.currentChanged.connect(self.on_config_tab_changed)
@@ -296,6 +415,15 @@ class SolutionUiMixin:
         self.solution_tab = QtWidgets.QWidget()
         solution_layout = QtWidgets.QVBoxLayout(self.solution_tab)
         # Controls for Solution Spaces
+        self.combo_dim = QtWidgets.QComboBox()
+        self.combo_dim.addItems(["1D", "2D", "3D"])
+        self.combo_dim.setCurrentIndex(1)
+        self.combo_dim.setToolTip(
+            "Plot dimension:\n"
+            "\u2022 1D: one variable (any input or output)\n"
+            "\u2022 2D: slice through two variables\n"
+            "\u2022 3D: rotatable view of three variables with an editable box"
+        )
         self.combo_add_x = QtWidgets.QComboBox()
         self.combo_add_x.setToolTip(
             "Select the design variable or output to plot on the X-axis. Shows how the selected variable affects the solution space."
@@ -304,6 +432,8 @@ class SolutionUiMixin:
         self.combo_add_y.setToolTip(
             "Select the design variable or output to plot on the Y-axis. Shows how the selected variable affects the solution space."
         )
+        self.combo_add_z = QtWidgets.QComboBox()
+        self.combo_add_z.setToolTip("Select the variable for the Z-axis of a 3D plot.")
         self.combo_viz_mode = QtWidgets.QComboBox()
         self.combo_viz_mode.addItem("Points")
         self.combo_viz_mode.addItem("Categorical Areas")
@@ -313,23 +443,39 @@ class SolutionUiMixin:
         self.combo_viz_mode.currentIndexChanged.connect(self.update_all_plots)
         self.btn_add_plot = QtWidgets.QPushButton("Add Plot")
         self.btn_add_plot.clicked.connect(self.add_plot)
-        self.btn_clear_plots = QtWidgets.QPushButton("Clear All")
-        self.btn_clear_plots.clicked.connect(self.clear_all_plots)
-        self.btn_save_all = QtWidgets.QPushButton("Save All Plots")
-        self.btn_save_all.clicked.connect(self.save_all_plots)
-        self.btn_colors = QtWidgets.QPushButton("Colors")
-        self.btn_colors.clicked.connect(self.configure_colors)
+        self.btn_clear_plots = _secondary(QtWidgets.QPushButton("Clear All"))
+        self.btn_clear_plots.clicked.connect(self._confirm_clear_plots)
+        self.act_save_all = QtGui.QAction("Save All Plots...", self)
+        self.act_save_all.triggered.connect(self.save_all_plots)
+        self.act_colors = QtGui.QAction("Colors...", self)
+        self.act_colors.triggered.connect(self.configure_colors)
+        self.act_add_all_1d = QtGui.QAction("Add 1D plot for every variable", self)
+        self.act_add_all_1d.triggered.connect(self.add_all_1d_plots)
+        self.btn_more = QtWidgets.QToolButton()
+        self.btn_more.setText("More")
+        self.btn_more.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        more_menu = QtWidgets.QMenu(self.btn_more)
+        more_menu.addAction(self.act_add_all_1d)
+        more_menu.addSeparator()
+        more_menu.addAction(self.act_save_all)
+        more_menu.addAction(self.act_colors)
+        self.btn_more.setMenu(more_menu)
         sol_ctrl_layout = QtWidgets.QHBoxLayout()
+        sol_ctrl_layout.addWidget(QtWidgets.QLabel("Dim:"))
+        sol_ctrl_layout.addWidget(self.combo_dim)
         sol_ctrl_layout.addWidget(QtWidgets.QLabel("X:"))
         sol_ctrl_layout.addWidget(self.combo_add_x)
-        sol_ctrl_layout.addWidget(QtWidgets.QLabel("Y:"))
+        self.lbl_axis_y = QtWidgets.QLabel("Y:")
+        sol_ctrl_layout.addWidget(self.lbl_axis_y)
         sol_ctrl_layout.addWidget(self.combo_add_y)
+        self.lbl_axis_z = QtWidgets.QLabel("Z:")
+        sol_ctrl_layout.addWidget(self.lbl_axis_z)
+        sol_ctrl_layout.addWidget(self.combo_add_z)
         sol_ctrl_layout.addWidget(QtWidgets.QLabel("Mode:"))
         sol_ctrl_layout.addWidget(self.combo_viz_mode)
         sol_ctrl_layout.addWidget(self.btn_add_plot)
         sol_ctrl_layout.addWidget(self.btn_clear_plots)
-        sol_ctrl_layout.addWidget(self.btn_save_all)
-        sol_ctrl_layout.addWidget(self.btn_colors)
+        sol_ctrl_layout.addWidget(self.btn_more)
         self.plot_columns = 2
         self.spin_plot_cols = QtWidgets.QSpinBox()
         self.spin_plot_cols.setRange(1, 4)
@@ -340,6 +486,8 @@ class SolutionUiMixin:
         sol_ctrl_layout.addWidget(self.spin_plot_cols)
         sol_ctrl_layout.addStretch()
         solution_layout.addLayout(sol_ctrl_layout)
+        self.combo_dim.currentIndexChanged.connect(self._on_dimension_changed)
+        self._on_dimension_changed(self.combo_dim.currentIndex())
         # Title
         self.lbl_global_title = QtWidgets.QLabel("Solution Spaces for Unknown Model")
         self.lbl_global_title.setAlignment(QtCore.Qt.AlignCenter)
@@ -357,6 +505,11 @@ class SolutionUiMixin:
         self.plots_layout = QtWidgets.QGridLayout(self.plots_container)
         self.plots_layout.setAlignment(QtCore.Qt.AlignTop)
         sol_scroll.setWidget(self.plots_container)
+        self._plots_empty = EmptyStateOverlay(
+            sol_scroll.viewport(),
+            "No plots yet.\nSelect a system model and press Compute Solution Space.",
+            lambda: not self.plot_widgets,
+        )
         sol_content_layout.addWidget(sol_scroll, stretch=4)
         # Global Legend Area for Solution Spaces
         self.legend_group = QtWidgets.QGroupBox("Legend")
@@ -371,7 +524,7 @@ class SolutionUiMixin:
         data_layout = QtWidgets.QVBoxLayout(self.data_panel)
 
         # Add Export Button
-        btn_export = QtWidgets.QPushButton("Export Data to CSV")
+        btn_export = _secondary(QtWidgets.QPushButton("Export Data to CSV"))
         btn_export.clicked.connect(self.export_csv)
         data_layout.addWidget(btn_export)
 
@@ -392,15 +545,42 @@ class SolutionUiMixin:
         )
         family_tab_layout.addWidget(self.lbl_family_title)
 
+        # Shared legend (variant colours once) and the column control
+        family_bar = QtWidgets.QHBoxLayout()
+        self.family_legend_layout = QtWidgets.QHBoxLayout()
+        self.family_legend_layout.setSpacing(14)
+        family_bar.addLayout(self.family_legend_layout)
+        family_bar.addStretch()
+        self.spin_family_cols = QtWidgets.QSpinBox()
+        self.spin_family_cols.setRange(0, 4)
+        self.spin_family_cols.setPrefix("Cols: ")
+        self.spin_family_cols.setSpecialValueText("Cols: Auto")
+        self.spin_family_cols.setToolTip(
+            "Plots per row. Auto fits as many as the width allows."
+        )
+        self.spin_family_cols.valueChanged.connect(self._layout_family_plots)
+        family_bar.addWidget(self.spin_family_cols)
+        family_tab_layout.addLayout(family_bar)
+        self.family_plot_widgets = []
+
         # Scroll Area for Family Plots
         family_scroll = QtWidgets.QScrollArea()
+        self.family_scroll = family_scroll
         family_scroll.setWidgetResizable(True)
         self.family_plots_container = QtWidgets.QWidget()
         self.family_plots_container.setStyleSheet("background-color: white;")
         self.family_plots_layout = QtWidgets.QGridLayout(self.family_plots_container)
         self.family_plots_layout.setAlignment(QtCore.Qt.AlignTop)
         family_scroll.setWidget(self.family_plots_container)
+        self._family_empty = EmptyStateOverlay(
+            family_scroll.viewport(),
+            "No product family result yet.\nAdd variants, set their requirements, then press Compute Product Family.",
+            lambda: self.family_plots_layout.count() == 0,
+        )
         family_tab_layout.addWidget(family_scroll)
+        self._family_resize = _ResizeWatcher(
+            family_scroll.viewport(), self._layout_family_plots
+        )
 
         self.right_tabs.addTab(self.family_tab, "Product Family Analysis")
 
@@ -429,8 +609,7 @@ class SolutionUiMixin:
         )
         adg_header.addWidget(self.combo_adg_scope)
 
-        self.btn_refresh_adg_list = QtWidgets.QPushButton("\u21bb")
-        self.btn_refresh_adg_list.setFixedWidth(30)
+        self.btn_refresh_adg_list = _secondary(QtWidgets.QPushButton("\u21bb Refresh list"))
         self.btn_refresh_adg_list.setToolTip("Refresh system list")
         self.btn_refresh_adg_list.clicked.connect(self.refresh_adg_system_list)
         adg_header.addWidget(self.btn_refresh_adg_list)
@@ -443,7 +622,7 @@ class SolutionUiMixin:
         self.btn_compute_adg.setEnabled(True)
         adg_header.addWidget(self.btn_compute_adg)
 
-        btn_save_adg = QtWidgets.QPushButton("Save Graph")
+        btn_save_adg = _secondary(QtWidgets.QPushButton("Save Graph"))
         btn_save_adg.clicked.connect(self.save_adg_graph)
         adg_header.addWidget(btn_save_adg)
 
@@ -472,13 +651,51 @@ class SolutionUiMixin:
 
         self.splitter.addWidget(self.right_tabs)
         # Set initial sizes and stretch factors
-        self.splitter.setSizes([400, 800])
+        self.splitter.setSizes([470, 830])
         self.splitter.setStretchFactor(0, 0)  # Left panel doesn't stretch
         self.splitter.setStretchFactor(1, 1)  # Right panel stretches
 
         # Initialize in normal mode (not product family mode)
         self.product_family_mode = False
         self.update_right_tabs_visibility()
+
+    def _on_dimension_changed(self, index: int) -> None:
+        """Show only the axis selectors the chosen plot dimension needs."""
+        dimension = index + 1
+        self.lbl_axis_y.setVisible(dimension >= 2)
+        self.combo_add_y.setVisible(dimension >= 2)
+        self.lbl_axis_z.setVisible(dimension >= 3)
+        self.combo_add_z.setVisible(dimension >= 3)
+        self.combo_viz_mode.setEnabled(dimension == 2)
+
+    def _family_column_count(self) -> int:
+        manual = self.spin_family_cols.value()
+        if manual > 0:
+            return manual
+        # Auto: keep every plot at least ~420 px wide so labels stay readable.
+        return max(1, min(4, self.family_scroll.viewport().width() // 420))
+
+    def _layout_family_plots(self, *_args) -> None:
+        containers = getattr(self, "family_plot_widgets", [])
+        while self.family_plots_layout.count():
+            self.family_plots_layout.takeAt(0)
+        cols = self._family_column_count()
+        for index, container in enumerate(containers):
+            self.family_plots_layout.addWidget(
+                container, index // cols, index % cols, QtCore.Qt.AlignTop
+            )
+        for col in range(4):
+            self.family_plots_layout.setColumnStretch(col, 1 if col < cols else 0)
+
+    def _confirm_clear_plots(self) -> None:
+        count = len(self.plot_widgets)
+        if count > 1:
+            answer = QtWidgets.QMessageBox.question(
+                self, "Clear plots", f"Remove all {count} plots?"
+            )
+            if answer != QtWidgets.QMessageBox.Yes:
+                return
+        self.clear_all_plots()
 
     def on_config_tab_changed(self, index: int):
         """
@@ -570,6 +787,9 @@ class SolutionUiMixin:
                     visible = tab_text != "Product Family Analysis"
 
                 self.right_tabs.setTabVisible(i, visible)
+
+            # A lone tab only repeats the heading, so hide its bar
+            self.right_tabs.tabBar().setVisible(not self.product_family_mode)
 
         finally:
             # Re-enable updates and trigger a single layout refresh

@@ -458,7 +458,9 @@ class _TopologyExecutionMixin:
         recovery_time_s = time.perf_counter() - recovery_started
         _emit_recovery_preview(study, output_context, progress_callback)
         finalization_started = time.perf_counter()
-        output = finalize_topology_output(self, output_context, cancel_callback)
+        output = finalize_topology_output(
+            self, output_context, cancel_callback, progress_callback=progress_callback
+        )
         if convergence_report is not None:
             output["topology_convergence"] = convergence_report
         if result.progressive_resolution is not None:

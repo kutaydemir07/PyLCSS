@@ -183,9 +183,7 @@ def validate_solver_settings(
     if feasibility_tolerance <= 0.0:
         raise ValueError("Feasibility tolerance must be positive.")
 
-    if method == "Differential Evolution":
-        _validate_differential_evolution(settings)
-    elif method == "Nevergrad":
+    if method == "Nevergrad":
         if int(settings.get("num_workers", 1)) < 1:
             raise ValueError("Nevergrad worker count must be at least 1.")
     elif method == "NSGA-II":
@@ -244,43 +242,7 @@ def _parse_constraint(item: Mapping[str, Any]) -> Constraint:
     )
 
 
-def _validate_differential_evolution(settings: Mapping[str, Any]) -> None:
-    if int(settings.get("popsize", 15)) < 1:
-        raise ValueError("Population multiplier must be at least 1.")
 
-    mutation = settings.get("mutation", (0.5, 1.0))
-    mutation_values: tuple[float, ...]
-    if isinstance(mutation, (int, float, np.number)):
-        mutation_values = (float(mutation),)
-    else:
-        try:
-            mutation_values = tuple(float(value) for value in mutation)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                "Differential Evolution mutation must be one number or a "
-                "two-number range."
-            ) from exc
-    if len(mutation_values) not in (1, 2):
-        raise ValueError(
-            "Differential Evolution mutation must be one number or a two-number range."
-        )
-    if not all(np.isfinite(value) and 0.0 <= value < 2.0 for value in mutation_values):
-        raise ValueError("Mutation values must satisfy 0 <= value < 2.")
-    if len(mutation_values) == 2 and mutation_values[0] > mutation_values[1]:
-        raise ValueError("Mutation range minimum cannot exceed its maximum.")
-
-    recombination = _finite_float(
-        settings.get("recombination", 0.7),
-        "Recombination",
-    )
-    if not 0.0 <= recombination <= 1.0:
-        raise ValueError("Recombination must be between 0 and 1.")
-    worker_count = int(settings.get("num_workers", settings.get("workers", 1)))
-    if worker_count != 1:
-        raise ValueError(
-            "Differential Evolution currently requires one worker because "
-            "in-process engineering model callbacks are not safely picklable."
-        )
 
 
 def _validate_nsga2(settings: Mapping[str, Any], objective_count: int) -> None:

@@ -111,6 +111,10 @@ class ProfessionalCadApp(
         self.graph.node_selected.connect(self._on_node_selected)
         self.graph.node_selection_changed.connect(self._on_node_selection_changed)
 
+        from pylcss.user_interface.common.theme_manager import current_theme
+
+        self.apply_theme(current_theme())
+
     def _register_nodes(self):
         """Register all available nodes."""
         for node_class in dict.fromkeys(NODE_CLASS_MAPPING.values()):
@@ -130,21 +134,23 @@ class ProfessionalCadApp(
         main_h_layout = QtWidgets.QHBoxLayout(content_widget)
         main_h_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Left panel: Library
+        # Left panel: Component Library
         self.library = LibraryPanel(self._spawn_node)
+        self.library.setMinimumWidth(220)
+
         left_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         left_splitter.addWidget(self.library)
         left_splitter.setSizes([500])
-        left_splitter.setMinimumWidth(190)
+        left_splitter.setMinimumWidth(220)
 
-        # CENTER AREA
-        center_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        # CENTER AREA: Flexible 3D Viewer + Node Graph (Top Viewer, Bottom Graph by default)
+        self.center_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         self.viewer = CQ3DViewer()
         self.viewer.face_picking_requested.connect(self._start_viewer_face_picking)
         self.viewer.result_field_changed.connect(
             self._on_viewer_result_field_changed
         )
-        center_splitter.addWidget(self.viewer)
+        self.center_splitter.addWidget(self.viewer)
 
         graph_widget = self.graph.widget
         # Enable drops
@@ -154,9 +160,9 @@ class ProfessionalCadApp(
         except Exception:
             logger.debug("Optional UI operation failed.", exc_info=True)
         self._graph_widget = graph_widget
-        center_splitter.addWidget(graph_widget)
-        center_splitter.setSizes([600, 400])
-        center_splitter.setMinimumWidth(480)
+        self.center_splitter.addWidget(graph_widget)
+        self.center_splitter.setSizes([520, 380])
+        self.center_splitter.setMinimumWidth(480)
 
         # Setup context menu for the graph
         try:
@@ -165,10 +171,7 @@ class ProfessionalCadApp(
         except Exception:
             logger.debug("Optional UI operation failed.", exc_info=True)
 
-        # Per-node context menu commands. NodeGraphQt scopes node-context
-        # menu items to a specific node type via its identifier, so this
-        # only appears on FreeCadPartNode right-click. The handler receives
-        # (graph, node).
+        # Per-node context menu commands
         try:
             node_menu = self.graph.get_context_menu("nodes")
             node_menu.add_command(
@@ -177,38 +180,89 @@ class ProfessionalCadApp(
                 node_type="com.cad.freecad_part.FreeCadPartNode",
             )
         except Exception:
-            # NodeGraphQt's node-context menu API changes between versions;
-            # if this signature isn't supported, double-click still works.
             pass
 
-        # Right panel
-        right_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        # Right panel: Inspector & Results Container
+        self.right_container = QtWidgets.QWidget()
+        right_layout = QtWidgets.QVBoxLayout(self.right_container)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+
+        self.right_header = QtWidgets.QWidget()
+        self.right_header.setFixedHeight(28)
+        hdr_layout = QtWidgets.QHBoxLayout(self.right_header)
+        hdr_layout.setContentsMargins(8, 2, 6, 2)
+        self._hdr_title = QtWidgets.QLabel("Inspector")
+        self._hdr_title.setStyleSheet("font-weight: 600; font-size: 11px;")
+        hdr_layout.addWidget(self._hdr_title, 1)
+
+        self.btn_toggle_inspector = QtWidgets.QToolButton()
+        self.btn_toggle_inspector.setText("›")
+        self.btn_toggle_inspector.setToolTip("Collapse Inspector")
+        self.btn_toggle_inspector.setFixedWidth(22)
+        self.btn_toggle_inspector.clicked.connect(self._toggle_inspector_visibility)
+        hdr_layout.addWidget(self.btn_toggle_inspector)
+
+        right_layout.addWidget(self.right_header)
+
+        self.right_body = QtWidgets.QWidget()
+        self.right_body.setObjectName("InspectorBody")
+        body_layout = QtWidgets.QVBoxLayout(self.right_body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+
+        self.results = ResultsPanel()
+        self.results.setVisible(False)
+        try:
+            self.results.view_mode_requested.connect(
+                self._on_results_view_mode_requested
+            )
+            self.results.undeformed_requested.connect(
+                self._on_results_undeformed_requested
+            )
+            self.results.extrema_requested.connect(
+                self._on_results_extrema_requested
+            )
+            self.results.deform_scale_requested.connect(
+                self._on_results_deform_scale_requested
+            )
+        except Exception:
+            logger.debug("Could not connect ResultsPanel signals.", exc_info=True)
+
         self.properties = PropertiesPanel()
         try:
             self.properties.property_changed.connect(self._on_property_changed)
         except Exception:
             logger.debug("Optional UI operation failed.", exc_info=True)
-        self.results = ResultsPanel()
-        # Session events go to the log, not to a panel: the dock under the
-        # inspector is for results only.
+
+        # Session events go to the log, not to a panel
         self.timeline = EventLog()
 
-        right_splitter.addWidget(self.properties)
-        right_splitter.addWidget(self.results)
-        right_splitter.setSizes([500, 260])
-        right_splitter.setMinimumWidth(300)
+        # 3D view mode selector upside at top, properties filling below (single continuous panel)
+        body_layout.addWidget(self.results)
+        body_layout.addWidget(self.properties, 1)
 
-        # Main splitter
-        main_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
-        main_splitter.addWidget(left_splitter)
-        main_splitter.addWidget(center_splitter)
-        main_splitter.addWidget(right_splitter)
-        main_splitter.setSizes([210, 850, 330])
-        main_splitter.setStretchFactor(0, 0)
-        main_splitter.setStretchFactor(1, 1)
-        main_splitter.setStretchFactor(2, 0)
+        self.right_splitter = self.right_body
+        self.right_body.sizes = lambda: [1, 1]
+        self.right_body.setSizes = lambda sizes: None
 
-        main_h_layout.addWidget(main_splitter)
+        right_layout.addWidget(self.right_body, 1)
+        self.right_container.setMinimumWidth(280)
+
+        # Main horizontal splitter
+        self.main_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.main_splitter.addWidget(left_splitter)
+        self.main_splitter.addWidget(self.center_splitter)
+        self.main_splitter.addWidget(self.right_container)
+        self.main_splitter.setCollapsible(0, False)
+        self.main_splitter.setCollapsible(1, False)
+        self.main_splitter.setCollapsible(2, False)
+        self.main_splitter.setSizes([230, 950, 340])
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 4)
+        self.main_splitter.setStretchFactor(2, 1)
+
+        main_h_layout.addWidget(self.main_splitter)
 
         # Set central widget for QMainWindow
         self.setCentralWidget(content_widget)
@@ -395,13 +449,7 @@ class ProfessionalCadApp(
         )
         self.toolbar.addSeparator()
 
-        # ── Edit (icon-only — short labels add noise) ───────────────────
-        # setShortcut() on the action makes Qt route Ctrl+Z / Ctrl+Y to our
-        # handler from a single owner; the previous QShortcut bindings were
-        # removed in _setup_shortcuts to stop the "Ambiguous shortcut" warning.
-        # QKeySequence is imported locally because _setup_shortcuts (the
-        # other caller in this file) does the same -- there's no
-        # module-level import to lean on.
+        # ── Edit ────────────────────────────────────────────────────────
         from PySide6.QtGui import QKeySequence
 
         act_undo = self.toolbar.addAction(_icon("fa5s.undo"), "", self._undo)
@@ -414,35 +462,73 @@ class ProfessionalCadApp(
         act_redo.setToolTip("Redo (Ctrl+Y)")
         self.toolbar.addSeparator()
 
-        # ── Run is the most-used action — give it accent color via icon ─
+        # ── Execution ───────────────────────────────────────────────────
         self.run_action = self.toolbar.addAction(
-            _icon("fa5s.play", "#66BB6A"), "Run", self._run_action
+            _icon("fa5s.play", "#3fb950"), "Run", self._run_action
         )
         self.run_action.setShortcut("F5")
         self.run_action.setToolTip("Run (F5)")
         self.stop_action = self.toolbar.addAction(
-            _icon("fa5s.stop", "#EF5350"), "Stop", self._cancel_execution
+            _icon("fa5s.stop", "#f85149"), "Stop", self._cancel_execution
         )
         self.stop_action.setShortcut("Shift+F5")
         self.stop_action.setToolTip("Stop (Shift+F5)")
 
         self.validate_action = self.toolbar.addAction(
-            _icon("fa5s.check-circle", "#4FC3F7"), "Validate", self._validate_model
+            _icon("fa5s.check-circle", "#d29922"), "Validate", self._validate_model
         )
         self.validate_action.setToolTip("Check the graph")
-        act_report = self.toolbar.addAction(
-            _icon("fa5s.clipboard-list"), "Report", self._generate_report
-        )
-        act_report.setToolTip("Create a model summary")
+        self.toolbar.addSeparator()
+
+        # ── Analysis & Export ───────────────────────────────────────────
         self.save_results_action = self.toolbar.addAction(
             _icon("fa5s.file-export"), "Export Results", self._export_simulation_results
         )
         self.save_results_action.setToolTip("Export the current result")
         self.toolbar.addSeparator()
 
+        # ── Layout Modes ────────────────────────────────────────────────
+        self._layout_group = QtGui.QActionGroup(self)
+        self._layout_group.setExclusive(True)
+        self._layout_actions = {}
+
+        self.act_layout_3d = self.toolbar.addAction(
+            _icon("fa5s.cube"), "3D Focus", lambda: self.set_layout_mode("3d")
+        )
+        self.act_layout_3d.setCheckable(True)
+        self.act_layout_3d.setToolTip("Focus on 3D Viewport")
+        self._layout_group.addAction(self.act_layout_3d)
+        self._layout_actions["3d"] = self.act_layout_3d
+
+        self.act_layout_split = self.toolbar.addAction(
+            _icon("fa5s.columns"), "Split View", lambda: self.set_layout_mode("split")
+        )
+        self.act_layout_split.setCheckable(True)
+        self.act_layout_split.setChecked(True)
+        self.act_layout_split.setToolTip("Split View (3D View + Node Graph)")
+        self._layout_group.addAction(self.act_layout_split)
+        self._layout_actions["split"] = self.act_layout_split
+
+        self.act_layout_graph = self.toolbar.addAction(
+            _icon("fa5s.project-diagram"), "Graph Focus", lambda: self.set_layout_mode("graph")
+        )
+        self.act_layout_graph.setCheckable(True)
+        self.act_layout_graph.setToolTip("Focus on Node Graph Canvas")
+        self._layout_group.addAction(self.act_layout_graph)
+        self._layout_actions["graph"] = self.act_layout_graph
+
+        self.act_layout_orient = self.toolbar.addAction(
+            _icon("fa5s.exchange-alt"), "", self.toggle_split_orientation
+        )
+        self.act_layout_orient.setToolTip("Toggle Split Orientation: Stacked (Top/Bottom) / Side-by-Side")
+        self.toolbar.addSeparator()
+
         # ── View ────────────────────────────────────────────────────────
         act_fit = self.toolbar.addAction(_icon("fa5s.expand"), "", self._fit_all)
         act_fit.setToolTip("Fit view to all (F)")
+        act_reset = self.toolbar.addAction(_icon("fa5s.compress-arrows-alt"), "", self._reset_view)
+        act_reset.setToolTip("Reset 3D View (R)")
+
         self._theme_toolbar_icons = (
             (act_new, "fa5s.file"),
             (act_open, "fa5s.folder-open"),
@@ -451,15 +537,96 @@ class ProfessionalCadApp(
             (act_import, "fa5s.file-import"),
             (act_undo, "fa5s.undo"),
             (act_redo, "fa5s.redo"),
-            (act_report, "fa5s.clipboard-list"),
             (self.save_results_action, "fa5s.file-export"),
+            (self.act_layout_3d, "fa5s.cube"),
+            (self.act_layout_split, "fa5s.columns"),
+            (self.act_layout_graph, "fa5s.project-diagram"),
+            (self.act_layout_orient, "fa5s.exchange-alt"),
             (act_fit, "fa5s.expand"),
+            (act_reset, "fa5s.compress-arrows-alt"),
         )
         self._theme_semantic_toolbar_icons = (
-            (self.run_action, "fa5s.play", "success", "#66BB6A"),
-            (self.stop_action, "fa5s.stop", "danger", "#EF5350"),
-            (self.validate_action, "fa5s.check-circle", "primary", "#4FC3F7"),
+            (self.run_action, "fa5s.play", "success", "#3fb950"),
+            (self.stop_action, "fa5s.stop", "danger", "#f85149"),
+            (self.validate_action, "fa5s.check-circle", "primary", "#d29922"),
         )
+
+    def set_layout_mode(self, mode: str):
+        """Switch center area between 3D focus, Split view, and Node Graph focus."""
+        mode = mode.lower()
+        self._current_layout_mode = mode
+
+        if hasattr(self, "_layout_actions"):
+            act = self._layout_actions.get(mode)
+            if act and not act.isChecked():
+                act.setChecked(True)
+
+        if mode == "3d":
+            self.viewer.setVisible(True)
+            self._graph_widget.setVisible(False)
+            self.center_splitter.setSizes([1000, 0])
+        elif mode == "graph":
+            self.viewer.setVisible(False)
+            self._graph_widget.setVisible(True)
+            self.center_splitter.setSizes([0, 1000])
+        else:  # "split"
+            self.viewer.setVisible(True)
+            self._graph_widget.setVisible(True)
+            sizes = self.center_splitter.sizes()
+            total = sum(sizes) if sum(sizes) > 0 else 1000
+            self.center_splitter.setSizes([int(total * 0.58), int(total * 0.42)])
+
+    def toggle_split_orientation(self):
+        """Toggle center splitter orientation between side-by-side and stacked."""
+        current = self.center_splitter.orientation()
+        new_orient = (
+            QtCore.Qt.Vertical
+            if current == QtCore.Qt.Horizontal
+            else QtCore.Qt.Horizontal
+        )
+        self.center_splitter.setOrientation(new_orient)
+        sizes = self.center_splitter.sizes()
+        total = sum(sizes) if sum(sizes) > 0 else 1000
+        self.center_splitter.setSizes([int(total * 0.55), int(total * 0.45)])
+
+    def _toggle_inspector_visibility(self):
+        """Toggle right inspector collapse / expand."""
+        is_visible = not self.right_splitter.isHidden()
+        self.right_splitter.setVisible(not is_visible)
+        if is_visible:
+            self.btn_toggle_inspector.setText("‹")
+            self.btn_toggle_inspector.setToolTip("Expand Inspector")
+        else:
+            self.btn_toggle_inspector.setText("›")
+            self.btn_toggle_inspector.setToolTip("Collapse Inspector")
+        if is_visible:
+            self.right_container.setMinimumWidth(32)
+            sizes = self.main_splitter.sizes()
+            if len(sizes) == 3:
+                self.main_splitter.setSizes([sizes[0], sizes[1] + sizes[2] - 32, 32])
+        else:
+            self.right_container.setMinimumWidth(280)
+            sizes = self.main_splitter.sizes()
+            if len(sizes) == 3 and sizes[2] < 200:
+                self.main_splitter.setSizes([sizes[0], max(400, sizes[1] - 300), 300])
+
+    def set_stage(self, stage: str):
+        """Adapt CAE workspace layout and focus for the active engineering stage."""
+        stage = stage.lower()
+        self._current_stage = stage
+        if stage in ("geometry", "cad"):
+            self.set_layout_mode("3d")
+            self.statusBar().showMessage("Stage: Parametric CAD & Geometry")
+        elif stage in ("setup", "physics"):
+            self.set_layout_mode("split")
+            self.statusBar().showMessage("Stage: Physics Pre-Processing & Boundary Conditions")
+        elif stage in ("solvers", "simulation"):
+            self.set_layout_mode("split")
+            self.statusBar().showMessage("Stage: Multi-Physics Solvers & Optimization")
+        elif stage in ("results", "insights"):
+            self.set_layout_mode("3d")
+            self._show_results_panel()
+            self.statusBar().showMessage("Stage: Post-Processing & Insights")
 
     def apply_theme(self, theme_name):
         """Apply theme colours to Design Studio's non-palette surfaces."""
@@ -493,6 +660,15 @@ class ProfessionalCadApp(
             retheme_widget_styles(self, theme_name)
         except Exception:
             logger.debug("Optional UI operation failed.", exc_info=True)
+        self.results.apply_theme(theme_name)
+        if hasattr(self, "right_header") and self.right_header is not None:
+            self.right_header.setStyleSheet(
+                f"""
+                background-color: {colors["bg_dark"]};
+                border-bottom: 1px solid {colors["border"]};
+                color: {colors["text_main"]};
+                """
+            )
 
     def _spawn_node(self, node_id, label, x=None, y=None):
         """Spawn a new node in the graph."""

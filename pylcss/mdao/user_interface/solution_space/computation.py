@@ -89,7 +89,7 @@ class SolutionComputationMixin:
             self._has_sampled = True
 
             params = MMSSParameters(
-                solver_type=self.mm_solver_combo.currentData(),
+                solver_type=self.solver_combo.currentData(),
                 decoupling_enabled=True,
             )
 
@@ -364,20 +364,7 @@ class SolutionComputationMixin:
             return
         try:
             dsl, dsu, req_l, req_u = self._multimodal_problem_arrays()
-            num_inputs = len(self.inputs)
-            active_plots = []
-            for widget in self.plot_widgets:
-                x_idx = (
-                    self.inputs.index(widget.x_name)
-                    if widget.x_name in self.inputs
-                    else num_inputs + self.outputs.index(widget.x_name)
-                )
-                y_idx = (
-                    self.inputs.index(widget.y_name)
-                    if widget.y_name in self.inputs
-                    else num_inputs + self.outputs.index(widget.y_name)
-                )
-                active_plots.append((x_idx, y_idx))
+            active_plots = self._plot_axis_indices()
 
             center_slice = bool(
                 hasattr(self, "chk_center_slice") and self.chk_center_slice.isChecked()
@@ -697,27 +684,7 @@ class SolutionComputationMixin:
             parameters = None
             sample_size = self.sample_size_spin.value()
 
-            active_plots = []
-            num_inputs = len(self.inputs)
-            for widget in self.plot_widgets:
-                x_name = widget.x_name
-                y_name = widget.y_name
-
-                x_idx = -1
-                y_idx = -1
-
-                if x_name in self.inputs:
-                    x_idx = self.inputs.index(x_name)
-                elif x_name in self.outputs:
-                    x_idx = num_inputs + self.outputs.index(x_name)
-
-                if y_name in self.inputs:
-                    y_idx = self.inputs.index(y_name)
-                elif y_name in self.outputs:
-                    y_idx = num_inputs + self.outputs.index(y_name)
-
-                if x_idx != -1 and y_idx != -1:
-                    active_plots.append((x_idx, y_idx))
+            active_plots = self._plot_axis_indices()
 
             self.btn_resample.setEnabled(False)
 

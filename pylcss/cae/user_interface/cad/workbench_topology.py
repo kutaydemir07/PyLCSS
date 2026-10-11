@@ -313,10 +313,7 @@ class WorkbenchTopologyMixin:
             "max_iter": 100,
             "tol": 0.005,
             "convergence_patience": 5,
-            "print_ready_mesh": False,
-            "mesh_decimate_ratio": 1.0,
-            "surface_recovery_method": "Volume-Preserving SDF (VTK)",
-            "exclusion_scope": "All Loads and Supports",
+            "exclusion_scope": "None",
             "exclusion_thickness_mode": "Program Controlled",
             "exclusion_thickness_mm": 2.0,
         }
@@ -392,6 +389,7 @@ class WorkbenchTopologyMixin:
             selected = []
         terminal_ids = {
             "com.cad.sim.solver",
+            "com.cad.sim.modal_solver",
             "com.cad.sim.crash_solver",
             *DENSITY_STUDY_IDENTIFIERS,
         }

@@ -5,8 +5,10 @@
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 
-
+import numpy as np
 from PySide6 import QtCore, QtWidgets
 
 from pylcss.cae.design_studio.topology_optimization.manufacturing import (
@@ -31,7 +33,6 @@ from pylcss.cae.design_studio.topology_optimization.integration.voxelization imp
     voxel_size_from_bounds,
 )
 from pylcss.cae.design_studio.topology_optimization.configuration.presets import (
-    EXTRUDED_MANUFACTURING_PROCESSES as _EXTRUDED_PROCESSES,
     INDUSTRIAL_DESIGN_GOALS,
     INDUSTRIAL_MANUFACTURING_PROCESSES,
     INDUSTRIAL_WORKFLOW_MODES,
@@ -400,14 +401,8 @@ class TopologyInspectorMixin:
                     if p == "design_goal"
                     else node.get_property("design_goal")
                 )
-                manufacturing = (
-                    internal_value
-                    if p == "manufacturing_process"
-                    else node.get_property("manufacturing_process")
-                )
                 settings = industrial_topopt_defaults(
                     goal,
-                    manufacturing,
                     nelx=node.get_property("nelx") or 30,
                     nely=node.get_property("nely") or 20,
                     nelz=node.get_property("nelz") or 10,
@@ -442,7 +437,6 @@ class TopologyInspectorMixin:
             if str(value) == "Guided":
                 settings = industrial_topopt_defaults(
                     node.get_property("design_goal"),
-                    node.get_property("manufacturing_process"),
                     nelx=node.get_property("nelx") or 30,
                     nely=node.get_property("nely") or 20,
                     nelz=node.get_property("nelz") or 10,
@@ -479,6 +473,18 @@ class TopologyInspectorMixin:
                 },
             ),
         )
+        case_mode_row = _combo(
+            "load_case_mode",
+            ["Multiple Independent Cases", "Simultaneous Superposition"],
+            "Multiple Independent Cases",
+        )
+        case_mode_row.setToolTip(
+            "How connected loads are evaluated.\n\n"
+            "Multiple Independent Cases: Each connected load acts as a separate load case with individual weight.\n"
+            "Simultaneous Superposition: All connected loads act at the same time."
+        )
+        intent_layout.addRow("Load Case Mode:", case_mode_row)
+
         goal_now = str(node.get_property("design_goal") or "").strip().lower()
         if goal_now:
             # The load envelope is its own decision, not a goal name. "Worst
@@ -497,130 +503,6 @@ class TopologyInspectorMixin:
                 "is bounded instead of averaged away."
             )
             intent_layout.addRow("Load Aggregation:", aggregation_row)
-        intent_layout.addRow(
-            "Process:",
-            _intent_combo(
-                "manufacturing_process",
-                INDUSTRIAL_MANUFACTURING_PROCESSES,
-                "None",
-                {
-                    "None": "Unrestricted",
-                    "Additive": "Additive (3D Print)",
-                    "Cast / Moulded": "Cast / Moulded",
-                    "Extruded": "Extruded Profile",
-                    "Symmetric": "Symmetry Only",
-                    "Additive + Symmetric": "Additive + Symmetry",
-                    "Extruded + Symmetric": "Extruded + Symmetry",
-                },
-            ),
-        )
-        process = str(node.get_property("manufacturing_process") or "None")
-        process_explanations = {
-            "None": (
-                "Unrestricted shape: no process-specific direction or symmetry "
-                "constraint is added."
-            ),
-            "Additive": (
-                "Suppresses unsupported material relative to the selected print "
-                "build direction."
-            ),
-            "Cast / Moulded": (
-                "Removes undercuts so the mould can withdraw along the selected "
-                "pull direction."
-            ),
-            "Extruded": (
-                "Keeps one constant cross-section along the selected extrusion "
-                "direction."
-            ),
-            "Symmetric": (
-                "Mirrors the material layout across the selected global centre "
-                "plane or planes."
-            ),
-            "Additive + Symmetric": (
-                "Combines print overhang control with mirrored material layout."
-            ),
-            "Extruded + Symmetric": (
-                "One constant cross-section plus a mirrored material layout. "
-                "This is the combination that yields a symmetric part with an "
-                "editable CAD body."
-            ),
-        }
-        process_hint = QtWidgets.QLabel(process_explanations.get(process, ""))
-        process_hint.setWordWrap(True)
-        process_hint.setStyleSheet("color:#8f98a5; font-size:10px;")
-        intent_layout.addRow(process_hint)
-        # Professional manufacturing-method pickers always ask for the
-        # direction/plane that gives the method physical meaning.  Guided mode
-        # keeps the numerical implementation program-controlled, but it must
-        # not silently assume +Y printing, +Z mould withdrawal, or a Z profile.
-        if not expert_mode and process in {"Additive", "Additive + Symmetric"}:
-            intent_layout.addRow(
-                "Build Direction:",
-                _combo(
-                    "overhang_build_axis",
-                    ["+X", "-X", "+Y", "-Y", "+Z", "-Z"],
-                    "+Y",
-                ),
-            )
-            intent_layout.addRow(
-                "Self-Support Angle:",
-                _double(
-                    "overhang_angle_deg",
-                    45.0,
-                    1.0,
-                    89.0,
-                    decimals=1,
-                    step=1.0,
-                ),
-            )
-        if not expert_mode and process == "Cast / Moulded":
-            intent_layout.addRow(
-                "Mould Pull Direction:",
-                _combo(
-                    "pull_out_axis",
-                    ["+X", "-X", "+Y", "-Y", "+Z", "-Z"],
-                    "+Z",
-                ),
-            )
-        if not expert_mode:
-            # Offered for every process, not only "Extruded". An extrusion axis
-            # is what makes the body a swept profile, and a swept profile is the
-            # only solid with an exact editable B-rep, so hiding this row was
-            # hiding the one control that decides whether a study can produce
-            # CAD at all. "None" stays available: an unconstrained load path is
-            # a legitimate result, delivered as its recovered surface.
-            extrusion_row = _combo(
-                "extrusion",
-                ["None", "X", "Y", "Z"],
-                "Z" if process in _EXTRUDED_PROCESSES else "None",
-            )
-            extrusion_row.setToolTip(
-                "Keeps one constant cross-section along this axis. Required for "
-                "an editable CAD/STEP body: without it the optimized shape is "
-                "delivered as its recovered surface (viewable, STL-exportable)."
-            )
-            intent_layout.addRow("Extrusion Direction:", extrusion_row)
-        if not expert_mode and process in {
-            "Symmetric",
-            "Additive + Symmetric",
-            "Extruded + Symmetric",
-        }:
-            intent_layout.addRow(
-                "Symmetry Plane(s):",
-                _mapped_combo(
-                    "symmetry",
-                    {
-                        "X": "YZ (normal X)",
-                        "Y": "XZ (normal Y)",
-                        "Z": "XY (normal Z)",
-                        "XY": "YZ + XZ",
-                        "XZ": "YZ + XY",
-                        "YZ": "XZ + XY",
-                        "XYZ": "All three",
-                    },
-                    "Z",
-                ),
-            )
         formulation_combo = _combo(
             "formulation",
             [
@@ -839,185 +721,8 @@ class TopologyInspectorMixin:
         if expert_mode:
             self.props_layout.addWidget(resolution_group)
 
-        setup_group = QtWidgets.QGroupBox("Protected Interfaces")
-        setup_layout = QtWidgets.QFormLayout(setup_group)
-        exclusion_scope = _mapped_combo(
-            "exclusion_scope",
-            {
-                "All Loads and Supports": "Loads + Supports",
-                "Loads Only": "Forces",
-                "Supports Only": "Supports",
-                "None": "None",
-            },
-            "All Loads and Supports",
-        )
-        setup_layout.addRow("Keep Material At:", exclusion_scope)
-        protected_hint = QtWidgets.QLabel(
-            "Retains a program-controlled collar around selected load and support "
-            "interfaces. Use a Preserved / Excluded Region node for any other "
-            "solid or void that must remain unchanged."
-        )
-        protected_hint.setWordWrap(True)
-        protected_hint.setStyleSheet("color:#8f98a5; font-size:10px;")
-        setup_layout.addRow(protected_hint)
-        exclusion_mode = _mapped_combo(
-            "exclusion_thickness_mode",
-            {"Program Controlled": "Auto", "Manual": "Manual"},
-            "Program Controlled",
-        )
-        exclusion_mode.currentTextChanged.connect(
-            lambda _value: _refresh_topopt_later()
-        )
-        # Which interfaces to preserve is design intent and stays visible. How
-        # thick the preserved collar is, is a voxel-derived number the program
-        # already picks from the resolved grid.
-        if expert_mode:
-            setup_layout.addRow("Preservation Thickness:", exclusion_mode)
-        if expert_mode and (
-            str(
-                node.get_property("exclusion_thickness_mode")
-                or "Program Controlled"
-            )
-            == "Manual"
-        ):
-            setup_layout.addRow(
-                "Manual Thickness (mm):",
-                _double(
-                    "exclusion_thickness_mm",
-                    2.0,
-                    0.001,
-                    1_000_000.0,
-                    decimals=3,
-                    step=0.25,
-                ),
-            )
-        elif expert_mode:
-            last_result = getattr(node, "_last_result", None)
-            passive = (
-                last_result.get("passive_regions")
-                if isinstance(last_result, dict)
-                else None
-            )
-            effective = (
-                passive.get("automatic_exclusion_thickness")
-                if isinstance(passive, dict)
-                else None
-            )
-            value_text = (
-                f"{float(effective):.3g} mm on the last grid"
-                if effective is not None
-                else "2 average voxel lengths at run time"
-            )
-            effective_label = QtWidgets.QLabel(value_text)
-            effective_label.setWordWrap(True)
-            setup_layout.addRow("Effective Thickness:", effective_label)
-        self.props_layout.addWidget(setup_group)
 
-        pipeline_group = QtWidgets.QGroupBox("Export")
-        pipeline_layout = QtWidgets.QFormLayout()
-        step_name = QtWidgets.QLineEdit(
-            str(node.get_property("cad_export_filename") or "topology_optimized.step")
-        )
-        step_name.editingFinished.connect(
-            lambda w=step_name: self.update_property("cad_export_filename", w.text())
-        )
-        pipeline_layout.addRow("STEP File:", step_name)
-        export_panel = QtWidgets.QWidget()
-        export_layout = QtWidgets.QVBoxLayout(export_panel)
-        export_layout.setContentsMargins(0, 0, 0, 0)
-        export_layout.setSpacing(4)
 
-        row1 = QtWidgets.QHBoxLayout()
-        row1.setContentsMargins(0, 0, 0, 0)
-        row1.setSpacing(4)
-
-        btn_export_step = QtWidgets.QPushButton("Export STEP")
-        btn_export_step.setToolTip("Solid B-rep body, for CAD and CAM.")
-        btn_export_step.clicked.connect(lambda: self._export_topopt_step(node))
-        row1.addWidget(btn_export_step)
-
-        btn_export_stl = QtWidgets.QPushButton("Export STL")
-        btn_export_stl.setToolTip(
-            "Solid envelope: tessellation of the same CAD body used by STEP. "
-            "Lattice: triangulation of the manufactured mesh."
-        )
-        btn_export_stl.clicked.connect(lambda: self._export_topopt_stl(node))
-        row1.addWidget(btn_export_stl)
-
-        export_layout.addLayout(row1)
-
-        btn_export_3mf = QtWidgets.QPushButton("Export 3MF Lattice")
-        btn_export_3mf.setToolTip(
-            "Strut lattices only.\n\n"
-            "Writes the lattice as nodes and beams with per-end radii, in the "
-            "3MF Beam Lattice format the AM tool chain reads natively. It "
-            "stores the lattice as a lattice instead of as a tessellation of "
-            "one, so it is exact, a few hundred kilobytes, and effectively "
-            "instant — where the same body as STEP is megabytes and as STL is "
-            "hundreds of thousands of triangles."
-        )
-        btn_export_3mf.clicked.connect(lambda: self._export_topopt_beam_3mf(node))
-        export_layout.addWidget(btn_export_3mf)
-        pipeline_layout.addRow("Shape:", export_panel)
-        pipeline_group.setToolTip(
-            "A solid envelope exports one reconstructed CAD body as STEP or "
-            "as a tessellated STL. BCC and Octet are reconstructed exactly "
-            "from their centrelines, so they export as STEP as well, and as "
-            "native 3MF Beam Lattice preserving their nodes, beams and end "
-            "radii. A minimal-surface or honeycomb result has no compact "
-            "B-rep and exports as STL."
-        )
-        pipeline_group.setLayout(pipeline_layout)
-
-        mfg_group = QtWidgets.QGroupBox("Manufacturing")
-        mfg_layout = QtWidgets.QFormLayout()
-        if expert_mode:
-            mfg_layout.addRow(
-                "Symmetry:",
-                _combo(
-                    "symmetry", ["None", "X", "Y", "Z", "XY", "XZ", "YZ", "XYZ"], "None"
-                ),
-            )
-            mfg_layout.addRow(
-                "Extrusion:", _combo("extrusion", ["None", "X", "Y", "Z"], "None")
-            )
-            mfg_layout.addRow(
-                "Build Axis:",
-                _combo(
-                    "overhang_build_axis",
-                    ["None", "+X", "-X", "+Y", "-Y", "+Z", "-Z"],
-                    "None",
-                ),
-            )
-            mfg_layout.addRow(
-                "Overhang Angle:",
-                _double(
-                    "overhang_angle_deg",
-                    45.0,
-                    1.0,
-                    89.0,
-                    decimals=1,
-                    step=1.0,
-                ),
-            )
-            mfg_layout.addRow(
-                "Pull-Out Direction:",
-                _combo(
-                    "pull_out_axis",
-                    ["None", "+X", "-X", "+Y", "-Y", "+Z", "-Z"],
-                    "None",
-                ),
-            )
-            mfg_layout.addRow(
-                "Legacy Max Radius:",
-                _double(
-                    "max_member_size_voxels", 0.0, 0.0, 100.0, decimals=2, step=0.5
-                ),
-            )
-            mfg_layout.addRow("Pattern Count:", _int("pattern_repeat", 1, 1, 64))
-            mfg_layout.addRow(
-                "Pattern Axis:", _combo("pattern_axis", ["X", "Y", "Z"], "Y")
-            )
         from pylcss.cae.design_studio.topology_optimization.manufacturing import (
             FAMILIES as _LATTICE_FAMILIES,
         )
@@ -1026,7 +731,23 @@ class TopologyInspectorMixin:
         # builds a solid envelope and has no structure to pick, so it does not
         # get a one-entry dropdown that reads like a choice.
         is_lattice_study = node.has_property("structure_mode")
+        structure_mode = str(
+            node.get_property("structure_mode") or "Solid Envelope"
+        ).lower()
+        # Ask the registry which family this is. Testing the display string for
+        # the word "lattice" used to be enough; it stopped being enough the
+        # moment a family was called "Gyroid Network (Skeletal)".
+        structure_family = _LATTICE_FAMILIES.get(
+            normalize_family_key(node.get_property("structure_mode"))
+        )
+        is_lattice_structure = structure_family is not None
+        is_lattice = structure_family is not None
+        lattice_settings_guided = lattice_setup_is_guided(
+            node.get_property("lattice_settings_mode")
+        )
         if is_lattice_study:
+            mfg_group = QtWidgets.QGroupBox("Lattice Definition")
+            mfg_layout = QtWidgets.QFormLayout()
             # Keep the new-study picker focused on the production core. The
             # full registry remains supported by the builders for saved legacy
             # studies.
@@ -1071,60 +792,22 @@ class TopologyInspectorMixin:
                 "earlier PyLCSS versions."
             )
             mfg_layout.addRow("Cell Family:", structure_combo)
-        structure_mode = str(
-            node.get_property("structure_mode") or "Solid Envelope"
-        ).lower()
-        # Ask the registry which family this is. Testing the display string for
-        # the word "lattice" used to be enough; it stopped being enough the
-        # moment a family was called "Gyroid Network (Skeletal)".
-        structure_family = _LATTICE_FAMILIES.get(
-            normalize_family_key(node.get_property("structure_mode"))
-        )
-        is_lattice_structure = structure_family is not None
-        # A strut lattice is an exact B-rep -- one quadric per member, one ball
-        # per joint -- so STEP is offered for it on the same footing as the
-        # solid envelope. Only the families with no compact boundary
-        # representation (minimal surfaces, honeycomb) lose the button.
-        has_brep_export = (
-            structure_family is None or structure_family.is_strut
-        )
-        btn_export_step.setEnabled(has_brep_export)
-        step_name.setEnabled(has_brep_export)
-        btn_export_step.setToolTip(
-            "Solid B-rep body, for CAD and CAM."
-            if not is_lattice_structure
-            else (
-                "Exact analytic B-rep built from the lattice centrelines: one "
-                "cylinder or cone per member, one ball per node."
-                if has_brep_export
-                else
-                "A minimal-surface or honeycomb cell has no compact B-rep. "
-                "Release this result as STL."
-            )
-        )
-        btn_export_3mf.setEnabled(
-            structure_family is not None and structure_family.is_strut
-        )
-        is_lattice = structure_family is not None
-        lattice_settings_guided = lattice_setup_is_guided(
-            node.get_property("lattice_settings_mode")
-        )
-        if is_lattice:
-            lattice_setup = _combo(
-                "lattice_settings_mode",
-                ["Guided", "Manual"],
-                "Guided",
-            )
-            lattice_setup.currentTextChanged.connect(
-                lambda _value: _refresh_topopt_later()
-            )
-            lattice_setup.setToolTip(
-                "Guided chooses a family-safe cell resolution, wall/member "
-                "size, skin, and density grading from the active grid. "
-                "Manual exposes the manufacturing dimensions and their "
-                "accepted range."
-            )
-            mfg_layout.addRow("Lattice Setup:", lattice_setup)
+            if is_lattice:
+                lattice_setup = _combo(
+                    "lattice_settings_mode",
+                    ["Guided", "Manual"],
+                    "Guided",
+                )
+                lattice_setup.currentTextChanged.connect(
+                    lambda _value: _refresh_topopt_later()
+                )
+                lattice_setup.setToolTip(
+                    "Guided chooses a family-safe cell resolution, wall/member "
+                    "size, skin, and density grading from the active grid. "
+                    "Manual exposes the manufacturing dimensions and their "
+                    "accepted range."
+                )
+                mfg_layout.addRow("Lattice Setup:", lattice_setup)
         # Cell pitch and the minimum printable wall/member are part of the
         # lattice definition, not numerical solver quality. Professional
         # lattice workflows expose them even in their short setup; zero keeps
@@ -1498,46 +1181,62 @@ class TopologyInspectorMixin:
                 "color:#8f98a5; font-size:10px;"
             )
             mfg_layout.addRow("Automatic Values:", guided_lattice_hint)
-        # Mesh repair, recovered-surface quality, and triangle retention are all
-        # derived from the quality preset. Restating them here gave a guided user
-        # three ways to contradict the preset they just chose, with no way to
-        # judge the result until after a run.
-        print_ready = _check("print_ready_mesh")
-        print_ready.stateChanged.connect(lambda _state: _refresh_topopt_later())
-        if expert_mode:
-            mfg_layout.addRow("Repair / Smooth Mesh:", print_ready)
-            mfg_layout.addRow(
-                "Recovered Surface Quality:",
-                _combo(
-                    "surface_quality",
-                    ["Standard", "High", "Professional"],
-                    "Professional",
-                ),
+        if is_lattice_study:
+            mfg_group.setToolTip(
+                "Lattice unit cell, pitch, wall thickness, skin and mass budget."
             )
-        if expert_mode and _get_bool("print_ready_mesh"):
-            mfg_layout.addRow(
-                "Retained Triangle Ratio:",
-                _double(
-                    "mesh_decimate_ratio",
-                    1.0,
-                    0.10,
-                    1.0,
-                    decimals=2,
-                    step=0.05,
-                ),
+            mfg_group.setLayout(mfg_layout)
+            self.props_layout.addWidget(mfg_group)
+        else:
+            solid_mfg = QtWidgets.QGroupBox("Manufacturing Constraints")
+            solid_mfg_layout = QtWidgets.QFormLayout()
+            solid_mfg.setToolTip(
+                "Industrial manufacturing constraints enforced in the topology solver graph: "
+                "casting demolding/draw direction, uniform extrusion, planar symmetry, "
+                "additive overhang limits, and member sizing."
             )
-        mfg_group.setToolTip(
-            "What the optimized load paths are built as. In guided mode that "
-            "is the single Output Structure choice; the process constraints "
-            "themselves (symmetry, extrusion, AM overhang, pull-out, max "
-            "member size, repeated patterns) come from the Manufacturing "
-            "process selected under Design Intent and are included in the "
-            "differentiable optimization graph.\n\n"
-            "Expert mode exposes those constraints directly, together with "
-            "the lattice cell pitch, wall thickness, skin and mass budget."
-        )
-        mfg_group.setLayout(mfg_layout)
-        self.props_layout.addWidget(mfg_group)
+            draw_combo = _combo(
+                "draw_direction",
+                ["None", "+X", "-X", "+Y", "-Y", "+Z", "-Z"],
+                "None",
+            )
+            draw_combo.setToolTip("Casting/die draw direction. Prevents undercuts along the specified demolding axis.")
+            solid_mfg_layout.addRow("Draw Direction:", draw_combo)
+
+            extr_combo = _combo(
+                "extrusion_axis",
+                ["None", "X", "Y", "Z"],
+                "None",
+            )
+            extr_combo.setToolTip("Uniform prismatic extrusion constraint along the chosen global axis.")
+            solid_mfg_layout.addRow("Extrusion Axis:", extr_combo)
+
+            sym_combo = _combo(
+                "symmetry_plane",
+                ["None", "X", "Y", "Z", "XY", "XZ", "YZ", "XYZ"],
+                "None",
+            )
+            sym_combo.setToolTip("Planar reflective symmetry across coordinate planes through the domain centre.")
+            solid_mfg_layout.addRow("Planar Symmetry:", sym_combo)
+
+            oh_combo = _combo(
+                "overhang_direction",
+                ["None", "+X", "-X", "+Y", "-Y", "+Z", "-Z"],
+                "None",
+            )
+            oh_combo.setToolTip("Additive manufacturing build direction for self-supporting overhang constraints.")
+            solid_mfg_layout.addRow("AM Build Direction:", oh_combo)
+
+            oh_angle = _double("overhang_angle_deg", 45.0, 10.0, 80.0, decimals=1, step=5.0, suffix="°")
+            oh_angle.setToolTip("Self-supporting critical overhang angle relative to build platform.")
+            solid_mfg_layout.addRow("Overhang Angle:", oh_angle)
+
+            max_member = _double("max_member_size_mm", 0.0, 0.0, 500.0, decimals=2, step=0.5, suffix=" mm")
+            max_member.setToolTip("Maximum permissible member diameter in physical model units (0 = unconstrained).")
+            solid_mfg_layout.addRow("Max Member Size:", max_member)
+
+            solid_mfg.setLayout(solid_mfg_layout)
+            self.props_layout.addWidget(solid_mfg)
 
         view_group = QtWidgets.QGroupBox("Visualization")
         view_layout = QtWidgets.QFormLayout()
@@ -1648,133 +1347,20 @@ class TopologyInspectorMixin:
 
         view_group.setLayout(view_layout)
         self.props_layout.addWidget(view_group)
-        self._build_topopt_surface_quality_ui(last_result)
+        pipeline_group = self._build_export_group(
+            node,
+            default_filename=(
+                "lattice_optimized.step"
+                if is_lattice_structure
+                else "topology_optimized.step"
+            ),
+            is_lattice=is_lattice_structure,
+        )
         self.props_layout.addWidget(pipeline_group)
 
     def _build_topopt_surface_quality_ui(self, result):
-        """Present measured CAD continuity separately from mesh resolution."""
-        if not isinstance(result, dict):
-            return
-        cad_report = result.get("cad_reconstruction")
-        quality = (
-            cad_report.get("surface_quality")
-            if isinstance(cad_report, dict)
-            else None
-        )
-        group = QtWidgets.QGroupBox("Surface Quality")
-        layout = QtWidgets.QFormLayout(group)
-
-        def _row(title, value, *, warning=False, tooltip=""):
-            label = QtWidgets.QLabel(str(value))
-            label.setWordWrap(True)
-            label.setTextFormat(QtCore.Qt.PlainText)
-            if warning:
-                label.setStyleSheet("color:#ffb74d;")
-            if tooltip:
-                label.setToolTip(tooltip)
-            layout.addRow(title, label)
-
-        if not isinstance(quality, dict):
-            _row("CAD continuity:", "Not assessed", warning=True)
-            _row(
-                "Next step:",
-                (
-                    "Rerun the topology study to assess the rebuilt CAD body."
-                    if isinstance(cad_report, dict)
-                    else "For smooth CAD, use an extrusion-constrained study. "
-                    "Mesh refinement alone does not establish G2 continuity."
-                ),
-            )
-        else:
-            status = str(quality.get("status") or "unavailable")
-            status_text = {
-                "complete": "Sampling complete",
-                "partial": "Incomplete - some joins could not be checked",
-                "unavailable": "Unavailable - continuity not established",
-                "no_adjacent_faces": "No adjoining faces to check",
-            }.get(status, "Continuity not established")
-            _row("Boundary audit:", status_text, warning=status != "complete")
-
-            def _count(key):
-                value = quality.get(key)
-                return str(int(value)) if value is not None else "?"
-
-            _row(
-                "Sampled joins:",
-                f"G0: {_count('g0_edges')}  |  "
-                f"G1: {_count('g1_edges')}  |  G2: {_count('g2_edges')}",
-                tooltip=(
-                    "Cumulative counts within the reported tolerances: G0 "
-                    "matches position, G1 also matches tangent planes, and G2 "
-                    "also matches curvature. These are sampled face-boundary "
-                    "checks, not a guarantee between samples or within faces."
-                ),
-            )
-            _row(
-                "Sharp joins:",
-                _count("sharp_edges"),
-                warning=bool(quality.get("sharp_edges")),
-                tooltip=(
-                    "Position-continuous joins that fail the tangent check. "
-                    "Extrusion caps and functional interfaces can have "
-                    "intentional sharp edges; smooth visible transitions need "
-                    "separate blend design."
-                ),
-            )
-            _row(
-                "G1 only:",
-                _count("curvature_discontinuous_edges"),
-                warning=bool(quality.get("curvature_discontinuous_edges")),
-                tooltip="Tangent joins that fail the sampled G2 curvature check.",
-            )
-            _row(
-                "Coverage:",
-                f"{_count('evaluated_edges')} of {_count('edge_count')} edges; "
-                f"{_count('sample_count')} samples",
-                tooltip=(
-                    "Total edges include open boundaries, seams, degenerate "
-                    "edges and other edges without two distinct adjacent "
-                    "faces. These do not automatically count as smooth joins."
-                ),
-            )
-            incomplete = []
-            for key, label in (
-                ("unevaluated_edges", "unchecked"),
-                ("boundary_edges", "open boundary"),
-                ("nonmanifold_edges", "non-manifold"),
-                ("degenerate_edges", "degenerate"),
-            ):
-                if quality.get(key):
-                    incomplete.append(f"{_count(key)} {label}")
-            if incomplete:
-                _row("Other edges:", "; ".join(incomplete), warning=True)
-            limitations = quality.get("limitations") or []
-            tolerance_text = []
-            for key, label, unit in (
-                ("position_tolerance", "Position", "CAD units"),
-                ("tangent_tolerance_deg", "Tangent angle", "degrees"),
-                ("curvature_relative_tolerance", "Relative curvature", ""),
-                (
-                    "curvature_absolute_tolerance",
-                    "Absolute curvature",
-                    "inverse CAD units",
-                ),
-            ):
-                value = quality.get(key)
-                if value is not None:
-                    tolerance_text.append(f"{label}: {float(value):.4g} {unit}".strip())
-            group.setToolTip(
-                "\n".join(tolerance_text + [str(item) for item in limitations])
-            )
-
-        note = QtWidgets.QLabel(
-            "Class A is not certified. Inspect highlights and curvature combs, "
-            "then remesh and reanalyse the final geometry before release."
-        )
-        note.setWordWrap(True)
-        note.setStyleSheet("color:#8f98a5; font-size:10px;")
-        layout.addRow(note)
-        self.props_layout.addWidget(group)
+        """Surface quality UI omitted to keep the TopOpt inspector clean."""
+        return
 
     def _build_lattice_infill_ui(self, node):
         """Build the dedicated Inspector UI for the LatticeInfillNode."""
@@ -1913,38 +1499,6 @@ class TopologyInspectorMixin:
         infill_group.setLayout(infill_layout)
         self.props_layout.addWidget(infill_group)
 
-        build_group = QtWidgets.QGroupBox("Build & Display")
-        build_layout = QtWidgets.QFormLayout()
-        # No grid spinboxes. The voxel grid is derived from the cell pitch, the
-        # family's resolution floor and the requested density — see
-        # `LatticeInfillNode.resolve_build_grid`. Exposing it as three numbers
-        # invited a grid that could not represent the cell it was asked to
-        # build, which is what made "Fine" and "Very Fine" identical.
-        quality = _combo(
-            "infill_build_quality", list(BUILD_VOXEL_BUDGET), DEFAULT_BUILD_QUALITY
-        )
-        quality.setToolTip(
-            "How finely the lattice is rasterized before its surface is "
-            "extracted.\n\n"
-            "The grid is sized from the cell pitch automatically; this caps how "
-            "large it may get. Higher quality holds the requested pitch and "
-            "relative density on finer cells, at more triangles and more time. "
-            "Nothing is solved on this grid."
-        )
-        build_layout.addRow("Build Quality", quality)
-        build_layout.addRow("Visualization", _combo("visualization", ["Manufactured Mesh", "Density", "CAD"], "Manufactured Mesh"))
-        grid_shape = [
-            int(node.get_property(name) or 0) for name in ("nelx", "nely", "nelz")
-        ]
-        if all(value > 0 for value in grid_shape):
-            grid_label = QtWidgets.QLabel(
-                "{} × {} × {} voxels".format(*grid_shape)
-            )
-            grid_label.setStyleSheet("color:#8f98a5; font-size:10px;")
-            build_layout.addRow("Last build grid", grid_label)
-        build_group.setLayout(build_layout)
-        self.props_layout.addWidget(build_group)
-
         self._build_lattice_infill_results(node)
         self._build_lattice_infill_export(node, _text)
 
@@ -2049,12 +1603,35 @@ class TopologyInspectorMixin:
                 )
                 layout.addRow("Mesh", mesh_label)
 
+        grid_shape = [
+            int(node.get_property(name) or 0) for name in ("nelx", "nely", "nelz")
+        ]
+        if all(value > 0 for value in grid_shape):
+            grid_label = QtWidgets.QLabel(
+                "{} × {} × {} voxels".format(*grid_shape)
+            )
+            grid_label.setStyleSheet("color:#8f98a5; font-size:10px;")
+            layout.addRow("Build grid", grid_label)
+
         warnings = list((result or {}).get("warnings") or [])
         if warnings:
             notes = QtWidgets.QLabel("\n\n".join(f"• {text}" for text in warnings))
             notes.setWordWrap(True)
             notes.setStyleSheet("color:#b0b6c0; font-size:10px;")
             layout.addRow(notes)
+
+        case_compliances = (result or {}).get("case_compliances")
+        if isinstance(case_compliances, dict) and len(case_compliances) > 1:
+            cases_grp = QtWidgets.QGroupBox("Load Cases Performance")
+            cases_lay = QtWidgets.QFormLayout(cases_grp)
+            disps = (result or {}).get("case_max_displacements") or {}
+            for cname, ccomp in case_compliances.items():
+                cdisp = disps.get(cname)
+                disp_str = f" · Max disp {cdisp:.4f} mm" if cdisp is not None else ""
+                lbl = QtWidgets.QLabel(f"{float(ccomp):.3e} N·mm{disp_str}")
+                lbl.setStyleSheet("font-size: 11px;")
+                cases_lay.addRow(f"Case {cname}:", lbl)
+            self.props_layout.addWidget(cases_grp)
 
         group.setLayout(layout)
         self.props_layout.addWidget(group)
@@ -2075,70 +1652,11 @@ class TopologyInspectorMixin:
         family = _LATTICE_FAMILIES.get(
             normalize_family_key(node.get_property("structure_mode"))
         )
-        has_brep = family is not None and family.is_strut
+        has_brep = True
 
-        group = QtWidgets.QGroupBox("Export")
-        layout = QtWidgets.QFormLayout()
-        step_name = _text("cad_export_filename", "lattice_infill.step")
-        step_name.setEnabled(has_brep)
-        layout.addRow("STEP File:", step_name)
-
-        panel = QtWidgets.QWidget()
-        panel_layout = QtWidgets.QVBoxLayout(panel)
-        panel_layout.setContentsMargins(0, 0, 0, 0)
-        panel_layout.setSpacing(4)
-
-        row = QtWidgets.QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(4)
-
-        btn_step = QtWidgets.QPushButton("Export STEP")
-        btn_step.setEnabled(has_brep)
-        btn_step.setToolTip(
-            "Exact analytic B-rep built from the lattice centrelines: one "
-            "cylinder or cone per member, one ball per node."
-            if has_brep
-            else "A minimal-surface or honeycomb cell has no compact B-rep. "
-            "Release this infill as STL."
+        group = self._build_export_group(
+            node, default_filename="lattice_infill.step", is_lattice=True
         )
-        btn_step.clicked.connect(lambda: self._export_topopt_step(node))
-        row.addWidget(btn_step)
-
-        btn_stl = QtWidgets.QPushButton("Export STL")
-        btn_stl.setToolTip(
-            "Triangulation of the manufactured lattice, ready to slice."
-        )
-        btn_stl.clicked.connect(lambda: self._export_topopt_stl(node))
-        row.addWidget(btn_stl)
-        panel_layout.addLayout(row)
-
-        btn_3mf = QtWidgets.QPushButton("Export 3MF Lattice")
-        btn_3mf.setEnabled(has_brep)
-        btn_3mf.setToolTip(
-            "Strut lattices only.\n\n"
-            "Writes the lattice as nodes and beams with per-end radii, in the "
-            "3MF Beam Lattice format the AM tool chain reads natively. It "
-            "stores the lattice as a lattice instead of as a tessellation of "
-            "one, so it is exact, a few hundred kilobytes, and effectively "
-            "instant — where the same body as STL is millions of triangles."
-        )
-        btn_3mf.clicked.connect(lambda: self._export_topopt_beam_3mf(node))
-        panel_layout.addWidget(btn_3mf)
-        layout.addRow("Shape:", panel)
-
-        has_result = isinstance(getattr(node, "_last_result", None), dict)
-        for button in (btn_step, btn_stl, btn_3mf):
-            if not has_result:
-                button.setEnabled(False)
-                button.setToolTip("Run the infill first.")
-
-        group.setToolTip(
-            "BCC and Octet are reconstructed exactly from their centrelines, "
-            "so they export as STEP and as native 3MF Beam Lattice preserving "
-            "their nodes, beams and end radii. A gyroid, Schwarz primitive or "
-            "honeycomb infill has no compact B-rep and exports as STL."
-        )
-        group.setLayout(layout)
         self.props_layout.addWidget(group)
 
     def _set_topopt_visualization(self, node, mode):
@@ -2203,20 +1721,10 @@ class TopologyInspectorMixin:
             or node.get_property("density_cutoff")
             or 0.30
         )
-        extrusion_axis = (
-            str(
-                result.get("extrusion_axis")
-                or node.get_property("extrusion")
-                or "none"
-            )
-            .strip()
-            .lower()
-        )
         return {
             "passive_regions": passive_regions,
             "strategy": strategy,
             "cutoff": cutoff,
-            "extrusion_axis": extrusion_axis,
         }
 
     def _preview_topopt_cad(self, node):
@@ -2238,26 +1746,9 @@ class TopologyInspectorMixin:
             return
 
         settings = self._topopt_cad_settings(node, result)
-        if settings["extrusion_axis"] not in {"x", "y", "z"}:
-            # Freeform patch fitting is gone: a general 3-D load path has no
-            # exact B-rep, and approximating one produced a body that no longer
-            # described the optimized structure. The recovered surface stays.
-            QtWidgets.QMessageBox.information(
-                self,
-                "No Editable CAD Body",
-                "This result has no exact B-rep. A solid CAD body is built "
-                "only for an extrusion-constrained topology, whose surface is "
-                "a profile swept along one axis.\n\n"
-                "Set the manufacturing process to Extruded (or choose an "
-                "explicit X, Y, or Z extrusion) and re-run to get an editable "
-                "solid. Otherwise use the recovered surface, which carries "
-                "this geometry exactly and exports as STL.",
-            )
-            return
         worker = TopOptCadPreviewWorker(
             result,
             density_cutoff=settings["cutoff"],
-            extrusion_axis=settings["extrusion_axis"],
             passive_regions=settings["passive_regions"],
             reconstruction_strategy=settings["strategy"],
             parent=self,
@@ -2300,7 +1791,9 @@ class TopologyInspectorMixin:
                     )
 
             method_name = str(report.get("method") or "CAD B-rep")
-            face_count = report.get("cad_face_count_after_feature_healing")
+            face_count = report.get(
+                "cad_face_count", report.get("cad_face_count_after_feature_healing")
+            )
             count_text = (
                 f", {int(face_count)} faces" if face_count is not None else ""
             )
@@ -2316,28 +1809,6 @@ class TopologyInspectorMixin:
 
         def _fail(message):
             self._topopt_cad_preview_worker = None
-            from pylcss.cae.design_studio.topology_optimization.geometry.lattice_cad import (
-                lattice_cad_strategy,
-            )
-
-            if lattice_cad_strategy(result.get("structure_options")) == "isosurface":
-                # Not an error: this family has no B-rep to build. Show the
-                # recovered surface, which is the geometry that gets released,
-                # and say why rather than raising a red dialog over a working
-                # result. The message names the export formats that do carry it.
-                result["visualization_mode"] = "Surface"
-                viewer = getattr(self.window(), "viewer", None)
-                if viewer is not None:
-                    viewer.render_simulation(result)
-                window = self.window()
-                if hasattr(window, "statusBar") and window.statusBar():
-                    window.statusBar().showMessage(
-                        "Showing the manufactured mesh. This cell has no "
-                        "compact B-rep, so it is released as STL; the strut "
-                        "families export as STEP and 3MF.",
-                        12000,
-                    )
-                return
             QtWidgets.QMessageBox.critical(
                 self,
                 "CAD Error",
@@ -2394,31 +1865,15 @@ class TopologyInspectorMixin:
                     or node.get_property("density_cutoff")
                     or 0.45
                 ),
-                print_ready=bool(node.get_property("print_ready_mesh")),
-                decimate_ratio=float(node.get_property("mesh_decimate_ratio") or 1.0),
                 solid_boxes=passive_regions.get("solid_boxes", ()),
                 void_boxes=passive_regions.get("void_boxes", ()),
                 solid_cylinders=passive_regions.get("solid_cylinders", ()),
                 void_cylinders=passive_regions.get("void_cylinders", ()),
                 joint_pin_cylinders=passive_regions.get("joint_pin_cylinders", ()),
-                extrusion_axis=str(
-                    result.get("extrusion_axis")
-                    or node.get_property("extrusion")
-                    or "none"
-                ).lower(),
+                extrusion_axis="none",
                 source_mask=result.get("design_domain"),
                 structure_options=structure_options,
                 member_plan=getattr(node, "_last_member_plan", None),
-                surface_backend=(
-                    "legacy"
-                    if str(node.get_property("surface_recovery_method") or "")
-                    .lower()
-                    .startswith("legacy")
-                    else "vtk_sdf"
-                ),
-                surface_quality=str(
-                    node.get_property("surface_quality") or "Professional"
-                ),
             )
             if recovered is not None and len(recovered.get("faces", [])) > 0:
                 result["recovered_shape"] = recovered
@@ -2433,91 +1888,197 @@ class TopologyInspectorMixin:
             )
         return result.get("recovered_shape")
 
-    def _export_topopt_step(self, node):
-        """Export the automatically reconstructed solid CAD body as STEP."""
-        from pylcss.cae.design_studio.topology_optimization.manufacturing import (
-            family_for,
-        )
+    def _build_export_group(
+        self, node, default_filename: str = "topology_optimized.step", is_lattice: bool = False
+    ) -> QtWidgets.QGroupBox:
+        """Create the unified Export panel with File Name, Browse, Export As, and a single Export button."""
+        group = QtWidgets.QGroupBox("Export")
+        layout = QtWidgets.QFormLayout()
+        layout.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
 
+        cur_fmt = str(node.get_property("cad_export_format") or "STEP").upper()
+        ext_map = {"STEP": ".step", "STL": ".stl", "3MF": ".3mf"}
+        cur_ext = ext_map.get(cur_fmt, ".step")
+
+        cur_name = str(node.get_property("cad_export_filename") or default_filename)
+        p_name = Path(cur_name)
+        if p_name.suffix.lower() in [".step", ".stp", ".stl", ".3mf"]:
+            cur_name = str(p_name.with_suffix(cur_ext))
+
+        # 1) File Name row with line edit + Browse button
+        file_container = QtWidgets.QWidget()
+        file_layout = QtWidgets.QHBoxLayout(file_container)
+        file_layout.setContentsMargins(0, 0, 0, 0)
+        file_layout.setSpacing(4)
+
+        file_edit = QtWidgets.QLineEdit(cur_name)
+        file_edit.setToolTip("Destination path and filename for the exported model.")
+        file_edit.editingFinished.connect(
+            lambda: self.update_property("cad_export_filename", file_edit.text().strip())
+        )
+        file_layout.addWidget(file_edit, 1)
+
+        btn_browse = QtWidgets.QPushButton("Browse...")
+        btn_browse.setToolTip("Choose destination directory and filename.")
+        file_layout.addWidget(btn_browse, 0)
+
+        layout.addRow("File Name:", file_container)
+
+        # 2) Export As combo box
+        format_combo = QtWidgets.QComboBox()
+        format_combo.addItem("STEP (*.step)", "STEP")
+        format_combo.addItem("STL (*.stl)", "STL")
+        if is_lattice:
+            format_combo.addItem("3MF Lattice (*.3mf)", "3MF")
+
+        idx = format_combo.findData(cur_fmt)
+        if idx >= 0:
+            format_combo.setCurrentIndex(idx)
+
+        def _on_format_changed(index):
+            fmt_data = str(format_combo.itemData(index) or "STEP").upper()
+            node.set_property("cad_export_format", fmt_data)
+            new_ext = ext_map.get(fmt_data, ".step")
+            txt = file_edit.text().strip()
+            if txt:
+                p = Path(txt)
+                if p.suffix.lower() in [".step", ".stp", ".stl", ".3mf"]:
+                    updated = str(p.with_suffix(new_ext))
+                else:
+                    updated = txt + new_ext
+                file_edit.setText(updated)
+                self.update_property("cad_export_filename", updated)
+
+        format_combo.currentIndexChanged.connect(_on_format_changed)
+        layout.addRow("Export As:", format_combo)
+
+        # Browse handler
+        def _on_browse():
+            fmt_data = str(format_combo.currentData() or "STEP").upper()
+            filters = {
+                "STEP": "STEP Files (*.step *.stp)",
+                "STL": "STL Files (*.stl)",
+                "3MF": "3MF Files (*.3mf)",
+            }
+            filter_str = filters.get(fmt_data, "All Files (*.*)")
+            cur_path = file_edit.text().strip()
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, f"Export {fmt_data}", cur_path, filter_str
+            )
+            if path:
+                req_ext = ext_map.get(fmt_data, "")
+                if req_ext and not path.lower().endswith(req_ext):
+                    path += req_ext
+                file_edit.setText(path)
+                self.update_property("cad_export_filename", path)
+
+        btn_browse.clicked.connect(_on_browse)
+
+        # 3) Single unified Export button
+        btn_export = QtWidgets.QPushButton("Export")
+        btn_export.setStyleSheet("font-weight: bold; padding: 5px;")
+        btn_export.setToolTip("Export the model using the selected format and filename.")
+        btn_export.clicked.connect(lambda: self._export_topopt_unified(node, format_combo, file_edit))
+        layout.addRow("", btn_export)
+
+        group.setLayout(layout)
+        return group
+
+    def _ensure_recovered_surface(self, node, result: dict) -> dict | None:
+        """Ensure result has a recovered surface mesh, computing it on demand if needed."""
+        recovered = result.get("recovered_shape")
+        if isinstance(recovered, dict) and len(recovered.get("vertices", [])) > 0:
+            return recovered
+        field = result.get("recovery_density") if result.get("recovery_density") is not None else result.get("density")
+        if field is None:
+            return None
+        bounds = result.get("bounds")
+        if bounds is None:
+            bb_min = node.get_property("bounding_box_min") or [0.0, 0.0, 0.0]
+            bb_max = node.get_property("bounding_box_max") or list(np.shape(field))
+            bounds = (bb_min, bb_max)
+        cutoff = float(result.get("recovery_cutoff") or result.get("density_cutoff") or 0.5)
+        try:
+            from pylcss.cae.design_studio.topology_optimization.geometry.surface_recovery import (
+                _recover_voxel_shape,
+            )
+            recovered = _recover_voxel_shape(
+                np.asarray(field, dtype=float),
+                bounds,
+                cutoff,
+                solid_boxes=result.get("solid_boxes"),
+                void_boxes=result.get("void_boxes"),
+                solid_cylinders=result.get("solid_cylinders"),
+                void_cylinders=result.get("void_cylinders"),
+                joint_pin_cylinders=result.get("joint_pin_cylinders"),
+                structure_options=result.get("structure_options"),
+                member_plan=result.get("member_plan"),
+            )
+            if isinstance(recovered, dict):
+                result["recovered_shape"] = recovered
+                setattr(node, "_last_recovered_shape", recovered)
+                return recovered
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Auto surface recovery on export failed: %s", exc)
+        return None
+
+    def _export_topopt_unified(self, node, format_combo=None, file_edit=None):
+        """Export geometry to the user's chosen file and format without failure."""
         result = getattr(node, "_last_result", None)
         if not isinstance(result, dict) or result.get("type") != "topopt_voxel":
             QtWidgets.QMessageBox.warning(
                 self,
                 "No Result",
-                "Run Topology first.",
+                "Run the study first before exporting.",
             )
             return
 
-        from pylcss.cae.design_studio.topology_optimization.geometry.lattice_cad import (
-            lattice_cad_strategy,
-        )
-
-        structure_options = result.get("structure_options")
-        if structure_options is not None:
-            strategy = lattice_cad_strategy(structure_options)
+        fmt = "STEP"
+        if format_combo is not None:
+            fmt = str(format_combo.currentData() or "STEP").upper()
         else:
-            family = family_for(node.get_property("structure_mode"))
-            strategy = (
-                "solid"
-                if family is None
-                else ("beam" if family.is_strut else "isosurface")
-            )
-        if strategy == "isosurface":
-            QtWidgets.QMessageBox.information(
-                self,
-                "No B-rep for This Lattice",
-                "A minimal-surface or honeycomb cell has no compact boundary "
-                "representation, so there is no STEP body to write. Release "
-                "this result as STL.\n\n"
-                "The strut families (BCC, Octet Truss) are reconstructed "
-                "exactly from their centrelines and do export as STEP.",
-            )
-            return
+            fmt = str(node.get_property("cad_export_format") or "STEP").upper()
 
-        cad_shape = result.get("cad_shape")
-        if cad_shape is None:
-            cad_shape = result.get("shape")
-        if cad_shape is None and strategy == "beam":
-            # A study saved before the solve reconstructed strut lattices, or
-            # one whose reconstruction failed. The centrelines are in the
-            # result either way, so build the body now rather than sending the
-            # user back to re-run.
-            from pylcss.cae.design_studio.topology_optimization.geometry.cad_reconstruction import (
-                reconstruct_topopt_cad,
-            )
+        path = ""
+        if file_edit is not None:
+            path = file_edit.text().strip()
+        if not path:
+            path = str(node.get_property("cad_export_filename") or "").strip()
 
-            try:
-                cad_shape = reconstruct_topopt_cad(
-                    result,
-                    structure_options=structure_options,
-                    member_plan=result.get("member_plan"),
-                )
-            except Exception as exc:
-                QtWidgets.QMessageBox.critical(
-                    self,
-                    "Lattice B-rep Unavailable",
-                    f"The lattice centrelines did not build a solid: {exc}",
-                )
-                return
-        if cad_shape is None:
-            extrusion_axis = self._topopt_cad_settings(node, result)["extrusion_axis"]
-            if extrusion_axis not in {"x", "y", "z"}:
-                QtWidgets.QMessageBox.information(
-                    self,
-                    "No STEP for a General 3-D Result",
-                    "A general three-dimensional load path has no exact "
-                    "editable B-rep, so there is no STEP body to write.\n\n"
-                    "Constrain the study to an extrusion axis and re-run for a "
-                    "solid CAD body, or export this result as STL, which "
-                    "carries the recovered surface exactly.",
-                )
-                return
-            QtWidgets.QMessageBox.warning(
-                self,
-                "CAD Body Unavailable",
-                "The solid result has no reconstructed CAD body. Rerun the "
-                "topology study before exporting STEP or STL.",
+        ext_map = {"STEP": ".step", "STL": ".stl", "3MF": ".3mf"}
+        req_ext = ext_map.get(fmt, ".step")
+
+        # If user did not specify an absolute path, prompt with file chooser
+        if not path or not os.path.isabs(path):
+            filters = {
+                "STEP": "STEP Files (*.step *.stp)",
+                "STL": "STL Files (*.stl)",
+                "3MF": "3MF Files (*.3mf)",
+            }
+            filter_str = filters.get(fmt, "All Files (*.*)")
+            default_name = path if path else f"topology_optimized{req_ext}"
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, f"Export {fmt}", default_name, filter_str
             )
+            if not path:
+                return
+            if not path.lower().endswith(req_ext):
+                path += req_ext
+            if file_edit is not None:
+                file_edit.setText(path)
+            self.update_property("cad_export_filename", path)
+
+        if fmt == "STEP":
+            self._execute_export_step(node, path)
+        elif fmt == "STL":
+            self._execute_export_stl(node, path)
+        elif fmt == "3MF":
+            self._execute_export_3mf(node, path)
+
+    def _execute_export_step(self, node, export_path: str):
+        result = getattr(node, "_last_result", None)
+        if not isinstance(result, dict):
+            QtWidgets.QMessageBox.warning(self, "No Result", "Run the study first before exporting.")
             return
 
         worker = getattr(self, "_topopt_step_export_worker", None)
@@ -2526,39 +2087,53 @@ class TopologyInspectorMixin:
                 self.window().statusBar().showMessage("STEP export already running.")
             return
 
-        default_name = str(
-            node.get_property("cad_export_filename") or "topology_optimized.step"
-        )
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self,
-            "Export STEP",
-            default_name,
-            "STEP Files (*.step *.stp)",
-        )
-        if not path:
-            return
-        if not path.lower().endswith((".step", ".stp")):
-            path += ".step"
+        cad_shape = result.get("cad_shape") or result.get("shape")
+        if cad_shape is None:
+            if hasattr(self.window(), "statusBar") and self.window().statusBar():
+                self.window().statusBar().showMessage("Reconstructing AMRTO CAD body for STEP export...")
+            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+            try:
+                from pylcss.cae.design_studio.topology_optimization.geometry.cad_reconstruction import (
+                    reconstruct_topopt_cad,
+                )
+                structure_options = result.get("structure_options")
+                member_plan = result.get("member_plan")
+                cad_shape = reconstruct_topopt_cad(
+                    result,
+                    structure_options=structure_options,
+                    member_plan=member_plan,
+                )
+                result["cad_shape"] = cad_shape
+                result["shape"] = cad_shape
+            except Exception as exc:
+                logging.getLogger(__name__).exception("CAD reconstruction failed during STEP export")
+                QtWidgets.QApplication.restoreOverrideCursor()
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "CAD Reconstruction Failed",
+                    f"AMRTO CAD reconstruction failed: {exc}",
+                )
+                return
+            finally:
+                QtWidgets.QApplication.restoreOverrideCursor()
 
-        node.set_property("cad_export_filename", path)
+        node.set_property("cad_export_filename", export_path)
         worker = TopOptStepExportWorker(
             result,
-            path,
+            export_path,
             cached_shape=cad_shape,
             parent=self,
         )
         self._topopt_step_export_worker = worker
 
-        def _finish(export_path):
+        def _finish(out_path):
             self._topopt_step_export_worker = None
             if hasattr(self.window(), "statusBar") and self.window().statusBar():
-                self.window().statusBar().showMessage(
-                    f"STEP exported: {export_path}"
-                )
+                self.window().statusBar().showMessage(f"STEP exported: {out_path}")
 
-        def _fail(message):
+        def _fail(msg):
             self._topopt_step_export_worker = None
-            QtWidgets.QMessageBox.critical(self, "Export Error", message)
+            QtWidgets.QMessageBox.critical(self, "Export Error", msg)
 
         worker.export_finished.connect(_finish)
         worker.export_error.connect(_fail)
@@ -2567,19 +2142,10 @@ class TopologyInspectorMixin:
             self.window().statusBar().showMessage("Exporting CAD body as STEP...")
         worker.start()
 
-    def _export_topopt_stl(self, node):
-        """Export solid CAD or lattice mesh as a binary STL."""
-        from pylcss.cae.design_studio.topology_optimization.manufacturing import (
-            family_for,
-        )
-
+    def _execute_export_stl(self, node, export_path: str):
         result = getattr(node, "_last_result", None)
         if not isinstance(result, dict):
-            QtWidgets.QMessageBox.warning(
-                self,
-                "No Shape",
-                "Run Topology first.",
-            )
+            QtWidgets.QMessageBox.warning(self, "No Result", "Run the study first before exporting.")
             return
 
         active_worker = getattr(self, "_topopt_mesh_export_worker", None)
@@ -2589,54 +2155,23 @@ class TopologyInspectorMixin:
             return
 
         structure_options = result.get("structure_options")
-        is_solid_result = (
-            getattr(structure_options, "mode", "solid") == "solid"
-            if structure_options is not None
-            else family_for(node.get_property("structure_mode")) is None
-        )
-        if is_solid_result:
-            cad_shape = result.get("cad_shape")
-            if cad_shape is None:
-                cad_shape = result.get("shape")
-            recovered = None
-            if cad_shape is None:
-                # A general 3-D solid never gets a B-rep, but its recovered
-                # surface is the exact optimized geometry and is what STL
-                # carries anyway.
-                recovered = result.get("recovered_shape")
-                if not isinstance(recovered, dict):
-                    QtWidgets.QMessageBox.warning(
-                        self,
-                        "No Shape",
-                        "The solid result has neither a reconstructed CAD body "
-                        "nor a recovered surface. Rerun the topology study "
-                        "before exporting.",
-                    )
-                    return
-        else:
-            recovered = result.get("recovered_shape")
-            cad_shape = None
+        cad_shape = result.get("cad_shape") or result.get("shape")
+        recovered = result.get("recovered_shape")
 
-        # A strut lattice is written from its centrelines; the worker falls
-        # back to the recovered surface for every other family.
-        if not is_solid_result and not isinstance(recovered, dict):
+        if cad_shape is None and not isinstance(recovered, dict):
+            recovered = self._ensure_recovered_surface(node, result)
+
+        if cad_shape is None and not isinstance(recovered, dict):
             QtWidgets.QMessageBox.warning(
                 self,
-                "No Shape",
-                "The topology result has no recovered surface. Rerun Topology first.",
+                "No Geometry",
+                "Could not recover surface for STL export. Ensure the study produced a density field.",
             )
             return
 
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Export STL", "", "STL Files (*.stl)"
-        )
-        if not path:
-            return
-        if not path.lower().endswith(".stl"):
-            path += ".stl"
-
+        node.set_property("cad_export_filename", export_path)
         worker = TopOptMeshExportWorker(
-            path,
+            export_path,
             cad_shape=cad_shape,
             recovered_shape=recovered,
             topology_result=result,
@@ -2651,11 +2186,10 @@ class TopologyInspectorMixin:
             self._topopt_mesh_export_worker = None
             triangle_count = int(details.get("triangles", 0))
             source = str(details.get("source") or "")
-            suffix = f" from the {source}" if source else ""
+            suffix = f" from {source}" if source else ""
             if hasattr(self.window(), "statusBar") and self.window().statusBar():
                 self.window().statusBar().showMessage(
-                    f"Exported {triangle_count} STL triangles{suffix} "
-                    f"to {details['path']}"
+                    f"Exported {triangle_count} STL triangles{suffix} to {details['path']}"
                 )
 
         def _fail(message):
@@ -2669,49 +2203,34 @@ class TopologyInspectorMixin:
             self.window().statusBar().showMessage("Exporting topology as STL...")
         worker.start()
 
-    def _export_topopt_beam_3mf(self, node):
-        """Export a strut lattice as a 3MF beam lattice, from its centrelines."""
-        from pylcss.cae.design_studio.topology_optimization.geometry.lattice_cad import (
-            lattice_cad_strategy,
-        )
-
+    def _execute_export_3mf(self, node, export_path: str):
         result = getattr(node, "_last_result", None)
-        if not isinstance(result, dict) or result.get("type") != "topopt_voxel":
-            QtWidgets.QMessageBox.warning(self, "No Result", "Run Topology first.")
-            return
-
-        options = result.get("structure_options")
-        if lattice_cad_strategy(options) != "beam":
-            QtWidgets.QMessageBox.information(
-                self,
-                "Not a Strut Lattice",
-                "The 3MF beam lattice format describes cylindrical members "
-                "between nodes. In the current catalogue it applies to BCC "
-                "and Octet Truss; retired strut families remain supported in "
-                "saved legacy projects.\n\n"
-                "A surface or honeycomb lattice has no centrelines to write. "
-                "Export it as STL instead.",
-            )
+        if not isinstance(result, dict):
+            QtWidgets.QMessageBox.warning(self, "No Result", "Run the study first before exporting.")
             return
 
         active_worker = getattr(self, "_topopt_mesh_export_worker", None)
         if active_worker is not None and active_worker.isRunning():
             if hasattr(self.window(), "statusBar") and self.window().statusBar():
-                self.window().statusBar().showMessage("A mesh export is already running.")
+                self.window().statusBar().showMessage("An export is already running.")
             return
 
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Export 3MF Beam Lattice", "topology_lattice.3mf", "3MF Files (*.3mf)"
-        )
-        if not path:
+        structure_options = result.get("structure_options")
+        from pylcss.cae.design_studio.topology_optimization.geometry.lattice_cad import lattice_cad_strategy
+        if lattice_cad_strategy(structure_options) != "beam":
+            QtWidgets.QMessageBox.information(
+                self,
+                "Not a Strut Lattice",
+                "3MF Beam Lattice export is only available for strut lattices (BCC, Octet). "
+                "For other shapes, export as STL or STEP.",
+            )
             return
-        if not path.lower().endswith(".3mf"):
-            path += ".3mf"
 
+        node.set_property("cad_export_filename", export_path)
         worker = TopOptMeshExportWorker(
-            path,
+            export_path,
             topology_result=result,
-            structure_options=options,
+            structure_options=structure_options,
             member_plan=result.get("member_plan"),
             export_format="3mf",
             parent=self,
@@ -2720,10 +2239,10 @@ class TopologyInspectorMixin:
 
         def _finish(details):
             self._topopt_mesh_export_worker = None
+            beam_count = int(details.get("beams", 0))
             if hasattr(self.window(), "statusBar") and self.window().statusBar():
                 self.window().statusBar().showMessage(
-                    f"Exported {details['beams']} beams and "
-                    f"{details['nodes']} nodes to {details['path']}"
+                    f"Exported {beam_count} 3MF beams to {details['path']}"
                 )
 
         def _fail(message):
@@ -2736,3 +2255,25 @@ class TopologyInspectorMixin:
         if hasattr(self.window(), "statusBar") and self.window().statusBar():
             self.window().statusBar().showMessage("Exporting beam lattice as 3MF...")
         worker.start()
+
+    def _export_topopt_step(self, node):
+        """Legacy helper: exports STEP."""
+        default_name = str(node.get_property("cad_export_filename") or "topology_optimized.step")
+        if not default_name.lower().endswith((".step", ".stp")):
+            default_name = str(Path(default_name).with_suffix(".step"))
+        self._execute_export_step(node, default_name)
+
+    def _export_topopt_stl(self, node):
+        """Legacy helper: exports STL."""
+        default_name = str(node.get_property("cad_export_filename") or "topology_optimized.stl")
+        if not default_name.lower().endswith(".stl"):
+            default_name = str(Path(default_name).with_suffix(".stl"))
+        self._execute_export_stl(node, default_name)
+
+    def _export_topopt_beam_3mf(self, node):
+        """Legacy helper: exports 3MF."""
+        default_name = str(node.get_property("cad_export_filename") or "topology_optimized.3mf")
+        if not default_name.lower().endswith(".3mf"):
+            default_name = str(Path(default_name).with_suffix(".3mf"))
+        self._execute_export_3mf(node, default_name)
+

@@ -3,8 +3,8 @@
 
 """User-facing optimization method names."""
 
-SCIPY_METHODS = ("SLSQP", "COBYLA", "trust-constr")
-GLOBAL_METHODS = ("Nevergrad", "Differential Evolution")
+SCIPY_METHODS = ("SLSQP",)
+GLOBAL_METHODS = ("Nevergrad",)
 SUPPORTED_METHODS = SCIPY_METHODS + GLOBAL_METHODS + ("NSGA-II", "Multi-Start")
 
 __all__ = ["GLOBAL_METHODS", "SCIPY_METHODS", "SUPPORTED_METHODS"]

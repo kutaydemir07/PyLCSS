@@ -7,53 +7,89 @@ from __future__ import annotations
 from PySide6 import QtCore, QtGui, QtWidgets
 
 
-def _get_node_category_badge(node_item) -> tuple[str, QtGui.QColor, QtGui.QColor]:
-    """Return category title, header start color, and header end color based on node type and role border color."""
+def _get_node_category_badge(node_item) -> tuple[str, QtGui.QColor]:
+    """Return category title and calm, disciplined accent color based on node type."""
     node_type = str(getattr(node_item, "type_", "") or "").lower()
     node_name = str(getattr(node_item, "name", "") or "").lower()
 
-    # Category matching badge text
     badge = ""
-    if "input" in node_type or "input" in node_name:
-        badge = "INPUT"
-    elif "output" in node_type or "output" in node_name:
-        badge = "OUTPUT"
-    elif "freecad" in node_type or "cad" in node_type or "part" in node_name:
-        badge = "CAD"
-    elif "mesh" in node_type or "fea" in node_type or "boundary" in node_type:
-        badge = "FEA"
-    elif "crash" in node_type or "impact" in node_type or "radioss" in node_type:
+    # Specific engineering disciplines checked first before generic substrings
+    if "crash" in node_type or "impact" in node_type or "radioss" in node_type:
         badge = "IMPACT"
-    elif "topopt" in node_type or "topology" in node_type or "opt" in node_type:
+    elif "topopt" in node_type or "topology" in node_type or "lattice" in node_type:
         badge = "OPT"
-    elif "custom_block" in node_type or "code" in node_type or "function" in node_name:
+    elif "constraint" in node_type or "pressure" in node_type or "load" in node_type:
+        badge = "LOAD"
+    elif "mesh" in node_type or "fea" in node_type or "material" in node_type or "component" in node_type or "solver" in node_type:
+        badge = "FEA"
+    elif "number" in node_type or "variable" in node_type or "select" in node_type or ("input" in node_type or "input" in node_name):
+        badge = "INPUT"
+    elif "export" in node_type or "output" in node_type or "output" in node_name or "analysis" in node_type or "properties" in node_type:
+        badge = "OUTPUT"
+    elif "custom_block" in node_type or "code" in node_type or "function" in node_name or "math" in node_type:
         badge = "MATH"
+    elif "freecad" in node_type or "cad" in node_type or "part" in node_name or "geometry" in node_type or "box" in node_type or "cylinder" in node_type or "boolean" in node_type or "pattern" in node_type or "transform" in node_type or "assembly" in node_type:
+        badge = "CAD"
 
-    # Default category fallback gradients
-    default_colors = {
-        "INPUT": (QtGui.QColor(55, 177, 224, 240), QtGui.QColor(30, 115, 150, 240)),
-        "OUTPUT": (QtGui.QColor(63, 192, 147, 240), QtGui.QColor(32, 125, 95, 240)),
-        "CAD": (QtGui.QColor(14, 116, 144, 240), QtGui.QColor(8, 75, 100, 240)),
-        "FEA": (QtGui.QColor(124, 58, 237, 240), QtGui.QColor(88, 28, 185, 240)),
-        "IMPACT": (QtGui.QColor(217, 119, 6, 240), QtGui.QColor(160, 80, 2, 240)),
-        "OPT": (QtGui.QColor(13, 148, 136, 240), QtGui.QColor(8, 95, 88, 240)),
-        "MATH": (QtGui.QColor(148, 107, 220, 240), QtGui.QColor(95, 65, 155, 240)),
+    # Calm, disciplined engineering accents (harmonized with MDAO palette)
+    accent_colors = {
+        "INPUT": QtGui.QColor(70, 130, 180),     # Steel blue (matches MDAO input)
+        "OUTPUT": QtGui.QColor(76, 140, 100),    # Muted sage (matches MDAO output)
+        "CAD": QtGui.QColor(85, 115, 150),      # Slate blue / steel gray
+        "FEA": QtGui.QColor(75, 110, 175),      # Muted navy blue
+        "LOAD": QtGui.QColor(195, 95, 80),       # Warm terracotta
+        "IMPACT": QtGui.QColor(180, 85, 75),     # Muted crimson
+        "OPT": QtGui.QColor(210, 153, 34),       # Warm amber (matches MDAO primary #d29922)
+        "MATH": QtGui.QColor(130, 105, 160),     # Muted plum (matches MDAO custom block)
     }
 
-    start_col, end_col = default_colors.get(
-        badge, (QtGui.QColor(42, 48, 60, 240), QtGui.QColor(30, 35, 45, 240))
-    )
+    accent = accent_colors.get(badge, QtGui.QColor(100, 116, 139))
+    return badge, accent
 
-    # Derive directly from node border_color if explicitly defined
-    if hasattr(node_item, "border_color") and node_item.border_color:
-        b_rgb = node_item.border_color[:3]
-        if max(b_rgb) > 40:
-            start_col = QtGui.QColor(b_rgb[0], b_rgb[1], b_rgb[2], 240)
-            end_col = QtGui.QColor(
-                int(b_rgb[0] * 0.65), int(b_rgb[1] * 0.65), int(b_rgb[2] * 0.65), 240
-            )
 
-    return badge, start_col, end_col
+def _harmonize_port_color(col, is_light: bool) -> QtGui.QColor:
+    """Map raw or fluorescent port colors into disciplined engineering tones matching MDAO.
+
+    Prevents low-contrast fluorescents (pure yellow, lime green, cyan) from washing out
+    against light canvas backgrounds, while maintaining semantic role recognition.
+    """
+    if not col or len(col) < 3:
+        return QtGui.QColor(100, 116, 139, 230) if is_light else QtGui.QColor(88, 105, 128, 220)
+
+    r, g, b = int(col[0]), int(col[1]), int(col[2])
+
+    # Check for near neutral/gray
+    if max(abs(r - g), abs(g - b), abs(r - b)) < 25:
+        return QtGui.QColor(100, 116, 139, 230) if is_light else QtGui.QColor(130, 142, 160, 220)
+
+    # Yellow / Gold (Loads, BCs, e.g. 255, 255, 0 or 255, 200, 0)
+    if r > 160 and g > 150 and b < 100:
+        return QtGui.QColor(175, 110, 20, 235) if is_light else QtGui.QColor(225, 165, 45, 235)
+
+    # Bright Green / Emerald (Shapes, geometry output, e.g. 100, 255, 100)
+    if g > 170 and r < 160 and b < 160:
+        return QtGui.QColor(42, 128, 68, 235) if is_light else QtGui.QColor(72, 195, 115, 235)
+
+    # Bright Cyan / Teal (Results, solver output, e.g. 0, 255, 255 or 0, 220, 255)
+    if b > 180 and g > 180 and r < 100:
+        return QtGui.QColor(28, 108, 168, 235) if is_light else QtGui.QColor(50, 190, 225, 235)
+
+    # Red / Coral (Constraints, e.g. 255, 100, 100)
+    if r > 180 and g < 140 and b < 140:
+        return QtGui.QColor(185, 65, 55, 235) if is_light else QtGui.QColor(225, 95, 85, 235)
+
+    # Magenta / Purple (Meshes, math, e.g. 200, 100, 200)
+    if r > 160 and b > 160 and g < 140:
+        return QtGui.QColor(128, 60, 145, 235) if is_light else QtGui.QColor(180, 105, 195, 235)
+
+    # Pale / Light Blue (File / Number, e.g. 180, 220, 255)
+    if b > 180 and r > 140 and g > 180:
+        return QtGui.QColor(60, 105, 160, 235) if is_light else QtGui.QColor(115, 180, 235, 235)
+
+    # Standard / other
+    if is_light:
+        return QtGui.QColor(int(r * 0.65), int(g * 0.65), int(b * 0.65), 235)
+    return QtGui.QColor(min(255, int(r * 1.05)), min(255, int(g * 1.05)), min(255, int(b * 1.05)), 235)
 
 
 
@@ -77,8 +113,8 @@ def _is_light_theme(item) -> bool:
 def paint_modern_node_horizontal(node_item, painter: QtGui.QPainter, option, widget) -> None:
     """High-quality modern painter for NodeGraphQt horizontal nodes.
 
-    Replaces classic flat rectangle with rounded squircle cards, drop shadows,
-    gradient accent headers, category badges, and sleek borders.
+    Paints clean, unified engineering cards aligned with MDAO's theme palette,
+    with a sleek top accent line, subtle tone-on-tone header, and legible typography.
     """
     painter.save()
     painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
@@ -101,39 +137,42 @@ def paint_modern_node_horizontal(node_item, painter: QtGui.QPainter, option, wid
     # Geometry corner radius
     node_type_str = str(getattr(node_item, "type_", "")).lower()
     is_terminal = "input" in node_type_str or "output" in node_type_str
-    radius = 14.0 if is_terminal else 10.0
+    radius = 12.0 if is_terminal else 8.0
 
-    # 1. Drop Shadow & Ambient Glow
+    # 1. Selection Ambient Glow or Drop Shadow
     if node_item.selected:
-        glow_color = QtGui.QColor(88, 140, 245, 70)
-        for step in (6.0, 4.0, 2.0):
+        glow_color = QtGui.QColor(210, 153, 34, 45) if not is_light else QtGui.QColor(79, 111, 145, 50)
+        for step in (4.0, 2.0):
             glow_rect = node_rect.adjusted(-step, -step, step, step)
             glow_path = QtGui.QPainterPath()
             glow_path.addRoundedRect(glow_rect, radius + step, radius + step)
             painter.fillPath(glow_path, glow_color)
     else:
-        # Subtle drop shadow
-        shadow_rect = node_rect.adjusted(1.0, 2.0, 2.0, 3.0)
-        shadow_path = QtGui.QPainterPath()
-        shadow_path.addRoundedRect(shadow_rect, radius, radius)
-        shadow_col = QtGui.QColor(0, 0, 0, 18) if is_light else QtGui.QColor(0, 0, 0, 45)
-        painter.fillPath(shadow_path, shadow_col)
+        shadow_col = QtGui.QColor(15, 23, 42, 12) if is_light else QtGui.QColor(0, 0, 0, 35)
+        s_rect = node_rect.adjusted(0.0, 1.5, 0.0, 2.5)
+        s_path = QtGui.QPainterPath()
+        s_path.addRoundedRect(s_rect, radius, radius)
+        painter.fillPath(s_path, shadow_col)
 
-    # 2. Main Node Body Fill
+    # 2. Main Node Body Fill (Unified with MDAO dark card surface)
     body_path = QtGui.QPainterPath()
     body_path.addRoundedRect(node_rect, radius, radius)
 
+    n_col = getattr(node_item, "color", None)
     if is_light:
-        body_bg = QtGui.QColor(255, 255, 255, 255)
+        if n_col and len(n_col) >= 3 and n_col[:3] not in ((13, 18, 23), (35, 35, 35)):
+            body_bg = QtGui.QColor(n_col[0], n_col[1], n_col[2], 255)
+        else:
+            body_bg = QtGui.QColor(255, 255, 255, 255)
         if hasattr(node_item, "_set_text_color"):
-            node_item._set_text_color((30, 41, 59, 255))
+            node_item._set_text_color((52, 64, 84, 255))
     else:
-        body_bg = QtGui.QColor(28, 35, 48, 250)
+        body_bg = QtGui.QColor(32, 35, 41, 255)
         if hasattr(node_item, "_set_text_color"):
-            node_item._set_text_color((248, 250, 252, 255))
+            node_item._set_text_color((241, 245, 249, 255))
     painter.fillPath(body_path, body_bg)
 
-    # 3. Header Region & Gradient Banner
+    # 3. Header Region (Subtle Tone-on-Tone Bar)
     header_height = 28.0
     if hasattr(node_item, "_text_item") and node_item._text_item:
         text_h = node_item._text_item.boundingRect().height()
@@ -147,16 +186,12 @@ def paint_modern_node_horizontal(node_item, painter: QtGui.QPainter, option, wid
         header_height,
     )
 
-    badge_text, head_start, head_end = _get_node_category_badge(node_item)
-    if is_light:
-        head_start = head_start.lighter(145)
-        head_end = head_end.lighter(135)
-
-    header_gradient = QtGui.QLinearGradient(
-        header_rect.left(), header_rect.top(), header_rect.right(), header_rect.bottom()
+    badge_text, accent_color = _get_node_category_badge(node_item)
+    header_bg = (
+        QtGui.QColor(accent_color.red(), accent_color.green(), accent_color.blue(), 18)
+        if is_light
+        else QtGui.QColor(38, 42, 49, 255)
     )
-    header_gradient.setColorAt(0.0, head_start)
-    header_gradient.setColorAt(1.0, head_end)
 
     # Header clip path (rounded top corners, square bottom)
     header_path = QtGui.QPainterPath()
@@ -168,19 +203,28 @@ def paint_modern_node_horizontal(node_item, painter: QtGui.QPainter, option, wid
     header_path.lineTo(node_rect.left(), node_rect.top() + radius)
     header_path.quadTo(node_rect.left(), node_rect.top(), node_rect.left() + radius, node_rect.top())
 
-    painter.fillPath(header_path, header_gradient)
+    painter.fillPath(header_path, header_bg)
+
+    # Crisp top accent line (2.5px) identifying node discipline
+    accent_path = QtGui.QPainterPath()
+    accent_path.moveTo(node_rect.left() + radius, node_rect.top())
+    accent_path.lineTo(node_rect.right() - radius, node_rect.top())
+    accent_pen = QtGui.QPen(accent_color, 2.5)
+    accent_pen.setCapStyle(QtCore.Qt.RoundCap)
+    painter.setPen(accent_pen)
+    painter.drawPath(accent_path)
 
     # Subtle horizontal line under header
-    sep_pen = QtGui.QPen(QtGui.QColor(0, 0, 0, 18) if is_light else QtGui.QColor(255, 255, 255, 35), 1.0)
-    painter.setPen(sep_pen)
+    sep_color = QtGui.QColor(215, 220, 228, 255) if is_light else QtGui.QColor(48, 54, 64, 255)
+    painter.setPen(QtGui.QPen(sep_color, 1.0))
     painter.drawLine(
         QtCore.QPointF(node_rect.left(), header_rect.bottom()),
         QtCore.QPointF(node_rect.right(), header_rect.bottom()),
     )
 
-    # 4. Header Badge Chip (if present)
+    # 4. Header Badge Chip (Subtle disciplined pill)
     if badge_text:
-        badge_font = QtGui.QFont("Segoe UI", 7, QtGui.QFont.Bold)
+        badge_font = QtGui.QFont("Segoe UI", 7, QtGui.QFont.DemiBold)
         fm = QtGui.QFontMetrics(badge_font)
         bw = fm.horizontalAdvance(badge_text) + 10.0
         bh = 14.0
@@ -189,40 +233,46 @@ def paint_modern_node_horizontal(node_item, painter: QtGui.QPainter, option, wid
 
         badge_rect = QtCore.QRectF(bx, by, bw, bh)
         badge_path = QtGui.QPainterPath()
-        badge_path.addRoundedRect(badge_rect, 4.0, 4.0)
+        badge_path.addRoundedRect(badge_rect, 3.0, 3.0)
 
-        if is_light:
-            painter.fillPath(badge_path, QtGui.QColor(0, 0, 0, 15))
-            painter.setFont(badge_font)
-            painter.setPen(QtGui.QColor(30, 41, 59, 220))
-        else:
-            painter.fillPath(badge_path, QtGui.QColor(255, 255, 255, 30))
-            painter.setFont(badge_font)
-            painter.setPen(QtGui.QColor(255, 255, 255, 220))
+        chip_bg = (
+            QtGui.QColor(accent_color.red(), accent_color.green(), accent_color.blue(), 25)
+            if is_light
+            else QtGui.QColor(accent_color.red(), accent_color.green(), accent_color.blue(), 35)
+        )
+        chip_border = (
+            QtGui.QColor(accent_color.red(), accent_color.green(), accent_color.blue(), 80)
+            if is_light
+            else QtGui.QColor(accent_color.red(), accent_color.green(), accent_color.blue(), 90)
+        )
+        chip_text = (
+            QtGui.QColor(52, 64, 84, 230)
+            if is_light
+            else QtGui.QColor(226, 232, 240, 230)
+        )
 
+        painter.fillPath(badge_path, chip_bg)
+        painter.setPen(QtGui.QPen(chip_border, 1.0))
+        painter.drawPath(badge_path)
+        painter.setFont(badge_font)
+        painter.setPen(chip_text)
         painter.drawText(badge_rect, QtCore.Qt.AlignCenter, badge_text)
 
-    # 5. Inner Glass Highlight Inset
-    glass_pen = QtGui.QPen(
-        QtGui.QColor(255, 255, 255, 140) if is_light else QtGui.QColor(255, 255, 255, 30),
-        1.0,
-    )
-    painter.setPen(glass_pen)
-    glass_rect = node_rect.adjusted(1.0, 1.0, -1.0, -1.0)
-    glass_path = QtGui.QPainterPath()
-    glass_path.addRoundedRect(glass_rect, radius - 1.0, radius - 1.0)
-    painter.drawPath(glass_path)
-
-    # 6. Outer Border Outline
+    # 5. Outer Border Outline (Matching MDAO selection color and role border)
     if node_item.selected:
-        border_width = 2.0
-        border_color = QtGui.QColor(90, 160, 255, 255)
+        border_width = 1.8
+        border_color = QtGui.QColor(79, 111, 145, 255) if is_light else QtGui.QColor(210, 153, 34, 255)
     else:
-        border_width = 1.0
-        if is_light:
-            border_color = QtGui.QColor(205, 215, 228, 255)
+        border_width = 1.2 if is_light else 1.0
+        n_border = getattr(node_item, "border_color", None)
+        if n_border and len(n_border) >= 3 and max(n_border[:3]) > 0 and n_border[:3] not in ((46, 57, 66), (0, 0, 0)):
+            border_color = QtGui.QColor(n_border[0], n_border[1], n_border[2], 255)
         else:
-            border_color = QtGui.QColor(58, 66, 78, 220)
+            border_color = (
+                QtGui.QColor(accent_color.red(), accent_color.green(), accent_color.blue(), 160)
+                if is_light
+                else QtGui.QColor(48, 54, 64, 255)
+            )
 
     border_pen = QtGui.QPen(border_color, border_width)
     if hasattr(node_item, "viewer") and node_item.viewer():
@@ -247,32 +297,33 @@ def paint_modern_port(port_item, painter: QtGui.QPainter, option, widget) -> Non
     center = port_item.boundingRect().center()
     port_rect = QtCore.QRectF(center.x() - w / 2.0, center.y() - h / 2.0, w, h)
 
+    is_light = _is_light_theme(port_item)
     is_hovered = getattr(port_item, "_hovered", False)
     is_connected = bool(getattr(port_item, "connected_pipes", None))
 
     port_col = getattr(port_item, "color", (200, 200, 200))
     border_col = getattr(port_item, "border_color", (240, 240, 240))
 
-    base_color = QtGui.QColor(port_col[0], port_col[1], port_col[2], 255)
-    border_color = QtGui.QColor(border_col[0], border_col[1], border_col[2], 255)
+    base_color = _harmonize_port_color(port_col, is_light)
+    border_color = _harmonize_port_color(border_col, is_light)
 
     # Ambient halo glow when hovered or connected
     if is_hovered:
-        halo_col = QtGui.QColor(90, 160, 255, 100)
+        halo_col = QtGui.QColor(79, 111, 145, 90) if is_light else QtGui.QColor(210, 153, 34, 90)
         halo_rect = port_rect.adjusted(-3.0, -3.0, 3.0, 3.0)
         painter.setPen(QtCore.Qt.NoPen)
         painter.setBrush(halo_col)
         painter.drawEllipse(halo_rect)
-        border_color = QtGui.QColor(120, 190, 255, 255)
+        border_color = QtGui.QColor(79, 111, 145, 255) if is_light else QtGui.QColor(210, 153, 34, 255)
     elif is_connected:
-        halo_col = QtGui.QColor(border_color.red(), border_color.green(), border_color.blue(), 60)
+        halo_col = QtGui.QColor(border_color.red(), border_color.green(), border_color.blue(), 40)
         halo_rect = port_rect.adjusted(-2.0, -2.0, 2.0, 2.0)
         painter.setPen(QtCore.Qt.NoPen)
         painter.setBrush(halo_col)
         painter.drawEllipse(halo_rect)
 
     # Socket outer stroke & fill
-    pen = QtGui.QPen(border_color, 1.6)
+    pen = QtGui.QPen(border_color, 1.4)
     painter.setPen(pen)
     painter.setBrush(base_color if not is_connected else border_color.darker(110))
     painter.drawEllipse(port_rect)
@@ -323,37 +374,41 @@ def paint_modern_pipe(pipe_item, painter: QtGui.QPainter, option, widget) -> Non
         return
 
     # Determine theme environment
-    viewer = pipe_item.viewer() if hasattr(pipe_item, "viewer") else None
-    is_light = False
-    if viewer and hasattr(viewer, "background_color"):
-        bg_col = viewer.background_color()
-        if isinstance(bg_col, (list, tuple)) and len(bg_col) >= 3:
-            is_light = (bg_col[0] + bg_col[1] + bg_col[2]) / 3.0 > 160
-
+    is_light = _is_light_theme(pipe_item)
     is_selected = getattr(pipe_item, "selected", False) or getattr(pipe_item, "_active", False)
     is_highlighted = getattr(pipe_item, "_highlight", False)
     is_disabled = getattr(pipe_item, "disabled", lambda: False)()
 
-    # Color palette (All Orange, matching original NodeGraph style)
+    # Derive connection color from the source output port if available
+    out_port = getattr(pipe_item, "output_port", None)
+    base_color = None
+    if out_port is not None:
+        p_col = getattr(out_port, "border_color", None) or getattr(out_port, "color", None)
+        if p_col and len(p_col) >= 3 and max(p_col[:3]) > 30:
+            base_color = _harmonize_port_color(p_col, is_light)
+
+    if base_color is None:
+        # Calibrated default slate connection matching MDAO
+        base_color = QtGui.QColor(100, 116, 139, 230) if is_light else QtGui.QColor(88, 105, 128, 220)
+
     if is_disabled:
         pipe_color = QtGui.QColor(140, 145, 155, 120)
-        pipe_width = 2.0
+        pipe_width = 1.6
     elif is_selected:
-        pipe_color = QtGui.QColor(255, 200, 50, 255)
-        pipe_width = 2.5
+        pipe_color = QtGui.QColor(79, 111, 145, 255) if is_light else QtGui.QColor(210, 153, 34, 255)
+        pipe_width = 2.2
     elif is_highlighted:
-        pipe_color = QtGui.QColor(255, 175, 40, 255)
-        pipe_width = 3.0
+        pipe_color = base_color.lighter(130) if not is_light else base_color.darker(115)
+        pipe_width = 2.4
     else:
-        pipe_color = QtGui.QColor(225, 150, 35, 240)
-        pipe_width = 2.0
+        pipe_color = base_color
+        pipe_width = 1.8
 
-
-    # Ambient glow for selected/highlighted pipe
+    # Subtle ambient glow for selected/highlighted pipe
     if (is_selected or is_highlighted) and not is_disabled:
         glow_pen = QtGui.QPen(
-            QtGui.QColor(pipe_color.red(), pipe_color.green(), pipe_color.blue(), 70),
-            pipe_width + 3.0,
+            QtGui.QColor(pipe_color.red(), pipe_color.green(), pipe_color.blue(), 50),
+            pipe_width + 2.5,
         )
         painter.setPen(glow_pen)
         painter.setBrush(QtCore.Qt.NoBrush)
@@ -366,6 +421,38 @@ def paint_modern_pipe(pipe_item, painter: QtGui.QPainter, option, widget) -> Non
     painter.setPen(pen)
     painter.setBrush(QtCore.Qt.NoBrush)
     painter.drawPath(path)
+
+    # Sleek directional arrowhead at path midpoint (data flow direction)
+    if not is_disabled and path.length() >= 18.0:
+        t = 0.52
+        p1 = path.pointAtPercent(max(0.0, t - 0.015))
+        p2 = path.pointAtPercent(min(1.0, t + 0.015))
+        dx = p2.x() - p1.x()
+        dy = p2.y() - p1.y()
+        seg_len = (dx * dx + dy * dy) ** 0.5
+        if seg_len > 1e-4:
+            ux = dx / seg_len
+            uy = dy / seg_len
+            nx = -uy
+            ny = ux
+            pt = path.pointAtPercent(t)
+            arrow_len = 8.5
+            arrow_w = 4.5
+            tip = pt + QtCore.QPointF(ux * 2.5, uy * 2.5)
+            left_wing = pt - QtCore.QPointF(ux * arrow_len, uy * arrow_len) + QtCore.QPointF(nx * arrow_w, ny * arrow_w)
+            right_wing = pt - QtCore.QPointF(ux * arrow_len, uy * arrow_len) - QtCore.QPointF(nx * arrow_w, ny * arrow_w)
+            notch = pt - QtCore.QPointF(ux * (arrow_len * 0.65), uy * (arrow_len * 0.65))
+
+            arrow_path = QtGui.QPainterPath()
+            arrow_path.moveTo(tip)
+            arrow_path.lineTo(left_wing)
+            arrow_path.lineTo(notch)
+            arrow_path.lineTo(right_wing)
+            arrow_path.closeSubpath()
+
+            painter.setPen(QtCore.Qt.NoPen)
+            painter.setBrush(pipe_color)
+            painter.drawPath(arrow_path)
 
     painter.restore()
 

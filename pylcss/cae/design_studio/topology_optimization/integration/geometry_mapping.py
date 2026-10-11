@@ -143,6 +143,18 @@ def _mesh_bounds(mesh: Any) -> Optional[tuple[np.ndarray, np.ndarray]]:
 def _bbox_tuple(bb: Any) -> Optional[tuple[float, float, float, float, float, float]]:
     if bb is None:
         return None
+    if isinstance(bb, (list, tuple)) and len(bb) == 6:
+        try:
+            return (
+                float(bb[0]),
+                float(bb[1]),
+                float(bb[2]),
+                float(bb[3]),
+                float(bb[4]),
+                float(bb[5]),
+            )
+        except Exception:
+            return None
     if isinstance(bb, dict):
         try:
             return (
@@ -179,6 +191,14 @@ def _entry_bboxes(
             bb = None
         if bb is not None:
             bboxes.append(bb)
+
+    for b in entry.get("bboxes") or []:
+        bb = _bbox_tuple(b)
+        if bb is not None:
+            bboxes.append(bb)
+    bb = _bbox_tuple(entry.get("bbox"))
+    if bb is not None:
+        bboxes.append(bb)
 
     viz = entry.get("viz") if isinstance(entry.get("viz"), dict) else {}
     for face in viz.get("faces") or []:

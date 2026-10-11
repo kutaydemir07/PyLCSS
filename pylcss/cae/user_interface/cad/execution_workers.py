@@ -143,11 +143,13 @@ def _write_step_shape(shape, path, product_name):
         for key, value in settings.items():
             Interface_Static.SetCVal_s(key, value)
         status = solid.exportStep(str(path))
+        if status != IFSelect_ReturnStatus.IFSelect_RetDone:
+            raise RuntimeError(f"STEP writer rejected the body (status {status}).")
+        from pylcss.cae.design_studio.topology_optimization.geometry.amrto_step_export import verify_step_roundtrip
+        verify_step_roundtrip(path)
     finally:
         for key, value in previous.items():
             Interface_Static.SetCVal_s(key, value)
-    if status != IFSelect_ReturnStatus.IFSelect_RetDone:
-        raise RuntimeError(f"STEP writer rejected the body (status {status}).")
     return True
 
 
@@ -166,7 +168,6 @@ def _external_write_cad_step(
         source_geometry="Recovered Shape",
         reconstruction_strategy=str(reconstruction_strategy or "auto"),
         sew_tolerance=1e-4,
-        max_faces=1500,
     )
     # The name comes from the caller's destination, not from ``path``: the
     # export writes to a temporary beside it and commits atomically, so
@@ -186,7 +187,6 @@ def _external_write_cad_brep(payload, path, reconstruction_strategy="auto"):
         source_geometry="Recovered Shape",
         reconstruction_strategy=str(reconstruction_strategy or "auto"),
         sew_tolerance=1e-4,
-        max_faces=1500,
         return_report=True,
     )
     cq.exporters.export(shape, str(path), exportType="BREP")
@@ -352,16 +352,9 @@ class TopOptCadPreviewWorker(QtCore.QThread):
             )
             os.close(descriptor)
 
-            from concurrent.futures import ProcessPoolExecutor
+            from .cad_background import run_cad_job
 
-            with ProcessPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(
-                    _external_write_cad_brep,
-                    payload,
-                    temporary,
-                    self.reconstruction_strategy,
-                )
-                report = future.result()
+            report = run_cad_job("brep", payload, temporary, self.reconstruction_strategy)
 
             import cadquery as cq
 
@@ -463,7 +456,9 @@ class TopOptMeshExportWorker(QtCore.QThread):
             }
 
         if self.cad_shape is not None:
-            import cadquery as cq
+            from pylcss.cae.design_studio.topology_optimization.geometry.amrto_common import (
+                tessellate_cad_absolute,
+            )
 
             shape = (
                 self.cad_shape.val()
@@ -471,26 +466,51 @@ class TopOptMeshExportWorker(QtCore.QThread):
                 else self.cad_shape
             )
             tolerance = _tessellation_tolerance(shape)
-            _, triangles = shape.tessellate(
-                tolerance=tolerance,
-                angularTolerance=STL_ANGULAR_TOLERANCE,
-            )
-            cq.exporters.export(
-                shape,
-                temporary,
-                exportType="STL",
-                tolerance=tolerance,
-                angularTolerance=STL_ANGULAR_TOLERANCE,
-            )
+            vertices, triangles = tessellate_cad_absolute(shape, tolerance, STL_ANGULAR_TOLERANCE)
+            triangle_count = _write_binary_stl(temporary, vertices, triangles)
             return {
                 "format": "stl",
                 "path": self.path,
-                "triangles": int(len(triangles)),
+                "triangles": triangle_count,
                 "chordal_tolerance": tolerance,
+                "relative_occ_deflection": False,
                 "recovered_shape": None,
             }
 
         recovered = self.recovered_shape
+        if not isinstance(recovered, dict) and self.topology_result:
+            field = (
+                self.topology_result.get("recovery_density")
+                if self.topology_result.get("recovery_density") is not None
+                else self.topology_result.get("density")
+            )
+            if field is not None:
+                bounds = self.topology_result.get("bounds")
+                cutoff = float(
+                    self.topology_result.get("recovery_cutoff")
+                    or self.topology_result.get("density_cutoff")
+                    or 0.5
+                )
+                try:
+                    from pylcss.cae.design_studio.topology_optimization.geometry.surface_recovery import (
+                        _recover_voxel_shape,
+                    )
+                    recovered = _recover_voxel_shape(
+                        np.asarray(field, dtype=float),
+                        bounds,
+                        cutoff,
+                        solid_boxes=self.topology_result.get("solid_boxes"),
+                        void_boxes=self.topology_result.get("void_boxes"),
+                        solid_cylinders=self.topology_result.get("solid_cylinders"),
+                        void_cylinders=self.topology_result.get("void_cylinders"),
+                        joint_pin_cylinders=self.topology_result.get("joint_pin_cylinders"),
+                        structure_options=self.structure_options,
+                        member_plan=self.member_plan,
+                    )
+                    if isinstance(recovered, dict):
+                        self.recovered_shape = recovered
+                except Exception:
+                    logger.debug("Failed on-demand surface recovery in export worker", exc_info=True)
         if not isinstance(recovered, dict):
             raise ValueError("The topology result has no recovered mesh to export.")
         vertices = np.asarray(recovered.get("vertices"), dtype=float)
@@ -620,17 +640,9 @@ class TopOptStepExportWorker(QtCore.QThread):
                     passive_regions=self.passive_regions,
                 )
 
-                from concurrent.futures import ProcessPoolExecutor
+                from .cad_background import run_cad_job
 
-                with ProcessPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(
-                        _external_write_cad_step,
-                        payload,
-                        temporary,
-                        self.reconstruction_strategy,
-                        product_name,
-                    )
-                    future.result()
+                run_cad_job("step", payload, temporary, self.reconstruction_strategy, product_name)
 
             _commit_export(temporary, self.path)
             temporary = ""

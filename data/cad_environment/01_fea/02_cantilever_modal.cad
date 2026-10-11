@@ -1,0 +1,306 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "beam": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Cantilever Beam",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 163.296875,
+      "height": 168.6,
+      "pos": [
+        -650,
+        0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "code": "result = cq.Workplane('XY').box(L, W, H, centered=(False, True, True))\n",
+        "parameters": "",
+        "description": "Cantilever Beam",
+        "notes": "Explicit topology region: connect shape to the corresponding solver region input.",
+        "param_1_name": "L",
+        "param_1_value": 100.0,
+        "param_2_name": "W",
+        "param_2_value": 10.0,
+        "param_3_name": "H",
+        "param_3_value": 10.0
+      }
+    },
+    "material": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "Structural Steel",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 163.296875,
+      "height": 168.6,
+      "pos": [
+        -650,
+        -200
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "preset": "Steel (Structural)",
+        "youngs_modulus": 210000.0,
+        "poissons_ratio": 0.3,
+        "density": 7.85e-09
+      }
+    },
+    "mesh": {
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "icon": null,
+      "name": "Quadratic Solid Mesh",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 163.296875,
+      "height": 168.6,
+      "pos": [
+        -330,
+        0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "mesh_source": "CAD",
+        "mesh_type": "Tet10",
+        "element_size": 3.0
+      }
+    },
+    "support": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "icon": null,
+      "name": "Fixed Root",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 163.296875,
+      "height": 168.6,
+      "pos": [
+        -300,
+        220
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "constraint_type": "Fixed",
+        "condition": "x < 0.001"
+      }
+    },
+    "modal": {
+      "type_": "com.cad.sim.modal_solver.ModalSolverNode",
+      "icon": null,
+      "name": "Modal Solver",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 163.296875,
+      "height": 168.6,
+      "pos": [
+        50,
+        0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "num_modes": 6,
+        "active_mode": 1,
+        "deformation_scale": "Auto",
+        "deck_only": false
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "beam",
+        "shape"
+      ],
+      "in": [
+        "mesh",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "mesh",
+        "mesh"
+      ],
+      "in": [
+        "support",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "mesh",
+        "mesh"
+      ],
+      "in": [
+        "modal",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "material",
+        "material"
+      ],
+      "in": [
+        "modal",
+        "material"
+      ]
+    },
+    {
+      "out": [
+        "support",
+        "constraints"
+      ],
+      "in": [
+        "modal",
+        "constraints"
+      ]
+    }
+  ],
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "_title": "Clamped Cantilever Natural Frequencies",
+  "_purpose": "Extract the first six natural frequencies and inspect bending, torsion and axial mode shapes.",
+  "_fidelity": "Linear-elastic CalculiX frequency extraction on a quadratic tetrahedral mesh; mm, N, s and tonne units.",
+  "_visual_target": "A 100 Ã— 10 Ã— 10 mm steel cantilever, clamped at its root, with colored mode shapes.",
+  "_engineering_decision": "Check natural frequencies against excitation bands and confirm stability under mesh refinement.",
+  "_baseline": "Unsolved reference model. Mode amplitudes are arbitrary mass-normalized eigenvectors.",
+  "_design_variables": [
+    "L: beam length",
+    "W and H: cross-section dimensions",
+    "element_size: mesh refinement"
+  ],
+  "_load_cases": [
+    "Fixed root; no applied force is needed for natural-frequency extraction."
+  ],
+  "_deliverables": [
+    "Natural-frequency table and spectrum",
+    "Six mode-shape views",
+    "Run metadata and mesh quality"
+  ],
+  "_workflow": [
+    "Preview the beam.",
+    "Run Modal Solver; CalculiX must be installed.",
+    "Open Results â†’ Natural Frequencies and Frequency Spectrum.",
+    "Select modes in the 3D selector; Auto scale is visual only.",
+    "Reduce mesh element size and compare frequencies."
+  ],
+  "_acceptance_criteria": [
+    "Six positive frequencies and nonzero eigenvectors.",
+    "Root nodes remain fixed in each mode.",
+    "Frequencies stabilize under mesh refinement."
+  ]
+}

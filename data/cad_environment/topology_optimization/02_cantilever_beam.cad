@@ -356,18 +356,155 @@
       "custom": {
         "description": "Runs the topology optimization.",
         "tags": "bundled-example, topology-optimization, pymoto",
-        "notes": "Z extrusion reproduces the planar benchmark; remove it to let the optimizer use the full thickness.",
+        "notes": "All connected loads act simultaneously. Run separate project copies for alternative operating cases. Preserved regions remain solid; obstacle regions remain void.",
         "workflow_mode": "Guided",
         "design_goal": "Lightweight Stiffness",
-        "manufacturing_process": "Extruded",
         "minimum_member_size_mm": 5.0,
         "exclusion_scope": "All Loads and Supports",
         "exclusion_thickness_mode": "Program Controlled",
         "validate_after_optimize": false,
         "cad_export_filename": "topology_optimized.step",
         "volfrac": 0.4,
-        "visualization": "Surface",
-        "extrusion": "Z"
+        "visualization": "Surface"
+      }
+    },
+    "preserved_root": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Non-design Root Mount",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 163.296875,
+      "height": 168.6,
+      "pos": [
+        -850,
+        250
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "code": "result = cq.Workplane('XY').box(8, H, T).translate((-L/2 + 4, 0, 0))\n",
+        "parameters": "",
+        "description": "Non-design Root Mount",
+        "notes": "Explicit topology region: connect shape to the corresponding solver region input.",
+        "param_1_name": "L",
+        "param_1_value": 120.0,
+        "param_2_name": "H",
+        "param_2_value": 60.0,
+        "param_3_name": "T",
+        "param_3_value": 10.0
+      }
+    },
+    "preserved_tip": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Non-design Load Pad",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 163.296875,
+      "height": 168.6,
+      "pos": [
+        -850,
+        460
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "code": "result = cq.Workplane('XY').box(8, 10, T).translate((L/2 - 4, -H/2 + 5, 0))\n",
+        "parameters": "",
+        "description": "Non-design Load Pad",
+        "notes": "Explicit topology region: connect shape to the corresponding solver region input.",
+        "param_1_name": "L",
+        "param_1_value": 120.0,
+        "param_2_name": "H",
+        "param_2_value": 60.0,
+        "param_3_name": "T",
+        "param_3_value": 10.0
+      }
+    },
+    "cable_obstacle": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Obstacle Cable Passage",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 163.296875,
+      "height": 168.6,
+      "pos": [
+        -850,
+        670
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "code": "result = cq.Workplane('XY').circle(D/2).extrude(T+2).translate((0, 0, -T/2-1))\n",
+        "parameters": "",
+        "description": "Obstacle Cable Passage",
+        "notes": "Explicit topology region: connect shape to the corresponding solver region input.",
+        "param_1_name": "D",
+        "param_1_value": 12.0,
+        "param_2_name": "T",
+        "param_2_value": 10.0
       }
     }
   },
@@ -451,6 +588,36 @@
         "0x201146e1940",
         "loads"
       ]
+    },
+    {
+      "out": [
+        "preserved_root",
+        "shape"
+      ],
+      "in": [
+        "0x201146e1940",
+        "preserved_regions"
+      ]
+    },
+    {
+      "out": [
+        "preserved_tip",
+        "shape"
+      ],
+      "in": [
+        "0x201146e1940",
+        "preserved_regions"
+      ]
+    },
+    {
+      "out": [
+        "cable_obstacle",
+        "shape"
+      ],
+      "in": [
+        "0x201146e1940",
+        "obstacle_regions"
+      ]
     }
   ],
   "_guided_topology_policy": {
@@ -460,11 +627,57 @@
   },
   "_copyright": "Copyright (c) 2026 Kutay Demir.",
   "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
-  "_result_store": {
-    "format": "HDF5",
-    "version": 1,
-    "file": "02_cantilever_beam.cad.results.h5",
-    "result_count": 1,
-    "saved_at": "2026-08-04T20:28:12.315848"
-  }
+  "_title": "Cantilever with Non-design Mounts and a Cable Obstacle",
+  "_purpose": "Classical MBB-style 3D continuum cantilever beam benchmark with fixed root and asymmetric tip shear load.",
+  "_fidelity": "FEA-driven SIMP voxel optimizer with AMRTO B-Rep surface recovery and Laplacian smoothing.",
+  "_visual_target": "Truss-like dual-flange structure with diagonal shear web members and clean organic fillets.",
+  "_engineering_decision": "Find the globally optimal load path from clamped root to tip load under 50% volume fraction budget.",
+  "_baseline": "Unsolved primary simultaneous-load scenario. Targets are requirements, not measured results.",
+  "_design_variables": [
+    "Length: 200 mm",
+    "Height: 100 mm",
+    "Width: 20 mm",
+    "Volume fraction: 50%"
+  ],
+  "_load_cases": [
+    "Tip Load 2.0 kN"
+  ],
+  "_requirements": [
+    {
+      "requirement": "Primary load response",
+      "target": "Review compliance and convergence",
+      "verification": "Topology solver objective and change histories",
+      "baseline_status": "Not evaluated"
+    },
+    {
+      "requirement": "Preserved interfaces and keep-out regions",
+      "target": "Preserved solid material retained; obstacles remain void",
+      "verification": "Non-design & Obstacles report and reconstructed geometry inspection",
+      "baseline_status": "Not evaluated"
+    },
+    {
+      "requirement": "Structural validation",
+      "target": "Meet application-specific stress and displacement limits",
+      "verification": "Enable structural verification; inspect the CalculiX validation result",
+      "baseline_status": "Not evaluated"
+    }
+  ],
+  "_deliverables": [
+    "Optimized density and reconstructed geometry",
+    "Objective and design-change histories",
+    "Non-design and obstacle region report",
+    "Validated stress and displacement only when verification is enabled and succeeds"
+  ],
+  "_workflow": [
+    "Preview the domain, supports and primary load scenario.",
+    "Inspect the non-design bodies and obstacles connected to the solver.",
+    "Run the topology solver; all connected loads act together.",
+    "Review density, reconstructed geometry, region counts and convergence in Results.",
+    "Run separate copies for other operating cases; enable structural validation before interpreting validated stress or displacement."
+  ],
+  "_acceptance_criteria": [
+    "Review convergence and final material fraction.",
+    "Check interface continuity and obstacle clearance in reconstructed geometry.",
+    "Run independent structural verification and refinement before assessing engineering targets."
+  ]
 }

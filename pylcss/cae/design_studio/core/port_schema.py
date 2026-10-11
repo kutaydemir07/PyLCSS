@@ -34,6 +34,7 @@ class PortDescriptor:
 
 _TYPE_DESCRIPTIONS = {
     "Geometry": "CAD body or surface geometry",
+    "Selection Source": "CAD geometry or finite-element mesh used to select entities",
     "Solid Geometry": "Closed CAD solid or watertight volume",
     "Surface Geometry": "CAD surface or shell midsurface",
     "Design Space": "Optimizable solid geometry",
@@ -53,6 +54,7 @@ _TYPE_DESCRIPTIONS = {
     "Joint": "Kinematic joint definition",
     "Load Case": "Grouped topology operating case",
     "Thermal Boundary": "Thermal sink or heat-load definition",
+    "Impact Condition": "Initial motion and contact",
     "Impact Setup": "Initial motion and contact",
     "Result Dataset": "Solved fields, histories, quality checks, and summaries",
     "Engineering Result": "Structural, impact, or topology result data",
@@ -99,12 +101,14 @@ _PORT_LABELS = {
     "mesh": "Mesh",
     "material": "Structural Material",
     "impact_material": "Impact Material",
-    "component": "Body",
-    "components": "Bodies",
+    "component": "Component",
+    "components": "Components",
     "constraints": "Supports",
     "supports": "Supports",
     "loads": "Loads",
-    "impact": "Impact Setup",
+    "preserved_regions": "Preserved Bodies (Non-Design)",
+    "obstacle_regions": "Obstacle Bodies (Keep-Out)",
+    "impact": "Impact Condition",
     "results": "Results",
     "result_view": "View",
     "topology_results": "Result",
@@ -125,6 +129,8 @@ _EXPLICIT_LABELS = {
     ("TopologyOptVoxelNode", "input", "material"): "Material",
     ("TopologyOptVoxelNode", "input", "supports"): "Supports",
     ("TopologyOptVoxelNode", "input", "loads"): "Forces",
+    ("TopologyOptVoxelNode", "input", "preserved_regions"): "Preserved (Non-Design)",
+    ("TopologyOptVoxelNode", "input", "obstacle_regions"): "Obstacle (Keep-Out)",
     ("TopologyOptVoxelNode", "output", "results"): "Optimization Result",
     ("TopologyOptVoxelNode", "output", "recovered_shape"): "Recovered Surface",
     ("ConstraintNode", "input", "mesh"): "FE Mesh (FEA)",
@@ -137,6 +143,7 @@ _EXPLICIT_LABELS = {
     ("PressureLoadNode", "input", "target_face"): "Selection",
     ("PressureLoadNode", "output", "loads"): "Load",
     ("SolverNode", "output", "results"): "Result",
+    ("ModalSolverNode", "output", "results"): "Result",
     ("CrashSolverNode", "output", "results"): "Result",
     ("NumberNode", "output", "value"): "Value",
     ("VariableNode", "output", "value"): "Value",
@@ -146,13 +153,6 @@ _EXPLICIT_LABELS = {
     ("BoxNode", "input", "height"): "Height (mm)",
     ("CylinderNode", "input", "diameter"): "Diameter (mm)",
     ("CylinderNode", "input", "length"): "Length (mm)",
-    ("TubeNode", "input", "outer_diameter"): "Outer Diameter (mm)",
-    ("TubeNode", "input", "wall_thickness"): "Wall (mm)",
-    ("TubeNode", "input", "length"): "Length (mm)",
-    ("CylindricalShellNode", "input", "diameter"): "Diameter (mm)",
-    ("CylindricalShellNode", "input", "length"): "Length (mm)",
-    ("ThroughHoleNode", "input", "diameter"): "Diameter (mm)",
-    ("FilletNode", "input", "radius"): "Radius (mm)",
     ("MassPropertiesNode", "output", "mass"): "Mass (kg)",
     ("MassPropertiesNode", "output", "volume"): "Volume (mm³)",
     ("BoundingBoxNode", "output", "length"): "Length (mm)",
@@ -172,9 +172,16 @@ _EXPLICIT_LABELS = {
     ("LoadNode", "input", "force_x"): "Force X (N)",
     ("LoadNode", "input", "force_y"): "Force Y (N)",
     ("LoadNode", "input", "force_z"): "Force Z (N)",
+    ("LoadNode", "input", "pressure"): "Pressure (MPa)",
     ("PressureLoadNode", "input", "pressure"): "Pressure (MPa)",
     ("MeshNode", "input", "element_size"): "Element Size (mm)",
     ("MeshNode", "input", "refinement_size"): "Local Size (mm)",
+    ("TransformNode", "input", "translate_x"): "Translate X (mm)",
+    ("TransformNode", "input", "translate_y"): "Translate Y (mm)",
+    ("TransformNode", "input", "translate_z"): "Translate Z (mm)",
+    ("TransformNode", "input", "rotation_angle_deg"): "Rotation Angle (deg)",
+    ("LinearPatternNode", "input", "count"): "Count",
+    ("LinearPatternNode", "input", "spacing"): "Spacing (mm)",
 }
 
 _NUMERIC_NAME_TYPES = {
@@ -196,9 +203,13 @@ _NUMERIC_NAME_TYPES = {
     "pressure": "Pressure",
     "radius": "Length",
     "refinement_size": "Length",
+    "rotation_angle_deg": "Scalar",
     "spacing": "Length",
     "thermal_conductivity": "Thermal Conductivity",
     "thickness": "Length",
+    "translate_x": "Length",
+    "translate_y": "Length",
+    "translate_z": "Length",
     "volume": "Volume",
     "wall_thickness": "Length",
     "width": "Length",
@@ -206,12 +217,7 @@ _NUMERIC_NAME_TYPES = {
 }
 
 _GENERIC_SCALAR_PORT_NAMES = {
-    "param_1",
-    "param_2",
-    "param_3",
-    "param_4",
-    "param_5",
-    "param_6",
+    *(f"param_{i}" for i in range(1, 33)),
     "value",
     "x",
     "y",
@@ -222,10 +228,12 @@ _GEOMETRY_PORT_NAMES = {
     "base",
     "bodies",
     "design_domain",
+    "obstacle_regions",
     "part_1",
     "part_2",
     "part_3",
     "part_4",
+    "preserved_regions",
     "recovered_shape",
     "region_shape",
     "shape",
@@ -248,6 +256,10 @@ _SELECTION_PORT_NAMES = {
 
 _EXPLICIT_TYPES = {
     ("TopologyOptVoxelNode", "input", "design_domain"): "Design Space",
+    ("TopologyOptVoxelNode", "input", "preserved_regions"): "Solid Geometry",
+    ("TopologyOptVoxelNode", "input", "obstacle_regions"): "Solid Geometry",
+    # SelectFaceNode can select entities from either a CAD shape or an FE mesh.
+    ("SelectFaceNode", "input", "shape"): "Selection Source",
     # Legacy selection output is deliberately not geometry.
     ("SelectFaceNode", "output", "workplane"): "Selection",
     ("InteractiveSelectFaceNode", "output", "workplane"): "Selection",
@@ -257,13 +269,16 @@ _EXPLICIT_TYPES = {
     ("SolverNode", "input", "loads"): "Structural Load",
     ("ConstraintNode", "output", "constraints"): "Support",
     ("SolverNode", "input", "constraints"): "Support",
+    ("ModalSolverNode", "input", "constraints"): "Support",
+    ("ModalSolverNode", "input", "material"): "Material",
+    ("ModalSolverNode", "input", "mesh"): "Solid Mesh",
     ("CrashSolverNode", "input", "constraints"): "Support",
     ("TopologySupportNode", "output", "supports"): "Topology Support",
     ("TopologyOptVoxelNode", "input", "supports"): "Topology Support",
     ("TopologyLoadNode", "output", "loads"): "Topology Load",
     ("TopologyOptVoxelNode", "input", "loads"): "Topology Load",
-    ("ImpactConditionNode", "output", "impact"): "Impact Setup",
-    ("CrashSolverNode", "input", "impact"): "Impact Setup",
+    ("ImpactConditionNode", "output", "impact"): "Impact Condition",
+    ("CrashSolverNode", "input", "impact"): "Impact Condition",
     ("MaterialNode", "output", "impact_material"): "Impact Material",
     ("MaterialNode", "output", "crash_material"): "Impact Material",
     ("CrashSolverNode", "input", "material"): "Material",
@@ -272,15 +287,9 @@ _EXPLICIT_TYPES = {
     ("TopologyOptVoxelNode", "output", "topopt_result"): "Topology Result",
     ("BoxNode", "output", "shape"): "Solid Geometry",
     ("CylinderNode", "output", "shape"): "Solid Geometry",
-    ("TubeNode", "output", "shape"): "Solid Geometry",
-    ("CylindricalShellNode", "output", "shape"): "Surface Geometry",
     ("BooleanNode", "input", "base"): "Solid Geometry",
     ("BooleanNode", "input", "tool"): "Solid Geometry",
     ("BooleanNode", "output", "shape"): "Solid Geometry",
-    ("ThroughHoleNode", "input", "shape"): "Solid Geometry",
-    ("ThroughHoleNode", "output", "shape"): "Solid Geometry",
-    ("FilletNode", "input", "shape"): "Solid Geometry",
-    ("FilletNode", "output", "shape"): "Solid Geometry",
     ("SolverNode", "input", "mesh"): "Solid Mesh",
     ("MassPropertiesNode", "output", "mass"): "Mass",
     ("MassPropertiesNode", "output", "volume"): "Volume",
@@ -297,7 +306,7 @@ _NAME_TYPES = {
     "components": "Body",
     "bodies": "Geometry",
     "constraints": "Support",
-    "impact": "Impact Setup",
+    "impact": "Impact Condition",
     "impact_material": "Impact Material",
     "results": "Result Dataset",
     "result_view": "Result Dataset",
@@ -311,13 +320,27 @@ _NAME_TYPES = {
 }
 
 _ACCEPTED_OUTPUT_TYPES = {
+    "Selection Source": {
+        "Geometry",
+        "Solid Geometry",
+        "Surface Geometry",
+        "Design Space",
+        "Mesh",
+        "Solid Mesh",
+        "Shell Mesh",
+    },
     "Geometry": {
         "Geometry",
         "Solid Geometry",
         "Surface Geometry",
         "Design Space",
     },
-    "Solid Geometry": {"Solid Geometry", "Geometry", "Design Space"},
+    "Solid Geometry": {
+        "Solid Geometry",
+        "Geometry",
+        "Design Space",
+        "Topology Region",
+    },
     "Surface Geometry": {"Surface Geometry", "Geometry"},
     "Region Scope": {
         "Selection",
@@ -340,6 +363,8 @@ _ACCEPTED_OUTPUT_TYPES = {
     "Topology Support": {"Topology Support", "Support"},
     "Structural Load": {"Structural Load", "Topology Load"},
     "Topology Load": {"Topology Load", "Structural Load"},
+    "Impact Condition": {"Impact Condition", "Impact Setup"},
+    "Impact Setup": {"Impact Setup", "Impact Condition"},
 }
 
 _NUMERIC_TYPES = {
@@ -364,8 +389,8 @@ _REQUIRED_INPUTS = {
     "BooleanNode": {"base", "tool"},
     "BoundingBoxNode": {"shape"},
     "CrashSolverNode": {"mesh", "material", "impact"},
+    "ModalSolverNode": {"mesh", "material"},
     "FEAComponentNode": {"mesh", "material"},
-    "FilletNode": {"shape"},
     "ImpactConditionNode": {"impact_face"},
     "InteractiveSelectFaceNode": {"shape"},
     "LinearPatternNode": {"shape"},
@@ -375,7 +400,6 @@ _REQUIRED_INPUTS = {
     "PressureLoadNode": {"target_face"},
     "SelectFaceNode": {"shape"},
     "SurfaceAreaNode": {"shape"},
-    "ThroughHoleNode": {"shape"},
     "TopologyLoadNode": {"target_region"},
     "TopologyOptVoxelNode": {"design_domain", "material"},
     "TopologySupportNode": {"target_region"},
@@ -572,7 +596,7 @@ def apply_context_port_visibility(node: object) -> None:
         # aliases rename the sockets in place.  Hiding blank slots made them
         # impossible to reach and they were never reliably shown again after
         # aliases arrived from the background execution worker.
-        for index in range(1, 9):
+        for index in range(1, 33):
             _set_port_visible(node, f"param_{index}", True)
 
 
@@ -593,6 +617,8 @@ def is_required_input(node: object, name: str) -> bool:
         )
     if class_name == "ConstraintNode" and name == "target_face":
         return not str(_property(node, "condition", "")).strip()
+    if class_name == "ModalSolverNode":
+        return name in {"mesh", "material"}
     if class_name == "SolverNode":
         if name in {"mesh", "material"}:
             return not _has_connection(node, "components")

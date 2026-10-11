@@ -26,6 +26,7 @@ SIMULATION_NODE_IDENTIFIERS = {
     "com.cad.sim.load",
     "com.cad.sim.pressure_load",
     "com.cad.sim.solver",
+    "com.cad.sim.modal_solver",
     "com.cad.sim.topopt_voxel",
     "com.cad.sim.lattice_voxel",
     "com.cad.sim.impact",

@@ -352,8 +352,8 @@ class GenericInspectorMixin:
                 "CAD",
             ],
             "cad_reconstruction_method": [
-                "Auto",
-                "Smooth",
+                "Auto (AMRTO)",
+                "AMRTO",
             ],
             "source_geometry": [
                 "Recovered Shape",
