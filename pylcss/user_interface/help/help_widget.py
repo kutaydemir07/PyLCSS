@@ -83,13 +83,12 @@ _PAGES: dict[str, str] = {
     "Installation and Workspaces": _page("""
 <h1>Installation and Workspaces</h1>
 <p>Run the Windows setup installer and choose one option: <b>PyLCSS MDAO only</b>, <b>PyLCSS CAE only</b>, or <b>PyLCSS MDAO and CAE</b>. Setup installs a shared Python runtime and required packages.</p>
-<p>CalculiX, OpenRadioss, FreeCAD, and AMRTO are optional external tools. Install only the external tools your workflows require.</p>
+<p>CalculiX, OpenRadioss, and FreeCAD are optional external tools. Install only the external tools your workflows require.</p>
 <h2>Install External Solvers</h2>
 <p>For a source installation in an activated environment, run the solver installer script:</p>
 <pre>python scripts/install_solvers.py --only ccx
 python scripts/install_solvers.py --only radioss
-python scripts/install_solvers.py --only freecad
-python scripts/install_solvers.py --only amrto</pre>
+python scripts/install_solvers.py --only freecad</pre>
 <h2>Launch Options</h2>
 <p>The main PyLCSS shortcut opens the workspace chooser. Dedicated shortcuts open MDAO or CAE directly. From a command prompt:</p>
 <pre>PyLCSS.exe --workspace mdao
@@ -156,7 +155,7 @@ pip install -e ".[mdao,cae]"</pre>
 <li><b>Static FEA:</b> CalculiX solid solver for linear and non-linear stress analysis.</li>
 <li><b>Modal Solver:</b> CalculiX natural frequency extraction and mode shape visualization.</li>
 <li><b>Impact:</b> OpenRadioss transient non-linear crash solver.</li>
-<li><b>Topology:</b> SIMP density optimization with automated AMRTO B-rep reconstruction.</li>
+<li><b>Topology:</b> SIMP density optimization with constrained G1 spline CAD reconstruction.</li>
 <li><b>Lattice:</b> Homogenized cellular synthesis with 3MF beam and STEP export.</li>
 </ul>
 """, "CAE — CAD and Simulation"),
@@ -271,16 +270,15 @@ pip install -e ".[mdao,cae]"</pre>
 <p>The <b>Topology Solver</b> optimizes solid material distribution directly from a CAD design domain using the SIMP method.</p>
 <h2>Study Configuration</h2>
 <p>Connect the design domain, material, supports, forces, passive regions, and joints. A <b>Passive Region</b> node protects critical CAD volumes as solid material or void clearance.</p>
-<h2>Automated AMRTO CAD Reconstruction</h2>
-<p>Topology results are reconstructed into B-rep CAD models using <b>AMRTO</b> (Automated CAD Model Reconstruction of Topology Optimization Result, Ren et al., 2025). The fitted faces are sewn into a solid and checked for closure and geometry accuracy:</p>
+<h2>Smooth CAD Reconstruction</h2>
+<p>Continuum and TPMS boundaries are fitted with coupled degree-five B-spline patches. Shared boundary curves and tangent-plane equations enforce G1 continuity across smooth seams. Sharp creases and analytic passive features remain explicit.</p>
 <ol>
-<li><b>Triangular Surface:</b> Recovers and smooths the optimized density boundary.</li>
-<li><b>Field-Aligned Remeshing:</b> Generates quadrilateral meshes using Instant Meshes.</li>
-<li><b>Sparse Layouts:</b> Uses generalized motorcycle graphs to create disk patches.</li>
-<li><b>Harmonic Mapping:</b> Parameterizes each patch and samples its surface.</li>
-<li><b>NURBS Fitting:</b> Fits multi-resolution B-spline patches with shared boundaries.</li>
-<li><b>Watertight B-rep Export:</b> Exports directly to standard <b>STEP</b> and <b>IGES</b> CAD formats.</li>
+<li><b>Recovered Boundary:</b> Physical voxel contours with feature-constrained smoothing.</li>
+<li><b>Quad Cage:</b> Topology-checked simplification and triangle-to-quad subdivision.</li>
+<li><b>Constrained Fit:</b> Sparse least squares with shared controls and G1 equations.</li>
+<li><b>Validation:</b> Sampled geometric error, orientation, material volume, cavity preservation, and STEP reimport.</li>
 </ol>
+<p>No external reconstruction executables are required. Fits retry within a bounded patch budget and report an error if accuracy cannot be met.</p>
 <p>Use <b>Volume Remesh</b> to create a solid tetrahedral mesh for downstream CalculiX validation.</p>
 """, "CAE — CAD and Simulation"),
 
@@ -300,7 +298,7 @@ pip install -e ".[mdao,cae]"</pre>
 <ul>
 <li><b>Manufactured Mesh:</b> High-resolution STL mesh for additive manufacturing.</li>
 <li><b>3MF Beam Lattice:</b> Node-and-beam network with per-end radii for AM software tools.</li>
-<li><b>B-rep STEP / IGES:</b> Strut lattices export analytic B-rep STEP models. TPMS and honeycomb cellular models are reconstructed into watertight B-rep CAD models using the AMRTO pipeline.</li>
+<li><b>B-rep STEP / IGES:</b> Strut lattices export cylinders/cones and node balls as a compound of overlapping solids. Fused beam lattice requests a bounded, checked union; node junctions are not guaranteed G1. TPMS and honeycomb cellular models are reconstructed into watertight B-rep CAD models using the constrained G1 spline fitter.</li>
 </ul>
 """, "CAE — CAD and Simulation"),
 
@@ -319,8 +317,7 @@ pip install -e ".[mdao,cae]"</pre>
 <p>Install external tools using the setup utility script:</p>
 <pre>python scripts/install_solvers.py --only ccx
 python scripts/install_solvers.py --only radioss
-python scripts/install_solvers.py --only freecad
-python scripts/install_solvers.py --only amrto</pre>
+python scripts/install_solvers.py --only freecad</pre>
 <p>PyLCSS detects solvers automatically. Check node library tooltips to inspect detection status.</p>
 """, "CAE — CAD and Simulation"),
 

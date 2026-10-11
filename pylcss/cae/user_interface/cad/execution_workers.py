@@ -145,7 +145,7 @@ def _write_step_shape(shape, path, product_name):
         status = solid.exportStep(str(path))
         if status != IFSelect_ReturnStatus.IFSelect_RetDone:
             raise RuntimeError(f"STEP writer rejected the body (status {status}).")
-        from pylcss.cae.design_studio.topology_optimization.geometry.amrto_step_export import verify_step_roundtrip
+        from pylcss.cae.design_studio.topology_optimization.geometry.step_export import verify_step_roundtrip
         verify_step_roundtrip(path)
     finally:
         for key, value in previous.items():
@@ -175,21 +175,38 @@ def _external_write_cad_step(
     return _write_step_shape(shape, path, product_name)
 
 
-def _external_write_cad_brep(payload, path, reconstruction_strategy="auto"):
+def _external_write_cad_brep(payload, path, reconstruction_strategy="auto",
+                             reconstruction_options=None, *, progress_callback=None):
     """Build preview CAD in a process so OCC cannot stall the Qt event loop."""
-    import cadquery as cq
     from pylcss.cae.design_studio.topology_optimization.geometry.cad_reconstruction import (
         reconstruct_topopt_cad,
     )
 
-    shape, report = reconstruct_topopt_cad(
-        payload,
-        source_geometry="Recovered Shape",
-        reconstruction_strategy=str(reconstruction_strategy or "auto"),
-        sew_tolerance=1e-4,
-        return_report=True,
+    options = dict(reconstruction_options or {})
+    options.update(source_geometry="Recovered Shape",
+                   reconstruction_strategy=str(reconstruction_strategy or "auto"),
+                   return_report=True, progress_callback=progress_callback)
+    options.setdefault("sew_tolerance", 1e-4)
+    shape, report = reconstruct_topopt_cad(payload, **options)
+    if progress_callback:
+        progress_callback({"type": "topopt_progress", "status_only": True,
+                           "stage": "CAD reconstruction — Preparing display mesh"}, None, 0, 0)
+    from pylcss.cae.design_studio.topology_optimization.geometry.cad_tessellation import (
+        tessellate_cad_absolute,
     )
-    cq.exporters.export(shape, str(path), exportType="BREP")
+    body = shape.val() if hasattr(shape, "val") else shape
+    box = body.BoundingBox()
+    tolerance = max(float(np.linalg.norm([box.xlen, box.ylen, box.zlen])) * 1e-3, 1e-7)
+    vertices, faces = tessellate_cad_absolute(body, tolerance, .3)
+    report["_preview_mesh"] = {"vertices": vertices, "faces": faces}
+    report["worker_pid"] = os.getpid()
+    # Keep the transfer small: the prepared display mesh travels separately,
+    # and importing BREP must not reimport OCC's triangulation as well.
+    from OCP.BRepTools import BRepTools
+    from OCP.TopTools import TopTools_FormatVersion_VERSION_1
+    if not BRepTools.Write_s(body.wrapped, str(path), False, False,
+                            TopTools_FormatVersion_VERSION_1):
+        raise RuntimeError("Could not transfer the reconstructed CAD body")
     return report
 
 
@@ -317,6 +334,8 @@ class TopOptCadPreviewWorker(QtCore.QThread):
 
     preview_finished = QtCore.Signal(object, object)
     preview_error = QtCore.Signal(str)
+    preview_cancelled = QtCore.Signal()
+    preview_progress = QtCore.Signal(object, object, int, int)
 
     def __init__(
         self,
@@ -336,9 +355,10 @@ class TopOptCadPreviewWorker(QtCore.QThread):
         self.reconstruction_strategy = str(
             reconstruction_strategy or "auto"
         ).strip().lower()
+        self.preview_mesh = None
 
     def run(self):
-        temporary = ""
+        from .cad_background import CadJobCancelled, reconstruct_cad_in_background
         try:
             payload = _topopt_cad_payload(
                 self.topo_output,
@@ -346,35 +366,23 @@ class TopOptCadPreviewWorker(QtCore.QThread):
                 extrusion_axis=self.extrusion_axis,
                 passive_regions=self.passive_regions,
             )
-            descriptor, temporary = tempfile.mkstemp(
-                prefix="pylcss_topopt_preview_",
-                suffix=".brep",
+            shape, report, self.preview_mesh = reconstruct_cad_in_background(
+                payload, reconstruction_strategy=self.reconstruction_strategy,
+                progress_callback=self.preview_progress.emit,
+                cancel_callback=self.isInterruptionRequested,
             )
-            os.close(descriptor)
-
-            from .cad_background import run_cad_job
-
-            report = run_cad_job("brep", payload, temporary, self.reconstruction_strategy)
-
-            import cadquery as cq
-
-            shape = cq.importers.importBrep(temporary)
             self.preview_finished.emit(shape, report)
+        except CadJobCancelled:
+            self.preview_cancelled.emit()
         except Exception as exc:
             import traceback
 
             traceback.print_exc()
             self.preview_error.emit(str(exc))
-        finally:
-            if temporary and os.path.exists(temporary):
-                try:
-                    os.remove(temporary)
-                except OSError:
-                    pass
 
 
 class TopOptMeshExportWorker(QtCore.QThread):
-    """Export topology STL or beam-lattice 3MF without blocking Qt."""
+    """Coordinate isolated topology STL/3MF export without blocking Qt."""
 
     export_finished = QtCore.Signal(object)
     export_error = QtCore.Signal(str)
@@ -456,7 +464,7 @@ class TopOptMeshExportWorker(QtCore.QThread):
             }
 
         if self.cad_shape is not None:
-            from pylcss.cae.design_studio.topology_optimization.geometry.amrto_common import (
+            from pylcss.cae.design_studio.topology_optimization.geometry.cad_tessellation import (
                 tessellate_cad_absolute,
             )
 
@@ -467,6 +475,20 @@ class TopOptMeshExportWorker(QtCore.QThread):
             )
             tolerance = _tessellation_tolerance(shape)
             vertices, triangles = tessellate_cad_absolute(shape, tolerance, STL_ANGULAR_TOLERANCE)
+            # OCC emits zero-area pole triangles on otherwise valid spheres
+            # and other singular parameterizations. Remove only triangles that
+            # collapse at STL precision, then require a closed oriented mesh.
+            import trimesh
+
+            vertices = np.asarray(vertices, dtype=np.float32).astype(float)
+            sites = vertices[triangles]
+            keep = np.linalg.norm(np.cross(sites[:, 1] - sites[:, 0],
+                                           sites[:, 2] - sites[:, 0]), axis=1) > 1e-12
+            removed = int(np.count_nonzero(~keep))
+            mesh = trimesh.Trimesh(vertices, triangles[keep], process=True)
+            if not mesh.is_watertight or not mesh.is_winding_consistent:
+                raise ValueError("CAD tessellation did not produce a closed, consistently oriented STL mesh.")
+            vertices, triangles = mesh.vertices, mesh.faces
             triangle_count = _write_binary_stl(temporary, vertices, triangles)
             return {
                 "format": "stl",
@@ -474,6 +496,7 @@ class TopOptMeshExportWorker(QtCore.QThread):
                 "triangles": triangle_count,
                 "chordal_tolerance": tolerance,
                 "relative_occ_deflection": False,
+                "removed_degenerate_triangles": removed,
                 "recovered_shape": None,
             }
 
@@ -485,7 +508,11 @@ class TopOptMeshExportWorker(QtCore.QThread):
                 else self.topology_result.get("density")
             )
             if field is not None:
-                bounds = self.topology_result.get("bounds")
+                from pylcss.cae.design_studio.topology_optimization.geometry.cad_features import _payload_bounds
+                from pylcss.cae.design_studio.topology_optimization.geometry.cad_reconstruction import _structure_options
+
+                bounds = _payload_bounds(self.topology_result)
+                regions = self.topology_result.get("passive_regions") or {}
                 cutoff = float(
                     self.topology_result.get("recovery_cutoff")
                     or self.topology_result.get("density_cutoff")
@@ -499,12 +526,16 @@ class TopOptMeshExportWorker(QtCore.QThread):
                         np.asarray(field, dtype=float),
                         bounds,
                         cutoff,
-                        solid_boxes=self.topology_result.get("solid_boxes"),
-                        void_boxes=self.topology_result.get("void_boxes"),
-                        solid_cylinders=self.topology_result.get("solid_cylinders"),
-                        void_cylinders=self.topology_result.get("void_cylinders"),
-                        joint_pin_cylinders=self.topology_result.get("joint_pin_cylinders"),
-                        structure_options=self.structure_options,
+                        **{name: regions.get(name, self.topology_result.get(name)) or ()
+                           for name in ("solid_boxes", "void_boxes", "solid_cylinders",
+                                        "void_cylinders", "joint_pin_cylinders")},
+                        extrusion_axis=self.topology_result.get("extrusion_axis") or "none",
+                        source_mask=(self.topology_result.get("source_mask")
+                                     if self.topology_result.get("source_mask") is not None
+                                     else self.topology_result.get("design_domain")),
+                        passive_solid_mask=self.topology_result.get("passive_solid_mask"),
+                        passive_void_mask=self.topology_result.get("passive_void_mask"),
+                        structure_options=_structure_options(self.topology_result, self.structure_options),
                         member_plan=self.member_plan,
                     )
                     if isinstance(recovered, dict):
@@ -563,12 +594,20 @@ class TopOptMeshExportWorker(QtCore.QThread):
         temporary = ""
         try:
             temporary = _temporary_export_path(self.path)
-            if self.export_format == "stl":
-                details = self._export_stl(temporary)
-            elif self.export_format == "3mf":
-                details = self._export_3mf(temporary)
-            else:
-                raise ValueError(f"Unsupported topology export: {self.export_format}.")
+            from .cad_background import run_cad_job
+
+            # OCC can retain the GIL in tessellation even inside QThread, and
+            # cleaning a shared shape also invalidates the viewer's mesh.
+            # Pickling gives the child its own CAD body and recovery arrays.
+            details = run_cad_job("mesh", {
+                "path": self.path,
+                "cad_shape": self.cad_shape,
+                "recovered_shape": self.recovered_shape,
+                "topology_result": self.topology_result,
+                "structure_options": self.structure_options,
+                "member_plan": self.member_plan,
+                "export_format": self.export_format,
+            }, temporary)
             _commit_export(temporary, self.path)
             temporary = ""
             self.export_finished.emit(details)
@@ -611,6 +650,8 @@ class TopOptStepExportWorker(QtCore.QThread):
             reconstruction_strategy or "auto"
         ).strip().lower()
         self.cached_shape = cached_shape
+        self.reconstruction_report = None
+        self.preview_mesh = None
 
     @staticmethod
     def _bounds_tuple(bounds_payload):
@@ -630,8 +671,12 @@ class TopOptStepExportWorker(QtCore.QThread):
         try:
             temporary = _temporary_export_path(self.path)
             product_name = Path(self.path).stem
+            from .cad_background import run_cad_job
+
             if self.cached_shape is not None:
-                _write_step_shape(self.cached_shape, temporary, product_name)
+                # Cached exports need the same isolation as a fresh fit: STEP
+                # transfer, validation and OCC's global settings can stall Qt.
+                run_cad_job("step_shape", self.cached_shape, temporary, product_name)
             else:
                 payload = _topopt_cad_payload(
                     self.topo_output,
@@ -640,9 +685,14 @@ class TopOptStepExportWorker(QtCore.QThread):
                     passive_regions=self.passive_regions,
                 )
 
-                from .cad_background import run_cad_job
-
-                run_cad_job("step", payload, temporary, self.reconstruction_strategy, product_name)
+                # An export can be the first request for CAD. Retain that
+                # verified body so the next export uses the same cache as a
+                # solve or CAD preview, instead of fitting it again.
+                from .cad_background import reconstruct_cad_in_background
+                self.cached_shape, self.reconstruction_report, self.preview_mesh = reconstruct_cad_in_background(
+                    payload, reconstruction_strategy=self.reconstruction_strategy,
+                )
+                run_cad_job("step_shape", self.cached_shape, temporary, product_name)
 
             _commit_export(temporary, self.path)
             temporary = ""
@@ -656,3 +706,16 @@ class TopOptStepExportWorker(QtCore.QThread):
                     os.remove(temporary)
                 except OSError:
                     pass
+
+
+def _external_write_cad_mesh(options, temporary):
+    """Run mesh recovery/tessellation only in the private CAD subprocess."""
+    exporter = TopOptMeshExportWorker(**options)
+    if exporter.export_format == "stl":
+        details = exporter._export_stl(temporary)
+    elif exporter.export_format == "3mf":
+        details = exporter._export_3mf(temporary)
+    else:
+        raise ValueError(f"Unsupported topology export: {exporter.export_format}.")
+    details["worker_pid"] = os.getpid()
+    return details

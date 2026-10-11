@@ -1,18 +1,7 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""Step 1: Generation of the triangular mesh model from topology optimization results.
-
-Reference:
-Section 2.3: Generation of the triangular mesh model (step 1)
-In AMRTO (Ren et al., 2025):
-"The homemade code has been developed using MATLAB to smooth the pseudo-density field,
-identify the isosurface with a reference pseudo-density, and generate the triangular mesh
-model... Preprocessing techniques, such as Laplacian smoothing, face normal smoothing,
-flipping normal error patches, eliminating duplicate patches, merging overlapping points,
-and filling gaps, may be used to address possible flaws in the triangular mesh,
-resulting in a smooth and watertight mesh model."
-"""
+"""Voxel isosurface recovery with feature and signed-volume preservation."""
 
 from __future__ import annotations
 
@@ -24,7 +13,7 @@ from scipy import ndimage as ndi
 from skimage import measure
 import trimesh
 
-from .amrto_common import AMRTOConfig
+from .cad_config import SurfaceRecoveryConfig
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +24,7 @@ def smooth_pseudo_density_field(
     window_size: int = 3,
     method: str = "gaussian",
 ) -> np.ndarray:
-    """Smooth the pseudo-density field as in AMRTO Section 2.3."""
+    """Smooth the pseudo-density field with a Gaussian filter."""
     grid = np.asarray(field, dtype=float)
     if grid.ndim != 3 or grid.size == 0:
         return grid
@@ -108,7 +97,7 @@ def preprocess_and_repair_mesh(
     laplacian_lambda: float = 0.3,
     domain_bounds: Optional[Tuple[Sequence[float], Sequence[float]]] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Execute preprocessing techniques from AMRTO Section 2.3.
+    """Execute preprocessing techniques for a recovered voxel boundary.
 
     Includes:
     - Eliminating duplicate patches and merging overlapping points
@@ -161,7 +150,7 @@ def preprocess_and_repair_mesh(
         except Exception:
             pass
 
-    # 4. Laplacian smoothing as described in AMRTO Section 2.3
+    # 4. Laplacian smoothing with feature constraints
     if laplacian_iters > 0:
         try:
             mesh = _smooth_mesh_preserving_features(
@@ -328,7 +317,7 @@ def _smooth_mesh_preserving_features(mesh: trimesh.Trimesh, *, iterations: int,
 
 def _collapse_zero_area_faces_preserving_topology(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     """Repair collinear triangles by checked local edge collapses, never holes."""
-    from .amrto_quadrangulation import mesh_topology_report, _quad_topology_error
+    from .mesh_topology import mesh_topology_report, topology_error
 
     vertices = np.asarray(mesh.vertices).copy()
     faces = np.asarray(mesh.faces).copy()
@@ -385,7 +374,7 @@ def _collapse_zero_area_faces_preserving_topology(mesh: trimesh.Trimesh) -> trim
             break
     repaired = trimesh.Trimesh(vertices, faces, process=False)
     topology = mesh_topology_report(vertices, faces)
-    error = _quad_topology_error(original, topology)
+    error = topology_error(original, topology)
     relative_volume_delta = abs(abs(float(repaired.volume)) - volume) / volume if volume else 0.0
     if error or relative_volume_delta > 1e-5:
         raise ValueError("Closed surface degeneracy could not be repaired while preserving topology and volume: "
@@ -400,10 +389,10 @@ def generate_topopt_triangular_mesh(
     field: np.ndarray,
     cutoff: float = 0.5,
     bounds: Optional[Tuple[Sequence[float], Sequence[float]]] = None,
-    config: Optional[AMRTOConfig] = None,
+    config: Optional[SurfaceRecoveryConfig] = None,
 ) -> Tuple[np.ndarray, np.ndarray, dict]:
-    """Step 1 entry point: Generate a smooth, watertight triangular mesh from TO results."""
-    cfg = config or AMRTOConfig(density_cutoff=cutoff)
+    """Generate a smooth, watertight triangular mesh from TO results."""
+    cfg = config or SurfaceRecoveryConfig(density_cutoff=cutoff)
     verts, faces = extract_isosurface_mesh(
         field,
         cutoff=cfg.density_cutoff,
@@ -425,7 +414,7 @@ def generate_topopt_triangular_mesh(
     components = len(mesh.split(only_watertight=False)) if len(faces) > 0 else 0
 
     report = {
-        "step": 1,
+        "stage": "surface_recovery",
         "vertex_count": len(verts),
         "face_count": len(faces),
         "volume": vol,

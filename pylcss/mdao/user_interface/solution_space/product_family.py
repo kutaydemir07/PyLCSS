@@ -145,7 +145,7 @@ class ProductFamilyMixin:
                     self.right_tabs.setCurrentIndex(i)
                     break
         else:
-            QtWidgets.QMessageBox.warning(self, "Warning", "No valid results obtained.")
+            self.lbl_family_summary.setText("No results")
 
     def update_family_summary(self, results):
         """Fill the left-panel summary: platform width, share of design range, communality."""
@@ -158,13 +158,11 @@ class ProductFamilyMixin:
         )
 
         self.family_summary_table.setRowCount(len(dvs))
-        feasible = 0
         for i, dv in enumerate(dvs):
             width_text, share_text = "none", "-"
             if platform is not None and i < platform.shape[0]:
                 width = float(platform[i, 1] - platform[i, 0])
                 if width > 0:
-                    feasible += 1
                     width_text = f"{width:.4g}"
                     span = float(dv["max"]) - float(dv["min"])
                     if span > 0:
@@ -177,8 +175,10 @@ class ProductFamilyMixin:
 
         self.family_summary_table.setVisible(bool(dvs))
         variant_count = len([k for k in results if k not in ("Platform", "Platform_Infeasible", "Communality")])
+        has_platform = platform is not None and not results.get("Platform_Infeasible", False)
+        platform_status = "Available" if has_platform else "None"
         self.lbl_family_summary.setText(
-            f"{variant_count} variants. Common platform exists for {feasible} of {len(dvs)} variables."
+            f"Variants: {variant_count} · Common platform: {platform_status}"
         )
 
     def display_communality_info(self, communality):
@@ -236,6 +236,7 @@ class ProductFamilyMixin:
         """Handle errors in product family computation."""
         self.family_progress.close()
         self.btn_compute_family.setEnabled(True)
+        self.lbl_family_summary.setText("Failed")
         QtWidgets.QMessageBox.critical(
             self, "Error", f"Product family computation failed: {error_msg}"
         )
@@ -246,6 +247,7 @@ class ProductFamilyMixin:
             self.family_worker.stop()
         self.family_progress.close()
         self.btn_compute_family.setEnabled(True)
+        self.lbl_family_summary.setText("Cancelled")
 
     def add_variant(self):
         """Add a new product variant."""

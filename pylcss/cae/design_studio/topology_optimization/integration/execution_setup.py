@@ -23,17 +23,13 @@ from ..manufacturing.lattice_families import normalize_family_key
 from ..models.study import ManufacturingConstraints, ThermalBC, VoxelBC
 from ..optimization.problem import TopologyOptVoxelProblem
 from .boundary_mapping import (
-    _add_bc_contact_regions,
-    _append_region_once,
     _bc_feature_bboxes,
     _bc_has_nonzero_load,
     _bc_has_support,
 )
 from .lattice_settings import (
-    guided_lattice_voxel_dimensions,
     lattice_dimension_range_text,
     lattice_setup_is_guided,
-    node_minimum_feature_size,
     resolve_lattice_structure_options,
 )
 from .geometry_mapping import (
@@ -47,7 +43,6 @@ from .voxelization import (
     _mesh_design_domain_grid,
     _non_design_region_masks,
     _use_automatic_guided_grid,
-    lattice_voxels_from_length,
     voxel_size_from_bounds,
 )
 
@@ -74,8 +69,6 @@ class PreparedTopologyStudy:
     nelx: int
     nely: int
     nelz: int
-    automatic_exclusion_scope: str
-    automatic_exclusion_thickness: float | None
     lattice_porosity: str
     source_design_domain: Any = None
     non_design_regions: tuple[Any, ...] = ()
@@ -134,50 +127,6 @@ class TopologyDomainContext:
     # Density ceiling of that cell, which bounds the design variable itself on a
     # lattice study. 1.0 for a solid study.
     lattice_maximum_density: float
-    automatic_exclusion_scope: str
-    automatic_exclusion_thickness: float | None
-
-
-def _lattice_cell_physical_size(
-    node: Any,
-    grid_shape: tuple[int, int, int],
-    bounds: Any,
-) -> float | None:
-    """Manufactured cell pitch in model units, or ``None`` for a solid study.
-
-    Resolved separately from :func:`resolve_lattice_structure_options`, and
-    earlier, because the load and support interface pads have to know it: a
-    lattice needs a full cell of solid at every interface, and the pads are
-    built before the manufacturing options are validated. Deliberately
-    tolerant — an invalid lattice setting is reported by the full resolution a
-    few lines later, and it must not surface here as a boundary-condition
-    error.
-    """
-    family = normalize_family_key(
-        str(node.get_property("structure_mode") or "Solid Envelope")
-    )
-    if not family or family == "solid":
-        return None
-    voxel_size = voxel_size_from_bounds(grid_shape, bounds)
-    if not voxel_size or not np.isfinite(voxel_size) or voxel_size <= 0.0:
-        return None
-    try:
-        if lattice_setup_is_guided(node.get_property("lattice_settings_mode")):
-            cell_voxels, _, _ = guided_lattice_voxel_dimensions(
-                family,
-                voxel_size=voxel_size,
-                minimum_feature_size=node_minimum_feature_size(node),
-            )
-        else:
-            cell_voxels = lattice_voxels_from_length(
-                node.get_property("lattice_cell_size_mm"),
-                voxel_size,
-                node.get_property("structure_cell_size_voxels") or 8.0,
-            )
-    except (TypeError, ValueError):
-        return None
-    cell_size = float(cell_voxels) * float(voxel_size)
-    return cell_size if np.isfinite(cell_size) and cell_size > 0.0 else None
 
 
 def _guided_cell_budget(
@@ -238,7 +187,7 @@ def _can_use_planar_extrusion_grid(
     physics_key = str(physics_mode or "Structural").strip().lower()
     if "thermal" in physics_key:
         return False
-    if bc.point_forces:
+    if bc.point_forces or bc.boundary_forces or bc.boundary_supports:
         return False
 
     axis = int(extrusion_axis)
@@ -285,7 +234,7 @@ def _can_use_planar_extrusion_grid(
             return False
 
     for case in bc.load_cases:
-        if case.joints or case.point_forces:
+        if case.joints or case.point_forces or case.boundary_forces or case.boundary_supports:
             return False
         if any(not _box_spans_axis(box) for box in case.fixed_boxes):
             return False
@@ -416,22 +365,28 @@ def _collect_graph_inputs(node: Any) -> TopologyGraphInputs | None:
         bc.fixed_front_face_dofs = []
         bc.fixed_back_face_dofs = []
         bc.fixed_boxes = []
+        bc.boundary_supports = []
     if load_list:
         bc.point_forces = []
         bc.box_forces = []
         bc.distributed_forces = []
+        bc.boundary_forces = []
     # One scenario per study. Anything a saved project carried in separate
     # operating cases or joints is dropped rather than silently reinterpreted:
     # folding several independent cases into one simultaneous load set is a
     # different structural problem, not the same one written differently.
     bc.joints = []
     bc.load_cases = []
-    node._merge_graph_bcs(
-        bc,
-        design_domain_input,
-        constraint_list,
-        load_list,
-    )
+    try:
+        node._merge_graph_bcs(
+            bc,
+            design_domain_input,
+            constraint_list,
+            load_list,
+        )
+    except (TypeError, ValueError) as exc:
+        node.set_error(f"Invalid connected TopOpt boundary condition: {exc}")
+        return None
     if constraint_list and not _bc_has_support(bc):
         node.set_error(
             "Connected constraints could not be mapped to voxel supports. "
@@ -726,48 +681,6 @@ def _prepare_domain(
         unitx = float(span[0] / max(nelx, 1))
         unity = float(span[1] / max(nely, 1))
         unitz = float(span[2] / max(nelz, 1))
-    else:
-        span = np.ones(3, dtype=float)
-
-    # Resolved before the exclusion pads, because a lattice study's interface
-    # pad has to be at least one cell deep — see `_add_bc_contact_regions`.
-    lattice_interface_cell_size = _lattice_cell_physical_size(
-        node, (nelx, nely, nelz), bounds
-    )
-
-    exclusion_scope = str(
-        node.get_property("exclusion_scope") or "All Loads and Supports"
-    )
-    exclusion_mode = str(
-        node.get_property("exclusion_thickness_mode") or "Program Controlled"
-    )
-    try:
-        manual_exclusion = None
-        if exclusion_mode.strip().lower() == "manual":
-            manual_exclusion = float(
-                node.get_property("exclusion_thickness_mm") or 0.0
-            )
-            if manual_exclusion <= 0.0:
-                raise ValueError(
-                    "Manual exclusion thickness must be greater than 0 mm."
-                )
-        elif exclusion_mode.strip().lower() != "program controlled":
-            raise ValueError(
-                "Exclusion thickness mode must be Program Controlled or Manual."
-            )
-        effective_exclusion = _add_bc_contact_regions(
-            bc,
-            span,
-            (nelx, nely, nelz),
-            scope=exclusion_scope,
-            manual_thickness=manual_exclusion,
-            design_domain=design_domain,
-            lattice_cell_size=lattice_interface_cell_size,
-        )
-    except (TypeError, ValueError) as exc:
-        node.set_error(f"Invalid TopOpt support/load exclusion settings: {exc}")
-        return None
-
     structure_mode_value = str(node.get_property("structure_mode") or "Solid Envelope")
     # Ask the registry, not the display string. "Gyroid Network (Skeletal)" is
     # every bit as much a lattice study as "Gyroid Lattice", and a substring
@@ -845,8 +758,6 @@ def _prepare_domain(
         lattice_study=bool(structure_family) and structure_family != "solid",
         lattice_cell_type=structure_family,
         lattice_maximum_density=lattice_maximum_density,
-        automatic_exclusion_scope=exclusion_scope,
-        automatic_exclusion_thickness=effective_exclusion,
     )
 
 
@@ -1108,8 +1019,6 @@ def _build_problem(
         nelx=nelx,
         nely=nely,
         nelz=nelz,
-        automatic_exclusion_scope=domain.automatic_exclusion_scope,
-        automatic_exclusion_thickness=domain.automatic_exclusion_thickness,
         lattice_porosity=lattice_porosity,
         source_design_domain=graph.design_domain_input,
         non_design_regions=tuple(graph.non_design_regions),

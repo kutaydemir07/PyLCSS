@@ -7,7 +7,7 @@ results with:
 1. Live 3D Model Display selector (switches VTK viewer in real time).
 2. Data Tables (Components, Assembly Ties, Reactions, Load Cases, Mesh Quality, KPIs).
 3. Graph Results (Convergence History, SAE J211 Crash Curves, Energy Balance).
-4. Run Summary, Timing & Warnings.
+4. Run summary and timing.
 5. CSV Export.
 """
 
@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
+from .result_presentation import analysis_label, crash_check_percent, result_state_rows, run_status
 
 try:
     import pyqtgraph as pg
@@ -764,12 +765,10 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         self._results_container.setVisible(True)
 
         rtype = self._data.get("type", "unknown").lower()
-        backend = self._data.get("backend", "CalculiX" if rtype == "fea" else "OpenRadioss" if rtype == "crash" else "pyMOTO" if rtype == "topopt_voxel" else "Solver")
-
-        title = {"fea": "Structural FEA", "modal": "Modal Analysis", "topopt_voxel": "Topology Optimization", "crash": "Crash / Impact"}.get(rtype, rtype.upper())
+        title = analysis_label(self._data)
         self._lbl_title.setText(f"{title} Results")
-        badge = {"topopt_voxel": "Topology", "external_solver": "FEA"}.get(rtype, rtype.upper())
-        self._badge_type.setText(f"{badge} · {backend}")
+        badge = ("Lattice" if title.startswith("Lattice") else "Topology") if rtype == "topopt_voxel" else {"external_solver": "FEA"}.get(rtype, rtype.upper())
+        self._badge_type.setText(badge)
         self._style_type_badge()
 
         self._populate_3d_controls()
@@ -908,22 +907,21 @@ class DetailedResultsWidget(QtWidgets.QWidget):
             if rtype == "topopt_voxel" and data.get("converged") is not None:
                 rows.append(["Convergence", "Converged" if data["converged"] else "Not converged"])
             if rows:
-                self._subtabs_tables.addTab(self._create_table(["Metric", "Value"], rows, is_dark=self._is_dark()), "Topology Metrics" if rtype == "topopt_voxel" else "Structural Metrics")
+                table_title = "Lattice Metrics" if analysis_label(data).startswith("Lattice") else "Topology Metrics" if rtype == "topopt_voxel" else "Structural Metrics"
+                self._subtabs_tables.addTab(self._create_table(["Metric", "Value"], rows, is_dark=self._is_dark()), table_title)
 
         if rtype == "topopt_voxel" and isinstance(data.get("passive_regions"), dict):
             regions = data["passive_regions"]
             rows = [
                 ["Non-design bodies", "Preserve solid material", len(regions.get("explicit_solid_shapes") or []), regions.get("explicit_solid_voxels", 0)],
                 ["Obstacles / keep-out bodies", "Remove material", len(regions.get("explicit_void_shapes") or []), regions.get("explicit_void_voxels", 0)],
-                ["Automatic interface protection", str(regions.get("automatic_exclusion_scope") or "None"), "—", "—"],
-                ["Interface protection thickness (mm)", _fmt(regions.get("automatic_exclusion_thickness")), "—", "—"],
             ]
             self._subtabs_tables.addTab(self._create_table(["Region", "Behavior", "Bodies", "Explicit Voxels"], rows, is_dark=self._is_dark()), "Non-design & Obstacles")
 
         # 1. Components Table (FEA multi-body)
         components = data.get("components")
         if isinstance(components, list) and components:
-            cols = ["Component Name", "Material", "Elements", "Peak Stress (MPa)", "Yield FoS", "Status"]
+            cols = ["Component Name", "Material", "Elements", "Peak Stress (MPa)", "Yield FoS"]
             rows = []
             for comp in components:
                 if not isinstance(comp, dict):
@@ -934,8 +932,7 @@ class DetailedResultsWidget(QtWidgets.QWidget):
                 stress = _fmt(comp.get("peak_stress_mpa"), "MPa")
                 fos_val = comp.get("yield_safety_factor")
                 fos_str = _fmt(fos_val)
-                status = "Safe (FoS ≥ 1.5)" if (fos_val and float(fos_val) >= 1.5) else "Marginal" if (fos_val and float(fos_val) >= 1.0) else "Critical / Yield" if fos_val else "—"
-                rows.append([name, mat, elem, stress, fos_str, status])
+                rows.append([name, mat, elem, stress, fos_str])
             self._subtabs_tables.addTab(self._create_table(cols, rows, is_dark=self._is_dark()), "Components")
 
         # 2. Assembly Interfaces Table (Tied contact)
@@ -948,7 +945,7 @@ class DetailedResultsWidget(QtWidgets.QWidget):
                     continue
                 pair = f"{conn.get('component_a', '?')} ↔ {conn.get('component_b', '?')}"
                 tol = _fmt(conn.get("search_tolerance_mm"), "mm")
-                rows.append([pair, "Bonded Tie (*TIE)", tol, "Active / Bonded"])
+                rows.append([pair, "Bonded", tol, "Active"])
             self._subtabs_tables.addTab(self._create_table(cols, rows, is_dark=self._is_dark()), "Assembly Ties")
 
         # 3. Load Cases Table (TopOpt Multi-load & Cases)
@@ -997,20 +994,19 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         if quality is None and mesh_obj is not None:
             quality = getattr(mesh_obj, "quality_report", None)
         if isinstance(quality, dict):
-            cols = ["Quality Metric", "Evaluated Value", "Ideal Criterion", "Engineering Status"]
+            cols = ["Mesh Metric", "Value"]
             rows = [
-                ["Assessment", str(quality.get("assessment", "—")), "High Quality", "Passed"],
-                ["Min Mean-Ratio (Element Quality)", _fmt(quality.get("min_mean_ratio")), "≥ 0.20", "OK" if float(quality.get("min_mean_ratio") or 0) >= 0.2 else "Review"],
-                ["5th Percentile Mean-Ratio", _fmt(quality.get("p05_mean_ratio")), "≥ 0.40", "OK"],
-                ["Average Mean-Ratio", _fmt(quality.get("mean_mean_ratio")), "≥ 0.70", "OK"],
-                ["Maximum Edge Ratio (Aspect Ratio)", _fmt(quality.get("max_edge_ratio")), "≤ 10.0", "OK" if float(quality.get("max_edge_ratio") or 1) <= 10 else "High Aspect"],
-                ["Degenerate / Collapsed Elements", str(int(quality.get("degenerate_elements") or 0)), "0", "Valid" if int(quality.get("degenerate_elements") or 0) == 0 else "Degenerate"],
+                ["Minimum Mean-Ratio", _fmt(quality.get("min_mean_ratio"))],
+                ["5th Percentile Mean-Ratio", _fmt(quality.get("p05_mean_ratio"))],
+                ["Average Mean-Ratio", _fmt(quality.get("mean_mean_ratio"))],
+                ["Maximum Edge Ratio", _fmt(quality.get("max_edge_ratio"))],
+                ["Collapsed Elements", _fmt(quality.get("degenerate_elements"))],
             ]
             self._subtabs_tables.addTab(self._create_table(cols, rows, is_dark=self._is_dark()), "Mesh Quality")
 
         # 6. Crash SAE J211 KPIs Table
         if rtype == "crash":
-            cols = ["Crash Characteristic", "Evaluated Metric", "Standard Unit", "Qualification"]
+            cols = ["Crash Metric", "Value", "Unit"]
             rows = []
             for k, lbl, u in [
                 ("peak_force", "Peak Crushing Force", "kN"),
@@ -1025,7 +1021,7 @@ class DetailedResultsWidget(QtWidgets.QWidget):
                 ("n_failed", "Failed Elements Count", "elements"),
             ]:
                 if data.get(k) is not None:
-                    rows.append([lbl, _fmt(data[k]), u, "Solver metric"])
+                    rows.append([lbl, _fmt(data[k]), u])
             if rows:
                 self._subtabs_tables.addTab(self._create_table(cols, rows, is_dark=self._is_dark()), "Crash KPIs")
 
@@ -1033,47 +1029,35 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         if rtype == "crash":
             quality = data.get("quality") or {}
             checks = {c.get("id"): c for c in quality.get("checks", []) if isinstance(c, dict)}
-            q_cols = ["Energy / Quality Gate", "Evaluated Value", "Acceptance Criterion", "Status"]
+            q_cols = ["Numerical Check", "Value", "Status"]
             q_rows = []
 
-            q_status = str(data.get("quality_status") or quality.get("status") or "Evaluated").upper()
-            q_rows.append(["Overall Qualification", q_status, "Qualified Solution", q_status])
-
             eb_chk = checks.get("energy_balance", {})
-            eb_val = eb_chk.get("value", data.get("energy_balance_max_error"))
+            eb_val = crash_check_percent(data, "energy_balance", "energy_balance_max_error")
             if eb_val is not None:
                 val_num = float(eb_val)
-                eb_rows_val = f"{val_num:.2f}%" if val_num > 1.0 else f"{val_num * 100.0:.2f}%"
-                q_rows.append(["Energy Balance Error", eb_rows_val, "≤ 5.0% error", str(eb_chk.get("status", "pass")).upper()])
+                q_rows.append(["Energy Balance Error", f"{val_num:.2f}%", str(eb_chk.get("status") or "—").title()])
 
             hg_chk = checks.get("hourglass_energy", {})
             hg_val = hg_chk.get("value")
             if hg_val is not None:
                 val_num = float(hg_val)
-                hg_rows_val = f"{val_num:.2f}%" if val_num > 1.0 else f"{val_num * 100.0:.2f}%"
-                q_rows.append(["Hourglass Energy Ratio", hg_rows_val, "≤ 10.0% of total", str(hg_chk.get("status", "pass")).upper()])
+                q_rows.append(["Hourglass Energy Ratio", f"{val_num:.2f}%", str(hg_chk.get("status") or "—").title()])
 
             art_chk = checks.get("hourglass_plus_contact_energy", {})
             art_val = art_chk.get("value")
             if art_val is not None:
                 val_num = float(art_val)
-                art_rows_val = f"{val_num:.2f}%" if val_num > 1.0 else f"{val_num * 100.0:.2f}%"
-                q_rows.append(["Hourglass + Contact Energy", art_rows_val, "≤ 15.0% of total", str(art_chk.get("status", "pass")).upper()])
+                q_rows.append(["Hourglass + Contact Energy", f"{val_num:.2f}%", str(art_chk.get("status") or "—").title()])
 
             am_chk = checks.get("added_mass", {})
-            am_val = am_chk.get("value", data.get("mass_balance_max_error"))
+            am_val = crash_check_percent(data, "added_mass", "mass_balance_max_error")
             if am_val is not None:
                 val_num = float(am_val)
-                am_rows_val = f"{val_num:.2f}%" if val_num > 1.0 else f"{val_num * 100.0:.2f}%"
-                q_rows.append(["Added Mass (Scaling)", am_rows_val, "≤ 1.0% mass added", str(am_chk.get("status", "pass")).upper()])
-
-            term_stat = str(data.get("external_status") or data.get("engine_status") or "engine_completed")
-            clean_stat = term_stat.replace("_", " ").title()
-            is_normal = "fail" not in term_stat.lower() and "error" not in term_stat.lower()
-            q_rows.append(["Solver Termination", f"Normal ({clean_stat})" if is_normal else clean_stat, "Normal termination", "PASS" if is_normal else "FAIL"])
+                q_rows.append(["Added Mass", f"{val_num:.2f}%", str(am_chk.get("status") or "—").title()])
 
             if q_rows:
-                self._subtabs_tables.addTab(self._create_table(q_cols, q_rows, is_dark=self._is_dark()), "Solution Quality and Energy Gates")
+                self._subtabs_tables.addTab(self._create_table(q_cols, q_rows, is_dark=self._is_dark()), "Numerical Checks")
 
         # 7. Measurements Table
         if self._measurements:
@@ -1089,7 +1073,7 @@ class DetailedResultsWidget(QtWidgets.QWidget):
                 if data.get(k) is not None:
                     rows.append([k.replace("_", " ").title(), _fmt(data[k])])
             if not rows:
-                rows = [["Result Status", str(data.get("external_status") or "No scalar metrics available")]]
+                rows = [["Result Status", run_status(data)]]
             self._subtabs_tables.addTab(self._create_table(cols, rows, is_dark=self._is_dark()), "General Metrics")
 
     # ── Graphs Tab Population ─────────────────────────────────────────
@@ -1102,7 +1086,7 @@ class DetailedResultsWidget(QtWidgets.QWidget):
 
         if not _HAVE_PYQTGRAPH:
             self._no_graphs_label.setVisible(True)
-            self._no_graphs_label.setText("pyqtgraph is unavailable; charts cannot be rendered.")
+            self._no_graphs_label.setText("Charts unavailable.")
             return
 
         data = self._data
@@ -1281,19 +1265,20 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         key_style = f"color: {key_color};"
         value_style = f"color: {value_color}; font-weight: 600;"
         rtype = data.get("type", "—").upper()
-        backend = str(data.get("backend", "—"))
 
         # Meta Group
-        meta_group = QtWidgets.QGroupBox("Solver Run")
+        meta_group = QtWidgets.QGroupBox("Run")
         meta_grid = QtWidgets.QGridLayout(meta_group)
         meta_grid.setContentsMargins(10, 8, 10, 8)
         meta_rows = [
-            ("Analysis", str(data.get("analysis_type") or {"FEA": "Structural FEA", "MODAL": "Natural Frequencies", "TOPOPT_VOXEL": "Topology Optimization", "CRASH": "Crash / Impact"}.get(rtype, rtype))),
-            ("Backend Solver", backend),
-            ("Status", str(data.get("external_status") or ("Converged" if data.get("converged") else "Not converged" if data.get("converged") is False else "Completed")).replace("_", " ").title()),
-            ("Runtime", _fmt(data.get("solver_elapsed_s"), "s")),
-            ("Work Directory", str(data.get("work_dir", "—"))),
+            ("Analysis", str(data.get("analysis_type") or analysis_label(data))),
+            *result_state_rows(data),
         ]
+        elapsed = data.get("solver_elapsed_s")
+        if elapsed is None and isinstance(data.get("timing"), dict):
+            elapsed = sum(float(value or 0.0) for value in data["timing"].values())
+        if elapsed is not None:
+            meta_rows.append(("Runtime", _fmt(elapsed, "s")))
         for idx, (lbl, val) in enumerate(meta_rows):
             k = QtWidgets.QLabel(lbl)
             k.setStyleSheet(key_style)
@@ -1304,145 +1289,58 @@ class DetailedResultsWidget(QtWidgets.QWidget):
             meta_grid.addWidget(v, idx, 1)
         self._summary_layout.addWidget(meta_group)
 
-        # Crash Performance & Energy Gates Groups
         if rtype.lower() == "crash":
             metrics = data.get("crash_metrics") or {}
-            quality = data.get("quality") or {}
-
-            # ── Crashworthiness Performance Group ──
-            crash_group = QtWidgets.QGroupBox("Crashworthiness and Energy Absorption")
-            crash_grid = QtWidgets.QGridLayout(crash_group)
-            crash_grid.setContentsMargins(10, 8, 10, 8)
-
-            peak_f = float(data.get("peak_force") or metrics.get("peak_crushing_force_kN") or 0.0)
-            mean_f = float(data.get("mean_force") or metrics.get("mean_crushing_force_kN") or 0.0)
-            cfe = float(
-                data.get("crush_force_efficiency")
-                or metrics.get("crush_force_efficiency")
-                or (mean_f / peak_f if peak_f > 0 else 0.0)
+            crash_rows = []
+            specifications = (
+                ("crush_force_efficiency", "crush_force_efficiency", "Crush Force Efficiency", "%", 100.0),
+                ("specific_energy_absorption", "specific_energy_absorption_kJ_kg", "Specific Energy Absorption", "kJ/kg", 1.0),
+                ("peak_force", "peak_crushing_force_kN", "Peak Crushing Force", "kN", 1.0),
+                ("mean_force", "mean_crushing_force_kN", "Mean Crushing Force", "kN", 1.0),
+                ("absorbed_energy_kj", "absorbed_energy_kJ", "Absorbed Energy", "kJ", 1.0),
+                ("crush_distance", "useful_crush_stroke_mm", "Crush Stroke", "mm", 1.0),
+                ("peak_acceleration_g", "peak_acceleration_g", "Peak Deceleration", "g", 1.0),
+                ("delta_v", "delta_v_m_s", "Velocity Change", "m/s", 1.0),
+                ("peak_displacement", "peak_displacement_mm", "Peak Displacement", "mm", 1.0),
+                ("peak_stress", "peak_stress_mpa", "Peak Stress", "MPa", 1.0),
+                ("n_failed", "n_failed", "Eroded Elements", "", 1.0),
             )
-            sea = float(
-                data.get("specific_energy_absorption")
-                or metrics.get("specific_energy_absorption_kJ_kg")
-                or 0.0
-            )
-            absorbed_e = float(
-                data.get("absorbed_energy_kj")
-                or metrics.get("absorbed_energy_kJ")
-                or (float(data.get("absorbed_energy", 0.0)) / 1.0e6)
-            )
-            stroke = float(
-                data.get("crush_distance")
-                or metrics.get("useful_crush_stroke_mm")
-                or 0.0
-            )
-            peak_a = float(
-                data.get("peak_acceleration_g")
-                or metrics.get("peak_acceleration_g")
-                or 0.0
-            )
-            delta_v = float(
-                data.get("delta_v")
-                or metrics.get("delta_v_m_s")
-                or 0.0
-            )
-            n_failed = int(data.get("n_failed", 0) or 0)
-
-            cfe_pct = cfe * 100.0
-            if cfe >= 0.70:
-                cfe_hint = " (Excellent / Progressive Buckling)"
-            elif cfe >= 0.50:
-                cfe_hint = " (Good / Typical Crush Box)"
-            else:
-                cfe_hint = " (Low Efficiency / High Initial Peak)"
-
-            crash_rows = [
-                ("Crash Force Efficiency (CFE)", f"{cfe_pct:.1f}%{cfe_hint}"),
-                ("Specific Energy Absorption (SEA)", f"{sea:.2f} kJ/kg"),
-                ("Peak Crushing Force (F_peak)", f"{peak_f:.2f} kN"),
-                ("Mean Crushing Force (F_mean)", f"{mean_f:.2f} kN"),
-                ("Total Energy Absorbed", f"{absorbed_e:.2f} kJ"),
-                ("Useful Crush Stroke", f"{stroke:.1f} mm"),
-            ]
-            if peak_a > 0.0:
-                crash_rows.append(("Peak Deceleration", f"{peak_a:.1f} g"))
-            if delta_v > 0.0:
-                crash_rows.append(("Velocity Change (ΔV)", f"{delta_v:.2f} m/s"))
-            crash_rows.append(("Eroded Elements", "0 (Intact - No Rupture)" if n_failed == 0 else f"{n_failed} elements eroded"))
-
-            for idx, (lbl, val) in enumerate(crash_rows):
-                k = QtWidgets.QLabel(lbl)
-                k.setStyleSheet(key_style)
-                v = QtWidgets.QLabel(val)
-                v.setStyleSheet(value_style)
-                v.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-                crash_grid.addWidget(k, idx, 0)
-                crash_grid.addWidget(v, idx, 1)
-            self._summary_layout.addWidget(crash_group)
-
-            # ── Solution Quality & Energy Gates Group ──
-            qual_group = QtWidgets.QGroupBox("Solution Quality and Energy Gates")
-            qual_grid = QtWidgets.QGridLayout(qual_group)
-            qual_grid.setContentsMargins(10, 8, 10, 8)
-
-            q_status = str(data.get("quality_status") or quality.get("status") or "").lower()
-            if q_status == "pass":
-                stat_str = "[PASS] Qualified Explicit Solution"
-            elif q_status == "warning":
-                stat_str = "[WARNING] Review Hourglass / Dissipation"
-            elif q_status == "fail":
-                stat_str = "[FAIL] Energy Balance / Termination Issue"
-            else:
-                stat_str = "Evaluated"
-
-            qual_rows = [("Quality Qualification", stat_str)]
-
-            checks = {c.get("id"): c for c in quality.get("checks", []) if isinstance(c, dict)}
-            eb_chk = checks.get("energy_balance", {})
-            eb_val = eb_chk.get("value", data.get("energy_balance_max_error"))
-            if eb_val is not None:
-                val_num = float(eb_val)
-                eb_str = f"{val_num:.2f}%" if val_num > 1.0 else f"{val_num*100.0:.2f}%"
-                qual_rows.append(("Energy Balance Error", f"{eb_str} (Limit ≤ 5% pass)"))
-
-            hg_chk = checks.get("hourglass_energy", {})
-            hg_val = hg_chk.get("value")
-            if hg_val is not None:
-                val_num = float(hg_val)
-                hg_str = f"{val_num:.2f}%" if val_num > 1.0 else f"{val_num*100.0:.2f}%"
-                qual_rows.append(("Hourglass Energy Ratio", f"{hg_str} (Limit ≤ 10% pass)"))
-
-            art_chk = checks.get("hourglass_plus_contact_energy", {})
-            art_val = art_chk.get("value")
-            if art_val is not None:
-                val_num = float(art_val)
-                art_str = f"{val_num:.2f}%" if val_num > 1.0 else f"{val_num*100.0:.2f}%"
-                qual_rows.append(("Hourglass + Contact Energy", f"{art_str} (Limit ≤ 15% pass)"))
-
-            am_chk = checks.get("added_mass", {})
-            am_val = am_chk.get("value", data.get("mass_balance_max_error"))
-            if am_val is not None:
-                val_num = float(am_val)
-                am_str = f"{val_num:.2f}%" if val_num > 1.0 else f"{val_num*100.0:.2f}%"
-                qual_rows.append(("Added Mass (Scaling)", f"{am_str} (Limit ≤ 1% pass)"))
-
-            term_stat = str(data.get("external_status") or data.get("engine_status") or "engine_completed")
-            clean_stat = term_stat.replace("_", " ").title()
-            is_normal = "fail" not in term_stat.lower() and "error" not in term_stat.lower()
-            qual_rows.append(("Solver Termination", f"Normal ({clean_stat})" if is_normal else clean_stat))
-
-            for idx, (lbl, val) in enumerate(qual_rows):
-                k = QtWidgets.QLabel(lbl)
-                k.setStyleSheet(key_style)
-                v = QtWidgets.QLabel(val)
-                v.setStyleSheet(value_style)
-                v.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-                qual_grid.addWidget(k, idx, 0)
-                qual_grid.addWidget(v, idx, 1)
-            self._summary_layout.addWidget(qual_group)
+            for key, metric_key, label, unit, scale in specifications:
+                value = data.get(key)
+                if value is None:
+                    value = metrics.get(metric_key)
+                if value is not None:
+                    crash_rows.append((label, _fmt(float(value) * scale, unit)))
+            if data.get("absorbed_energy_kj") is None and metrics.get("absorbed_energy_kJ") is None and data.get("absorbed_energy") is not None:
+                crash_rows.append(("Absorbed Energy", _fmt(float(data["absorbed_energy"]) / 1e6, "kJ")))
+            numerical_rows = []
+            for check_id, fallback, label in (
+                ("energy_balance", "energy_balance_max_error", "Energy Balance Error"),
+                ("hourglass_energy", None, "Hourglass Energy"),
+                ("hourglass_plus_contact_energy", None, "Hourglass + Contact Energy"),
+                ("added_mass", "mass_balance_max_error", "Added Mass"),
+            ):
+                value = crash_check_percent(data, check_id, fallback)
+                if value is not None:
+                    numerical_rows.append((label, _fmt(value, "%")))
+            for title, rows in (("Impact Results", crash_rows), ("Numerical Checks", numerical_rows)):
+                if not rows:
+                    continue
+                group = QtWidgets.QGroupBox(title)
+                grid = QtWidgets.QGridLayout(group)
+                grid.setContentsMargins(10, 8, 10, 8)
+                for index, (label, value) in enumerate(rows):
+                    key_widget = QtWidgets.QLabel(label)
+                    key_widget.setStyleSheet(key_style)
+                    value_widget = QtWidgets.QLabel(value)
+                    value_widget.setStyleSheet(value_style)
+                    value_widget.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+                    grid.addWidget(key_widget, index, 0)
+                    grid.addWidget(value_widget, index, 1)
+                self._summary_layout.addWidget(group)
         else:
             # Performance / Key Results Group
-            section_title = {"MODAL": "Natural Frequencies", "TOPOPT_VOXEL": "Topology Results"}.get(rtype, "Structural Results")
+            section_title = {"MODAL": "Natural Frequencies", "TOPOPT_VOXEL": "Lattice Results" if analysis_label(data).startswith("Lattice") else "Topology Results"}.get(rtype, "Structural Results")
             res_group = QtWidgets.QGroupBox(section_title)
             res_grid = QtWidgets.QGridLayout(res_group)
             res_grid.setContentsMargins(10, 8, 10, 8)
@@ -1454,7 +1352,6 @@ class DetailedResultsWidget(QtWidgets.QWidget):
                     ("Extracted Modes", str(len(data.get("modes") or []))),
                     ("Active Mode", str(data.get("active_mode", "—"))),
                     ("Active Natural Frequency", _fmt(data.get("frequency_hz"), "Hz")),
-                    ("Mode Shape Amplitude", "Mass-normalized eigenvector; amplitude is arbitrary"),
                 ])
             if data.get("peak_displacement") is not None and rtype.lower() != "modal":
                 res_rows.append(("Peak Displacement", _fmt(data["peak_displacement"], "mm")))
@@ -1490,19 +1387,6 @@ class DetailedResultsWidget(QtWidgets.QWidget):
                 res_grid.addWidget(v, idx, 1)
             if res_rows:
                 self._summary_layout.addWidget(res_group)
-
-        # Warnings Group
-        warnings = list(data.get("warnings") or [])
-        if warnings:
-            warn_group = QtWidgets.QGroupBox(f"Solver Warnings ({len(warnings)})")
-            warn_layout = QtWidgets.QVBoxLayout(warn_group)
-            for w in warnings:
-                lbl = QtWidgets.QLabel(f"Warning: {w}")
-                lbl.setWordWrap(True)
-                lbl.setStyleSheet(f"color: {'#e3b341' if is_dark else '#9a6700'}; font-weight: 500;")
-                lbl.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-                warn_layout.addWidget(lbl)
-            self._summary_layout.addWidget(warn_group)
 
         self._summary_layout.addStretch(1)
 
@@ -1550,8 +1434,7 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         lines = [
             f"PyLCSS {data.get('type', 'CAE').upper()} Simulation Results",
             "=" * 40,
-            f"Backend: {data.get('backend', '—')}",
-            f"Status: {data.get('external_status', 'Completed')}",
+            *(f"{label}: {value}" for label, value in result_state_rows(data)),
         ]
         rtype = str(data.get("type", "")).lower()
         if rtype == "crash":
@@ -1570,10 +1453,6 @@ class DetailedResultsWidget(QtWidgets.QWidget):
                 val = data.get(k) or metrics.get(k)
                 if val is not None:
                     lines.append(f"{lbl}: {_fmt(val, u)}")
-            quality = data.get("quality") or {}
-            q_status = data.get("quality_status") or quality.get("status")
-            if q_status:
-                lines.append(f"Quality Qualification: {str(q_status).upper()}")
         else:
             for k in ("peak_stress_nodal", "peak_displacement", "minimum_yield_safety_factor", "compliance", "volume", "mass"):
                 if data.get(k) is not None:

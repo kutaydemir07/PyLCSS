@@ -14,6 +14,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from pylcss.input_values import as_bool
+
 from ..manufacturing.lattice_families import family_for
 from ..manufacturing.structures import (
     ManufacturingStructureOptions,
@@ -341,6 +343,7 @@ def resolve_lattice_structure_options(
         maximum_density,
         solid_transition,
         target_density,
+        repair_connections=as_bool(node.get_property("repair_lattice_connections")),
     )
 
 

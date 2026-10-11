@@ -498,10 +498,7 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
         self.results_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         lay.addWidget(self.results_table)
 
-        self.pareto_label = QtWidgets.QLabel(
-            "Pareto front — each row is a non-dominated feasible design. "
-            "The main result above is the normalized utopia-distance compromise."
-        )
+        self.pareto_label = QtWidgets.QLabel("Pareto solutions")
         self.pareto_label.setWordWrap(True)
         self.pareto_label.hide()
         lay.addWidget(self.pareto_label)

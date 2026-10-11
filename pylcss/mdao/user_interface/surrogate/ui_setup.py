@@ -525,6 +525,7 @@ class SurrogateUiMixin:
         self.lbl_metrics = QtWidgets.QLabel(
             "No dataset yet. Generate or upload data to begin."
         )
+        self.lbl_metrics.setWordWrap(True)
         self.lbl_metrics.setStyleSheet(
             "background-color: #1e1f22; border: 1px solid #282a2e; color: #b5bac1; padding: 10px; border-radius: 4px;"
         )
@@ -549,16 +550,16 @@ class SurrogateUiMixin:
         self.tab_widget.addTab(self.parity_tab, "Parity Plot")
         self.tab_widget.setTabToolTip(
             0,
-            "Accuracy validation: Predicted vs Actual test targets along the 1:1 diagonal line with uncertainty confidence bounds.",
+            "Predictions and test values.",
         )
 
         # Tab 2: AutoML Leaderboard (Multi-model tournament results)
         self.lb_tab = QtWidgets.QWidget()
         lb_layout = QtWidgets.QVBoxLayout(self.lb_tab)
         self.lb_table = QtWidgets.QTableWidget()
-        self.lb_table.setColumnCount(7)
+        self.lb_table.setColumnCount(6)
         self.lb_table.setHorizontalHeaderLabels(
-            ["Rank", "Algorithm Candidate", "MDAO Family", "R2 Score", "RMSE", "RMAE", "Fit Time (s)"]
+            ["Rank", "Model", "R²", "RMSE", "RMAE", "Fit Time (s)"]
         )
         lb_header = self.lb_table.horizontalHeader()
         lb_header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
@@ -567,7 +568,7 @@ class SurrogateUiMixin:
         self.tab_widget.addTab(self.lb_tab, "Leaderboard")
         self.tab_widget.setTabToolTip(
             1,
-            "Scientific tournament comparison across peer-reviewed MDAO algorithms.",
+            "Model scores and training time.",
         )
 
         # Tab 3: Training Curves (Loss vs Epoch for iterative neural networks)
@@ -598,7 +599,7 @@ class SurrogateUiMixin:
         self.tab_widget.addTab(self.curve_tab, "Training Curves")
         self.tab_widget.setTabToolTip(
             2,
-            "Loss curves over epochs (applicable to iterative Deep Learning / PyTorch architectures).",
+            "Training and validation loss.",
         )
 
         viz_layout.addWidget(self.tab_widget)

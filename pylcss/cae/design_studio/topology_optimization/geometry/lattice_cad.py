@@ -2,46 +2,13 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 """Analytic CAD for strut lattices, built from centrelines instead of voxels.
 
-Why this exists
----------------
-The general topology result has no closed-form surface, so it earns the long
-road: supersample the density, extract an isosurface, repair the mesh, and sew
-one planar B-rep face per triangle. That is the right pipeline for an organic
-optimized blob.
+Members become analytic cylinders or truncated cones, with optional balls at
+their joints. STEP can contain the member compound or an explicitly requested,
+validated Boolean union. 3MF retains the centreline graph and per-end radii.
 
-It is the wrong pipeline for a strut lattice, and expensively so. A cubic or
-octet lattice on a recovery grid is a million-triangle isosurface of a shape we
-already know exactly: :class:`~..manufacturing.member_sizing.OptimizedMemberPlan`
-holds the centrelines and the sized radii. Sewing that isosurface produces a
-STEP file with on the order of a million planar faces — minutes to hours of
-OCC time, hundreds of megabytes, and a body no CAD system will open — to
-approximate cylinders that could have been written down.
-
-So for the strut families this module goes straight from the centrelines to
-geometry:
-
-``3MF beam lattice``
-    Nodes and beams with per-end radii, in the format the AM tool chain
-    already reads (the 3MF Beam Lattice extension, ISO/ASTM 52915 family).
-    Exact, a few hundred kilobytes, and effectively instant, because it stores
-    the lattice as the lattice rather than as a tessellation of it. This is
-    what the industry actually ships lattices in, and it is the recommended
-    output.
-
-``STEP``
-    Exact analytic B-rep: one cylinder or truncated cone per member, one ball
-    per node, each a real quadric surface rather than a facet. Face count is
-    proportional to the member count, not to the voxel count.
-
-What this does not do
----------------------
-TPMS sheets have no exact B-rep — a gyroid is not a union of quadrics — and
-they keep the isosurface route. :func:`lattice_cad_strategy` is the one place
-that decides which result gets which treatment.
-
-Nothing here replaces re-analysis. These are the same centrelines the axial
-truss sizing used, so the geometry inherits that model's limits: joint bending,
-local stress concentration and as-built defects are not in it.
+Continuum and implicit lattice boundaries use the coupled G1 spline fitter in
+cad_reconstruction instead. Manufacturing re-analysis remains necessary: the
+centreline sizing model does not resolve joint bending or local concentrations.
 """
 from __future__ import annotations
 
@@ -116,6 +83,8 @@ class BeamLattice:
             raise ValueError("Beam lattice coordinates and radii must be finite.")
         if len(radii) and np.any(radii <= 0.0):
             raise ValueError("Beam lattice radii must be positive.")
+        if len(beams) and np.any(np.linalg.norm(nodes[beams[:, 1]] - nodes[beams[:, 0]], axis=1) <= 1e-9):
+            raise ValueError("Beam lattice members must have nonzero length.")
         object.__setattr__(self, "nodes", nodes)
         object.__setattr__(self, "beams", beams)
         object.__setattr__(self, "radii", radii)
@@ -530,14 +499,10 @@ def beam_lattice_solid(
     than the voxel count. Building the solids is the fast part and is always
     exact.
 
-    ``fuse`` additionally unions them into a single solid. It is off by default
-    and deliberately so: on measured lattices the union costs far more than
-    everything else in the study put together and, worse, can come back invalid
-    without saying so. When it is requested the result is checked and discarded
-    if it does not survive; the caller is told which of the two it got, because
-    "one solid" and "a set of solids overlapping at the joints" are not the
-    same thing to whatever consumes the file next. Both are valid STEP and both
-    are exact.
+    ``fuse`` requests a Boolean union, subject to the solid-count budget and
+    validity checks. A failed requested union raises an error. The default
+    compound retains overlapping member solids and reports their volume sum;
+    its junctions do not have guaranteed G1 continuity.
     """
     import cadquery as cq
     from OCP.BRep import BRep_Builder
@@ -564,8 +529,8 @@ def beam_lattice_solid(
                     float(lattice.radii[index, 1]),
                 )
             )
-        except Exception:
-            skipped += 1
+        except Exception as error:
+            raise RuntimeError(f"CAD construction failed for lattice member {index}") from error
 
     ball_count = 0
     if node_balls:
@@ -595,7 +560,9 @@ def beam_lattice_solid(
             "one cylinder or cone per member, one ball per joint"
         ),
         "editable": True,
-        "smooth": True,
+        "smooth": False,
+        "analytic_member_surfaces": True,
+        "junction_continuity": "Analytic members and node balls; G1 junction continuity is not guaranteed",
         "member_count": int(len(lattice.beams) - skipped),
         "joint_ball_count": int(ball_count),
         "skipped_member_count": int(skipped),
@@ -614,7 +581,7 @@ def beam_lattice_solid(
                 )
         except Exception as exc:
             logger.info(
-                "Beam lattice fuse failed (%s); returning a compound instead.",
+                "Requested beam lattice fuse failed (%s).",
                 exc,
             )
             report["fuse_error"] = str(exc)
@@ -624,9 +591,14 @@ def beam_lattice_solid(
             "union is allowed to attempt"
         )
 
+    if fuse and fused is None:
+        raise RuntimeError("Requested lattice union failed: " + report.get("fuse_error", "unknown OCC failure"))
+
     if fused is not None:
         shape = cq.Shape.cast(fused)
         report["fused"] = True
+        report["method"] = "Fused beam lattice"
+        report["solid_count"] = len(shape.Solids())
         report["cad_face_count"] = int(len(shape.Faces()))
     else:
         builder = BRep_Builder()
@@ -639,10 +611,9 @@ def beam_lattice_solid(
         report["cad_face_count"] = int(len(shape.Faces()))
         report["guidance"] = (
             f"{len(solids)} exact solids were written without a boolean union. "
-            "They overlap at the joints, which slicers and meshers accept and "
-            "which every CAD system can union on import if a single closed "
-            "solid is wanted. The 3MF beam lattice export needs no union at "
-            "all and is smaller again."
+            "They overlap at joints. Select Fused beam lattice when the receiving "
+            "CAD or meshing workflow requires unioned material; that option is "
+            "bounded and rejects an invalid union."
         )
 
     if return_report:
@@ -656,9 +627,8 @@ def _is_valid_shape(shape: Any) -> bool:
         from OCP.BRepCheck import BRepCheck_Analyzer
 
         return bool(BRepCheck_Analyzer(shape).IsValid())
-    except Exception:
-        logger.debug("BRepCheck_Analyzer unavailable; skipping the fuse check")
-        return True
+    except Exception as error:
+        raise RuntimeError("Could not validate the lattice union") from error
 
 
 def _fuse_solids(solids: list[Any], *, fuzzy_value: float = 0.0) -> Any:

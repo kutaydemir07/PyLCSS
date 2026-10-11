@@ -412,7 +412,7 @@
         "notes": "Representative wrought room-temperature elastic data. As-built LPBF properties are direction dependent and must be replaced with coupon data before release.",
         "schema_version": 1,
         "analysis_purpose": "Structural FEA",
-        "preset": "Ti-6Al-4V",
+        "preset": "Custom",
         "youngs_modulus": 114000.0,
         "poissons_ratio": 0.34,
         "density": 4.43e-09,
@@ -470,20 +470,18 @@
         "workflow_mode": "Guided",
         "design_goal": "Lightweight Stiffness",
         "minimum_member_size_mm": 16.0,
-        "exclusion_scope": "All Loads and Supports",
-        "exclusion_thickness_mode": "Program Controlled",
         "validate_after_optimize": false,
         "cad_export_filename": "payload_fitting_octet.step",
         "volfrac": 0.35,
         "visualization": "Density",
         "structure_mode": "Octet Truss Lattice",
-        "lattice_settings_mode": "Manual",
+        "lattice_settings_mode": "Guided",
         "lattice_cell_size_mm": 0.0,
         "lattice_member_thickness_mm": 0.0,
         "lattice_skin_thickness_mm": 0.0,
         "lattice_target_relative_density": 0.0,
         "lattice_porosity": "Conservative",
-        "adaptive_subcell_solid": true
+        "repair_lattice_connections": false
       }
     }
   },
@@ -598,15 +596,16 @@
   "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
   "_title": "Spacecraft Payload Adapter Fitting - Octet Truss Lattice",
   "_purpose": "Additive manufacturing lattice infill optimization for an aerospace payload adapter ring using stretch-dominated Octet Truss unit cells.",
-  "_fidelity": "Two-scale compliance minimization with AMRTO Step 1 surface recovery, adaptive sub-cell thin feature solid preservation, and boundary-conformal strut attachment.",
+  "_fidelity": "Linear elastic voxel compliance optimization with Octet Truss Lattice, Guided cell/member sizing, and explicitly connected preserved and obstacle CAD bodies.",
   "_visual_target": "Continuous Octet truss lattice with adaptive boundary attachment; thin mounting lugs preserved as solid; zero sub-pitch voids; mass reduction >= 45%.",
   "_engineering_decision": "Select optimal octet cell pitch and target relative density to minimize launch mass while meeting launch acceleration stiffness and stress allowables.",
   "_baseline": "Unsolved primary simultaneous-load scenario. Targets are requirements, not measured results.",
   "_design_variables": [
-    "Cell size: 16 mm",
-    "Target relative density: 25%",
-    "Skin thickness: 1.0 mm",
-    "Adaptive sub-cell solid: True"
+    "Envelope volume fraction: 35%",
+    "Minimum member size: 16 mm (0 uses Guided sizing)",
+    "Lattice cell/member sizes: Guided",
+    "Skin thickness: 0 mm",
+    "Lattice relative density: Program Controlled (Conservative)"
   ],
   "_load_cases": [
     "LC1 Axial 13.2 kN"

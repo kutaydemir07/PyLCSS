@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""Surface recovery orchestration powered by AMRTO Step 1 (Ren et al., 2025)."""
+"""Recover physical continuum and lattice boundaries from voxel fields."""
 
 from __future__ import annotations
 
@@ -32,8 +32,9 @@ from .passive_regions import (
     _apply_passive_density_regions,
     _resample_source_mask,
 )
-from .amrto_common import AMRTOConfig
-from .amrto_tri_mesh import generate_topopt_triangular_mesh
+from .cad_config import SurfaceRecoveryConfig
+from .mesh_surface import generate_topopt_triangular_mesh
+from .mesh_screening import screen_mesh_intersections
 
 logger = logging.getLogger(__name__)
 
@@ -61,13 +62,8 @@ def _recover_voxel_shape(
 ) -> Optional[dict[str, np.ndarray]]:
     """Extract a recovered surface from a topology optimization density field.
 
-    Powered by Step 1 of the AMRTO pipeline (Automated CAD Model Reconstruction
-    of Topology Optimization Result, Ren et al., Comput. Methods Appl. Mech.
-    Engrg. 435 (2025) 117673):
-    - Smooths the pseudo-density field
-    - Extracts the isosurface using Marching Cubes mapped to physical coordinates
-    - Repairs the triangular mesh via Laplacian smoothing, normal correction,
-      gap filling, and degenerate patch elimination.
+    Marching Cubes uses physical voxel spacing. Feature-constrained smoothing
+    retains domain boundaries and per-shell signed volume, including cavities.
     """
     try:
         LAST_LATTICE_SIZING.clear()
@@ -209,11 +205,11 @@ def _recover_voxel_shape(
         manufacturing_count = int(np.count_nonzero(grid >= eff_cutoff))
         manufacturing_reference_volume = float(manufacturing_count * np.prod(spacing))
 
-        cfg = AMRTOConfig(
+        cfg = SurfaceRecoveryConfig(
             density_cutoff=eff_cutoff,
         )
 
-        verts, faces, step1_report = generate_topopt_triangular_mesh(
+        verts, faces, recovery_report = generate_topopt_triangular_mesh(
             grid,
             cutoff=eff_cutoff,
             bounds=bounds,
@@ -280,9 +276,10 @@ def _recover_voxel_shape(
         recovered_shape = {
             "vertices": np.asarray(verts, dtype=float),
             "faces": np.asarray(faces, dtype=np.int64),
-            "surface_backend": "AMRTO Step 1 (Marching Cubes + Laplacian Smoothing)",
-            "surface_quality_preset": "AMRTO",
+            "surface_backend": "Marching Cubes with feature-constrained smoothing",
+            "surface_quality_preset": "Feature preserving",
             "surface_quality": {
+                **screen_mesh_intersections(verts, faces),
                 "connected_components": int(component_count),
                 "boundary_shell_count": int(component_count),
                 "positive_outer_shell_count": sum(body.volume > 0 for body in boundary_shells),
@@ -309,12 +306,12 @@ def _recover_voxel_shape(
             "protected_profile_points": np.empty((0, 3), dtype=float),
             "structure_resolution_scale": resolution_scale,
             "recovery_grid_shape": [int(value) for value in grid.shape],
-            "stage1_report": step1_report,
+            "surface_recovery_report": recovery_report,
             "is_watertight": is_watertight,
         }
         return recovered_shape
     except Exception:
-        logger.exception("Voxel shape recovery failed via AMRTO")
+        logger.exception("Voxel boundary recovery failed")
         return None
 
 

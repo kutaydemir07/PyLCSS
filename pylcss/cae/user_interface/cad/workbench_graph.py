@@ -157,6 +157,11 @@ class WorkbenchGraphMixin:
 
     def _on_graph_property_changed(self, node, prop_name, prop_value):
         """Handle property changes from the graph (including widgets on nodes)."""
+        # Export destinations and formats do not change engineering geometry.
+        # Preserve dirty state and editor focus, and avoid a mesh/graph refresh
+        # competing with the export that this property change is preparing.
+        if prop_name in {"cad_export_filename", "cad_export_format"}:
+            return
         # Mark node as dirty so it re-executes
         setattr(node, "_dirty", True)
 

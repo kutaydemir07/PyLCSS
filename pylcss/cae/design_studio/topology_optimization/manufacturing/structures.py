@@ -25,7 +25,8 @@ from typing import Any
 import numpy as np
 
 from . import lattice_families as families
-from .lattice_families import FAMILIES, LatticeFamily, normalize_family_key, PUBLIC_LATTICE_FAMILY_NAMES
+from .lattice_families import FAMILIES, LatticeFamily, normalize_family_key
+from .lattice_families import PUBLIC_LATTICE_FAMILY_NAMES as PUBLIC_LATTICE_FAMILY_NAMES
 from .member_sizing import OptimizedMemberPlan, rasterize_member_plan
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ class ManufacturingStructureOptions:
     mode: str = "solid"
     cell_size_voxels: float = 8.0
     member_thickness_voxels: float = 1.0
-    skin_thickness_voxels: float = 0.75
+    skin_thickness_voxels: float = 0.0
     variable_density: bool = True
     minimum_relative_density: float = 0.15
     maximum_relative_density: float = 0.60
@@ -61,10 +62,8 @@ class ManufacturingStructureOptions:
     # thickness is no longer a free control and this is what a whole-part mass
     # budget has to move instead. 1.0 builds exactly what the law asks for.
     member_scale: float = 1.0
-    # Adaptive preservation of sub-cell thin features (ribs, walls, tapered tips).
-    # When enabled, features narrower than what can sustain an open lattice cell
-    # transition to continuous solid material to eliminate empty voids.
-    adaptive_subcell_solid: bool = True
+    # Off-pattern ligaments are a geometry change that requires explicit intent.
+    repair_connections: bool = False
 
     def __post_init__(self) -> None:
         mode = _resolve_mode(self.mode)
@@ -101,7 +100,7 @@ class ManufacturingStructureOptions:
                 "size the structure from an explicit member thickness instead."
             )
         object.__setattr__(self, "variable_density", bool(self.variable_density))
-        object.__setattr__(self, "adaptive_subcell_solid", bool(getattr(self, "adaptive_subcell_solid", True)))
+        object.__setattr__(self, "repair_connections", bool(self.repair_connections))
         is_lattice = self.mode != "solid"
         if is_lattice and self.cell_size_voxels < 3.0:
             raise ValueError("A lattice cell must span at least 3 voxels.")
@@ -181,45 +180,6 @@ def _boundary_skin(envelope: np.ndarray, thickness: float) -> np.ndarray:
     )
     inside_distance = ndi.distance_transform_edt(padded)[1:-1, 1:-1, 1:-1]
     return envelope & (inside_distance <= max(1.0, float(thickness)))
-
-
-def _run_lengths_axis(arr_3d: np.ndarray, axis: int) -> np.ndarray:
-    """Measure the 1D continuous solid span passing through each solid voxel along an axis."""
-    swapped = np.swapaxes(arr_3d, axis, -1)
-    fwd = np.zeros(swapped.shape, dtype=np.int32)
-    for i in range(swapped.shape[-1]):
-        fwd[..., i] = np.where(swapped[..., i], (fwd[..., i - 1] if i > 0 else 0) + 1, 0)
-    bwd = np.zeros(swapped.shape, dtype=np.int32)
-    for i in range(swapped.shape[-1] - 1, -1, -1):
-        bwd[..., i] = np.where(swapped[..., i], (bwd[..., i + 1] if i < swapped.shape[-1] - 1 else 0) + 1, 0)
-    return np.swapaxes(np.where(swapped, fwd + bwd - 1, 0), axis, -1)
-
-
-def _adaptive_subcell_solid_mask(
-    envelope: np.ndarray,
-    cell_size: float,
-    member_thickness: float,
-) -> np.ndarray:
-    """Identify thin walls, ribs, and features narrower than what can sustain a periodic lattice pore.
-
-    Commercial AM and topology optimization formulations (nTop, Materialise Magics, Altair OptiStruct)
-    distinguish bulk regions from sub-cell thin features. Where local feature thickness is smaller
-    than what can sustain an open unit cell pore (w <= w_threshold), attempting to tile a periodic
-    pore punches voids through the feature, producing disconnected specks or completely hollow ribs.
-    Such sub-cell regions adaptively transition to continuous solid material to ensure structural
-    continuity with zero empty spaces.
-    """
-    solid = np.asarray(envelope, dtype=bool)
-    if not np.any(solid) or np.all(solid):
-        return np.zeros_like(solid, dtype=bool)
-
-    rl_x = _run_lengths_axis(solid, 0)
-    rl_y = _run_lengths_axis(solid, 1)
-    rl_z = _run_lengths_axis(solid, 2)
-    min_span = np.where(solid, np.minimum(np.minimum(rl_x, rl_y), rl_z), 0)
-
-    w_threshold = max(2.5 * float(member_thickness), 0.85 * float(cell_size))
-    return solid & (min_span <= w_threshold)
 
 
 def _tpms_implicit(
@@ -1032,75 +992,15 @@ def build_manufacturing_field(
         manufactured = envelope
     else:
         scale = max(float(resolution_scale), 1e-9)
-        occupied = np.argwhere(envelope)
-        extents = (
-            np.ptp(occupied, axis=0) + 1
-            if len(occupied)
-            else np.asarray(field.shape, dtype=int)
-        )
-        # Avoid a single oversized cell swallowing a thin engineering part.
-        # Two cells across the second-largest envelope dimension is a useful
-        # lower bound for a recognizable, connected 3-D lattice.
-        second_largest = float(np.sort(np.maximum(extents, 1))[-2])
-        largest_useful_cell = max(3.0, 0.5 * second_largest)
-        # The bounding box is not what limits the pitch, though: an optimized
-        # envelope is a set of ribs a small fraction of that box thick, and a
-        # cell that does not fit *inside a rib* is the failure this bound was
-        # meant to prevent. Measure the envelope's own wall thickness and keep
-        # the pitch inside it.
-        #
-        # This is why BCC used to come apart on thin sections where Octet did
-        # not, which reads as a family bug and is not one: BCC's only interior
-        # node is the body centre, so once a rib is thinner than a cell the
-        # centre falls outside the envelope and nothing anchors the eight
-        # struts that meet there. Octet carries its struts on the cell faces
-        # and still catches a plane of them. Measured on the bundled crush
-        # block at a 16 voxel pitch, BCC filled 47% of the sub-half-cell
-        # regions against Octet's 73%, and needed 48 repair ligaments against
-        # 2. Sizing the pitch to the part rather than to its bounding box fixes
-        # both families at once, instead of special-casing one.
-        thickness = _envelope_thickness_voxels(envelope)
-        # A uniform infill domain can hold its requested periodic cell when filling a bulk solid.
-        # However, when the envelope has thin ribs (median thickness is a small fraction of the
-        # extents), capping cell pitch to rib thickness prevents under-resolved porous collapse.
-        if (
-            thickness > 0.0
-            and not np.all(envelope)
-            and (opts.variable_density or thickness < 0.65 * float(np.min(extents)))
-        ):
-            largest_useful_cell = min(largest_useful_cell, thickness)
-        # Shrinking the pitch to fit a rib is only worth doing while the cell
-        # is still resolved. Below the family's own floor the surface pinches
-        # off at its necks and the connectivity cull removes most of it, which
-        # is a worse result than a cell that is honestly too large for the rib.
-        # When the two bounds cross, the pitch stays at the floor and
-        # `cell_resolution_warning` is what tells the user the grid, not the
-        # pitch, is what has to change.
-        family_floor = opts.family
-        resolution_floor = max(
-            3.0,
-            float(family_floor.minimum_cell_voxels)
-            if family_floor is not None
-            else 3.0,
-        )
-        cell_size = min(
-            max(3.0, opts.cell_size_voxels * scale),
-            max(largest_useful_cell, resolution_floor),
-        )
-        member = min(
-            max(0.75, opts.member_thickness_voxels * scale),
-            0.35 * cell_size,
-        )
+        # Physical cell and member sizes are engineering inputs. A poor fit
+        # must be reported, not repaired by silently changing those inputs.
+        cell_size = opts.cell_size_voxels * scale
+        member = opts.member_thickness_voxels * scale
         skin = _boundary_skin(
             envelope,
             opts.skin_thickness_voxels * scale,
         )
         solid_zone = np.zeros_like(envelope, dtype=bool)
-        thin_feature_solid = (
-            _adaptive_subcell_solid_mask(envelope, cell_size, member)
-            if getattr(opts, "adaptive_subcell_solid", True)
-            else np.zeros_like(envelope, dtype=bool)
-        )
 
         if opts.variable_density:
             # The macro optimizer's physical density is the desired local
@@ -1156,18 +1056,18 @@ def build_manufacturing_field(
         core = envelope & lattice
         core = _remove_floating_lattice(
             envelope,
-            core | solid_zone | thin_feature_solid,
+            core | solid_zone,
             skin,
             member,
         )
 
-        manufactured = envelope & (skin | core | solid_zone | thin_feature_solid)
+        manufactured = envelope & (skin | core | solid_zone)
         # Rejoin what trimming to the envelope broke apart, then drop only what
         # is too small to be a member. Doing it in this order matters: the
         # connectivity repair has to see every fragment, because a fragment is
         # exactly what it exists to reattach.
         before_repair = manufactured
-        if not np.all(envelope):
+        if opts.repair_connections and not np.all(envelope):
             manufactured, bridge_count = _connect_lattice_components(
                 envelope,
                 manufactured,
@@ -1190,7 +1090,7 @@ def build_manufacturing_field(
             display_name=opts.display_name,
         )
 
-    if opts.mode != "solid":
+    if opts.mode != "solid" and opts.repair_connections:
         manufactured = _attach_passive_interfaces(
             envelope | passive_solid,
             manufactured,
@@ -1233,13 +1133,16 @@ def cell_fit_warning(
         return None
     if cell <= 0.0 or thickness <= 0.0 or cell <= thickness:
         return None
+    repair_note = (
+        f"Explicit connection repair added {fragments} ligament(s), contributing "
+        f"{100.0 * repaired:.1f}% of the delivered part outside the cell pattern. "
+        if fragments else "Connection repair added no ligaments. "
+    )
     return (
         f"{options.display_name} builds a {cell:.0f}-voxel cell inside an "
         f"envelope whose ribs are a median {thickness:.0f} voxels thick, so the "
-        f"cell cannot tile within the material it is filling. The trimmed "
-        f"network came apart and {fragments} connecting ligament(s) were added "
-        f"to restore one load path, contributing {100.0 * repaired:.1f}% of the "
-        "delivered part as geometry that is not on the cell pattern. Reduce the "
+        "cell cannot tile within the material it is filling. "
+        + repair_note + "Reduce the "
         "cell pitch, refine the analysis grid so a finer pitch resolves, or "
         "choose a family with a lower resolution floor."
     )
@@ -1350,7 +1253,7 @@ def structure_options_from_values(
     maximum_relative_density: Any = 0.60,
     solid_transition_density: Any = 0.92,
     target_relative_density: Any = 0.0,
-    adaptive_subcell_solid: Any = True,
+    repair_connections: Any = False,
 ) -> ManufacturingStructureOptions:
     """Parse graph-property values with one consistent validation path."""
     return ManufacturingStructureOptions(
@@ -1363,7 +1266,7 @@ def structure_options_from_values(
         maximum_relative_density=float(maximum_relative_density or 0.60),
         solid_transition_density=float(solid_transition_density or 0.92),
         target_relative_density=float(target_relative_density or 0.0),
-        adaptive_subcell_solid=bool(adaptive_subcell_solid),
+        repair_connections=bool(repair_connections),
     )
 
 

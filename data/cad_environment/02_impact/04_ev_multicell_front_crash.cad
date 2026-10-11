@@ -459,7 +459,9 @@
         "impactor_mass_kg": 1850.0,
         "node_tolerance": 0.5,
         "wall_friction": 0.08,
-        "wall_gap_mm": 0.5
+        "wall_gap_mm": 0.5,
+        "self_contact_enabled": true,
+        "self_contact_friction": 0.08
       }
     },
     "0x162620e5c10": {
@@ -513,21 +515,10 @@
         "force_cfc": "600",
         "visualization": "Von Mises Stress",
         "disp_scale": 1.0,
-        "solver_backend": "OpenRadioss",
-        "run_external_solver": true,
         "time_steps": 28788,
         "enable_mass_scaling": true,
         "mass_scaling_target_dt": 0.00198,
-        "time_step_scale": 0.9,
-        "damping_alpha": 0.0,
-        "damping_beta": 0.0,
-        "enable_corotation": true,
-        "enable_contact": true,
-        "contact_stiffness": 0.1,
-        "contact_thickness": 0.2,
-        "contact_update_interval": 5,
-        "mass_scaling_threshold": 0.0,
-        "impactor_mass_kg": 1850.0
+        "time_step_scale": 0.9
       }
     }
   },

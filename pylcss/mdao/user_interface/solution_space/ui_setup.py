@@ -281,7 +281,7 @@ class SolutionUiMixin:
         view_layout.addLayout(sample_row)
 
         self.lbl_multimodal_info = QtWidgets.QLabel(
-            "No Multi-Modal result yet. Press Compute Multi-Modal Spaces."
+            "No results yet."
         )
         self.lbl_multimodal_info.setWordWrap(True)
         view_layout.addWidget(self.lbl_multimodal_info)
@@ -289,7 +289,7 @@ class SolutionUiMixin:
         self.multibox_table = QtWidgets.QTableWidget()
         self.multibox_table.setColumnCount(4)
         self.multibox_table.setHorizontalHeaderLabels(
-            ["Box / Mode", "Volume", "a lower", "Samples"]
+            ["Box", "Volume", "Feasible fraction\n(lower bound)", "Samples"]
         )
         self.multibox_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.multibox_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
@@ -495,6 +495,10 @@ class SolutionUiMixin:
             "font-size: 16px; font-weight: bold; margin: 10px;"
         )
         solution_layout.addWidget(self.lbl_global_title)
+        self.lbl_solution_status = QtWidgets.QLabel()
+        self.lbl_solution_status.setAlignment(QtCore.Qt.AlignCenter)
+        self.lbl_solution_status.hide()
+        solution_layout.addWidget(self.lbl_solution_status)
         # Main Content Area (Scroll + Legend)
         sol_content_layout = QtWidgets.QHBoxLayout()
         # Scroll Area for Plots
@@ -637,9 +641,7 @@ class SolutionUiMixin:
         adg_tab_layout.addWidget(self.adg_plot, stretch=2)
 
         # Info label
-        self.lbl_adg_info = QtWidgets.QLabel(
-            "Graph shows direct connections from design variables to outputs"
-        )
+        self.lbl_adg_info = QtWidgets.QLabel("No results yet.")
         self.lbl_adg_info.setStyleSheet("margin: 5px; color: #666;")
         self.lbl_adg_info.setAlignment(QtCore.Qt.AlignCenter)
         adg_tab_layout.addWidget(self.lbl_adg_info)

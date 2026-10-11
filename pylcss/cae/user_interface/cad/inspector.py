@@ -256,6 +256,7 @@ class PropertiesPanel(
                 "node_tolerance",
                 "wall_",
                 "impactor_mass_kg",
+                "self_contact_",
             ),
         ),
         (
@@ -380,7 +381,6 @@ class PropertiesPanel(
             "external_timeout_s",
             "openradioss_starter_path",
             "openradioss_engine_path",
-            "deck_only",
             "deck_path",
             "engine_path",
             "engine_executable_path",
@@ -441,10 +441,6 @@ class PropertiesPanel(
             "mesh_quality",
             "repair_surface",
             "allow_voxel_fallback",
-            # Retired heuristic keep-material controls (replaced by explicit CAD solid bodies)
-            "exclusion_scope",
-            "exclusion_thickness_mode",
-            "exclusion_thickness_mm",
             # Universal metadata is rendered in its own compact section.
             "description",
             "tags",
@@ -607,11 +603,6 @@ class PropertiesPanel(
         "but can make optimization less smooth.",
         "projected_gradient_step": "Expert update size for projected-gradient optimization. Guided Auto chooses "
         "a suitable optimizer for the active constraints.",
-        "exclusion_scope": "Automatically keep material at load/support interfaces. All Loads and Supports is "
-        "the safe default; None is expert-only because a load can become stranded in void.",
-        "exclusion_thickness_mode": "Program Controlled preserves two average voxel lengths. Manual uses the "
-        "physical thickness below.",
-        "exclusion_thickness_mm": "Physical material-preservation thickness around selected load/support interfaces.",
         "validate_after_optimize": "Re-mesh and independently re-analyse the recovered solid. Strongly recommended "
         "for final designs and required for lattice interpretations.",
         "validation_quality": "Standard performs one independent re-analysis. Mesh Convergence repeats it on a "
@@ -677,12 +668,13 @@ class PropertiesPanel(
         "application_scope": "Fixed specimen + moving impactor: selected face is hit by a moving\n"
         "finite-mass impactor/wall; connected constraints stay active.\n"
         "Moving body + fixed wall: the mesh receives initial velocity and\n"
-        "hits a generated fixed wall; connected constraints are ignored.\n"
+        "hits a generated fixed wall; disconnect support constraints.\n"
         "Prescribed moving wall: selected face is driven by a massless platen\n"
         "with imposed velocity, useful for controlled crush.",
         "node_tolerance": "Distance [mm] within which a mesh node is treated as belonging to the impact face.",
-        "wall_friction": "Rigid-wall Coulomb friction.  Use -1 for the scenario default\n"
-        "(0.0 for fixed barrier, 0.08 for moving platen/impactor).",
+        "wall_friction": "Rigid-wall Coulomb friction coefficient. Zero is frictionless.",
+        "self_contact_enabled": "Add contact between deforming surfaces of the crash body.",
+        "self_contact_friction": "Coulomb friction coefficient for enabled body self-contact.",
         "wall_gap_mm": "Initial clearance from wall to selected/leading face [mm].\n"
         "Use 0 for automatic clearance based on model size.",
         "impactor_mass_kg": "Optional sled/impactor mass [kg].  In Fixed specimen + moving\n"
@@ -785,7 +777,7 @@ class PropertiesPanel(
         "engine_executable_path": "Override the auto-discovered OpenRadioss engine executable.",
         "work_dir": "Solver working directory. Empty creates an isolated temporary run directory.",
         "timeout_s": "Maximum external-solver wall time [s] before PyLCSS stops waiting.",
-        "cad_reconstruction_method": "Automated CAD model reconstruction via AMRTO (Ren et al., 2025): Marching Cubes triangular meshing, 4-RoSy Instant-Meshes quadrangulation, sparse quadrilateral layout division, Discrete Harmonic Mapping, and bicubic NURBS surface fitting sewn into a watertight B-rep solid.",
+        "cad_reconstruction_method": "Auto uses analytic cylinders/cones for beam lattices and constrained G1 B-splines for continuum and TPMS boundaries. Fused beam lattice requests a checked boolean union. Geometry error and STEP reimport are validated.",
         "cad_export_filename": "Destination path and filename for the exported model.",
         "cad_export_format": "File format to export (STEP, STL, or 3MF).",
         "nelx": "Expert voxel count in X. Guided mode derives resolution automatically.",
@@ -845,6 +837,8 @@ class PropertiesPanel(
         "wall_friction": "Wall Friction",
         "wall_gap_mm": "Wall Gap (mm)",
         "impactor_mass_kg": "Impactor Mass (kg)",
+        "self_contact_enabled": "Enable Self-Contact",
+        "self_contact_friction": "Self-Contact Friction",
         "end_time": "End Time (ms)",
         "time_steps": "Mass-Scaling Steps",
         "n_frames": "Result Frames",
@@ -863,9 +857,6 @@ class PropertiesPanel(
         "tangent_modulus": "Tangent Modulus (MPa)",
         "failure_strain": "Failure Strain",
         "strain_rate_sensitive": "Strain-Rate Sensitive",
-        "exclusion_scope": "Preserve Interfaces",
-        "exclusion_thickness_mode": "Preservation Thickness",
-        "exclusion_thickness_mm": "Manual Thickness (mm)",
         "geometry_source": "Source",
         "element_order": "Order",
         "close_holes": "Cap Open Boundaries",

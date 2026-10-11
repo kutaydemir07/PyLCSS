@@ -15,9 +15,8 @@ CRASH_SCENARIOS = [
 def migrate_impact_scenario_properties(session_data):
     """Copy legacy physical scenario values before graph deserialization.
 
-    Impactor mass used to be serialized on ``CrashSolverNode``. Keeping the
-    original value there preserves backward compatibility, while copying it to
-    the connected ``ImpactConditionNode`` makes the modern inspector truthful.
+    Physical settings belong to the connected Impact Setup. Move the old
+    solver-side mass and contact toggle there, then discard their hidden copies.
     """
     if not isinstance(session_data, dict):
         return False
@@ -27,6 +26,20 @@ def migrate_impact_scenario_properties(session_data):
         return False
 
     changed = False
+    for record in nodes.values():
+        if not isinstance(record, dict) or not str(record.get("type_", "")).endswith(".ImpactConditionNode"):
+            continue
+        custom = record.get("custom")
+        if not isinstance(custom, dict):
+            continue
+        try:
+            automatic_friction = float(custom.get("wall_friction", 0.0)) < 0.0
+        except (TypeError, ValueError):
+            automatic_friction = False
+        if automatic_friction:
+            moving_body = str(custom.get("application_scope", "")).lower().replace("_", " ").startswith("moving body")
+            custom["wall_friction"] = 0.0 if moving_body else 0.08
+            changed = True
     for connection in connections:
         if not isinstance(connection, dict):
             continue
@@ -64,6 +77,13 @@ def migrate_impact_scenario_properties(session_data):
                 "impactor_mass_kg"
             ]
             changed = True
+        if "enable_contact" in solver_custom:
+            scenario_custom.setdefault("self_contact_enabled", solver_custom["enable_contact"])
+            scenario_custom.setdefault("self_contact_friction", 0.08)
+            changed = True
+        if "impactor_mass_kg" in solver_custom:
+            solver_custom.pop("impactor_mass_kg")
+            changed = True
     return changed
 
 
@@ -77,8 +97,8 @@ class ImpactConditionNode(CadQueryNode):
       With zero impactor mass, OpenRadioss treats the wall speed as imposed
       velocity rather than an inertial impact.
     - ``Moving body + fixed wall``: the whole mesh receives an initial velocity
-      and hits a generated stationary rigid wall. Connected constraints are
-      ignored because the structure is a free-flying projectile.
+      and hits a generated stationary rigid wall. Disconnect supports for this
+      free-flying projectile scenario.
     - ``Prescribed moving wall``: the selected face is driven by a massless
       moving wall/platen. This is useful for controlled crush, not for a
       free impactor whose velocity should decay as energy is absorbed.
@@ -117,11 +137,11 @@ class ImpactConditionNode(CadQueryNode):
         # Node-selection tolerance (mm): nodes within this distance of the
         # selected face become rigid-wall secondary candidates.
         self.create_property('node_tolerance', 2.0, widget_type='float')
-        # Negative means scenario default: frictionless fixed barrier for the
-        # moving-body case, low-friction platen for the moving-wall cases.
-        self.create_property('wall_friction', -1.0, widget_type='float')
+        self.create_property('wall_friction', 0.0, widget_type='float')
         # Zero/negative means auto gap based on model size.
         self.create_property('wall_gap_mm', 0.0, widget_type='float')
+        self.create_property('self_contact_enabled', False, widget_type='checkbox')
+        self.create_property('self_contact_friction', 0.0, widget_type='float')
 
     def run(self):
         self.clear_error()
@@ -164,6 +184,7 @@ class ImpactConditionNode(CadQueryNode):
             friction = float(self.get_property('wall_friction'))
             gap = float(self.get_property('wall_gap_mm'))
             impactor_mass = float(self.get_property('impactor_mass_kg'))
+            self_contact_friction = float(self.get_property('self_contact_friction'))
         except (TypeError, ValueError):
             self.set_error(
                 "Impact velocity, mass, and wall settings must be numeric."
@@ -175,17 +196,19 @@ class ImpactConditionNode(CadQueryNode):
         if not np.isfinite(tolerance) or tolerance <= 0.0:
             self.set_error("Impact surface search tolerance must be greater than zero.")
             return None
-        if not np.isfinite(friction):
-            self.set_error("Wall friction must be finite.")
+        if not np.isfinite(friction) or friction < 0.0:
+            self.set_error("Wall friction must be finite and non-negative.")
             return None
-        if friction < 0.0:
-            friction = -1.0
         if not np.isfinite(gap):
             self.set_error("Wall gap must be finite.")
             return None
         if not np.isfinite(impactor_mass) or impactor_mass < 0.0:
             self.set_error("Impactor mass must be finite and non-negative.")
             return None
+        if not np.isfinite(self_contact_friction) or self_contact_friction < 0.0:
+            self.set_error("Self-contact friction must be finite and non-negative.")
+            return None
+        from pylcss.input_values import as_bool
 
         return {
             'face_list':      face_list,
@@ -195,6 +218,8 @@ class ImpactConditionNode(CadQueryNode):
             'wall_friction': friction,
             'wall_gap_mm': gap,
             'impactor_mass_kg': impactor_mass,
+            'self_contact_enabled': as_bool(self.get_property('self_contact_enabled')),
+            'self_contact_friction': self_contact_friction,
         }
 
 

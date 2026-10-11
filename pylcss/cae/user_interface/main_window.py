@@ -147,13 +147,13 @@ class CAEMainWindow(QtWidgets.QMainWindow):
         from pylcss.cae.user_interface.cad.cad_viewer import CQ3DViewer
 
         self.results_page = DetailedResultsWidget()
-        self.results_viewer = CQ3DViewer()
+        self.results_workspace = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        self.results_viewer = CQ3DViewer(self.results_workspace)
         self.results_viewer.setObjectName("results_viewer")
         self.results_viewer.setMinimumWidth(380)
         self.results_viewer.setToolTip(
             "Interactive 3D results viewer. Use the view controls above the model to adjust the camera."
         )
-        self.results_workspace = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         self.results_workspace.setObjectName("results_workspace")
         self.results_workspace.setChildrenCollapsible(False)
         self.results_workspace.addWidget(self.results_viewer)
@@ -391,3 +391,6 @@ class CAEMainWindow(QtWidgets.QMainWindow):
             event.ignore()
             return
         super().closeEvent(event)
+        if event.isAccepted():
+            self.cad_widget.viewer.shutdown()
+            self.results_viewer.shutdown()

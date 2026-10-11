@@ -79,12 +79,6 @@ class SolverNode(CadQueryNode):
             widget_type='float',
         )
 
-        # Hidden compatibility properties: required so older .cad sessions
-        # deserialize. They are excluded from the inspector.
-        self.create_property('solver_backend', 'CalculiX', widget_type='combo',
-                             items=['CalculiX'])
-        self.create_property('run_external_solver', True, widget_type='checkbox')
-
     def run(self, cancel_callback=None):
         logger.debug("FEA Solver: routing to CalculiX backend.")
         from pylcss.cae.solver_backends import (
@@ -175,9 +169,6 @@ class SolverNode(CadQueryNode):
         # Selecting the solver implicitly means "run it"; `deck_only` is the
         # explicit opt-out for users who only want the input deck.
         deck_only = as_bool(self.get_property('deck_only'))
-        legacy_run = self.get_property('run_external_solver')
-        if legacy_run is not None and not as_bool(legacy_run):
-            deck_only = True
         run_flag = not deck_only
         logger.debug("FEA Solver: deck_only=%s, run_solver=%s", deck_only, run_flag)
 

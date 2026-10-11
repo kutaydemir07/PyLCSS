@@ -188,11 +188,13 @@ class RenderQualityMixin:
         QtCore.QTimer.singleShot(0, self._apply_deferred_quality)
 
     def _apply_deferred_quality(self):
+        if self._viewer_closed:
+            return
         try:
             self._apply_viewport_background(self._light_mode)
             self._enable_realistic_shading()
             self._refresh_render_quality()
-            self.vtkWidget.GetRenderWindow().Render()
+            self._request_render()
         except Exception:
             _LOG.debug("Could not upgrade render quality.", exc_info=True)
 
@@ -307,7 +309,7 @@ class RenderQualityMixin:
             self._interacting = False
             self._refresh_render_quality()
             try:
-                self.vtkWidget.GetRenderWindow().Render()
+                self._request_render()
             except Exception:
                 _LOG.debug("Optional UI operation failed.", exc_info=True)
 
@@ -467,7 +469,7 @@ class RenderQualityMixin:
                     actor, color=getattr(actor, "_pylcss_material_color", _CAD_COLOR)
                 )
         try:
-            self.vtkWidget.GetRenderWindow().Render()
+            self._request_render()
         except Exception:
             _LOG.debug("Optional UI operation failed.", exc_info=True)
 

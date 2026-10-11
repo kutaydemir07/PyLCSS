@@ -205,7 +205,7 @@ class PickingMixin:
             self.renderer.AddActor(actor)
             self._highlight_actors.append(actor)
 
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
 
     def _clear_highlight_actors(self):
         """Remove all highlight actors from the scene."""
@@ -345,7 +345,7 @@ class PickingMixin:
             actor.GetProperty().LightingOff()
             self.renderer.AddActor(actor)
             self._edge_highlight_actors.append(actor)
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
 
     def _clear_edge_highlight_actors(self):
         """Remove all edge highlight actors from the scene."""
@@ -379,7 +379,7 @@ class PickingMixin:
                 "LeftButtonPressEvent", self._on_vtk_pick
             )
         self.vtkWidget.setCursor(QtGui.QCursor(QtCore.Qt.CrossCursor))
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
         return True
 
     def disable_vertex_picking_mode(self):
@@ -402,7 +402,7 @@ class PickingMixin:
             self._vertex_actor.SetPickable(0)
             self._vertex_actor.SetVisibility(0)
         self.vtkWidget.setCursor(QtGui.QCursor(QtCore.Qt.ArrowCursor))
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
 
     def _do_vertex_pick(self, vtk_x, vtk_y, ctrl_held):
         """Pick one OCC vertex from the dedicated point actor."""
@@ -469,7 +469,7 @@ class PickingMixin:
             actor.GetProperty().SetDiffuse(0.0)
             self.renderer.AddActor(actor)
             self._vertex_highlight_actors.append(actor)
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
 
     def _clear_vertex_highlight_actors(self):
         for actor in self._vertex_highlight_actors:
@@ -511,7 +511,7 @@ class PickingMixin:
                 actor.GetProperty().SetLineWidth(1.5)
                 self.renderer.AddActor(actor)
                 self.actors.append(actor)
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
         self.face_picked.emit(picked)
 
     def _on_pick_cancel(self):
@@ -557,7 +557,7 @@ class PickingMixin:
                 actor.GetProperty().SetLineWidth(1.5)
                 self.renderer.AddActor(actor)
                 self.actors.append(actor)
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
 
     def highlight_edges(self, edge_indices):
         """Highlight stored CAD-edge indices on the current shape."""

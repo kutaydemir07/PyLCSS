@@ -208,20 +208,6 @@ SOLVERS: Dict[str, Dict[str, SolverAsset]] = {
             env_var="PYLCSS_FREECAD_EXE",
         ),
     },
-    "amrto": {
-        "Windows": SolverAsset(
-            name="AMRTO",
-            url="local:external_solvers/amrto",
-            archive="",
-            binary_glob="**/Instant Meshes.exe",
-            env_var="PYLCSS_AMRTO_INSTANT_MESHES",
-            extra_globs={
-                "PYLCSS_AMRTO_GMCG": "**/GMCG_revision.exe",
-                "PYLCSS_AMRTO_GMCG_HEADLESS": "**/gmcg_headless.exe",
-                "PYLCSS_AMRTO_JSON2ON": "**/json2on.exe",
-            },
-        ),
-    },
 }
 
 COMPONENT_LICENSES: Dict[str, Dict[str, str]] = {
@@ -244,11 +230,6 @@ COMPONENT_LICENSES: Dict[str, Dict[str, str]] = {
         "license": "GNU Lesser General Public License version 2.1",
         "license_url": "https://github.com/FreeCAD/FreeCAD/blob/1.1.3/LICENSE",
         "source_url": "https://github.com/FreeCAD/FreeCAD/tree/1.1.3",
-    },
-    "amrto": {
-        "license": "AMRTO Research License (Ren et al., CMAME 2025)",
-        "license_url": "https://doi.org/10.1016/j.cma.2024.117673",
-        "source_url": "external_solvers/amrto",
     },
 }
 

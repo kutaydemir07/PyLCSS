@@ -9,7 +9,6 @@ import logging
 import numpy as np
 import vtk
 from PySide6 import QtCore, QtGui, QtWidgets
-from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
 from .boundary_visuals import BC_PALETTE
 from .navigation_cube import NavCubeWidget
@@ -20,6 +19,7 @@ from .viewer_picking import PickingMixin
 from .viewer_quality import RenderQualityMixin
 from .viewer_scene import SceneRenderingMixin
 from .viewer_simulation import SimulationRenderingMixin
+from .vtk_widget import VTKRenderWidget
 
 __all__ = ["CQ3DViewer", "NavCubeWidget"]
 
@@ -49,6 +49,7 @@ class CQ3DViewer(
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self._viewer_closed = False
         self._show_bc_overlay = True
         self._show_bc_labels = True
         self.main_layout = QtWidgets.QVBoxLayout(self)
@@ -137,7 +138,7 @@ class CQ3DViewer(
         self.main_layout.addWidget(self._picking_toolbar)
 
         # VTK Widget
-        self.vtkWidget = QVTKRenderWindowInteractor(self)
+        self.vtkWidget = VTKRenderWidget(self)
         self.main_layout.addWidget(self.vtkWidget)
 
         # Renderer
@@ -210,8 +211,6 @@ class CQ3DViewer(
         self.marker_widget.SetOrientationMarker(axes)
         self.marker_widget.SetInteractor(self.interactor)
         self.marker_widget.SetViewport(0.0, 0.0, 0.2, 0.2)
-        self.marker_widget.SetEnabled(1)
-        self.marker_widget.InteractiveOff()  # Prevent user from dragging it around
 
         # Initialize Grid state
         self._grid_actor = None
@@ -313,18 +312,14 @@ class CQ3DViewer(
         self._crash_panel.hide()
         self.main_layout.addWidget(self._crash_panel)
 
-        self.interactor.Initialize()
-        self.interactor.Start()
-
         # Cache the default trackball interactor style so we can restore it
         # after picking. A no-op style is installed during locked picking to
         # prevent the camera from rotating while the user clicks faces/edges.
         self._default_interactor_style = self.interactor.GetInteractorStyle()
         self._noop_interactor_style = vtk.vtkInteractorStyleUser()
 
-        # Camera/pointer behaviour, then presentation quality. The interactor
-        # has to be initialised first: both attach observers to it, and
-        # _install_cad_interactor_style replaces the style cached just above.
+        # Observers can be installed before initialization. OpenGL starts at
+        # the first paint, once Qt has finished placing the native window.
         self._init_interaction()
         self._install_cad_interactor_style()
         self._init_render_quality()
@@ -339,10 +334,44 @@ class CQ3DViewer(
         self._nav_cube.show()
 
         self.ensure_navigation_cube_visible()
-        self.vtkWidget.GetRenderWindow().AddObserver(
+        self._render_observer_id = self.vtkWidget.GetRenderWindow().AddObserver(
             "EndEvent", lambda o, e: self._on_vtk_render()
         )
         self.apply_theme(active_theme)
+        QtWidgets.QApplication.instance().aboutToQuit.connect(self.shutdown)
+
+    def _request_render(self):
+        if not self._viewer_closed:
+            self.vtkWidget.request_render()
+
+    @QtCore.Slot()
+    def shutdown(self):
+        """Stop viewer callbacks before Qt destroys the native render window."""
+        if self._viewer_closed:
+            return
+        self._viewer_closed = True
+        self._crash_playing = False
+        self._camera_anim_state = None
+        self._hover_enabled = False
+        self._hover_pending = None
+        for timer in self.findChildren(QtCore.QTimer):
+            timer.stop()
+        self.vtkWidget.GetRenderWindow().RemoveObserver(self._render_observer_id)
+        self.vtkWidget.Finalize()
+
+    def closeEvent(self, event):
+        self.shutdown()
+        super().closeEvent(event)
+
+    def event(self, event):
+        if event.type() == QtCore.QEvent.Type.ParentAboutToChange:
+            widget = self.__dict__.get("vtkWidget")
+            if widget is not None:
+                widget.release_context()
+        elif event.type() == QtCore.QEvent.Type.DeferredDelete:
+            if "vtkWidget" in self.__dict__:
+                self.shutdown()
+        return super().event(event)
 
     # ------------------------------------------------------------------
     # view toolbar
@@ -649,7 +678,7 @@ class CQ3DViewer(
         if not render:
             return
         try:
-            self.vtkWidget.GetRenderWindow().Render()
+            self._request_render()
         except Exception:
             logging.getLogger(__name__).debug(
                 "Optional UI operation failed.", exc_info=True
@@ -693,7 +722,7 @@ class CQ3DViewer(
         if self._edge_actor is not None:
             self._edge_actor.SetVisibility(1 if self._show_edges else 0)
         try:
-            self.vtkWidget.GetRenderWindow().Render()
+            self._request_render()
         except Exception:
             logging.getLogger(__name__).debug(
                 "Optional UI operation failed.", exc_info=True
@@ -704,7 +733,7 @@ class CQ3DViewer(
         try:
             self.renderer.ResetCamera()
             self._update_scene_scale()
-            self.vtkWidget.GetRenderWindow().Render()
+            self._request_render()
         except Exception:
             logging.getLogger(__name__).debug(
                 "Optional UI operation failed.", exc_info=True
@@ -852,7 +881,7 @@ class CQ3DViewer(
                 1 if self._show_undeformed else 0
             )
         try:
-            self.vtkWidget.GetRenderWindow().Render()
+            self._request_render()
         except Exception:
             logging.getLogger(__name__).debug(
                 "Optional UI operation failed.", exc_info=True
@@ -1059,7 +1088,7 @@ class CQ3DViewer(
         try:
             if not self._section_enabled:
                 self._clear_section_clip()
-                self.vtkWidget.GetRenderWindow().Render()
+                self._request_render()
                 return
             if (
                 self._section_actor is not actor
@@ -1090,7 +1119,7 @@ class CQ3DViewer(
             # them on the next render without rebuilding the pipeline.
             self._section_plane.SetOrigin(*origin)
             self._section_plane.SetNormal(*normal)
-            self.vtkWidget.GetRenderWindow().Render()
+            self._request_render()
         except Exception:
             logging.getLogger(__name__).debug(
                 "Could not update section plane.", exc_info=True
@@ -1104,7 +1133,7 @@ class CQ3DViewer(
         for actor in self._result_extrema_actors:
             actor.SetVisibility(1 if self._show_extrema else 0)
         try:
-            self.vtkWidget.GetRenderWindow().Render()
+            self._request_render()
         except Exception:
             logging.getLogger(__name__).debug(
                 "Could not toggle result extrema.", exc_info=True
@@ -1165,7 +1194,7 @@ class CQ3DViewer(
                     load_vectors=vectors or None,
                 )
             else:
-                self.vtkWidget.GetRenderWindow().Render()
+                self._request_render()
         except Exception:
             logging.getLogger(__name__).debug(
                 "Optional UI operation failed.", exc_info=True

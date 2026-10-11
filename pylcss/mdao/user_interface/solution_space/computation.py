@@ -156,12 +156,12 @@ class SolutionComputationMixin:
         self.combo_active_box.addItem("All boxes", "all")
         for box in self.multi_modal_boxes:
             self.combo_active_box.addItem(
-                f"Box {box.box_id + 1} (Mode {box.box_id + 1})",
+                f"Box {box.box_id + 1}",
                 f"box:{box.box_id}",
             )
         if self._get_shared_display_family() is not None:
             self.combo_active_box.addItem(
-                "Recommended box (Decoupled form)", "recommended"
+                "Shared ranges", "recommended"
             )
         self.combo_active_box.setCurrentIndex(0)
         self.combo_active_box.blockSignals(False)
@@ -169,7 +169,7 @@ class SolutionComputationMixin:
         self.multibox_table.setRowCount(len(self.multi_modal_boxes))
         for row, box in enumerate(self.multi_modal_boxes):
             values = (
-                f"Box {box.box_id + 1} / Mode {box.box_id + 1}",
+                f"Box {box.box_id + 1}",
                 f"{box.volume:.3e}",
                 f"{box.good_fraction_lower_bound:.4f}",
                 str(box.validation_samples),
@@ -184,32 +184,12 @@ class SolutionComputationMixin:
 
         if not self.multi_modal_boxes:
             self.btn_resample_multimodal.setEnabled(False)
-            reason = (
-                "Feasible finds were clustered, but no positive-volume "
-                "solution space survived computation."
-                if result.n_clusters_found
-                else "No feasible basin was discovered."
-            )
-            self.lbl_multimodal_info.setText(reason)
-            QtWidgets.QMessageBox.warning(self, "Multi-Modal result", reason)
+            self.lbl_multimodal_info.setText("No solution spaces found.")
             return
 
-        decoupled = self._get_shared_display_family()
-        decoupled_text = ""
-        if decoupled is not None:
-            names = [dv["name"] for dv in self.problem.design_variables]
-            common_names = [names[i] for i in decoupled.common_variable_indices]
-            separating_names = [names[i] for i in decoupled.separating_variable_indices]
-            common_text = ", ".join(common_names) if common_names else "none"
-            separating_text = (
-                ", ".join(separating_names) if separating_names else "none"
-            )
-            decoupled_text = f" | common: {common_text} | separating: {separating_text}"
         self.lbl_multimodal_info.setText(
-            f"{len(self.multi_modal_boxes)} mode(s) / box-shaped solution spaces, "
-            "total volume "
-            f"{result.total_volume:.3e}, {result.computation_time:.1f} s, "
-            f"{result.clustering_method}{decoupled_text}"
+            f"Boxes: {len(self.multi_modal_boxes)} · "
+            f"Volume: {result.total_volume:.3e} · {result.computation_time:.1f} s"
         )
         self.btn_resample_multimodal.setEnabled(True)
         self._display_all_boxes()
@@ -418,8 +398,7 @@ class SolutionComputationMixin:
         self._show_multimodal_samples(samples)
         if not worker.silent:
             self.lbl_multimodal_info.setText(
-                f"Plotted {worker.box_count} visible box(es) with "
-                f"approximately {worker.sample_size} samples."
+                f"Boxes: {worker.box_count} · Samples: {worker.sample_size}"
             )
 
     def _on_multimodal_resample_error(self, worker, message):
@@ -443,6 +422,8 @@ class SolutionComputationMixin:
         if not self.problem:
             return
         self._reset_multimodal_state()
+        self.lbl_solution_status.setText("Computing…")
+        self.lbl_solution_status.show()
         # Compute is an explicit user action — allow its post-compute sample.
         self._has_sampled = True
 
@@ -533,6 +514,8 @@ class SolutionComputationMixin:
             self.solver_worker.start()
 
         except Exception as e:
+            self.lbl_solution_status.setText("Failed")
+            self.lbl_solution_status.show()
             QtWidgets.QMessageBox.critical(self, "Computation Error", str(e))
 
     def on_compute_progress(self, msg):
@@ -579,9 +562,9 @@ class SolutionComputationMixin:
 
         self.process_results(samples)
         self.btn_resample.setEnabled(True)
-        QtWidgets.QMessageBox.information(
-            self, "Success", f"Computation complete in {elapsed_time:.2f}s!"
-        )
+        status = "Completed" if box is not None else "No solution space found"
+        self.lbl_solution_status.setText(f"{status} · {elapsed_time:.2f} s")
+        self.lbl_solution_status.show()
 
         # Auto-resample to show samples
         self.resample_box(silent=True)
@@ -590,6 +573,8 @@ class SolutionComputationMixin:
         self.status_msg.close()
         self.btn_compute_feasible.setEnabled(True)
         self.btn_compute_adg.setEnabled(True)
+        self.lbl_solution_status.setText("Failed")
+        self.lbl_solution_status.show()
         # Check if there are any objectives defined
         has_objectives = self.problem is not None and any(
             qoi.get("minimize", False) or qoi.get("maximize", False)
@@ -604,6 +589,8 @@ class SolutionComputationMixin:
     def on_computation_cancelled(self):
         self.solver_worker.stop()
         self.status_msg.close()
+        self.lbl_solution_status.setText("Cancelled")
+        self.lbl_solution_status.show()
 
     def resample_box(self, silent=False):
         # Auto/silent resamples (box drag, first render, add-plot, table writes)

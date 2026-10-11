@@ -91,17 +91,6 @@ def _scenario_label(scenario: str) -> str:
     return "Fixed specimen + moving impactor"
 
 
-def _wall_friction(raw_value: Any, *, moving_body: bool) -> float:
-    """Return rigid-wall Coulomb friction, preserving legacy defaults."""
-    try:
-        value = float(raw_value)
-    except (TypeError, ValueError):
-        value = -1.0
-    if value >= 0.0:
-        return value
-    return 0.0 if moving_body else 0.08
-
-
 def _impact_state(impact: dict[str, Any]) -> _ImpactState:
     try:
         velocity = np.asarray(
@@ -132,10 +121,7 @@ def _impact_state(impact: dict[str, Any]) -> _ImpactState:
         scenario_label=_scenario_label(scenario),
         moving_body=moving_body,
         prescribed_wall=scenario == "prescribed_moving_wall",
-        wall_friction=_wall_friction(
-            impact.get("wall_friction"),
-            moving_body=moving_body,
-        ),
+        wall_friction=nonnegative_float(impact.get("wall_friction", 0.0), label="Wall friction"),
         wall_gap=wall_gap,
     )
 
@@ -152,12 +138,9 @@ def _append_constraints(
     constrained_node_ids: list[int] = []
     if moving_body:
         if constraints:
-            warnings.append(
-                "Moving body + fixed wall crash: SPC constraints are ignored in this "
-                "scope because the whole structure is a free-flying projectile and "
-                "the rigid wall provides the reaction. To model a fixed-rear "
-                "laboratory test, switch the ImpactCondition to "
-                "'Fixed specimen + moving impactor'."
+            raise SolverBackendError(
+                "Moving body + fixed wall requires a free body. Disconnect the "
+                "support constraints or choose Fixed specimen + moving impactor."
             )
         return next_set_id, constrained_node_ids
 
@@ -177,13 +160,9 @@ def _append_constraints(
                 + 1
             )
         else:
-            warnings.append(
-                f"Crash constraint {idx} has no face geometry or condition; skipped."
-            )
-            continue
+            raise SolverBackendError(f"Crash constraint {idx} has no selected geometry or condition.")
         if len(node_ids) == 0:
-            warnings.append(f"Crash constraint {idx} did not match any mesh nodes.")
-            continue
+            raise SolverBackendError(f"Crash constraint {idx} did not match any mesh nodes.")
 
         constrained_node_ids.extend(int(value) for value in node_ids)
         set_id = next_set_id
@@ -239,7 +218,9 @@ def _impact_nodes(
             + 1
         )
     else:
-        node_ids = np.arange(1, points.shape[0] + 1, dtype=int)
+        raise SolverBackendError("Select an impact face for fixed-specimen or prescribed-wall crash.")
+    if not state.moving_body and len(node_ids) == 0:
+        raise SolverBackendError("The selected impact face did not match any mesh nodes.")
     return impact_faces, node_ids
 
 
@@ -356,14 +337,14 @@ def _append_velocity(
         )
 
 
-def _append_self_contact(lines: list[str]) -> None:
+def _append_self_contact(lines: list[str], friction: float) -> None:
     lines.extend(
         [
             "*CONTACT_AUTOMATIC_SINGLE_SURFACE",
             "$#    ssid      msid     sstyp     mstyp    sboxid    mboxid       spr       mpr",
             "0",
             "$#      fs        fd        dc        vc       vdc    penchk        bt        dt",
-            "0.08, 0.08",
+            f"{friction:.12g}, {friction:.12g}",
             "$#     sfs       sfm       sst       mst      sfst      sfmt       fsf       vsf",
             "1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0",
         ]
@@ -539,7 +520,7 @@ def _append_moving_wall(
             "Fixed specimen + moving impactor uses a moving rigid wall with "
             "Mass=0. OpenRadioss treats V0 as imposed velocity, not an "
             "initial velocity of a finite-mass impactor. Set "
-            "impactor_mass_kg on the Crash Solver for an inertial sled impact."
+            "impactor_mass_kg on Impact Setup for an inertial sled impact."
         )
     logger.info(
         "OpenRadioss deck: moving planar wall point=%s normal=%s "
@@ -690,7 +671,12 @@ def append_crash_event_cards(
         impactor_mass=impactor_mass,
         warnings=warnings,
     )
-    _append_self_contact(lines)
+    from pylcss.input_values import as_bool
+    if as_bool(impact.get("self_contact_enabled")):
+        friction = nonnegative_float(
+            impact.get("self_contact_friction", 0.0), label="Self-contact friction",
+        )
+        _append_self_contact(lines, friction)
     next_set_id = _append_stationary_wall(
         lines,
         mesh=mesh,
@@ -736,6 +722,8 @@ def append_crash_event_cards(
             "impact_axis": [float(value) for value in state.direction],
             "initial_speed_m_s": float(state.speed),
             "impactor_mass_kg": float(impactor_mass),
+            "self_contact_enabled": as_bool(impact.get("self_contact_enabled")),
+            "self_contact_friction": float(impact.get("self_contact_friction") or 0.0),
             "reference_name": (
                 "constrained support" if state.prescribed_wall else "impact face"
             ),

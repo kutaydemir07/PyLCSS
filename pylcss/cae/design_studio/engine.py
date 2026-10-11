@@ -58,6 +58,7 @@ _NON_EXECUTION_PROPERTIES = {
     "disp_scale",
     "advanced_settings_visible",
     "cad_export_filename",
+    "cad_export_format",
     "cad_reconstruction_method",
     "description",
     "tags",

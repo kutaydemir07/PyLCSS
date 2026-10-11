@@ -230,7 +230,10 @@ class SolutionRequirementsMixin:
         if hasattr(self, "multibox_table"):
             self.multibox_table.setRowCount(0)
         if hasattr(self, "lbl_multimodal_info"):
-            self.lbl_multimodal_info.setText("No Multi-Modal result yet.")
+            self.lbl_multimodal_info.setText("No results yet.")
+        if hasattr(self, "lbl_solution_status"):
+            self.lbl_solution_status.clear()
+            self.lbl_solution_status.hide()
         if hasattr(self, "btn_resample_multimodal"):
             self.btn_resample_multimodal.setEnabled(False)
         self.last_samples = None

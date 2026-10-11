@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Kutay Demir.
+# Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 """Verify exported STEP topology and repair only transfer-induced trim defects."""
 from __future__ import annotations
 
@@ -14,6 +16,35 @@ from OCP.IFSelect import IFSelect_RetDone
 from OCP.Interface import Interface_Static
 from OCP.ShapeFix import ShapeFix_Shape
 from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
+
+
+def export_cad_model(workplane_or_shape, layouts=(), export_path=None, export_format="STEP", *, verify=True):
+    """Export native CAD geometry; check STEP by reimporting the result.
+
+    ``layouts`` is retained for callers of the previous public signature.
+    Passing the destination as the second argument is also supported.
+    """
+    if export_path is None:
+        export_path = layouts
+    path = Path(export_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    shape = workplane_or_shape.val() if hasattr(workplane_or_shape, 'val') else workplane_or_shape
+    kind = str(export_format).upper()
+    if kind in {'STEP', 'STP'}:
+        writer = STEPControl_Writer()
+        if (writer.Transfer(shape.wrapped, STEPControl_AsIs) != IFSelect_RetDone
+                or writer.Write(str(path)) != IFSelect_RetDone):
+            raise RuntimeError(f'STEP export failed: {path}')
+        if verify:
+            verify_step_roundtrip(path)
+    elif kind in {'IGES', 'IGS'}:
+        from OCP.IGESControl import IGESControl_Writer
+        writer = IGESControl_Writer()
+        if not writer.AddShape(shape.wrapped) or not writer.Write(str(path)):
+            raise RuntimeError(f'IGES export failed: {path}')
+    else:
+        raise ValueError(f'Unsupported CAD export format: {export_format}; use STEP or IGES')
+    return path
 
 
 def _closed(shape):

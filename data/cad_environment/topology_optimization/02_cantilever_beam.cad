@@ -360,12 +360,10 @@
         "workflow_mode": "Guided",
         "design_goal": "Lightweight Stiffness",
         "minimum_member_size_mm": 5.0,
-        "exclusion_scope": "All Loads and Supports",
-        "exclusion_thickness_mode": "Program Controlled",
         "validate_after_optimize": false,
         "cad_export_filename": "topology_optimized.step",
         "volfrac": 0.4,
-        "visualization": "Surface"
+        "visualization": "CAD"
       }
     },
     "preserved_root": {
@@ -634,10 +632,8 @@
   "_engineering_decision": "Find the globally optimal load path from clamped root to tip load under 50% volume fraction budget.",
   "_baseline": "Unsolved primary simultaneous-load scenario. Targets are requirements, not measured results.",
   "_design_variables": [
-    "Length: 200 mm",
-    "Height: 100 mm",
-    "Width: 20 mm",
-    "Volume fraction: 50%"
+    "Design-domain bounds: 120 x 60 x 10 mm",
+    "Volume fraction: 40%"
   ],
   "_load_cases": [
     "Tip Load 2.0 kN"

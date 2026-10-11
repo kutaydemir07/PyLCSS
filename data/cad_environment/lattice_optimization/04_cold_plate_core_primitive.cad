@@ -470,20 +470,18 @@
         "workflow_mode": "Guided",
         "design_goal": "Lightweight Stiffness",
         "minimum_member_size_mm": 10.0,
-        "exclusion_scope": "All Loads and Supports",
-        "exclusion_thickness_mode": "Program Controlled",
         "validate_after_optimize": false,
         "cad_export_filename": "cold_plate_core_primitive.step",
         "volfrac": 0.48,
         "visualization": "Density",
         "structure_mode": "Schwarz Primitive Lattice",
-        "lattice_settings_mode": "Manual",
+        "lattice_settings_mode": "Guided",
         "lattice_cell_size_mm": 0.0,
         "lattice_member_thickness_mm": 0.0,
         "lattice_skin_thickness_mm": 0.0,
         "lattice_target_relative_density": 0.0,
         "lattice_porosity": "Conservative",
-        "adaptive_subcell_solid": true
+        "repair_lattice_connections": false
       }
     }
   },
@@ -597,16 +595,17 @@
   "_copyright": "Copyright (c) 2026 Kutay Demir.",
   "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
   "_title": "High-Power Electronics Cold Plate - Schwarz Primitive TPMS",
-  "_purpose": "Liquid-cooled avionics cold plate design using Schwarz P TPMS core with solid boundary skins and integrated manifold interfaces.",
-  "_fidelity": "Continuum-level optimization with adaptive skin attachment and sub-cell solid sealing.",
+  "_purpose": "Structural stiffness optimization of a Schwarz Primitive lattice cold-plate core under connected mechanical loads. Cooling and pressure-drop performance require separate thermal and fluid studies.",
+  "_fidelity": "Linear elastic voxel compliance optimization with Schwarz Primitive Lattice, Guided cell/member sizing, and explicitly connected preserved and obstacle CAD bodies.",
   "_visual_target": "Self-supporting TPMS core with leak-tight solid perimeter walls; pressure containment up to 1.2 MPa.",
   "_engineering_decision": "Optimize Schwarz Primitive core for simultaneous heat conduction and structural pressure containment.",
   "_baseline": "Unsolved primary simultaneous-load scenario. Targets are requirements, not measured results.",
   "_design_variables": [
-    "Cell size: 10 mm",
-    "Target relative density: 30%",
-    "Skin thickness: 1.5 mm",
-    "Adaptive sub-cell solid: True"
+    "Envelope volume fraction: 48%",
+    "Minimum member size: 10 mm (0 uses Guided sizing)",
+    "Lattice cell/member sizes: Guided",
+    "Skin thickness: 0 mm",
+    "Lattice relative density: Program Controlled (Conservative)"
   ],
   "_load_cases": [
     "LC1 Clamping 18 kN"

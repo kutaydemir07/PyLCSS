@@ -23,7 +23,6 @@ from pylcss.mdao.system_modeling.compiler import GraphBuilder
 from .workers import (
     AdaptiveTrainingWorker,
     ModelTrainingWorker,
-    TrainingWorker,
 )
 
 if TORCH_AVAILABLE:
@@ -209,9 +208,7 @@ class SurrogateTrainingMixin:
             self.progress_text.hide()
         elif "Auto" in model_type:
             self.tab_widget.setCurrentWidget(self.lb_tab)
-            self.progress_text.setText(
-                "Auto Mode Benchmarking Candidates...\n(Evaluating SOTA MDAO algorithms)"
-            )
+            self.progress_text.setText("Comparing models…")
             self.progress_text.show()
             self.curve_plot.setXRange(-1, 1)
             self.curve_plot.setYRange(-1, 1)
@@ -306,33 +303,35 @@ class SurrogateTrainingMixin:
             self.curve_plot.autoRange()
 
         # Update metrics text
-        msg = f"<b>Training Complete</b><br>RMSE: {metrics['RMSE']:.4f}<br>R\u00b2 Score: {metrics['R2']:.4f}"
+        msg = f"<b>Completed</b> · RMSE: {metrics['RMSE']:.4f} · R\u00b2: {metrics['R2']:.4f}"
         if "RMAE" in metrics:
-            msg += f"<br>RMAE (Relative Max Error): {metrics['RMAE']:.4f}"
+            msg += f" · RMAE: {metrics['RMAE']:.4f}"
         if "champion_name" in metrics:
-            msg += f"<br>Champion: <b>{metrics['champion_name']}</b> ({metrics.get('champion_family', 'MDAO')})"
+            msg += f"<br>Selected model: <b>{metrics['champion_name']}</b>"
         if y_std is not None:
             msg += f"<br>Mean Uncertainty: {np.mean(y_std):.4f}"
 
-        # Add warning if debug mode was used
         if metrics.get("debug_mode", False):
-            msg += "<br><span style='color: red; font-weight: bold;'>DEBUG MODE - PERFECT SCORES EXPECTED<br>DO NOT USE FOR REAL DESIGN!</span>"
+            msg += "<br>Evaluation: debug mode"
 
         self.lbl_metrics.setText(msg)
 
         # Populate AutoML Leaderboard if available
+        if hasattr(self, "lb_table"):
+            self.lb_table.setRowCount(0)
         if "leaderboard" in metrics and hasattr(self, "lb_table"):
             lb_data = metrics["leaderboard"]
             self.lb_table.setRowCount(len(lb_data))
             for row_idx, item in enumerate(lb_data):
                 self.lb_table.setItem(row_idx, 0, QtWidgets.QTableWidgetItem(str(item.get("rank", row_idx + 1))))
                 self.lb_table.setItem(row_idx, 1, QtWidgets.QTableWidgetItem(str(item.get("name", "-"))))
-                self.lb_table.setItem(row_idx, 2, QtWidgets.QTableWidgetItem(str(item.get("family", "-"))))
-                self.lb_table.setItem(row_idx, 3, QtWidgets.QTableWidgetItem(f"{item.get('r2', 0.0):.4f}"))
-                self.lb_table.setItem(row_idx, 4, QtWidgets.QTableWidgetItem(f"{item.get('rmse', 0.0):.4f}"))
-                self.lb_table.setItem(row_idx, 5, QtWidgets.QTableWidgetItem(f"{item.get('rmae', 0.0):.4f}"))
-                self.lb_table.setItem(row_idx, 6, QtWidgets.QTableWidgetItem(f"{item.get('fit_time', 0.0):.3f}"))
+                self.lb_table.setItem(row_idx, 2, QtWidgets.QTableWidgetItem(f"{item.get('r2', 0.0):.4f}"))
+                self.lb_table.setItem(row_idx, 3, QtWidgets.QTableWidgetItem(f"{item.get('rmse', 0.0):.4f}"))
+                self.lb_table.setItem(row_idx, 4, QtWidgets.QTableWidgetItem(f"{item.get('rmae', 0.0):.4f}"))
+                self.lb_table.setItem(row_idx, 5, QtWidgets.QTableWidgetItem(f"{item.get('fit_time', 0.0):.3f}"))
             self.tab_widget.setCurrentWidget(self.lb_tab)
+        else:
+            self.tab_widget.setCurrentWidget(self.parity_tab)
 
         # Handle multi-output visualization
         self.plot_widget.clear()
@@ -539,7 +538,7 @@ class SurrogateTrainingMixin:
         )
 
         # Show adaptive training message
-        self.progress_text.setText("Adaptive Training...\n(Active Learning)")
+        self.progress_text.setText("Adaptive training…")
         self.progress_text.show()
         self.curve_plot.setXRange(-1, 1)
         self.curve_plot.setYRange(-1, 1)
@@ -616,24 +615,20 @@ class SurrogateTrainingMixin:
         self.update_training_summary()
 
         # Update metrics display (similar to training_finished)
-        msg = f"<b>Adaptive Training Complete</b><br>RMSE: {metrics['RMSE']:.4f}<br>R² Score: {metrics['R2']:.4f}"
+        msg = f"<b>Completed</b> · RMSE: {metrics['RMSE']:.4f} · R²: {metrics['R2']:.4f}"
+        if metrics.get("debug_mode", False):
+            msg += "<br>Evaluation: debug mode"
         if "y_std" in metrics and metrics["y_std"] is not None:
             y_std = np.array(metrics["y_std"])
             msg += f"<br>Mean Uncertainty: {np.mean(y_std):.4f}"
         active_info = metrics.get("active_learning", {})
         if active_info:
             msg += (
-                f"<br>Strategy: {active_info.get('strategy', 'unknown')}"
                 f"<br>New simulations: {active_info.get('new_samples', 0)}"
             )
-            if active_info.get("fallback_rounds"):
-                msg += (
-                    "<br>Committee fallback rounds: "
-                    f"{active_info['fallback_rounds']}"
-                )
             if active_info.get("failed_evaluations"):
                 msg += (
-                    "<br>Failed simulations skipped: "
+                    "<br>Failed simulations: "
                     f"{active_info['failed_evaluations']}"
                 )
 

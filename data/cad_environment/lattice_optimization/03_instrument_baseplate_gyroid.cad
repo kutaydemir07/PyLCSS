@@ -412,7 +412,7 @@
         "notes": "Representative wrought room-temperature elastic data.",
         "schema_version": 1,
         "analysis_purpose": "Structural FEA",
-        "preset": "Ti-6Al-4V",
+        "preset": "Custom",
         "youngs_modulus": 114000.0,
         "poissons_ratio": 0.34,
         "density": 4.43e-09,
@@ -470,20 +470,18 @@
         "workflow_mode": "Guided",
         "design_goal": "Lightweight Stiffness",
         "minimum_member_size_mm": 12.0,
-        "exclusion_scope": "All Loads and Supports",
-        "exclusion_thickness_mode": "Program Controlled",
         "validate_after_optimize": false,
         "cad_export_filename": "instrument_baseplate_gyroid.step",
         "volfrac": 0.3,
         "visualization": "Density",
         "structure_mode": "Gyroid Lattice",
-        "lattice_settings_mode": "Manual",
+        "lattice_settings_mode": "Guided",
         "lattice_cell_size_mm": 0.0,
         "lattice_member_thickness_mm": 0.0,
         "lattice_skin_thickness_mm": 0.0,
         "lattice_target_relative_density": 0.0,
         "lattice_porosity": "Conservative",
-        "adaptive_subcell_solid": true
+        "repair_lattice_connections": false
       }
     }
   },
@@ -597,16 +595,17 @@
   "_copyright": "Copyright (c) 2026 Kutay Demir.",
   "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
   "_title": "Satellite Optical Instrument Baseplate - Gyroid TPMS",
-  "_purpose": "Sheet-mode Gyroid TPMS infill optimization for a satellite optical bench baseplate requiring high specific stiffness and thermal dissipation.",
-  "_fidelity": "Marching cubes level-set evaluation with calibrated density-to-band transfer, adaptive sub-pitch wall preservation, and solid boss attachments.",
+  "_purpose": "Structural specific-stiffness optimization of a satellite optical bench baseplate with Gyroid lattice. Thermal dissipation requires a separate thermal study.",
+  "_fidelity": "Linear elastic voxel compliance optimization with Gyroid Lattice, Guided cell/member sizing, and explicitly connected preserved and obstacle CAD bodies.",
   "_visual_target": "Continuous bicontinuous gyroid channels; solid mounting bosses and perimeter rim; no internal powder-trapping dead ends.",
   "_engineering_decision": "Determine gyroid triply periodic minimal surface (TPMS) infill to satisfy 120 Hz fundamental frequency requirement with minimal launch mass.",
   "_baseline": "Unsolved primary simultaneous-load scenario. Targets are requirements, not measured results.",
   "_design_variables": [
-    "Cell size: 12 mm",
-    "Target relative density: 22%",
-    "Skin thickness: 1.2 mm",
-    "Adaptive sub-cell solid: True"
+    "Envelope volume fraction: 30%",
+    "Minimum member size: 12 mm (0 uses Guided sizing)",
+    "Lattice cell/member sizes: Guided",
+    "Skin thickness: 0 mm",
+    "Lattice relative density: Program Controlled (Conservative)"
   ],
   "_load_cases": [
     "LC1 Normal 2.94 kN"

@@ -614,7 +614,7 @@ class CrashPlaybackMixin:
 
     def _on_crash_timer(self):
         """Timer callback: advance one frame."""
-        if not self._crash_frames:
+        if self._viewer_closed or not self._crash_frames:
             self._crash_timer.stop()
             return
         next_idx = self._crash_frame_idx + 1

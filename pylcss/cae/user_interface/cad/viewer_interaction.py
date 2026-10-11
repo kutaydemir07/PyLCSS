@@ -278,7 +278,7 @@ class ViewerInteractionMixin:
         camera.OrthogonalizeViewUp()
         camera.ParallelProjectionOff()
         self.renderer.ResetCameraClippingRange()
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
         if hasattr(self, "_nav_cube"):
             try:
                 self._nav_cube.update_rotation(camera)
@@ -345,7 +345,7 @@ class ViewerInteractionMixin:
             self._hover_observer_id = None
         self._clear_hover_actor()
         try:
-            self.vtkWidget.GetRenderWindow().Render()
+            self._request_render()
         except Exception:
             _LOG.debug("Optional UI operation failed.", exc_info=True)
 
@@ -391,7 +391,7 @@ class ViewerInteractionMixin:
         if index is not None:
             self._build_hover_actor(index)
         try:
-            self.vtkWidget.GetRenderWindow().Render()
+            self._request_render()
         except Exception:
             _LOG.debug("Optional UI operation failed.", exc_info=True)
 

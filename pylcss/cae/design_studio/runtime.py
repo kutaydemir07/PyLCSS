@@ -95,11 +95,11 @@ _OVERRIDEABLE_PROPERTIES = {
     "com.cad.sim.pressure_load": ("pressure",),
     "com.cad.sim.impact": (
         "velocity_x", "velocity_y", "velocity_z", "node_tolerance",
-        "wall_friction", "wall_gap_mm",
+        "wall_friction", "wall_gap_mm", "impactor_mass_kg",
+        "self_contact_enabled", "self_contact_friction",
     ),
     "com.cad.sim.crash_solver": (
         "end_time", "n_frames", "time_steps", "enable_mass_scaling",
-        "impactor_mass_kg",
     ),
     "com.cad.sim.topopt_voxel": (
         "nelx", "nely", "nelz", "volfrac", "rmin", "penal",
@@ -109,7 +109,6 @@ _OVERRIDEABLE_PROPERTIES = {
         "minimum_member_size_mm", "minimum_void_size_mm",
         "overhang_angle_deg",
         "topology_convergence_enabled", "topology_convergence_levels",
-        "exclusion_thickness_mm",
         "pattern_repeat",
     ),
 }
@@ -663,12 +662,14 @@ def _load_graph(abs_path: str):
     migrate_removed_mesher_properties(session_data)
     from pylcss.cae.design_studio.session_persistence import (
         expand_guided_topology_session,
+        migrate_cad_reconstruction_properties,
         migrate_lattice_topology_nodes,
         sanitize_unregistered_nodes,
     )
 
     # Retype before expansion: which guided defaults a study is hydrated with
     # depends on whether it is a lattice study.
+    migrate_cad_reconstruction_properties(session_data)
     migrate_lattice_topology_nodes(session_data)
     expand_guided_topology_session(session_data)
     sanitize_unregistered_nodes(session_data)

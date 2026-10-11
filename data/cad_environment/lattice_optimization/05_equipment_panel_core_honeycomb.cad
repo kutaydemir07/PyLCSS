@@ -470,20 +470,18 @@
         "workflow_mode": "Guided",
         "design_goal": "Lightweight Stiffness",
         "minimum_member_size_mm": 20.0,
-        "exclusion_scope": "All Loads and Supports",
-        "exclusion_thickness_mode": "Program Controlled",
         "validate_after_optimize": false,
         "cad_export_filename": "equipment_panel_core_honeycomb.step",
         "volfrac": 0.38,
         "visualization": "Density",
         "structure_mode": "Honeycomb Lattice",
-        "lattice_settings_mode": "Manual",
+        "lattice_settings_mode": "Guided",
         "lattice_cell_size_mm": 0.0,
         "lattice_member_thickness_mm": 0.0,
         "lattice_skin_thickness_mm": 0.0,
         "lattice_target_relative_density": 0.0,
         "lattice_porosity": "Conservative",
-        "adaptive_subcell_solid": true
+        "repair_lattice_connections": false
       }
     }
   },
@@ -598,15 +596,16 @@
   "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
   "_title": "Aerospace Equipment Sandwich Panel - Extruded Honeycomb",
   "_purpose": "Structural sandwich panel with regular hexagonal prismatic core for aircraft cabin electronics mounting.",
-  "_fidelity": "2.5D regular-hexagonal extruded level-set field with solid insert bosses and skin faceplates.",
+  "_fidelity": "Linear elastic voxel compliance optimization with Honeycomb lattice, Guided cell/member sizing and zero skin thickness. Solid insert regions come from connected preserved CAD bodies.",
   "_visual_target": "Regular hexagonal cellular core with integral solid fastener sleeves; zero edge voids.",
   "_engineering_decision": "Optimize regular-hexagonal honeycomb wall thickness and core orientation for minimum panel deflection under normal pressure.",
   "_baseline": "Unsolved primary simultaneous-load scenario. Targets are requirements, not measured results.",
   "_design_variables": [
-    "Cell size: 15 mm",
-    "Target relative density: 20%",
-    "Skin thickness: 1.0 mm",
-    "Adaptive sub-cell solid: True"
+    "Envelope volume fraction: 38%",
+    "Minimum member size: 20 mm (0 uses Guided sizing)",
+    "Lattice cell/member sizes: Guided",
+    "Skin thickness: 0 mm",
+    "Lattice relative density: Program Controlled (Conservative)"
   ],
   "_load_cases": [
     "LC1 Normal 3.92 kN"

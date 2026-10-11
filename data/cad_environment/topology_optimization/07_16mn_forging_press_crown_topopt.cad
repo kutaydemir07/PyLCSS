@@ -618,14 +618,12 @@
       "port_deletion_allowed": false,
       "subgraph_session": {},
       "custom": {
-        "description": "Worst-case compliance optimization for the complete four-case crown load envelope.",
+        "description": "Compliance optimization under the simultaneous connected cylinder loads.",
         "tags": "topology-optimization, engineering-challenge, press-crown, large-structure",
         "notes": "All connected loads act simultaneously. Run separate project copies for alternative operating cases. Preserved regions remain solid; obstacle regions remain void.",
         "workflow_mode": "Guided",
         "design_goal": "Lightweight Stiffness",
         "minimum_member_size_mm": 300.0,
-        "exclusion_scope": "All Loads and Supports",
-        "exclusion_thickness_mode": "Program Controlled",
         "validate_after_optimize": false,
         "cad_export_filename": "16mn_press_crown_topology.step",
         "volfrac": 0.34,
@@ -784,15 +782,13 @@
   "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
   "_title": "16 MN Press Crown with Preserved Bearing Pads",
   "_purpose": "Heavy industrial press crown optimization with 4 column supports, 2 hydraulic ram cylinders, and the primary symmetric 16 MN load scenario.",
-  "_fidelity": "SIMP 3D continuum with 4 independent multi-load cases and passive hydraulic cylinder mounting sleeves.",
+  "_fidelity": "SIMP 3D continuum optimization of simultaneous connected ram loads and four column supports. Preserved mounting material comes from connected CAD bodies.",
   "_visual_target": "Arched double-arch load transmission directly transferring cylinder thrust into the 4 outer columns; mass reduction >= 35%.",
   "_engineering_decision": "Redesign the heavy press crown to eliminate weld fatigue cracking under eccentric die jams while reducing casting mass by 35%.",
   "_baseline": "Unsolved primary simultaneous-load scenario. Targets are requirements, not measured results.",
   "_design_variables": [
-    "Crown span: 3000 mm",
-    "Depth: 1800 mm",
-    "Height: 1200 mm",
-    "Volume fraction: 45%"
+    "Design-domain bounds: 3600 x 900 x 2200 mm",
+    "Volume fraction: 34%"
   ],
   "_load_cases": [
     "LC1 Left Cylinder 8.0 MN",

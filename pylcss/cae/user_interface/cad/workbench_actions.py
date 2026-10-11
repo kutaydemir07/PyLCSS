@@ -196,8 +196,7 @@ class WorkbenchActionMixin:
             # Reset the 3D viewer camera
             if hasattr(self.viewer, "renderer") and self.viewer.renderer:
                 self.viewer.renderer.ResetCamera()
-                if hasattr(self.viewer, "iren") and self.viewer.iren:
-                    self.viewer.iren.GetRenderWindow().Render()
+                self.viewer._request_render()
             self.statusBar().showMessage("3D view reset")
             self.timeline.add_event("3D view reset to default")
         except Exception:

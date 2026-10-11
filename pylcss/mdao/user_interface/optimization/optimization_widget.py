@@ -512,6 +512,7 @@ class OptimizationWidget(QtWidgets.QWidget):
             self.lbl_status.setText("Stopping at the next solver checkpoint…")
 
     def on_finished(self, result):
+        was_stopping = self._stopping
         self.worker = None
         self._stopping = False
         self.progress_bar.setRange(0, 100)
@@ -521,25 +522,28 @@ class OptimizationWidget(QtWidgets.QWidget):
         self.feasibility_tolerance = float(
             getattr(result, "feasibility_tolerance", FEASIBILITY_TOL)
         )
+        self.plots_widget.feasibility_tolerance = self.feasibility_tolerance
         is_feasible = result.max_violation <= self.feasibility_tolerance
-        if result.success and getattr(result, "converged", result.success):
+        if was_stopping:
+            msg, color = "Cancelled", "#7f8c8d"
+        elif result.success and getattr(result, "converged", result.success):
             msg, color = "Converged", "#27ae60"
         elif result.success and is_feasible:
-            msg, color = "Done (Max Iter / Tol)", "#27ae60"
+            msg, color = "Not converged", "#b7791f"
         else:
             msg, color = "Failed", "#e74c3c"
 
         if result.max_violation > self.feasibility_tolerance:
-            msg += " (Constraints Violated)"
+            msg += " · Constraints violated"
             color = "#e74c3c"
 
-        self.lbl_status.setText(f"{msg}: {result.message}")
+        logger.info("Optimization finished: %s", result.message)
+        self.lbl_status.setText(msg)
+        self.plots_widget._set_result_status(msg, color)
 
         # Write the final solution into the Results tab and back to the model.
         if result.x is not None:
-            self.plots_widget.set_results_final(
-                result, f"{msg}: {result.message}", color
-            )
+            self.plots_widget.set_results_final(result, msg, color)
             self.plots_widget.show_results()
             for i, val in enumerate(result.x):
                 self.problem.design_variables[i]["value"] = float(val)
@@ -548,7 +552,8 @@ class OptimizationWidget(QtWidgets.QWidget):
         self.worker = None
         self._stopping = False
         self._refresh_run_state()
-        self.lbl_status.setText("Error occurred")
+        self.lbl_status.setText("Failed")
+        self.plots_widget._set_result_status("Failed", "#e74c3c")
         QtWidgets.QMessageBox.critical(self, "Error", msg)
 
     # --- Utils ---

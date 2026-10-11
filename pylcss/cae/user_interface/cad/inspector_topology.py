@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 from PySide6 import QtCore, QtWidgets
+from .result_presentation import result_state_rows
 
 from pylcss.cae.design_studio.topology_optimization.manufacturing import (
     PUBLIC_FAMILY_KEYS,
@@ -152,10 +153,10 @@ class TopologyInspectorMixin:
             )
             if singular_topology_interface:
                 status.setToolTip(
-                    "Edges and vertices have zero physical area. The voxel "
-                    "solver must inflate them into a mesh-sized contact pad, "
-                    "which can create artificial branches. Select the real "
-                    "load/support face for a production topology study."
+                    "Edges and vertices apply line or point conditions without "
+                    "a solid pad. Local stresses near these conditions depend "
+                    "on mesh resolution. Select a face when the physical "
+                    "load/support acts over an area."
                 )
             layout.addRow(label + ":", status)
 
@@ -354,9 +355,6 @@ class TopologyInspectorMixin:
             "lattice_max_member_thickness_voxels",
             "lattice_member_sizing_iterations",
             "lattice_buckling_length_factor",
-            "exclusion_scope",
-            "exclusion_thickness_mode",
-            "exclusion_thickness_mm",
         }
 
         def _apply_guided_settings(settings):
@@ -473,36 +471,8 @@ class TopologyInspectorMixin:
                 },
             ),
         )
-        case_mode_row = _combo(
-            "load_case_mode",
-            ["Multiple Independent Cases", "Simultaneous Superposition"],
-            "Multiple Independent Cases",
-        )
-        case_mode_row.setToolTip(
-            "How connected loads are evaluated.\n\n"
-            "Multiple Independent Cases: Each connected load acts as a separate load case with individual weight.\n"
-            "Simultaneous Superposition: All connected loads act at the same time."
-        )
-        intent_layout.addRow("Load Case Mode:", case_mode_row)
+        intent_layout.addRow("Loads:", QtWidgets.QLabel("All connected loads act simultaneously."))
 
-        goal_now = str(node.get_property("design_goal") or "").strip().lower()
-        if goal_now:
-            # The load envelope is its own decision, not a goal name. "Worst
-            # Case" minimizes a smooth P-norm over the cases so no single case
-            # exceeds the bound; "Weighted Sum" minimizes their average, where a
-            # dominant case can erase a path another one needs.
-            aggregation_row = _combo(
-                "load_aggregation",
-                ["Weighted Sum", "Worst Case"],
-                "Weighted Sum",
-            )
-            aggregation_row.setToolTip(
-                "How several load cases are combined into one objective. "
-                "Weighted Sum minimizes the weighted average compliance. "
-                "Worst Case minimizes a smooth maximum, so a rare severe case "
-                "is bounded instead of averaged away."
-            )
-            intent_layout.addRow("Load Aggregation:", aggregation_row)
         formulation_combo = _combo(
             "formulation",
             [
@@ -792,6 +762,13 @@ class TopologyInspectorMixin:
                 "earlier PyLCSS versions."
             )
             mfg_layout.addRow("Cell Family:", structure_combo)
+            if node.has_property("repair_lattice_connections"):
+                repair = _check("repair_lattice_connections", "Add connecting ligaments")
+                repair.setToolTip(
+                    "Adds material outside the cell pattern to reconnect fragments "
+                    "and preserved interfaces. Changes geometry; requires structural verification."
+                )
+                mfg_layout.addRow("Repair Connections:", repair)
             if is_lattice:
                 lattice_setup = _combo(
                     "lattice_settings_mode",
@@ -1583,7 +1560,7 @@ class TopologyInspectorMixin:
             else None
         )
         if isinstance(surface, dict):
-            watertight = surface.get("watertight")
+            watertight = surface.get("is_watertight", surface.get("watertight"))
             faces = surface.get("faces")
             bodies = surface.get("connected_components")
             parts = []
@@ -1613,12 +1590,8 @@ class TopologyInspectorMixin:
             grid_label.setStyleSheet("color:#8f98a5; font-size:10px;")
             layout.addRow("Build grid", grid_label)
 
-        warnings = list((result or {}).get("warnings") or [])
-        if warnings:
-            notes = QtWidgets.QLabel("\n\n".join(f"• {text}" for text in warnings))
-            notes.setWordWrap(True)
-            notes.setStyleSheet("color:#b0b6c0; font-size:10px;")
-            layout.addRow(notes)
+        for label, value in result_state_rows(result):
+            layout.addRow(label, QtWidgets.QLabel(value))
 
         case_compliances = (result or {}).get("case_compliances")
         if isinstance(case_compliances, dict) and len(case_compliances) > 1:
@@ -1677,13 +1650,8 @@ class TopologyInspectorMixin:
             return
 
         settings = self._topopt_cad_settings(node, result)
-        report = result.get("cad_reconstruction")
-        cached_strategy = (
-            str(report.get("requested_strategy") or "")
-            if isinstance(report, dict)
-            else ""
-        )
-        if result.get("cad_shape") is not None and cached_strategy == settings["strategy"]:
+        from pylcss.cae.design_studio.topology_optimization.geometry.cad_config import cached_cad_shape
+        if cached_cad_shape(result, settings["strategy"]) is not None:
             result["visualization_mode"] = mode
             viewer = getattr(self.window(), "viewer", None)
             if viewer is not None:
@@ -1715,7 +1683,8 @@ class TopologyInspectorMixin:
             node.get_property("cad_reconstruction_method")
             or "Auto"
         ).strip().lower()
-        strategy = "spline" if method.startswith("smooth") else "auto"
+        from pylcss.cae.design_studio.topology_optimization.geometry.cad_reconstruction import normalize_cad_strategy
+        strategy = normalize_cad_strategy(method)
         cutoff = float(
             result.get("density_cutoff")
             or node.get_property("density_cutoff")
@@ -1729,9 +1698,10 @@ class TopologyInspectorMixin:
 
     def _preview_topopt_cad(self, node):
         """Build, cache, and display the actual STEP-ready TopOpt B-rep."""
+        window = self.window()
+        window = getattr(window, "cad_widget", window)
         worker = getattr(self, "_topopt_cad_preview_worker", None)
         if worker is not None and worker.isRunning():
-            window = self.window()
             if hasattr(window, "statusBar") and window.statusBar():
                 window.statusBar().showMessage("CAD build already running.")
             return
@@ -1761,6 +1731,7 @@ class TopologyInspectorMixin:
             result["cad_shape"] = shape
             result["shape"] = shape
             result["cad_reconstruction"] = report
+            result["cad_preview_mesh"] = worker.preview_mesh
             result["visualization_mode"] = "CAD"
             node._last_result = result
             node._last_cad_reconstruction_report = report
@@ -1776,7 +1747,9 @@ class TopologyInspectorMixin:
                     "CAD",
                 )
 
-            window = self.window()
+            clear_progress = getattr(window, "_clear_solve_progress", None)
+            if callable(clear_progress):
+                clear_progress()
             viewer = getattr(window, "viewer", None)
             if viewer is not None:
                 viewer.render_simulation(result)
@@ -1809,16 +1782,30 @@ class TopologyInspectorMixin:
 
         def _fail(message):
             self._topopt_cad_preview_worker = None
+            clear_progress = getattr(window, "_clear_solve_progress", None)
+            if callable(clear_progress):
+                clear_progress()
             QtWidgets.QMessageBox.critical(
                 self,
                 "CAD Error",
                 message,
             )
 
+        def _cancelled():
+            self._topopt_cad_preview_worker = None
+            clear_progress = getattr(window, "_clear_solve_progress", None)
+            if callable(clear_progress):
+                clear_progress()
+            if hasattr(window, "statusBar") and window.statusBar():
+                window.statusBar().showMessage("CAD reconstruction cancelled.")
+
         worker.preview_finished.connect(_finish)
         worker.preview_error.connect(_fail)
+        worker.preview_cancelled.connect(_cancelled)
         worker.finished.connect(worker.deleteLater)
-        window = self.window()
+        progress_slot = getattr(window, "_on_optimization_step", None)
+        if callable(progress_slot):
+            worker.preview_progress.connect(progress_slot)
         if hasattr(window, "statusBar") and window.statusBar():
             window.statusBar().showMessage("Building CAD...")
         worker.start()
@@ -1880,6 +1867,7 @@ class TopologyInspectorMixin:
                 result.pop("cad_shape", None)
                 result.pop("shape", None)
                 result.pop("cad_reconstruction", None)
+                result.pop("cad_preview_mesh", None)
                 setattr(node, "_last_result", result)
                 return recovered
         except Exception:
@@ -2087,40 +2075,17 @@ class TopologyInspectorMixin:
                 self.window().statusBar().showMessage("STEP export already running.")
             return
 
-        cad_shape = result.get("cad_shape") or result.get("shape")
-        if cad_shape is None:
-            if hasattr(self.window(), "statusBar") and self.window().statusBar():
-                self.window().statusBar().showMessage("Reconstructing AMRTO CAD body for STEP export...")
-            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
-            try:
-                from pylcss.cae.design_studio.topology_optimization.geometry.cad_reconstruction import (
-                    reconstruct_topopt_cad,
-                )
-                structure_options = result.get("structure_options")
-                member_plan = result.get("member_plan")
-                cad_shape = reconstruct_topopt_cad(
-                    result,
-                    structure_options=structure_options,
-                    member_plan=member_plan,
-                )
-                result["cad_shape"] = cad_shape
-                result["shape"] = cad_shape
-            except Exception as exc:
-                logging.getLogger(__name__).exception("CAD reconstruction failed during STEP export")
-                QtWidgets.QApplication.restoreOverrideCursor()
-                QtWidgets.QMessageBox.critical(
-                    self,
-                    "CAD Reconstruction Failed",
-                    f"AMRTO CAD reconstruction failed: {exc}",
-                )
-                return
-            finally:
-                QtWidgets.QApplication.restoreOverrideCursor()
+        from pylcss.cae.design_studio.topology_optimization.geometry.cad_config import cached_cad_shape
+        settings = self._topopt_cad_settings(node, result)
+        cad_shape = cached_cad_shape(result, settings["strategy"])
 
         node.set_property("cad_export_filename", export_path)
         worker = TopOptStepExportWorker(
             result,
             export_path,
+            density_cutoff=settings["cutoff"],
+            passive_regions=settings["passive_regions"],
+            reconstruction_strategy=settings["strategy"],
             cached_shape=cad_shape,
             parent=self,
         )
@@ -2128,6 +2093,14 @@ class TopologyInspectorMixin:
 
         def _finish(out_path):
             self._topopt_step_export_worker = None
+            # Only attach to the result this export used: a newer solve must
+            # never receive a body prepared from an earlier density field.
+            if worker.reconstruction_report is not None and getattr(node, "_last_result", None) is result:
+                result["cad_shape"] = worker.cached_shape
+                result["shape"] = worker.cached_shape
+                result["cad_reconstruction"] = worker.reconstruction_report
+                result["cad_preview_mesh"] = worker.preview_mesh
+                node._last_cad_reconstruction_report = worker.reconstruction_report
             if hasattr(self.window(), "statusBar") and self.window().statusBar():
                 self.window().statusBar().showMessage(f"STEP exported: {out_path}")
 
@@ -2154,14 +2127,16 @@ class TopologyInspectorMixin:
                 self.window().statusBar().showMessage("A mesh export is already running.")
             return
 
+        from pylcss.cae.design_studio.topology_optimization.geometry.cad_config import cached_cad_shape
+        settings = self._topopt_cad_settings(node, result)
         structure_options = result.get("structure_options")
-        cad_shape = result.get("cad_shape") or result.get("shape")
+        cad_shape = cached_cad_shape(result, settings["strategy"])
         recovered = result.get("recovered_shape")
 
-        if cad_shape is None and not isinstance(recovered, dict):
-            recovered = self._ensure_recovered_surface(node, result)
-
-        if cad_shape is None and not isinstance(recovered, dict):
+        # Recovery is expensive too; let the isolated export job do it. A
+        # filename change or Export click must never rebuild the surface here.
+        if (cad_shape is None and not isinstance(recovered, dict)
+                and result.get("recovery_density") is None and result.get("density") is None):
             QtWidgets.QMessageBox.warning(
                 self,
                 "No Geometry",
@@ -2184,6 +2159,8 @@ class TopologyInspectorMixin:
 
         def _finish(details):
             self._topopt_mesh_export_worker = None
+            if isinstance(details.get("recovered_shape"), dict):
+                result["recovered_shape"] = details["recovered_shape"]
             triangle_count = int(details.get("triangles", 0))
             source = str(details.get("source") or "")
             suffix = f" from {source}" if source else ""

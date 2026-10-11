@@ -5,7 +5,7 @@
 param(
     [string]$PythonVersion = "3.12.10",
     [string]$PythonArchiveSha256 = "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3",
-    [string]$PipZipAppSha256 = "6ddc3444b803a48d83ccf1c4ad846717b42c8ffc9d74713a53ae829a97201365",
+    [string]$PipZipAppSha256 = "91D5FD9F6F25549FD839C60536C6F1B945316CE3588D34A605635B6071C91526",
     [string]$InnoCompiler = "",
     [string]$OutputBaseFilename = "PyLCSS-2.2.0.2-Setup-x64",
     [string]$SigningCertificateThumbprint = $env:PYLCSS_SIGNING_CERT_SHA1,
@@ -220,8 +220,6 @@ foreach ($fileName in @(
     "LICENSE",
     "NOTICE",
     "PRIVACY.md",
-    "SECURITY.md",
-    "CONTRIBUTING.md",
     "README.md",
     "pyproject.toml",
     "requirements.txt",
@@ -243,12 +241,6 @@ foreach ($directoryName in @("pylcss", "data")) {
     if (Test-Path -LiteralPath $source -PathType Container) {
         Copy-Item -LiteralPath $source -Destination $appStage -Recurse
     }
-}
-$amrtoSource = Join-Path $repoRoot "external_solvers\amrto"
-if (Test-Path -LiteralPath $amrtoSource -PathType Container) {
-    $amrtoStage = Join-Path $appStage "external_solvers\amrto"
-    New-Item -ItemType Directory -Path (Split-Path -Parent $amrtoStage) -Force | Out-Null
-    Copy-Item -LiteralPath $amrtoSource -Destination $amrtoStage -Recurse
 }
 $scriptStage = Join-Path $appStage "scripts"
 New-Item -ItemType Directory -Path $scriptStage -Force | Out-Null

@@ -9,27 +9,27 @@
     "reject_connection_types": "{}"
   },
   "nodes": {
-    "0x16262031460": {
+    "0x16de93a24b0": {
       "type_": "com.cad.code_part.CadQueryCodeNode",
       "icon": null,
       "name": "Continuous Reinforced Press Frame",
       "color": [
-        13,
-        18,
-        23,
+        245,
+        247,
+        250,
         255
       ],
       "border_color": [
-        74,
-        84,
         85,
+        115,
+        150,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        50,
+        65,
+        85,
+        255
       ],
       "disabled": false,
       "selected": false,
@@ -48,6 +48,7 @@
         "tags": "engineering-challenge, structural-fea, calculix, press-frame, continuous-solid",
         "notes": "This global model intentionally removes numerical assembly ties; detailed weld profiles remain local-submodel work.",
         "schema_version": 1,
+        "param_count": 6,
         "code": "if min(L, D, BED_H, CROWN_H, COLUMN_W, WALL) <= 0:\n    raise ValueError('All primary frame dimensions must be positive.')\nif 2.0 * WALL >= min(COLUMN_W, column_depth):\n    raise ValueError('Column wall thickness closes the hollow section.')\n\nbed = cq.Workplane('XY').box(L, D, BED_H).translate((0.0, 0.0, BED_H / 2.0))\ncrown = cq.Workplane('XY').box(L, D, CROWN_H).translate((0.0, 0.0, crown_z + CROWN_H / 2.0))\nframe = bed.union(crown)\n\nfor x in (-column_x, column_x):\n    for y in (-column_y, column_y):\n        column_height = column_z1 - column_z0\n        outer = cq.Workplane('XY').box(COLUMN_W, column_depth, column_height).translate((x, y, (column_z0 + column_z1) / 2.0))\n        inner = cq.Workplane('XY').box(COLUMN_W - 2.0 * WALL, column_depth - 2.0 * WALL, column_height + 4.0).translate((x, y, (column_z0 + column_z1) / 2.0))\n        tube = outer.cut(inner)\n        base_plate = cq.Workplane('XY').box(end_plate, end_plate, plate_t).translate((x, y, BED_H + plate_t / 2.0))\n        lower_haunch = cq.Workplane('XY').transformed(offset=(x, y, BED_H + plate_t)).rect(end_plate, end_plate).workplane(offset=haunch_h).rect(COLUMN_W, column_depth).loft(combine=True)\n        upper_haunch = cq.Workplane('XY').transformed(offset=(x, y, crown_z - plate_t - haunch_h)).rect(COLUMN_W, column_depth).workplane(offset=haunch_h).rect(end_plate, end_plate).loft(combine=True)\n        cap_plate = cq.Workplane('XY').box(end_plate, end_plate, plate_t).translate((x, y, crown_z - plate_t / 2.0))\n        frame = frame.union(tube).union(base_plate).union(lower_haunch).union(upper_haunch).union(cap_plate)\n\nfor y in (-column_y, column_y):\n    brace = cq.Workplane('XY').box(brace_length, column_depth, brace_height).translate((0.0, y, brace_z))\n    frame = frame.union(brace)\n\nfor x in (-pad_offset, pad_offset):\n    pad = cq.Workplane('XY').box(pad_length, pad_width, pad_height).translate((x, 0.0, crown_z + CROWN_H + pad_height / 2.0))\n    frame = frame.union(pad)\n\nresult = frame.clean()\n",
         "parameters": "column_depth=400\ncolumn_x=1300\ncolumn_y=700\ncolumn_z0=600\ncolumn_z1=3300\ncrown_z=3500\nend_plate=620\nplate_t=80\nhaunch_h=170\nbrace_length=2220\nbrace_height=300\nbrace_z=2000\npad_offset=450\npad_length=700\npad_width=800\npad_height=160",
         "param_1_name": "L",
@@ -64,27 +65,27 @@
         "param_6_value": 60.0
       }
     },
-    "0x16262103f50": {
+    "0x16de93bae70": {
       "type_": "com.cad.analysis.mass_properties.MassPropertiesNode",
       "icon": null,
       "name": "Frame Mass and Center of Gravity",
       "color": [
-        13,
-        18,
-        23,
+        244,
+        248,
+        245,
         255
       ],
       "border_color": [
-        74,
-        84,
-        85,
+        92,
+        133,
+        105,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        52,
+        72,
+        60,
+        255
       ],
       "disabled": false,
       "selected": false,
@@ -106,27 +107,27 @@
         "density": 7.85e-09
       }
     },
-    "0x1626210a270": {
+    "0x16d1e35af90": {
       "type_": "com.cad.select_face.SelectFaceNode",
       "icon": null,
       "name": "Foundation Support Face",
       "color": [
-        13,
-        18,
-        23,
+        244,
+        247,
+        250,
         255
       ],
       "border_color": [
-        74,
-        84,
-        85,
+        91,
+        127,
+        163,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        52,
+        64,
+        84,
+        255
       ],
       "disabled": false,
       "selected": false,
@@ -162,27 +163,27 @@
         "tag": "Bed underside"
       }
     },
-    "0x1626210aba0": {
+    "0x16d1e355ca0": {
       "type_": "com.cad.select_face.SelectFaceNode",
       "icon": null,
       "name": "Left Crown Pad Load Face",
       "color": [
-        13,
-        18,
-        23,
+        244,
+        247,
+        250,
         255
       ],
       "border_color": [
-        74,
-        84,
-        85,
+        91,
+        127,
+        163,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        52,
+        64,
+        84,
+        255
       ],
       "disabled": false,
       "selected": false,
@@ -218,27 +219,27 @@
         "tag": "Left pad top"
       }
     },
-    "0x1626210af90": {
+    "0x16d1e359df0": {
       "type_": "com.cad.select_face.SelectFaceNode",
       "icon": null,
       "name": "Right Crown Pad Load Face",
       "color": [
-        13,
-        18,
-        23,
+        244,
+        247,
+        250,
         255
       ],
       "border_color": [
-        74,
-        84,
-        85,
+        91,
+        127,
+        163,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        52,
+        64,
+        84,
+        255
       ],
       "disabled": false,
       "selected": false,
@@ -274,27 +275,27 @@
         "tag": "Right pad top"
       }
     },
-    "0x1626210b3e0": {
+    "0x16d1e358bc0": {
       "type_": "com.cad.sim.mesh.MeshNode",
       "icon": null,
       "name": "Conformal Frame Tet10 Mesh",
       "color": [
-        13,
-        18,
-        23,
+        244,
+        246,
+        252,
         255
       ],
       "border_color": [
-        74,
-        84,
-        85,
+        75,
+        110,
+        175,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        45,
+        60,
+        90,
+        255
       ],
       "disabled": false,
       "selected": false,
@@ -322,27 +323,27 @@
         "shell_nip": 5
       }
     },
-    "0x16262101c10": {
+    "0x16d1e35bc50": {
       "type_": "com.cad.sim.material.MaterialNode",
       "icon": null,
       "name": "S460 Structural Steel",
       "color": [
-        13,
-        18,
-        23,
+        244,
+        246,
+        252,
         255
       ],
       "border_color": [
-        74,
-        84,
-        85,
+        75,
+        110,
+        175,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        45,
+        60,
+        90,
+        255
       ],
       "disabled": false,
       "selected": false,
@@ -379,27 +380,27 @@
         "validated_rate_max_per_s": 0.0
       }
     },
-    "0x162621101a0": {
+    "0x16d2bf66cc0": {
       "type_": "com.cad.sim.constraint.ConstraintNode",
       "icon": null,
       "name": "Fixed Foundation Plane",
       "color": [
-        13,
-        18,
-        23,
+        253,
+        247,
+        245,
         255
       ],
       "border_color": [
-        74,
-        84,
-        85,
+        195,
+        95,
+        80,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        90,
+        48,
+        42,
+        255
       ],
       "disabled": false,
       "selected": false,
@@ -428,33 +429,33 @@
         "condition": ""
       }
     },
-    "0x162620e5100": {
+    "0x16d1e35a9c0": {
       "type_": "com.cad.sim.load.LoadNode",
       "icon": null,
       "name": "Complete Frame Self-Weight",
       "color": [
-        13,
-        18,
-        23,
+        253,
+        247,
+        245,
         255
       ],
       "border_color": [
-        74,
-        84,
-        85,
+        195,
+        95,
+        80,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        90,
+        48,
+        42,
+        255
       ],
       "disabled": false,
       "selected": false,
       "visible": true,
       "width": 210.203125,
-      "height": 60,
+      "height": 76.2,
       "pos": [
         -250.0,
         -500.0
@@ -472,40 +473,44 @@
         "force_x": 0.0,
         "force_y": 0.0,
         "force_z": 0.0,
+        "pressure": 1.0,
+        "direction": "Inward",
         "moment_x": 0.0,
         "moment_y": 0.0,
         "moment_z": 0.0,
         "gravity_accel": 9810.0,
-        "gravity_direction": "-Z"
+        "gravity_direction": "-Z",
+        "case_weight": 1.0,
+        "case_name": ""
       }
     },
-    "0x16262110680": {
+    "0x16d1e3593d0": {
       "type_": "com.cad.sim.load.LoadNode",
       "icon": null,
       "name": "LC1 Left Pad 6.0 MN Down",
       "color": [
-        13,
-        18,
-        23,
+        253,
+        247,
+        245,
         255
       ],
       "border_color": [
-        74,
-        84,
-        85,
+        195,
+        95,
+        80,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        90,
+        48,
+        42,
+        255
       ],
       "disabled": false,
       "selected": false,
       "visible": true,
       "width": 197.546875,
-      "height": 145.5,
+      "height": 168.6,
       "pos": [
         -250.0,
         -220.0
@@ -523,40 +528,44 @@
         "force_x": 0.0,
         "force_y": 0.0,
         "force_z": -6000000.0,
+        "pressure": 1.0,
+        "direction": "Inward",
         "moment_x": 0.0,
         "moment_y": 0.0,
         "moment_z": 0.0,
         "gravity_accel": 9810.0,
-        "gravity_direction": "-Y"
+        "gravity_direction": "-Y",
+        "case_weight": 1.0,
+        "case_name": ""
       }
     },
-    "0x16262111f40": {
+    "0x16d1e3aca10": {
       "type_": "com.cad.sim.load.LoadNode",
       "icon": null,
       "name": "LC1 Right Pad 6.0 MN Down",
       "color": [
-        13,
-        18,
-        23,
+        253,
+        247,
+        245,
         255
       ],
       "border_color": [
-        74,
-        84,
-        85,
+        195,
+        95,
+        80,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        90,
+        48,
+        42,
+        255
       ],
       "disabled": false,
       "selected": false,
       "visible": true,
       "width": 206.46875,
-      "height": 145.5,
+      "height": 168.6,
       "pos": [
         -250.0,
         -20.0
@@ -574,40 +583,44 @@
         "force_x": 0.0,
         "force_y": 0.0,
         "force_z": -6000000.0,
+        "pressure": 1.0,
+        "direction": "Inward",
         "moment_x": 0.0,
         "moment_y": 0.0,
         "moment_z": 0.0,
         "gravity_accel": 9810.0,
-        "gravity_direction": "-Y"
+        "gravity_direction": "-Y",
+        "case_weight": 1.0,
+        "case_name": ""
       }
     },
-    "0x16262112660": {
+    "0x16d2bf64110": {
       "type_": "com.cad.sim.load.LoadNode",
       "icon": null,
       "name": "LC2 Left Pad Eccentric Load",
       "color": [
-        13,
-        18,
-        23,
+        253,
+        247,
+        245,
         255
       ],
       "border_color": [
-        74,
-        84,
-        85,
+        195,
+        95,
+        80,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        90,
+        48,
+        42,
+        255
       ],
       "disabled": false,
       "selected": false,
       "visible": true,
       "width": 201.0625,
-      "height": 145.5,
+      "height": 168.6,
       "pos": [
         -250.0,
         260.0
@@ -625,40 +638,44 @@
         "force_x": 420000.0,
         "force_y": 0.0,
         "force_z": -8400000.0,
+        "pressure": 1.0,
+        "direction": "Inward",
         "moment_x": 0.0,
         "moment_y": 0.0,
         "moment_z": 0.0,
         "gravity_accel": 9810.0,
-        "gravity_direction": "-Y"
+        "gravity_direction": "-Y",
+        "case_weight": 1.0,
+        "case_name": ""
       }
     },
-    "0x162621132f0": {
+    "0x16d1e7d5940": {
       "type_": "com.cad.sim.load.LoadNode",
       "icon": null,
       "name": "LC2 Right Pad Eccentric Load",
       "color": [
-        13,
-        18,
-        23,
+        253,
+        247,
+        245,
         255
       ],
       "border_color": [
-        74,
-        84,
-        85,
+        195,
+        95,
+        80,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        90,
+        48,
+        42,
+        255
       ],
       "disabled": false,
       "selected": false,
       "visible": true,
       "width": 209.984375,
-      "height": 145.5,
+      "height": 168.6,
       "pos": [
         -250.0,
         460.0
@@ -676,40 +693,44 @@
         "force_x": 180000.0,
         "force_y": 0.0,
         "force_z": -3600000.0,
+        "pressure": 1.0,
+        "direction": "Inward",
         "moment_x": 0.0,
         "moment_y": 0.0,
         "moment_z": 0.0,
         "gravity_accel": 9810.0,
-        "gravity_direction": "-Y"
+        "gravity_direction": "-Y",
+        "case_weight": 1.0,
+        "case_name": ""
       }
     },
-    "0x16262113d70": {
+    "0x16d1e3adee0": {
       "type_": "com.cad.sim.load.LoadNode",
       "icon": null,
       "name": "LC3 Left Pad Emergency Jam",
       "color": [
-        13,
-        18,
-        23,
+        253,
+        247,
+        245,
         255
       ],
       "border_color": [
-        74,
-        84,
-        85,
+        195,
+        95,
+        80,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        90,
+        48,
+        42,
+        255
       ],
       "disabled": false,
       "selected": false,
       "visible": true,
       "width": 207.890625,
-      "height": 145.5,
+      "height": 168.6,
       "pos": [
         -250.0,
         740.0
@@ -727,40 +748,44 @@
         "force_x": -1080000.0,
         "force_y": 360000.0,
         "force_z": -16200000.0,
+        "pressure": 1.0,
+        "direction": "Inward",
         "moment_x": 0.0,
         "moment_y": 0.0,
         "moment_z": 0.0,
         "gravity_accel": 9810.0,
-        "gravity_direction": "-Y"
+        "gravity_direction": "-Y",
+        "case_weight": 1.0,
+        "case_name": ""
       }
     },
-    "0x16262103d10": {
+    "0x16d1e7d6900": {
       "type_": "com.cad.sim.load.LoadNode",
       "icon": null,
       "name": "LC3 Right Pad Emergency Jam",
       "color": [
-        13,
-        18,
-        23,
+        253,
+        247,
+        245,
         255
       ],
       "border_color": [
-        74,
-        84,
-        85,
+        195,
+        95,
+        80,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        90,
+        48,
+        42,
+        255
       ],
       "disabled": false,
       "selected": false,
       "visible": true,
       "width": 216.8125,
-      "height": 145.5,
+      "height": 168.6,
       "pos": [
         -250.0,
         940.0
@@ -778,37 +803,41 @@
         "force_x": -120000.0,
         "force_y": 40000.0,
         "force_z": -1800000.0,
+        "pressure": 1.0,
+        "direction": "Inward",
         "moment_x": 0.0,
         "moment_y": 0.0,
         "moment_z": 0.0,
         "gravity_accel": 9810.0,
-        "gravity_direction": "-Y"
+        "gravity_direction": "-Y",
+        "case_weight": 1.0,
+        "case_name": ""
       }
     },
-    "0x1623fee1010": {
+    "0x16d1e35ba40": {
       "type_": "com.cad.sim.solver.SolverNode",
       "icon": null,
       "name": "LC1 Rated Centered Solve",
       "color": [
-        13,
-        18,
-        23,
+        244,
+        246,
+        252,
         255
       ],
       "border_color": [
-        74,
-        84,
-        85,
+        75,
+        110,
+        175,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        45,
+        60,
+        90,
+        255
       ],
       "disabled": false,
-      "selected": false,
+      "selected": true,
       "visible": true,
       "width": 192.734375,
       "height": 145.5,
@@ -832,32 +861,30 @@
         "deformation_scale": "Auto",
         "analysis_type": "Linear",
         "assembly_connection": "Automatic Bonded",
-        "connection_tolerance_mm": 0.25,
-        "solver_backend": "CalculiX",
-        "run_external_solver": true
+        "connection_tolerance_mm": 0.25
       }
     },
-    "0x162621017f0": {
+    "0x16de92868d0": {
       "type_": "com.cad.sim.solver.SolverNode",
       "icon": null,
       "name": "LC2 Eccentric Production Solve",
       "color": [
-        13,
-        18,
-        23,
+        244,
+        246,
+        252,
         255
       ],
       "border_color": [
-        74,
-        84,
-        85,
+        75,
+        110,
+        175,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        45,
+        60,
+        90,
+        255
       ],
       "disabled": false,
       "selected": false,
@@ -884,35 +911,33 @@
         "deformation_scale": "Auto",
         "analysis_type": "Linear",
         "assembly_connection": "Automatic Bonded",
-        "connection_tolerance_mm": 0.25,
-        "solver_backend": "CalculiX",
-        "run_external_solver": true
+        "connection_tolerance_mm": 0.25
       }
     },
-    "0x1623fee17f0": {
+    "0x16d2bf67530": {
       "type_": "com.cad.sim.solver.SolverNode",
       "icon": null,
       "name": "LC3 Emergency Die-Jam Solve",
       "color": [
-        13,
-        18,
-        23,
+        244,
+        246,
+        252,
         255
       ],
       "border_color": [
-        74,
-        84,
-        85,
+        75,
+        110,
+        175,
         255
       ],
       "text_color": [
-        255,
-        255,
-        255,
-        180
+        45,
+        60,
+        90,
+        255
       ],
       "disabled": false,
-      "selected": true,
+      "selected": false,
       "visible": true,
       "width": 216.8125,
       "height": 145.5,
@@ -936,458 +961,399 @@
         "deformation_scale": "Auto",
         "analysis_type": "Linear",
         "assembly_connection": "Automatic Bonded",
-        "connection_tolerance_mm": 0.25,
-        "solver_backend": "CalculiX",
-        "run_external_solver": true
+        "connection_tolerance_mm": 0.25
       }
     }
   },
   "connections": [
     {
       "out": [
-        "0x16262031460",
+        "0x16de93a24b0",
         "shape"
       ],
       "in": [
-        "0x16262103f50",
+        "0x16de93bae70",
         "shape"
       ]
     },
     {
       "out": [
-        "0x16262031460",
+        "0x16de93a24b0",
         "shape"
       ],
       "in": [
-        "0x1626210a270",
+        "0x16d1e35af90",
         "shape"
       ]
     },
     {
       "out": [
-        "0x16262031460",
+        "0x16de93a24b0",
         "shape"
       ],
       "in": [
-        "0x1626210aba0",
+        "0x16d1e355ca0",
         "shape"
       ]
     },
     {
       "out": [
-        "0x16262031460",
+        "0x16de93a24b0",
         "shape"
       ],
       "in": [
-        "0x1626210af90",
+        "0x16d1e359df0",
         "shape"
       ]
     },
     {
       "out": [
-        "0x16262031460",
+        "0x16de93a24b0",
         "shape"
       ],
       "in": [
-        "0x1626210b3e0",
+        "0x16d1e358bc0",
         "shape"
       ]
     },
     {
       "out": [
-        "0x1626210a270",
+        "0x16d1e35af90",
         "selection"
       ],
       "in": [
-        "0x162621101a0",
+        "0x16d2bf66cc0",
         "target_face"
       ]
     },
     {
       "out": [
-        "0x1626210aba0",
+        "0x16d1e355ca0",
         "selection"
       ],
       "in": [
-        "0x16262110680",
+        "0x16d1e3593d0",
         "target_face"
       ]
     },
     {
       "out": [
-        "0x1626210aba0",
+        "0x16d1e355ca0",
         "selection"
       ],
       "in": [
-        "0x16262112660",
+        "0x16d2bf64110",
         "target_face"
       ]
     },
     {
       "out": [
-        "0x1626210aba0",
+        "0x16d1e355ca0",
         "selection"
       ],
       "in": [
-        "0x16262113d70",
+        "0x16d1e3adee0",
         "target_face"
       ]
     },
     {
       "out": [
-        "0x1626210af90",
+        "0x16d1e359df0",
         "selection"
       ],
       "in": [
-        "0x16262111f40",
+        "0x16d1e3aca10",
         "target_face"
       ]
     },
     {
       "out": [
-        "0x1626210af90",
+        "0x16d1e359df0",
         "selection"
       ],
       "in": [
-        "0x162621132f0",
+        "0x16d1e7d5940",
         "target_face"
       ]
     },
     {
       "out": [
-        "0x1626210af90",
+        "0x16d1e359df0",
         "selection"
       ],
       "in": [
-        "0x16262103d10",
+        "0x16d1e7d6900",
         "target_face"
       ]
     },
     {
       "out": [
-        "0x1626210b3e0",
+        "0x16d1e358bc0",
         "mesh"
       ],
       "in": [
-        "0x162621101a0",
+        "0x16d2bf66cc0",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x1626210b3e0",
+        "0x16d1e358bc0",
         "mesh"
       ],
       "in": [
-        "0x162620e5100",
+        "0x16d1e35a9c0",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x1626210b3e0",
+        "0x16d1e358bc0",
         "mesh"
       ],
       "in": [
-        "0x16262110680",
+        "0x16d1e3593d0",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x1626210b3e0",
+        "0x16d1e358bc0",
         "mesh"
       ],
       "in": [
-        "0x16262111f40",
+        "0x16d1e3aca10",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x1626210b3e0",
+        "0x16d1e358bc0",
         "mesh"
       ],
       "in": [
-        "0x16262112660",
+        "0x16d2bf64110",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x1626210b3e0",
+        "0x16d1e358bc0",
         "mesh"
       ],
       "in": [
-        "0x162621132f0",
+        "0x16d1e7d5940",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x1626210b3e0",
+        "0x16d1e358bc0",
         "mesh"
       ],
       "in": [
-        "0x16262113d70",
+        "0x16d1e3adee0",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x1626210b3e0",
+        "0x16d1e358bc0",
         "mesh"
       ],
       "in": [
-        "0x16262103d10",
+        "0x16d1e7d6900",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x1626210b3e0",
+        "0x16d1e358bc0",
         "mesh"
       ],
       "in": [
-        "0x1623fee1010",
+        "0x16d1e35ba40",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x1626210b3e0",
+        "0x16d1e358bc0",
         "mesh"
       ],
       "in": [
-        "0x162621017f0",
+        "0x16de92868d0",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x1626210b3e0",
+        "0x16d1e358bc0",
         "mesh"
       ],
       "in": [
-        "0x1623fee17f0",
+        "0x16d2bf67530",
         "mesh"
       ]
     },
     {
       "out": [
-        "0x16262101c10",
+        "0x16d1e35bc50",
         "material"
       ],
       "in": [
-        "0x1623fee1010",
-        "material"
-      ]
-    },
-    {
-      "out": [
-        "0x16262101c10",
-        "material"
-      ],
-      "in": [
-        "0x162621017f0",
+        "0x16d1e35ba40",
         "material"
       ]
     },
     {
       "out": [
-        "0x16262101c10",
+        "0x16d1e35bc50",
         "material"
       ],
       "in": [
-        "0x1623fee17f0",
+        "0x16de92868d0",
         "material"
       ]
     },
     {
       "out": [
-        "0x162621101a0",
-        "constraints"
+        "0x16d1e35bc50",
+        "material"
       ],
       "in": [
-        "0x1623fee1010",
-        "constraints"
+        "0x16d2bf67530",
+        "material"
       ]
     },
     {
       "out": [
-        "0x162621101a0",
+        "0x16d2bf66cc0",
         "constraints"
       ],
       "in": [
-        "0x162621017f0",
-        "constraints"
-      ]
-    },
-    {
-      "out": [
-        "0x162621101a0",
-        "constraints"
-      ],
-      "in": [
-        "0x1623fee17f0",
+        "0x16d1e35ba40",
         "constraints"
       ]
     },
     {
       "out": [
-        "0x162620e5100",
+        "0x16d2bf66cc0",
+        "constraints"
+      ],
+      "in": [
+        "0x16de92868d0",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "0x16d2bf66cc0",
+        "constraints"
+      ],
+      "in": [
+        "0x16d2bf67530",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "0x16d1e35a9c0",
         "loads"
       ],
       "in": [
-        "0x1623fee1010",
+        "0x16d1e35ba40",
         "loads"
       ]
     },
     {
       "out": [
-        "0x162620e5100",
+        "0x16d1e35a9c0",
         "loads"
       ],
       "in": [
-        "0x162621017f0",
+        "0x16de92868d0",
         "loads"
       ]
     },
     {
       "out": [
-        "0x162620e5100",
+        "0x16d1e35a9c0",
         "loads"
       ],
       "in": [
-        "0x1623fee17f0",
+        "0x16d2bf67530",
         "loads"
       ]
     },
     {
       "out": [
-        "0x16262110680",
+        "0x16d1e3593d0",
         "loads"
       ],
       "in": [
-        "0x1623fee1010",
+        "0x16d1e35ba40",
         "loads"
       ]
     },
     {
       "out": [
-        "0x16262111f40",
+        "0x16d1e3aca10",
         "loads"
       ],
       "in": [
-        "0x1623fee1010",
+        "0x16d1e35ba40",
         "loads"
       ]
     },
     {
       "out": [
-        "0x16262112660",
+        "0x16d2bf64110",
         "loads"
       ],
       "in": [
-        "0x162621017f0",
+        "0x16de92868d0",
         "loads"
       ]
     },
     {
       "out": [
-        "0x162621132f0",
+        "0x16d1e7d5940",
         "loads"
       ],
       "in": [
-        "0x162621017f0",
+        "0x16de92868d0",
         "loads"
       ]
     },
     {
       "out": [
-        "0x16262113d70",
+        "0x16d1e3adee0",
         "loads"
       ],
       "in": [
-        "0x1623fee17f0",
+        "0x16d2bf67530",
         "loads"
       ]
     },
     {
       "out": [
-        "0x16262103d10",
+        "0x16d1e7d6900",
         "loads"
       ],
       "in": [
-        "0x1623fee17f0",
+        "0x16d2bf67530",
         "loads"
       ]
     }
   ],
   "_copyright": "Copyright (c) 2026 Kutay Demir.",
   "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
-  "_title": "16 MN Heavy Industrial Forging Press Frame",
-  "_purpose": "Structural verification of a 16 MN heavy forging press frame with hollow rectangular columns, tapered haunches, and reinforced crown beams under centered and eccentric forging loads.",
-  "_fidelity": "Linear elastic static FEA using CalculiX, solid continuum elements with fine haunch discretization, fixed foundation multipoint constraints.",
-  "_visual_target": "von Mises stress contour showing stress concentrations <= 280 MPa at column-haunch transitions, bed center deflection <= 0.85 mm, reaction forces balanced across foundation.",
-  "_engineering_decision": "Determine whether the continuous welded frame satisfies deflection limits (<= 0.85 mm at bed center) and yield allowable (von Mises <= 280 MPa) under 16 MN centered forging and 11.2:4.8 MN eccentric die-jam loading.",
-  "_baseline": "Unsolved structural example; run each solver branch to evaluate the requirements.",
-  "_design_variables": [
-    "L (Bed length): 3000 mm",
-    "D (Bed depth): 1800 mm",
-    "BED_H: 400 mm",
-    "CROWN_H: 500 mm",
-    "COLUMN_W: 400 mm",
-    "WALL: 60 mm"
-  ],
-  "_load_cases": [
-    "Centered 16.0 MN Forging",
-    "Left Eccentric 11.2 MN Load Case",
-    "Right Eccentric 4.8 MN Load Case",
-    "Transverse Jam 1.5 MN Load Case"
-  ],
-  "_requirements": [
-    {
-      "requirement": "Bed Center Deflection",
-      "target": "<= 0.85 mm",
-      "verification": "CalculiX nodal displacement UZ",
-      "baseline_status": "Not evaluated; run the stated verification."
-    },
-    {
-      "requirement": "Peak von Mises Stress",
-      "target": "<= 280 MPa",
-      "verification": "CalculiX elemental stress MISES",
-      "baseline_status": "Not evaluated; run the stated verification."
-    },
-    {
-      "requirement": "Column Haunch Stress",
-      "target": "<= 250 MPa",
-      "verification": "Haunch transition integration",
-      "baseline_status": "Not evaluated; run the stated verification."
-    },
-    {
-      "requirement": "Foundation Reaction Balance",
-      "target": ">= 0.85",
-      "verification": "Reaction force extraction",
-      "baseline_status": "Not evaluated; run the stated verification."
-    }
-  ],
-  "_deliverables": [
-    "Von Mises, principal and tensor stress fields",
-    "Displacement, reactions and available yield safety factors",
-    "Mesh quality and assembly component tables when available"
-  ],
-  "_workflow": [
-    "Generate parametric CadQuery frame geometry",
-    "Apply S355/S460 structural steel properties",
-    "Define bed base fixity and cylinder pad distributed loads",
-    "Run CalculiX static FEA solver",
-    "Inspect results in 3D viewer and Detailed Results Hub dialog",
-    "Open Results to inspect structural metrics, available contours, reactions and mesh quality."
-  ],
-  "_acceptance_criteria": [
-    "Maximum displacement <= 0.85 mm",
-    "von Mises stress within yield allowable",
-    "Zero solver convergence errors"
-  ]
+  "_result_store": {
+    "format": "HDF5",
+    "version": 1,
+    "file": "01_16mn_forging_press_frame.cad.results.h5",
+    "result_count": 2,
+    "saved_at": "2026-10-11T17:43:09.852227"
+  }
 }

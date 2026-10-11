@@ -46,7 +46,7 @@
       "custom": {
         "description": "Tapered 420 x 260 x 160 mm yoke with twin bearing bosses, pin bores, and a service tunnel.",
         "tags": "topology-optimization, evtol, gearbox-yoke, design-domain",
-        "notes": "One connected design body; four operating cases form the envelope.",
+        "notes": "One connected design body; the connected loads act simultaneously.",
         "schema_version": 1,
         "code": "body = (\n    cq.Workplane('YZ', origin=(0.0, 0.50 * H, 0.50 * W))\n    .ellipse(0.45 * H, 0.43 * W)\n    .workplane(offset=0.55 * L)\n    .ellipse(0.38 * H, 0.36 * W)\n    .workplane(offset=0.27 * L)\n    .ellipse(0.30 * H, 0.29 * W)\n    .loft(combine=True)\n)\nroot = (\n    cq.Workplane('XY')\n    .box(0.10 * L, 0.94 * H, 0.94 * W, centered=(False, False, False))\n    .translate((0.0, 0.03 * H, 0.03 * W))\n)\nupper = (\n    cq.Workplane('YZ', origin=(0.76 * L, 0.70 * H, 0.50 * W))\n    .ellipse(0.155 * H, 0.25 * W)\n    .extrude(0.24 * L)\n)\nlower = (\n    cq.Workplane('YZ', origin=(0.76 * L, 0.30 * H, 0.50 * W))\n    .ellipse(0.155 * H, 0.25 * W)\n    .extrude(0.24 * L)\n)\nresult = body.union(root).union(upper).union(lower)\ntunnel = (\n    cq.Workplane('YZ', origin=(0.13 * L, 0.50 * H, 0.50 * W))\n    .ellipse(0.16 * H, 0.22 * W)\n    .extrude(0.61 * L)\n)\nupper_bore = (\n    cq.Workplane('YZ', origin=(0.78 * L, 0.70 * H, 0.50 * W))\n    .ellipse(0.058 * H, 0.108 * W)\n    .extrude(0.22 * L)\n)\nlower_bore = (\n    cq.Workplane('YZ', origin=(0.78 * L, 0.30 * H, 0.50 * W))\n    .ellipse(0.058 * H, 0.108 * W)\n    .extrude(0.22 * L)\n)\nresult = result.cut(tunnel).cut(upper_bore).cut(lower_bore)\n",
         "parameters": "",
@@ -354,14 +354,12 @@
       "port_deletion_allowed": false,
       "subgraph_session": {},
       "custom": {
-        "description": "Guided Professional variable-density Schwarz Primitive Lattice optimization across four operating cases.",
+        "description": "Compliance minimization under the simultaneous connected loads.",
         "tags": "topology-optimization, guided, evtol, primitive, saved-result",
         "notes": "All connected loads act simultaneously. Run separate project copies for alternative operating cases. Preserved regions remain solid; obstacle regions remain void.",
         "workflow_mode": "Guided",
-        "design_goal": "Load-Case Envelope",
+        "design_goal": "Lightweight Stiffness",
         "minimum_member_size_mm": 0.0,
-        "exclusion_scope": "All Loads and Supports",
-        "exclusion_thickness_mode": "Program Controlled",
         "validate_after_optimize": false,
         "cad_export_filename": "topology_optimized.step",
         "volfrac": 0.45,
@@ -373,7 +371,7 @@
         "lattice_skin_thickness_mm": 0.0,
         "lattice_target_relative_density": 0.0,
         "lattice_porosity": "Conservative",
-        "adaptive_subcell_solid": true
+        "repair_lattice_connections": false
       }
     },
     "preserved_interfaces": {
@@ -413,7 +411,7 @@
       "custom": {
         "description": "Tapered 420 x 260 x 160 mm yoke with twin bearing bosses, pin bores, and a service tunnel.",
         "tags": "topology-optimization, evtol, gearbox-yoke, design-domain",
-        "notes": "One connected design body; four operating cases form the envelope.",
+        "notes": "One connected design body; the connected loads act simultaneously.",
         "schema_version": 1,
         "code": "body = (\n    cq.Workplane('YZ', origin=(0.0, 0.50 * H, 0.50 * W))\n    .ellipse(0.45 * H, 0.43 * W)\n    .workplane(offset=0.55 * L)\n    .ellipse(0.38 * H, 0.36 * W)\n    .workplane(offset=0.27 * L)\n    .ellipse(0.30 * H, 0.29 * W)\n    .loft(combine=True)\n)\nroot = (\n    cq.Workplane('XY')\n    .box(0.10 * L, 0.94 * H, 0.94 * W, centered=(False, False, False))\n    .translate((0.0, 0.03 * H, 0.03 * W))\n)\nupper = (\n    cq.Workplane('YZ', origin=(0.76 * L, 0.70 * H, 0.50 * W))\n    .ellipse(0.155 * H, 0.25 * W)\n    .extrude(0.24 * L)\n)\nlower = (\n    cq.Workplane('YZ', origin=(0.76 * L, 0.30 * H, 0.50 * W))\n    .ellipse(0.155 * H, 0.25 * W)\n    .extrude(0.24 * L)\n)\nresult = body.union(root).union(upper).union(lower)\ntunnel = (\n    cq.Workplane('YZ', origin=(0.13 * L, 0.50 * H, 0.50 * W))\n    .ellipse(0.16 * H, 0.22 * W)\n    .extrude(0.61 * L)\n)\nupper_bore = (\n    cq.Workplane('YZ', origin=(0.78 * L, 0.70 * H, 0.50 * W))\n    .ellipse(0.058 * H, 0.108 * W)\n    .extrude(0.22 * L)\n)\nlower_bore = (\n    cq.Workplane('YZ', origin=(0.78 * L, 0.30 * H, 0.50 * W))\n    .ellipse(0.058 * H, 0.108 * W)\n    .extrude(0.22 * L)\n)\nresult = result.cut(tunnel).cut(upper_bore).cut(lower_bore)\n\nresult = result.intersect(root.union(upper).union(lower))\n",
         "parameters": "",
@@ -468,7 +466,7 @@
       "custom": {
         "description": "Tapered 420 x 260 x 160 mm yoke with twin bearing bosses, pin bores, and a service tunnel.",
         "tags": "topology-optimization, evtol, gearbox-yoke, design-domain",
-        "notes": "One connected design body; four operating cases form the envelope.",
+        "notes": "One connected design body; the connected loads act simultaneously.",
         "schema_version": 1,
         "code": "body = (\n    cq.Workplane('YZ', origin=(0.0, 0.50 * H, 0.50 * W))\n    .ellipse(0.45 * H, 0.43 * W)\n    .workplane(offset=0.55 * L)\n    .ellipse(0.38 * H, 0.36 * W)\n    .workplane(offset=0.27 * L)\n    .ellipse(0.30 * H, 0.29 * W)\n    .loft(combine=True)\n)\nroot = (\n    cq.Workplane('XY')\n    .box(0.10 * L, 0.94 * H, 0.94 * W, centered=(False, False, False))\n    .translate((0.0, 0.03 * H, 0.03 * W))\n)\nupper = (\n    cq.Workplane('YZ', origin=(0.76 * L, 0.70 * H, 0.50 * W))\n    .ellipse(0.155 * H, 0.25 * W)\n    .extrude(0.24 * L)\n)\nlower = (\n    cq.Workplane('YZ', origin=(0.76 * L, 0.30 * H, 0.50 * W))\n    .ellipse(0.155 * H, 0.25 * W)\n    .extrude(0.24 * L)\n)\nresult = body.union(root).union(upper).union(lower)\ntunnel = (\n    cq.Workplane('YZ', origin=(0.13 * L, 0.50 * H, 0.50 * W))\n    .ellipse(0.16 * H, 0.22 * W)\n    .extrude(0.61 * L)\n)\nupper_bore = (\n    cq.Workplane('YZ', origin=(0.78 * L, 0.70 * H, 0.50 * W))\n    .ellipse(0.058 * H, 0.108 * W)\n    .extrude(0.22 * L)\n)\nlower_bore = (\n    cq.Workplane('YZ', origin=(0.78 * L, 0.30 * H, 0.50 * W))\n    .ellipse(0.058 * H, 0.108 * W)\n    .extrude(0.22 * L)\n)\nresult = result.cut(tunnel).cut(upper_bore).cut(lower_bore)\n\nresult = tunnel.union(upper_bore).union(lower_bore)\n",
         "parameters": "",
@@ -598,15 +596,16 @@
   "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
   "_title": "eVTOL Rotor Gearbox Yoke - Guided Schwarz Primitive Lattice",
   "_purpose": "Benchmark study evaluating Schwarz Primitive TPMS on the eVTOL rotor gearbox yoke geometry.",
-  "_fidelity": "Skeletal Schwarz P level-set formulation with adaptive solid attachment and powder-drain clearance.",
+  "_fidelity": "Linear elastic voxel compliance optimization with Schwarz Primitive Lattice, Guided cell/member sizing, and explicitly connected preserved and obstacle CAD bodies.",
   "_visual_target": "Connected cubic-symmetric open cells with solid preserved pin eyes and fuselage mounting flange.",
   "_engineering_decision": "Compare Schwarz Primitive lattice against Gyroid for manufacturing drainability and transverse shear stiffness.",
   "_baseline": "Unsolved primary simultaneous-load scenario. Targets are requirements, not measured results.",
   "_design_variables": [
-    "Cell size: 16 mm",
-    "Target relative density: 35%",
-    "Skin thickness: 1.5 mm",
-    "Adaptive sub-cell solid: True"
+    "Envelope volume fraction: 45%",
+    "Minimum member size: 0 mm (0 uses Guided sizing)",
+    "Lattice cell/member sizes: Guided",
+    "Skin thickness: 0 mm",
+    "Lattice relative density: Program Controlled (Conservative)"
   ],
   "_load_cases": [
     "2.5g Thrust Resultant"

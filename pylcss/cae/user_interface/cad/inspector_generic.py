@@ -352,8 +352,10 @@ class GenericInspectorMixin:
                 "CAD",
             ],
             "cad_reconstruction_method": [
-                "Auto (AMRTO)",
-                "AMRTO",
+                "Auto",
+                "Smooth spline",
+                "Analytic beam lattice",
+                "Fused beam lattice",
             ],
             "source_geometry": [
                 "Recovered Shape",

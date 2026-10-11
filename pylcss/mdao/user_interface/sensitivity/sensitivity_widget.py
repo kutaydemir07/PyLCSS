@@ -17,7 +17,7 @@ and an importance-ranked sensitivity data table.
 
 import numpy as np
 import html
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtWidgets
 import pyqtgraph as pg
 import logging
 from ...sensitivity import SensitivityAnalyzer
@@ -308,7 +308,8 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setBackground(COLORS["chart_bg"])
         self.plot_widget.setLabel("left", "Sensitivity index")
-        self.plot_widget.setLabel("bottom", "Design variables (ranked by ST)")
+        self.plot_widget.getAxis("left").enableAutoSIPrefix(False)
+        self.plot_widget.setLabel("bottom", "Design variables")
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
         self.plot_widget.getAxis("bottom").setTicks([[]])
         self._legend = self.plot_widget.addLegend(offset=(10, 10))
@@ -601,7 +602,7 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
 
     def _summary_html(self, results, name):
         """Clean summary line for an output."""
-        return f"Analysis complete for <b>{html.escape(str(name))}</b>."
+        return f"Completed · <b>{html.escape(str(name))}</b>"
 
     # ====================================================================
     # Refresh Outputs
@@ -791,7 +792,14 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         if res is None:
             return
         if isinstance(res, dict) and "error" in res:
-            self.lbl_status.setText(f"{name}: analysis failed — {res['error']}")
+            logger.error("Sensitivity analysis failed for %s: %s", name, res["error"])
+            self.lbl_status.setText(f"Failed · {html.escape(str(name))}")
+            self.current_results = None
+            self.results_table.setRowCount(0)
+            self.plot_widget.clear()
+            self._legend.clear()
+            self.heatmap_widget.clear()
+            self._update_heatmap_visibility()
             return
         self.current_results = res
         self._update_heatmap_visibility()
@@ -865,9 +873,9 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
                 )
             )
 
-        self._legend.addItem(first_bars, "First Order (S1: Main Effect)")
-        self._legend.addItem(total_bars, "Total Order (ST: Main + Couplings)")
-        self.plot_widget.setTitle("Sobol' Global Sensitivity Indices")
+        self._legend.addItem(first_bars, "First order (S1)")
+        self._legend.addItem(total_bars, "Total order (ST)")
+        self.plot_widget.setTitle("Sensitivity Indices")
 
         ax = self.plot_widget.getAxis("bottom")
         ax.setTicks([[(i, name) for i, name in enumerate(names)]])
@@ -901,9 +909,7 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         ticks = [(i + 0.5, v) for i, v in enumerate(variables)]
         ax_bottom.setTicks([ticks])
         ax_left.setTicks([ticks])
-        self.heatmap_widget.setTitle(
-            "Pairwise Second-Order Indices (S2 Couplings)"
-        )
+        self.heatmap_widget.setTitle("Pairwise Interactions (S2)")
 
     def update_table(self):
         """Show numeric Sobol indices sorted by total-order index (ST)."""

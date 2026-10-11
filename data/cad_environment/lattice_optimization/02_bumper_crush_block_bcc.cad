@@ -470,20 +470,18 @@
         "workflow_mode": "Guided",
         "design_goal": "Lightweight Stiffness",
         "minimum_member_size_mm": 16.0,
-        "exclusion_scope": "All Loads and Supports",
-        "exclusion_thickness_mode": "Program Controlled",
         "validate_after_optimize": false,
         "cad_export_filename": "bumper_crush_block_bcc.step",
         "volfrac": 0.35,
         "visualization": "Density",
         "structure_mode": "BCC Lattice",
-        "lattice_settings_mode": "Manual",
+        "lattice_settings_mode": "Guided",
         "lattice_cell_size_mm": 0.0,
         "lattice_member_thickness_mm": 0.0,
         "lattice_skin_thickness_mm": 0.0,
         "lattice_target_relative_density": 0.0,
         "lattice_porosity": "Conservative",
-        "adaptive_subcell_solid": true
+        "repair_lattice_connections": false
       }
     }
   },
@@ -597,16 +595,17 @@
   "_copyright": "Copyright (c) 2026 Kutay Demir.",
   "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
   "_title": "Automotive Bumper Crash Energy Absorber - BCC Lattice",
-  "_purpose": "LPBF additive manufacturing optimization of an AlSi10Mg bumper crush block filled with BCC lattice structure.",
-  "_fidelity": "BCC unit cell formulation with boundary-conformal strut snapping and adaptive thin-feature solid preservation.",
+  "_purpose": "Linear elastic structural screening of an AlSi10Mg bumper concept with BCC lattice. Energy absorption and progressive crushing require a separate nonlinear crash study.",
+  "_fidelity": "Linear elastic voxel compliance optimization with BCC Lattice, Guided cell/member sizing, and explicitly connected preserved and obstacle CAD bodies.",
   "_visual_target": "Clean BCC cellular network with solid mounting faceplates; zero disconnected corner struts; smooth energy dissipation.",
   "_engineering_decision": "Size body-centered cubic (BCC) lattice density to maximize energy absorption efficiency under frontal impact without premature cell shear fracture.",
   "_baseline": "Unsolved primary simultaneous-load scenario. Targets are requirements, not measured results.",
   "_design_variables": [
-    "Cell size: 14 mm",
-    "Target relative density: 28%",
-    "Skin thickness: 0.8 mm",
-    "Adaptive sub-cell solid: True"
+    "Envelope volume fraction: 35%",
+    "Minimum member size: 16 mm (0 uses Guided sizing)",
+    "Lattice cell/member sizes: Guided",
+    "Skin thickness: 0 mm",
+    "Lattice relative density: Program Controlled (Conservative)"
   ],
   "_load_cases": [
     "LC1 Frontal 60 kN"

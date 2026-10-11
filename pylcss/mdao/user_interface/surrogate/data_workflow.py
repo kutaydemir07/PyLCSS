@@ -88,8 +88,8 @@ class SurrogateDataMixin:
             self.btn_train.setEnabled(True)
             self.btn_adaptive.setEnabled(True)
             self.lbl_metrics.setText(
-                f"Data loaded successfully: {stats['valid_rows']} samples, "
-                f"{len(in_cols)} inputs, {len(out_cols)} outputs. Ready to train."
+                f"Samples: {stats['valid_rows']} · "
+                f"Inputs: {len(in_cols)} · Outputs: {len(out_cols)}"
             )
             self.update_data_table()
             if hasattr(self, "update_training_summary"):

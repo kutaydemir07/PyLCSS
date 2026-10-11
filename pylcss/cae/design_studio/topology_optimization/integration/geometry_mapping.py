@@ -222,7 +222,6 @@ def _fraction(value: float, lo: float, hi: float, *, invert: bool = False) -> fl
 def _fraction_box(
     bbox: tuple[float, float, float, float, float, float],
     bounds: tuple[np.ndarray, np.ndarray],
-    pad: float = 0.02,
 ) -> tuple[float, float, float, float, float, float]:
     mins, maxs = bounds
     vals = [
@@ -233,11 +232,6 @@ def _fraction_box(
         _fraction(bbox[4], mins[2], maxs[2]),
         _fraction(bbox[5], mins[2], maxs[2]),
     ]
-    for i in (0, 2, 4):
-        if abs(vals[i + 1] - vals[i]) < pad:
-            center = 0.5 * (vals[i] + vals[i + 1])
-            vals[i] = max(0.0, center - pad)
-            vals[i + 1] = min(1.0, center + pad)
     return tuple(vals)  # type: ignore[return-value]
 
 

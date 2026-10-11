@@ -503,6 +503,9 @@ class WorkbenchProjectMixin:
                 f"Property changed: {prop_name} = {new} ({getattr(node, 'name', '')})"
             )
 
+            if prop_name in {"cad_export_filename", "cad_export_format"}:
+                return
+
             # IMPORTANT: When a property changes, the modified node should be rendered
             # Store it as last_rendered_node so _on_execution_finished renders the right node
             self._last_rendered_node = node

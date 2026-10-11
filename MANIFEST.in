@@ -7,6 +7,6 @@ prune build
 prune .venv
 global-exclude __pycache__ *.py[cod] *.log
 include requirements*.txt requirements*.lock
-include LICENSE NOTICE PRIVACY.md SECURITY.md
+include LICENSE NOTICE PRIVACY.md
 include scripts/install_solvers.py
 include scripts/export_third_party_licenses.py

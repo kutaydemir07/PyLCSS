@@ -94,6 +94,7 @@ class LatticeOptVoxelNode(TopologyOptVoxelNode):
             "lattice_target_relative_density", 0.0, widget_type="float"
         )
         self.create_property("lattice_variable_density", True, widget_type="bool")
+        self.create_property("repair_lattice_connections", False, widget_type="checkbox")
         self.create_property("lattice_min_relative_density", 0.15, widget_type="float")
         self.create_property("lattice_max_relative_density", 0.60, widget_type="float")
         self.create_property(

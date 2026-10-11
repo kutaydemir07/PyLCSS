@@ -62,7 +62,6 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 Name: "solvers"; Description: "Download optional engineering solver backends (separately licensed)"; GroupDescription: "Optional third-party components:"; Flags: checkablealone unchecked; Components: cae
 Name: "solvers\calculix"; Description: "CalculiX structural FEA solver (GPL v2 or later; separate terms)"; Flags: unchecked; Components: cae
 Name: "solvers\radioss"; Description: "OpenRadioss crash and impact solver (AGPL v3 or later; separate terms)"; Flags: unchecked; Components: cae
-Name: "solvers\amrto"; Description: "AMRTO CAD reconstruction tools (Instant Meshes, GMCG; separate terms)"; Flags: unchecked; Components: cae
 Name: "freecad"; Description: "FreeCAD CAD backend (LGPL v2.1; large download; its own installer and UAC prompt)"; GroupDescription: "Optional third-party components:"; Flags: unchecked; Components: cae
 
 [Files]
@@ -87,7 +86,6 @@ Name: "{group}\PyLCSS CAE"; Filename: "{app}\PyLCSS.exe"; Parameters: "--workspa
 Name: "{group}\PyLCSS License"; Filename: "{app}\app\LICENSE.txt"
 Name: "{group}\Third-Party Notices"; Filename: "{app}\app\THIRD_PARTY_NOTICES.txt"
 Name: "{group}\Privacy Information"; Filename: "{app}\app\PRIVACY.md"
-Name: "{group}\Security Information"; Filename: "{app}\app\SECURITY.md"
 Name: "{autodesktop}\PyLCSS"; Filename: "{app}\PyLCSS.exe"; WorkingDir: "{app}\app"; Tasks: desktopicon
 
 [Run]
@@ -234,12 +232,6 @@ begin
       'Installing OpenRadioss...',
       False);
 
-  if WizardIsComponentSelected('cae') and WizardIsTaskSelected('solvers\amrto') then
-    RunAndWait(
-      PythonExe,
-      '"' + InstallerScript + '" --only amrto',
-      'Configuring AMRTO CAD reconstruction tools...',
-      False);
 
   if WizardIsComponentSelected('cae') and WizardIsTaskSelected('freecad') then
     RunAndWait(

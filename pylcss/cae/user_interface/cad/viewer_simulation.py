@@ -446,7 +446,7 @@ class SimulationRenderingMixin:
         self._render_topopt_joint_overlays(data)
         self._update_scalar_bar("", 0.0, 1.0, None)
         self.renderer.ResetCamera()
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
         return True
 
     def _render_density_field(self, data, density):
@@ -533,7 +533,7 @@ class SimulationRenderingMixin:
         self._render_topopt_joint_overlays(data)
         self._update_scalar_bar("Density", 0.0, 1.0, lut)
         self.renderer.ResetCamera()
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
         return True
 
     def _render_voxel_topopt(self, data):
@@ -617,7 +617,7 @@ class SimulationRenderingMixin:
         self._render_topopt_joint_overlays(data)
         self._update_scalar_bar("Density", 0.0, 1.0, lut)
         self.renderer.ResetCamera()
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
 
     def _clear_topopt_joint_overlays(self):
         """Remove multibody joint reference geometry from the previous result."""
@@ -703,7 +703,7 @@ class SimulationRenderingMixin:
             self._update_section_cut()
         self._render_topopt_joint_overlays(data)
         self.renderer.ResetCamera()
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
         return True
 
     def _render_topopt_joint_overlays(self, data):
@@ -861,7 +861,7 @@ class SimulationRenderingMixin:
                 if item is not None:
                     self.render_simulation(item, is_sub_render=True)
             self.renderer.ResetCamera()
-            self.vtkWidget.GetRenderWindow().Render()
+            self._request_render()
             return
 
         preserve_field_selector = bool(
@@ -928,19 +928,18 @@ class SimulationRenderingMixin:
                         if isinstance(reconstruction, dict)
                         else ""
                     )
-                    # AMRTO sews separate NURBS charts into one CAD body.
+                    # The constrained fitter sews shared B-spline patches into a CAD body.
                     # Chart boundaries are fitting seams, so use the same
                     # welded display normals as the legacy freeform route.
                     # render_shape retains sharp feature normals and the
                     # original OCC face mapping for picking.
                     smooth_reconstruction = (
                         reconstruction_method == "smooth freeform"
-                        or reconstruction_method.startswith("amrto")
+                        or reconstruction_method in {"sparse g1 spline", "tpms g1 spline"}
                     )
                     cad_preview = data.get("cad_preview_mesh")
                     if (
-                        smooth_reconstruction
-                        and isinstance(cad_preview, dict)
+                        isinstance(cad_preview, dict)
                         and cad_preview.get("vertices") is not None
                         and cad_preview.get("faces") is not None
                     ):
@@ -962,7 +961,7 @@ class SimulationRenderingMixin:
                             smooth_across_faces=smooth_reconstruction,
                         )
                         self._render_topopt_joint_overlays(data)
-                        self.vtkWidget.GetRenderWindow().Render()
+                        self._request_render()
                         return
                 # Keep the last recovered surface visible while an on-demand
                 # reconstruction is running in the background.
@@ -1031,7 +1030,7 @@ class SimulationRenderingMixin:
                 self._update_scalar_bar("", 0, 1, None)
 
                 self.renderer.ResetCamera()
-                self.vtkWidget.GetRenderWindow().Render()
+                self._request_render()
                 return
 
         # Imported STL/OBJ meshes arrive as a plain surface dict.  Render that
@@ -1077,7 +1076,7 @@ class SimulationRenderingMixin:
 
                 self._update_scalar_bar("", 0, 1, None)
                 self.renderer.ResetCamera()
-                self.vtkWidget.GetRenderWindow().Render()
+                self._request_render()
                 return
 
         if isinstance(data, dict) and data.get("type") == "topopt_voxel":
@@ -1636,7 +1635,7 @@ class SimulationRenderingMixin:
             should_reset = bool(data.get("_reset_camera", False))
         if should_reset:
             self.renderer.ResetCamera()
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
 
     def _clear_result_extrema(self):
         """Remove result-extrema markers and their cached locations."""

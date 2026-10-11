@@ -330,10 +330,7 @@
         "notes": "",
         "workflow_mode": "Guided",
         "design_goal": "Lightweight Stiffness",
-        "manufacturing_process": "None",
         "minimum_member_size_mm": 0.0,
-        "exclusion_scope": "All Loads and Supports",
-        "exclusion_thickness_mode": "Program Controlled",
         "validate_after_optimize": false,
         "cad_export_filename": "topology_optimized.step",
         "volfrac": 0.29,
@@ -522,12 +519,10 @@
   "_fidelity": "Fast coarse voxel solve with interactive surface picking.",
   "_visual_target": "Stable converged density field and valid recovered surface mesh.",
   "_engineering_decision": "Rapid sanity check for solver execution, connectivity gating, and surface recovery pipeline.",
-  "_baseline": "Linear elastic static solve with tip shear.",
+  "_baseline": "Unsolved reference scenario; execute the study to evaluate convergence and geometry.",
   "_design_variables": [
-    "Length: 100 mm",
-    "Width: 40 mm",
-    "Height: 20 mm",
-    "Volume fraction: 50%"
+    "Design-domain bounds: 100 x 40 x 20 mm",
+    "Volume fraction: 29%"
   ],
   "_load_cases": [
     "Direct Verification Load"
@@ -537,13 +532,13 @@
       "requirement": "Solver Convergence",
       "target": "== True",
       "verification": "Tolerance <= 1e-3",
-      "baseline_status": "Converged (Passed)"
+      "baseline_status": "Not evaluated; run the stated verification."
     },
     {
       "requirement": "Recovered Mesh Integrity",
       "target": "== 100%",
       "verification": "Watertight manifold mesh check",
-      "baseline_status": "100% (Passed)"
+      "baseline_status": "Not evaluated; run the stated verification."
     }
   ],
   "_deliverables": [

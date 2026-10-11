@@ -332,7 +332,7 @@ def _physical_cylinder_to_solid(
 _BOOLEAN_FUZZY_RETRIES = (1e-5, 1e-4, 1e-3)
 
 
-def _boolean_or_raise(result: Any, tool: Any, *, operation: str) -> Any:
+def _boolean_or_raise(result: Any, tool: Any, *, operation: str, allow_empty_cut: bool = False) -> Any:
     """Run isolated CadQuery booleans and keep rejected operands unchanged."""
     solid_input = hasattr(result, "Solids") and bool(result.Solids())
 
@@ -361,6 +361,14 @@ def _boolean_or_raise(result: Any, tool: Any, *, operation: str) -> Any:
         # OCC can return a valid empty Compound after a failed boolean. A
         # manufactured solid must retain solid geometry before accepting it.
         if solid_input and (not candidate.Solids() or not candidate.Faces()):
+            if operation == "cut" and allow_empty_cut:
+                # A clearance may legitimately remove an entire lattice member
+                # or joint. Confirm complete containment independently before
+                # treating an empty Boolean result as a successful removal.
+                overlap = result.copy().intersect(tool.copy())
+                volume = abs(float(result.Volume()))
+                if overlap.isValid() and volume > 0 and abs(abs(overlap.Volume()) - volume) <= volume * 1e-7:
+                    return candidate
             last_error = RuntimeError(f"Analytic {operation} erased the solid body")
             continue
         if fuzzy:
@@ -415,7 +423,7 @@ def _intersecting_tools(shape: Any, tools: list[Any]) -> list[Any]:
     return retained
 
 
-def _cut_tools_sequentially(shape: Any, tools: list[Any]) -> Any:
+def _cut_tools_sequentially(shape: Any, tools: list[Any], *, allow_empty_cut: bool = False) -> Any:
     """Apply overlapping bore/cleanup tools one at a time.
 
     OCC compounds containing overlapping cylinders are not a boolean union;
@@ -425,7 +433,9 @@ def _cut_tools_sequentially(shape: Any, tools: list[Any]) -> Any:
     """
     result = shape
     for tool in tools:
-        result = _boolean_or_raise(result, tool, operation="cut")
+        result = _boolean_or_raise(result, tool, operation="cut", allow_empty_cut=allow_empty_cut)
+        if allow_empty_cut and not result.Solids():
+            break
     return result
 
 
@@ -691,15 +701,12 @@ def _attach_passive_regions_to_lattice(
     the same relationship the members already have with one another. Both forms
     are valid STEP and both are exact; what changes is that this one survives.
 
-    Keep-void regions are deliberately not cut here. A member only exists where
-    the optimizer's density passed the cutoff, and a keep-void region holds that
-    density at zero, so the lattice was never generated inside one. Cutting it
-    again costs an OCC boolean per member -- thousands of them -- to remove
-    nothing.
+    Member radii can cross a protected clearance even when their centrelines
+    pass envelope clipping. Cut only members whose bounds reach a void tool.
     """
     import cadquery as cq
 
-    solid_tools, _cut_tools, hardware_tools = _collect_passive_tools(
+    solid_tools, cut_tools, hardware_tools = _collect_passive_tools(
         payload,
         void_axial_margin=void_axial_margin,
         void_radial_margin=void_radial_margin,
@@ -708,6 +715,7 @@ def _attach_passive_regions_to_lattice(
         "attached_solids": 0,
         "hardware_solids": len(hardware_tools),
         "member_solids": 0,
+        "cut_member_solids": 0,
     }
 
     parts: list[Any] = []
@@ -716,6 +724,18 @@ def _attach_passive_regions_to_lattice(
     except Exception:
         parts.append(shape)
     counts["member_solids"] = len(parts)
+    if cut_tools:
+        trimmed = []
+        for part in parts:
+            nearby = [tool for tool in cut_tools
+                      if _bounds_reach_any(_shape_bounds(part), [_shape_bounds(tool)])]
+            if nearby:
+                part = _cut_tools_sequentially(part, nearby, allow_empty_cut=True)
+                counts["cut_member_solids"] += 1
+                trimmed.extend(part.Solids())
+            else:
+                trimmed.append(part)
+        parts = trimmed
 
     if solid_tools or hardware_tools:
         # `_intersecting_tools` runs an OCC common per tool. Against a compound
@@ -740,11 +760,14 @@ def _attach_passive_regions_to_lattice(
                 skipped,
             )
         counts["attached_solids"] = len(retained)
+        retained = [_cut_tools_sequentially(tool, cut_tools, allow_empty_cut=True) if cut_tools else tool
+                    for tool in retained]
+        retained = [tool for tool in retained if tool.Solids()]
         parts = parts + retained + list(hardware_tools)
 
     result = _compound_or_single(parts)
     if result is None:
-        result = shape
+        raise RuntimeError("Protected clearances removed the entire beam lattice")
     if not isinstance(result, cq.Shape):
         result = cq.Shape.cast(result)
     logger.info(

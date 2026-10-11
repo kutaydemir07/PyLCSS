@@ -206,9 +206,6 @@ def industrial_topopt_defaults(
         # shaded solid hides intermediate density and the retained/removed
         # material decision.
         'visualization': 'Density',
-        'exclusion_scope': 'None',
-        'exclusion_thickness_mode': 'Program Controlled',
-        'exclusion_thickness_mm': 2.0,
         **quality_settings,
     }
 

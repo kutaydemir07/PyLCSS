@@ -1504,7 +1504,7 @@ class BoundaryOverlayMixin:
         # Every prop above was just created; the display switches decide what
         # of it is actually drawn.
         self._apply_bc_visibility(render=False)
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
 
     def _add_arrow(self, start, vector, color=(1, 1, 0), scale=1.0):
         """Add a 3D arrow to the scene representing a vector."""

@@ -77,11 +77,6 @@ class CrashSolverNode(CadQueryNode):
         # Multiplies displayed displacement; does not affect physics.
         self.create_property('disp_scale', 3.0, widget_type='float')
 
-        # Hidden compatibility fields for pre-OpenRadioss-only sessions.
-        self.create_property('solver_backend', 'OpenRadioss', widget_type='combo',
-                             items=['OpenRadioss'])
-        self.create_property('run_external_solver', True, widget_type='checkbox')
-
         # OpenRadioss mass-scaling target.  When enable_mass_scaling is true,
         # the engine deck requests /DT/NODA/CST.  A positive physical target
         # takes precedence; zero retains the legacy end_time / time_steps input.
@@ -94,25 +89,6 @@ class CrashSolverNode(CadQueryNode):
         # 0.9 is the OpenRadioss default; lower values support controlled
         # temporal-discretisation studies without changing model mass.
         self.create_property('time_step_scale', 0.9, widget_type='float')
-
-        self.create_property('damping_alpha', 0.0, widget_type='float')
-        self.create_property('damping_beta', 0.0, widget_type='float')
-        self.create_property('enable_corotation', True, widget_type='checkbox')
-        self.create_property('enable_contact', False, widget_type='checkbox')
-        self.create_property('contact_stiffness', 0.1, widget_type='float')
-        self.create_property('contact_thickness', 0.2, widget_type='float')
-        self.create_property('contact_update_interval', 5, widget_type='int')
-        self.create_property('mass_scaling_threshold', 0.0, widget_type='float')
-
-        # Impactor (sled) mass in kg.  In "Fixed specimen + moving impactor"
-        # this becomes the moving rigid wall mass; in "Moving body + fixed wall"
-        # it is lumped onto the projectile's trailing edge.
-        # Without a sled mass the crashbox (~250 g) has too little KE to crush
-        # plastically at realistic velocities — it bounces elastically.
-        # Set to 0 to disable; typical component test values: 25–200 kg.
-        # Compatibility property for studies saved before impactor mass moved
-        # to Impact Setup. It is intentionally hidden in the inspector.
-        self.create_property('impactor_mass_kg', 0.0, widget_type='float')
 
     def run(self, cancel_callback=None):
         logger.info("Crash Solver: routing to OpenRadioss backend")
@@ -172,16 +148,8 @@ class CrashSolverNode(CadQueryNode):
             history_samples = int(self.get_property('history_samples') or 0)
             end_time = float(self.get_property('end_time') or 0.0)
             timeout_s = float(self.get_property('external_timeout_s') or 0.0)
-            legacy_impactor_mass = float(
-                self.get_property('impactor_mass_kg') or 0.0
-            )
-            scenario_impactor_mass = float(
+            impactor_mass = float(
                 impact.get('impactor_mass_kg') or 0.0
-            )
-            impactor_mass = (
-                scenario_impactor_mass
-                if scenario_impactor_mass > 0.0
-                else legacy_impactor_mass
             )
             disp_scale = float(self.get_property('disp_scale') or 0.0)
         except (TypeError, ValueError):
@@ -215,9 +183,6 @@ class CrashSolverNode(CadQueryNode):
             return None
 
         deck_only = as_bool(self.get_property('deck_only'))
-        legacy_run = self.get_property('run_external_solver')
-        if legacy_run is not None and not as_bool(legacy_run):
-            deck_only = True
         run_flag = not deck_only
         logger.info("Crash Solver: deck_only=%s, run_solver=%s", deck_only, run_flag)
 

@@ -456,7 +456,21 @@ def _base_fixed_dofs(
     for box in bc.fixed_boxes:
         for node in _box_nodes(nodes, box, tolerance):
             fixed.extend(3 * int(node) + int(dof) for dof in box[6])
+    for boundary in bc.boundary_supports:
+        selected, _ = _boundary_nodes(nodes, boundary, tolerance)
+        for node in np.unique(selected):
+            fixed.extend(3 * int(node) + int(dof) for dof in boundary.fixed_dofs)
     return np.unique(fixed).astype(int)
+
+
+def _boundary_nodes(nodes: np.ndarray, boundary: Any, tolerance: float) -> tuple:
+    from scipy.spatial import cKDTree
+    from ..optimization.boundary_sampling import sample_boundary
+
+    resolution = np.full(3, max(1, int(np.ceil(1.0 / max(tolerance, 0.01)))))
+    samples, forces = sample_boundary(boundary, resolution)
+    _, indices = cKDTree(nodes).query(samples)
+    return indices, forces
 
 
 def _case_force(
@@ -479,6 +493,10 @@ def _case_force(
         share = np.asarray((fx, fy, fz), dtype=float) / max(1, len(selected))
         for node in selected:
             force[3 * int(node) : 3 * int(node) + 3] += share
+    for boundary in case.boundary_forces:
+        selected, forces = _boundary_nodes(nodes, boundary, tolerance)
+        for component in range(3):
+            np.add.at(force, 3 * selected + component, forces[:, component])
     return force
 
 
@@ -497,6 +515,7 @@ def _analysis_cases(
                 point_forces=list(bc.point_forces),
                 box_forces=list(bc.box_forces),
                 distributed_forces=list(bc.distributed_forces),
+                boundary_forces=list(bc.boundary_forces),
             )
         ]
     result: list[tuple[str, float, np.ndarray, np.ndarray]] = []
@@ -504,13 +523,17 @@ def _analysis_cases(
         force = _case_force(nodes, case, tolerance)
         if not np.any(np.abs(force) > 1e-15):
             continue
-        if case.fixed_boxes:
+        if case.fixed_boxes or case.boundary_supports:
             local_fixed: list[int] = []
             for box in case.fixed_boxes:
                 for node in _box_nodes(nodes, box, tolerance):
                     local_fixed.extend(
                         3 * int(node) + int(dof) for dof in box[6]
                     )
+            for boundary in case.boundary_supports:
+                selected, _ = _boundary_nodes(nodes, boundary, tolerance)
+                for node in np.unique(selected):
+                    local_fixed.extend(3 * int(node) + int(dof) for dof in boundary.fixed_dofs)
             local = np.unique(local_fixed).astype(int)
             fixed = (
                 local

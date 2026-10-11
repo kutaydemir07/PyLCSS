@@ -67,6 +67,21 @@ class JointDefinition:
 
 
 @dataclass
+class BoundaryMesh:
+    """Selected CAD surface/line in fractional coordinates, with no thickness.
+
+    Cells contain one vertex, two edge vertices, or three triangle vertices.
+    Forces are integrated resultants per cell; supports constrain sampled
+    boundary nodes. Neither changes the material design variables.
+    """
+
+    vertices: Any
+    cells: Any
+    cell_forces: Any = None
+    fixed_dofs: List[int] = field(default_factory=list)
+
+
+@dataclass
 class LoadCase:
     """One independent loading scenario contributing weight·compliance to the objective."""
     name:               str   = "LC1"
@@ -78,6 +93,8 @@ class LoadCase:
     box_forces:         List[Tuple[float, float, float, float, float, float, float, float, float]] = field(default_factory=list)
     # Distributed face force: list of (face, fx_per, fy_per, fz_per)
     distributed_forces: List[Tuple[str, float, float, float]] = field(default_factory=list)
+    boundary_forces: List[BoundaryMesh] = field(default_factory=list)
+    boundary_supports: List[BoundaryMesh] = field(default_factory=list)
     # Optional supports that are active only in this configuration.  This makes
     # one density field serve several multibody poses without
     # pretending that all pose-dependent joints are fixed simultaneously.
@@ -101,6 +118,13 @@ class LoadCase:
             raise ValueError(f"Load case {self.name!r} weight must be finite and positive.")
 
         has_nonzero_force = False
+        for boundary in self.boundary_forces:
+            if boundary.cell_forces is None:
+                raise ValueError(f"Load case {self.name!r} has a boundary without forces.")
+            for vector in boundary.cell_forces:
+                if len(vector) != 3 or not all(math.isfinite(float(v)) for v in vector):
+                    raise ValueError(f"Load case {self.name!r} has an invalid boundary force.")
+                has_nonzero_force |= any(abs(float(v)) > 1e-15 for v in vector)
         for point in self.point_forces:
             if len(point) != 6 or not all(math.isfinite(float(v)) for v in point):
                 raise ValueError(f"Load case {self.name!r} has an invalid point force.")
@@ -161,6 +185,8 @@ class VoxelBC:
     # Localized support boxes in fractional node coordinates:
     # (x_min, x_max, y_min, y_max, z_min, z_max, dofs)
     fixed_boxes: List[Tuple[float, float, float, float, float, float, List[int]]] = field(default_factory=list)
+    boundary_supports: List[BoundaryMesh] = field(default_factory=list)
+    boundary_forces: List[BoundaryMesh] = field(default_factory=list)
     # Multi-load-case objective: weighted sum of compliances.  If empty, legacy
     # point_forces / distributed_forces below are normalised into a single LC.
     load_cases: List[LoadCase] = field(default_factory=list)

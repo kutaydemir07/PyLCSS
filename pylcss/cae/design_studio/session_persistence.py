@@ -27,8 +27,16 @@ _GUIDED_TOPOLOGY_BASE_PROPERTIES = frozenset(
         "manufacturing_process",
         "volfrac",
         "minimum_member_size_mm",
-        "exclusion_scope",
-        "exclusion_thickness_mode",
+        "minimum_void_size_mm",
+        "draw_direction",
+        "extrusion_axis",
+        "symmetry_plane",
+        "overhang_direction",
+        "overhang_angle_deg",
+        "max_member_size_mm",
+        "stress_constraint",
+        "yield_stress",
+        "load_aggregation",
         "structure_mode",
         "lattice_settings_mode",
         "visualization",
@@ -57,6 +65,7 @@ _LATTICE_INTENT_PROPERTIES = frozenset(
         # says what the part weighs.
         "lattice_target_relative_density",
         "lattice_porosity",
+        "repair_lattice_connections",
     }
 )
 
@@ -90,6 +99,12 @@ _LATTICE_ONLY_PROPERTIES = frozenset(
 # still carries one of these fails to open until it is stripped here.
 _RETIRED_TOPOLOGY_PROPERTIES = frozenset(
     {
+        # Automatic interface preservation was replaced by connected CAD
+        # non-design and obstacle bodies. Ignore it in older projects.
+        "exclusion_scope",
+        "exclusion_thickness_mode",
+        "exclusion_thickness_mm",
+        "load_case_mode",
         # Retired fidelity dropdowns, replaced by physical feature sizes.
         "quality_preset",
         "analysis_resolution",
@@ -99,7 +114,6 @@ _RETIRED_TOPOLOGY_PROPERTIES = frozenset(
         "manufacturing_process",
         "symmetry",
         "overhang_build_axis",
-        "overhang_angle_deg",
         "pull_out_axis",
         "max_member_size_voxels",
         "maximum_member_size_mm",
@@ -167,37 +181,38 @@ def _guided_topology_property_names(
 ) -> set[str]:
     """Return the context-sensitive intent fields for one Guided study."""
     names = set(_GUIDED_TOPOLOGY_BASE_PROPERTIES)
-    process = str(custom.get("manufacturing_process") or "None").strip().lower()
     structure = str(custom.get("structure_mode") or "Solid Envelope").strip().lower()
-    goal = str(custom.get("design_goal") or "Lightweight Stiffness").strip().lower()
-    exclusion_mode = str(
-        custom.get("exclusion_thickness_mode") or "Program Controlled"
-    ).strip().lower()
-
-    try:
-        maximum_member_size = float(
-            custom.get("maximum_member_size_mm") or 0.0
-        )
-    except (TypeError, ValueError):
-        maximum_member_size = 0.0
-    if maximum_member_size > 0.0:
-        names.add("maximum_member_size_mm")
-    if process in {"additive", "additive + symmetric"}:
-        names.update({"overhang_build_axis", "overhang_angle_deg"})
-    if process == "cast / moulded":
-        names.add("pull_out_axis")
-    if process in {"symmetric", "additive + symmetric"}:
-        names.add("symmetry")
-    if "stress" in goal:
-        names.add("yield_stress")
-    if exclusion_mode == "manual":
-        names.add("exclusion_thickness_mm")
     # The lattice node always owns a cell, so its manufacturing dimensions are
     # always intent. The structure check remains for topology records saved
     # before lattice optimization became its own node.
     if lattice_study or structure != "solid envelope":
         names.update(_LATTICE_INTENT_PROPERTIES)
+        # Manual reconstruction settings are user choices even when the
+        # analysis grid uses Guided sizing. Saving must not reset them.
+        if str(custom.get("lattice_settings_mode") or "Guided").lower() == "manual":
+            names.update(_LATTICE_ONLY_PROPERTIES)
     return names
+
+
+def migrate_cad_reconstruction_properties(session: dict[str, Any]) -> dict[str, Any]:
+    """Normalize retired reconstruction selections before graph deserialization."""
+    # Keep this migration independent of the optional CAD/numerical packages.
+    names = {
+        "auto (amrto)": "Auto", "amrto": "Auto",
+        "amrto bicubic nurbs": "Auto", "faceted": "Auto",
+        "recovered shape": "Auto", "smooth freeform": "Smooth spline",
+    }
+    nodes = session.get("nodes")
+    if isinstance(nodes, dict):
+        for record in nodes.values():
+            if not isinstance(record, dict):
+                continue
+            custom = record.get("custom")
+            if isinstance(custom, dict) and "cad_reconstruction_method" in custom:
+                key = str(custom["cad_reconstruction_method"]).strip().lower()
+                if key in names:
+                    custom["cad_reconstruction_method"] = names[key]
+    return session
 
 
 def migrate_lattice_topology_nodes(session: dict[str, Any]) -> dict[str, Any]:
@@ -242,6 +257,32 @@ def migrate_lattice_topology_nodes(session: dict[str, Any]) -> dict[str, Any]:
     return session
 
 
+def _reject_legacy_independent_loads(session: dict[str, Any]) -> None:
+    """Refuse to silently combine an explicitly saved independent case set."""
+    nodes = session.get("nodes")
+    if not isinstance(nodes, dict):
+        return
+    connections = session.get("connections") or []
+    for node_id, record in nodes.items():
+        if not _is_topology_node(record):
+            continue
+        custom = record.get("custom", {})
+        if not isinstance(custom, dict):
+            continue
+        if custom.get("load_case_mode") != "Multiple Independent Cases":
+            continue
+        count = sum(
+            isinstance(connection, dict) and connection.get("in") == [node_id, "loads"]
+            for connection in connections
+        )
+        if count > 1:
+            raise ValueError(
+                "This saved topology study explicitly uses independent load cases. "
+                "Split them into separate studies, or change the saved load_case_mode "
+                "to Simultaneous Superposition to explicitly combine them."
+            )
+
+
 def compact_design_studio_session(session: dict[str, Any]) -> dict[str, Any]:
     """Return a save-ready session with derived Guided TopOpt controls removed.
 
@@ -250,6 +291,7 @@ def compact_design_studio_session(session: dict[str, Any]) -> dict[str, Any]:
     restored from the node's current policy defaults during deserialization,
     then deterministically resolved from the saved intent at execution time.
     """
+    _reject_legacy_independent_loads(session)
     compact = deepcopy(session)
     nodes = compact.get("nodes")
     if not isinstance(nodes, dict):
@@ -329,6 +371,9 @@ def migrate_legacy_ports_and_nodes(session: dict[str, Any]) -> dict[str, Any]:
     workplane -> selection, part_1..part_4 -> bodies, etc.) and pops retired
     properties like fuse_parts on Group Bodies.
     """
+    from pylcss.cae.design_studio.crash.conditions import migrate_impact_scenario_properties
+
+    migrate_impact_scenario_properties(session)
     nodes = session.get("nodes")
     if isinstance(nodes, dict):
         for record in nodes.values():
@@ -339,6 +384,20 @@ def migrate_legacy_ports_and_nodes(session: dict[str, Any]) -> dict[str, Any]:
             if isinstance(custom, dict):
                 if "AssemblyNode" in type_name or type_name.endswith(".assembly"):
                     custom.pop("fuse_parts", None)
+                if type_name.endswith((".SolverNode", ".CrashSolverNode")):
+                    from pylcss.input_values import as_bool
+                    if "deck_only" not in custom and "run_external_solver" in custom:
+                        custom["deck_only"] = not as_bool(custom["run_external_solver"])
+                    custom.pop("run_external_solver", None)
+                    custom.pop("solver_backend", None)
+                if type_name.endswith(".CrashSolverNode"):
+                    for name in (
+                        "damping_alpha", "damping_beta", "enable_corotation",
+                        "enable_contact", "contact_stiffness", "contact_thickness",
+                        "contact_update_interval", "mass_scaling_threshold",
+                        "impactor_mass_kg",
+                    ):
+                        custom.pop(name, None)
 
     connections = session.get("connections")
     if isinstance(connections, list):
@@ -366,6 +425,7 @@ def expand_guided_topology_session(session: dict[str, Any]) -> dict[str, Any]:
     goal, fidelity, process, physical sizes, and user-visible choices remain
     authoritative.
     """
+    _reject_legacy_independent_loads(session)
     session = migrate_legacy_box_properties(session)
     session = migrate_legacy_ports_and_nodes(session)
     nodes = session.get("nodes")

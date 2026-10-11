@@ -103,7 +103,7 @@ class SceneRenderingMixin:
         self._last_simulation_mesh = None
 
         self.scalar_bar.VisibilityOff()
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
 
     def clear_cached_results(self):
         """Drop result/playback data that could repopulate an empty scene."""
@@ -187,6 +187,8 @@ class SceneRenderingMixin:
 
     def ensure_navigation_cube_visible(self):
         """Synchronize and raise the cube after tab, layout, or native-window changes."""
+        if self._viewer_closed:
+            return
         if not hasattr(self, "_nav_cube") or not hasattr(self, "vtkWidget"):
             return
         self._position_nav_cube()
@@ -197,6 +199,8 @@ class SceneRenderingMixin:
 
     def _on_vtk_render(self):
         """Sync NavCube rotation to camera after every VTK render."""
+        if self._viewer_closed:
+            return
         try:
             self._nav_cube.update_rotation(self.renderer.GetActiveCamera())
             self._nav_cube.raise_()
@@ -230,7 +234,7 @@ class SceneRenderingMixin:
                 self.renderer.RemoveActor(self._axes_actor)
                 for actor in self._axis_label_actors:
                     self.renderer.RemoveActor(actor)
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
 
     def _build_edge_actor(self, topo_shape, *, initial_visibility=None):
         """
@@ -952,7 +956,7 @@ class SceneRenderingMixin:
         camera.SetViewUp(0, 1, 0)
 
         self.renderer.ResetCamera()
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
 
     def render_shape(
         self,
@@ -1084,7 +1088,7 @@ class SceneRenderingMixin:
         # each face using relative deflection can visibly coarsen large patches.
         absolute_mesh = None
         try:
-            from pylcss.cae.design_studio.topology_optimization.geometry.amrto_common import (
+            from pylcss.cae.design_studio.topology_optimization.geometry.cad_tessellation import (
                 tessellate_cad_absolute,
             )
             box = topo_shape.BoundingBox()
@@ -1245,7 +1249,7 @@ class SceneRenderingMixin:
         # whenever the model that fills the view changes size.
         self._update_scene_scale()
         self._refresh_render_quality()
-        self.vtkWidget.GetRenderWindow().Render()
+        self._request_render()
 
     def _polydata_from_cells(self, dataset, cell_ids):
         """Build standalone polydata from selected cells in a VTK dataset."""

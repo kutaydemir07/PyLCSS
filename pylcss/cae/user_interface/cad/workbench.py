@@ -53,6 +53,8 @@ class ProfessionalCadApp(
             event.ignore()
             return
         super().closeEvent(event)
+        if event.isAccepted():
+            self.viewer.shutdown()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -145,7 +147,7 @@ class ProfessionalCadApp(
 
         # CENTER AREA: Flexible 3D Viewer + Node Graph (Top Viewer, Bottom Graph by default)
         self.center_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
-        self.viewer = CQ3DViewer()
+        self.viewer = CQ3DViewer(self.center_splitter)
         self.viewer.face_picking_requested.connect(self._start_viewer_face_picking)
         self.viewer.result_field_changed.connect(
             self._on_viewer_result_field_changed

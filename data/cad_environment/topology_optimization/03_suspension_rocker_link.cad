@@ -783,14 +783,12 @@
       "port_deletion_allowed": false,
       "subgraph_session": {},
       "custom": {
-        "description": "Minimizes weighted compliance over the two operating cases.",
+        "description": "Compliance minimization under the simultaneous connected loads.",
         "tags": "bundled-example, topology-optimization, pymoto",
         "notes": "All connected loads act simultaneously. Run separate project copies for alternative operating cases. Preserved regions remain solid; obstacle regions remain void.",
         "workflow_mode": "Guided",
         "design_goal": "Lightweight Stiffness",
         "minimum_member_size_mm": 8.0,
-        "exclusion_scope": "All Loads and Supports",
-        "exclusion_thickness_mode": "Program Controlled",
         "validate_after_optimize": false,
         "cad_export_filename": "rocker_link_optimized.step",
         "volfrac": 0.32,
@@ -979,14 +977,13 @@
   "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
   "_title": "Automotive Double-Wishbone Suspension Rocker Link",
   "_purpose": "High-performance automotive suspension rocker link with 3 preserved cylindrical bearing sleeves and the primary bump load scenario.",
-  "_fidelity": "Multi-load case SIMP voxel topology optimization with preserved interface bodies and obstacle cylindrical exclusion.",
+  "_fidelity": "SIMP voxel topology optimization of simultaneous connected loads with explicitly connected preserved bearing sleeves and cylindrical obstacles.",
   "_visual_target": "Triangular truss architecture with preserved bearing bores and smooth organic transitions.",
   "_engineering_decision": "Optimize bellcrank geometry connecting pushrod and damper to maximize suspension motion transfer stiffness.",
   "_baseline": "Unsolved primary simultaneous-load scenario. Targets are requirements, not measured results.",
   "_design_variables": [
-    "Pivot centers distance: 140 mm",
-    "Volume fraction: 30%",
-    "Filter radius: 6.0 mm"
+    "Design-domain bounds: 300 x 200 x 25 mm",
+    "Volume fraction: 32%"
   ],
   "_load_cases": [
     "LC1 Pushrod 22.5 kN",

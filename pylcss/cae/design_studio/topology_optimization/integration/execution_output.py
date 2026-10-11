@@ -703,6 +703,8 @@ def build_topology_output(
         "optimizer_used": result.optimizer_used,
         "formulation_used": result.formulation_used,
         "physical_length_scale": {
+            "requested_minimum_solid_size": float(node.get_property("minimum_member_size_mm") or 0.0),
+            "requested_minimum_void_size": float(node.get_property("minimum_void_size_mm") or 0.0),
             "filter_radius": float(problem.rmin),
             "filter_radius_units": (
                 "model units"
@@ -853,9 +855,6 @@ def build_topology_output(
             "boundary_interfaces": {
                 "support_selection_types": support_selection_types,
                 "load_selection_types": load_selection_types,
-                "automatic_contact_thickness": (
-                    study.automatic_exclusion_thickness
-                ),
                 "recommendation": (
                     "Use physical CAD faces for production load/support "
                     "interfaces. Edge and vertex selections are zero-area "
@@ -903,7 +902,7 @@ def build_topology_output(
             "surface_quality_preset": (
                 recovered.get("surface_quality_preset")
                 if isinstance(recovered, dict)
-                else "AMRTO"
+                else "Sparse G1 spline"
             ),
             "material_fraction": manufactured_material_fraction,
             "volume": manufactured_volume,
@@ -1132,11 +1131,6 @@ def build_topology_output(
             "explicit_void_voxels": int(np.count_nonzero(explicit_passive_void_mask)),
             "explicit_solid_shapes": explicit_solid_shapes,
             "explicit_void_shapes": explicit_void_shapes,
-            "automatic_exclusion_scope": study.automatic_exclusion_scope,
-            "automatic_exclusion_thickness": (
-                study.automatic_exclusion_thickness
-            ),
-            "automatic_exclusion_unit": "mm",
         },
     }
 
@@ -1371,10 +1365,9 @@ def finalize_topology_output(
         advise(
             "zero_area_boundary_interface",
             f"{singular_interface_count} topology load/support interface(s) "
-            "use an edge or vertex. They were regularized into finite voxel "
-            "contact pads, but the resulting branches remain sensitive to "
-            "that artificial pad. Select the physical CAD interface face for "
-            "a production study.",
+            "use an edge or vertex. These line/point conditions have no added "
+            "material pad; local stresses are sensitive to mesh resolution. "
+            "Select a face if the physical interface acts over an area.",
         )
     manufactured_components = int(
         manufacturing.get("meaningful_component_count") or 0
@@ -1477,7 +1470,7 @@ def finalize_topology_output(
             )
     surface_quality = manufacturing.get("surface_quality") or {}
     if isinstance(surface_quality, dict):
-        if surface_quality.get("watertight") is False:
+        if surface_quality.get("is_watertight", surface_quality.get("watertight")) is False:
             # Watertightness fails on either defect, so name whichever is
             # actually present. A mesh can have no open boundary at all and
             # still be unusable because three faces share an edge.
@@ -1527,11 +1520,11 @@ def finalize_topology_output(
             # wrong one sends them to install a package they already have. The
             # screening report names which it was.
             scope = str(surface_quality.get("screening_scope") or "").strip()
-            reason = (
-                f"the mesh is too large to screen affordably ({scope})"
+            reason = str(surface_quality.get("screening_reason") or (
+                f"screening was incomplete ({scope})"
                 if scope and scope != "full"
-                else "the spatial-index backend is unavailable"
-            )
+                else "the recovery report did not provide a screening result"
+            ))
             advise(
                 "self_intersection_not_screened",
                 "The recovered surface was not screened for self-intersection: "
@@ -1549,7 +1542,7 @@ def finalize_topology_output(
     # rounding of free edges, and with no formulation imposing the length scale
     # there is nothing for a hard gate to hand back to the user beyond this
     # number. Stating it with its uncertainty is the honest form of the check.
-    requested_member = float(getattr(problem, "minimum_solid_size", 0.0) or 0.0)
+    requested_member = float(node.get_property("minimum_member_size_mm") or 0.0)
     if structure_options.mode == "solid" and requested_member > 0.0:
         density_field = (
             manufactured_density
@@ -1963,7 +1956,7 @@ def finalize_topology_output(
     if eager_cad:
         try:
             cad_shape = node._run_embedded_cad_reconstruction(
-                output, progress_callback=progress_callback
+                output, progress_callback=progress_callback, cancel_callback=cancel_callback
             )
             output["cad_shape"] = cad_shape
             output["shape"] = cad_shape
@@ -1971,23 +1964,12 @@ def finalize_topology_output(
             reconstruction_report = dict(
                 getattr(node, "_last_cad_reconstruction_report", {}) or {}
             )
-            try:
-                solid = cad_shape.val() if hasattr(cad_shape, "val") else cad_shape
-                output["cad_reconstruction"] = reconstruction_report | {
-                    "method": reconstruction_report.get(
-                        "method", "AMRTO"
-                    ),
-                    "valid": bool(solid.isValid())
-                    if hasattr(solid, "isValid")
-                    else None,
-                    "volume": float(solid.Volume())
-                    if hasattr(solid, "Volume")
-                    else None,
-                }
-            except Exception:
-                output["cad_reconstruction"] = reconstruction_report or {
-                    "method": "AMRTO",
-                }
+            # Validation and mass properties were already evaluated in the
+            # CAD child. Repeating OCC calls here can stall the Qt interpreter.
+            output["cad_reconstruction"] = reconstruction_report | {
+                "method": reconstruction_report.get("method", "Sparse G1 spline"),
+                "volume": reconstruction_report.get("cad_volume"),
+            }
             if output["cad_reconstruction"].get("valid") is False:
                 block(
                     "cad_reconstruction_invalid",
@@ -1995,10 +1977,14 @@ def finalize_topology_output(
                     "before export or downstream meshing.",
                 )
         except Exception as exc:
-            msg = f"CAD reconstruction failed: {exc}"
-            logger.warning("TopologyOptVoxelNode: %s", msg)
-            output["cad_error"] = str(exc)
-            block("cad_reconstruction_failed", msg)
+            from pylcss.cae.user_interface.cad.cad_background import CadJobCancelled
+            if isinstance(exc, CadJobCancelled):
+                output["cad_reconstruction"] = {"method": "Cancelled", "cancelled": True}
+            else:
+                msg = f"CAD reconstruction failed: {exc}"
+                logger.warning("TopologyOptVoxelNode: %s", msg)
+                output["cad_error"] = str(exc)
+                block("cad_reconstruction_failed", msg)
             if output.get("recovered_shape") is not None:
                 output["visualization_mode"] = (
                     "Manufactured Mesh"

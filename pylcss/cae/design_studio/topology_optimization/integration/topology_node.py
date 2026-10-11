@@ -15,6 +15,7 @@ from pylcss.cae.design_studio.core.base_node import CadQueryNode
 from ..models.study import (
     VoxelBC,
     LoadCase,
+    BoundaryMesh,
 )
 from ..configuration.presets import (
     industrial_topopt_defaults,
@@ -25,21 +26,18 @@ from ..configuration.presets import (
 from .geometry_mapping import (
     _flatten,
     _mesh_bounds,
-    _entry_bboxes,
-    _fraction_box,
     _joint_from_graph_payload,
 )
 from .boundary_mapping import (
-    _iter_load_faces,
     _pressure_load_patches,
     _cylinder_void_region_from_face,
     _append_region_once,
-    _add_cylindrical_contact_region,
     _joint_pin_from_anchor_cylinders,
 )
 from . import boundary_mapping as _boundary_mapping
 from . import geometry_mapping as _geometry_mapping
 from . import voxelization as _voxelization
+from .selected_boundary import selection_regions, region_measure, boundary_with_force
 from .node_execution import _TopologyExecutionMixin
 
 logger = logging.getLogger(__name__)
@@ -150,28 +148,6 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
             widget_type="float",
         )
         self.create_property("advanced_settings_visible", False, widget_type="bool")
-        self.create_property(
-            "exclusion_scope",
-            "None",
-            widget_type="combo",
-            items=[
-                "None",
-                "All Loads and Supports",
-                "Loads Only",
-                "Supports Only",
-            ],
-        )
-        self.create_property(
-            "exclusion_thickness_mode",
-            "Program Controlled",
-            widget_type="combo",
-            items=["Program Controlled", "Manual"],
-        )
-        self.create_property(
-            "exclusion_thickness_mm",
-            2.0,
-            widget_type="float",
-        )
         self.create_property("validate_after_optimize", False, widget_type="bool")
         self.create_property(
             "validation_quality",
@@ -207,11 +183,13 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
         self.create_property("generate_cad_after_optimize", True, widget_type="bool")
         self.create_property(
             "cad_reconstruction_method",
-            "Auto (AMRTO)",
+            "Auto",
             widget_type="combo",
             items=[
-                "Auto (AMRTO)",
-                "AMRTO",
+                "Auto",
+                "Smooth spline",
+                "Analytic beam lattice",
+                "Fused beam lattice",
             ],
         )
         self.create_property(
@@ -247,12 +225,6 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
             "Auto",
             widget_type="combo",
             items=["Auto", "OC", "MMA", "GCMMA"],
-        )
-        self.create_property(
-            "load_case_mode",
-            "Multiple Independent Cases",
-            widget_type="combo",
-            items=["Multiple Independent Cases", "Simultaneous Superposition"],
         )
         self.create_property(
             "load_aggregation",
@@ -366,38 +338,33 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
         self,
         topo_output: dict[str, Any],
         progress_callback: Any = None,
+        cancel_callback: Callable[[], bool] | None = None,
     ) -> Any:
         """Build a CAD body as an internal TopOpt study action."""
-        from ..geometry.cad_reconstruction import reconstruct_topopt_cad
+        from ..geometry.cad_reconstruction import normalize_cad_strategy
+        from pylcss.cae.user_interface.cad.cad_background import reconstruct_cad_in_background
 
         method = str(
             self.get_property("cad_reconstruction_method")
             or "Auto"
         )
-        method_key = method.strip().lower()
-        if method_key.startswith("smooth"):
-            strategy = "spline"
-        else:
-            # Legacy "Recovered Shape" / "Faceted" values now route to the
-            # single validated professional method. There is no mesh fallback.
-            strategy = "auto"
+        strategy = normalize_cad_strategy(method)
         topo_payload = dict(topo_output or {})
         export_steps_dir = getattr(self, "_export_steps_dir", None) or topo_payload.get("export_steps_dir")
-        shape, report = reconstruct_topopt_cad(
+        shape, report, preview_mesh = reconstruct_cad_in_background(
             topo_payload,
-            source_geometry="Recovered Shape",
             reconstruction_strategy=strategy,
             sew_tolerance=1e-4,
             merge_angle_deg=0.0,
-            return_report=True,
-            # A strut lattice is reconstructed from these directly and never
-            # goes near the isosurface; everything else uses them only to know
-            # that per-triangle sewing is the wrong tool for the result.
+            # Strut families use the solved analytic members. Other families
+            # fit shared splines to the actual recovered boundary.
             structure_options=getattr(self, "_last_structure_options", None),
             member_plan=getattr(self, "_last_member_plan", None),
             export_steps_dir=export_steps_dir,
             progress_callback=progress_callback,
+            cancel_callback=cancel_callback,
         )
+        topo_output["cad_preview_mesh"] = preview_mesh
         self._last_cad_reconstruction_report = report
         return shape
 
@@ -416,48 +383,35 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
         bounds = _mesh_bounds(design_domain)
         if bounds is None:
             if constraints or loads:
-                logger.warning(
-                    "TopologyOptVoxelNode: cannot map graph BCs without mesh bounds."
-                )
+                raise ValueError("Cannot map connected supports and loads without design-domain bounds.")
             return
 
-        for constraint in constraints:
+        for index, constraint in enumerate(constraints, start=1):
             if not isinstance(constraint, dict):
-                continue
+                raise ValueError(f"Connected support {index} did not produce a support definition.")
             dofs = constraint.get("fixed_dofs") or []
             try:
                 dofs = [int(d) for d in dofs if int(d) in (0, 1, 2)]
             except Exception:
                 dofs = []
             if not dofs:
-                continue
-            for face in constraint.get("geometries") or []:
-                cylinder = _cylinder_void_region_from_face(face, bounds)
-                if cylinder is not None:
-                    _add_cylindrical_contact_region(bc, cylinder)
-            bboxes = _entry_bboxes(constraint)
-            if not bboxes:
-                logger.warning(
-                    "TopologyOptVoxelNode: connected constraint did not "
-                    "include selected geometry or bounding-box metadata; it "
-                    "cannot be "
-                    "mapped to voxel supports."
-                )
-                continue
-            for bbox in bboxes:
-                frac_box = _fraction_box(bbox, bounds)
-                bc.fixed_boxes.append((*frac_box, dofs))
+                raise ValueError(f"Connected support {index} has no valid constrained DOFs.")
+            regions = selection_regions(constraint, bounds)
+            if not regions:
+                raise ValueError(f"Connected support {index} has no selected geometry or bounding-box metadata.")
+            for region in regions:
+                if isinstance(region[0], BoundaryMesh):
+                    boundary = region[0]
+                    boundary.fixed_dofs = list(dofs)
+                    bc.boundary_supports.append(boundary)
+                else:
+                    bc.fixed_boxes.append((*region, dofs))
 
-        mode = str(self.get_property("load_case_mode") or "Multiple Independent Cases")
-        is_independent = (
-            mode == "Multiple Independent Cases"
-            and len(loads) > 1
-        )
         bc.load_cases = []
 
-        for idx, load in enumerate(loads):
+        for index, load in enumerate(loads, start=1):
             if not isinstance(load, dict):
-                continue
+                raise ValueError(f"Connected load {index} did not produce a load definition.")
             load_type = str(load.get("type") or "").lower()
             local_boxes = []
             if load_type in ("force", "bearing_load"):
@@ -465,65 +419,43 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
                 try:
                     fx, fy, fz = (float(vector[0]), float(vector[1]), float(vector[2]))
                 except Exception:
-                    continue
-                for face in _iter_load_faces(load):
-                    cylinder = _cylinder_void_region_from_face(face, bounds)
-                    if cylinder is not None:
-                        _add_cylindrical_contact_region(bc, cylinder)
-                bboxes = _entry_bboxes(load)
-                if not bboxes:
-                    logger.warning(
-                        "TopologyOptVoxelNode: connected force load did not "
-                        "include selected geometry or bounding-box metadata; "
-                        "it cannot be mapped to voxel forces."
-                    )
-                    continue
-                scale = 1.0 / max(1, len(bboxes))
-                for bbox in bboxes:
-                    frac_box = _fraction_box(bbox, bounds)
-                    # Graph-selected load faces become distributed patch loads,
-                    # not mathematical point loads. The same patch is also kept
-                    # local so CAD face loads stay tied to their source face.
-                    local_boxes.append(
-                        (*frac_box, fx * scale, fy * scale, fz * scale)
-                    )
+                    raise ValueError(f"Connected load {index} needs three finite force components.")
+                if not np.all(np.isfinite([fx, fy, fz])):
+                    raise ValueError(f"Connected load {index} needs three finite force components.")
+                regions = selection_regions(load, bounds)
+                if not regions:
+                    raise ValueError(f"Connected load {index} has no selected geometry or bounding-box metadata.")
+                measures = [region_measure(region, bounds) for region in regions]
+                for region, measure in zip(regions, measures):
+                    vector = np.asarray([fx, fy, fz]) * measure / sum(measures)
+                    if isinstance(region[0], BoundaryMesh):
+                        bc.boundary_forces.append(boundary_with_force(region, vector))
+                    else:
+                        local_boxes.append((*region, *vector))
             elif load_type == "pressure":
-                for face in _iter_load_faces(load):
-                    cylinder = _cylinder_void_region_from_face(face, bounds)
-                    if cylinder is not None:
-                        _add_cylindrical_contact_region(bc, cylinder)
+                if load.get("geometries") or load.get("geometry") is not None:
+                    pressure = float(load.get("pressure", load.get("magnitude", 0.0)))
+                    if not np.isfinite(pressure):
+                        raise ValueError(f"Connected pressure load {index} needs a finite pressure.")
+                    regions = selection_regions(load, bounds, exact_boxes=False)
+                    for region in regions:
+                        bc.boundary_forces.append(boundary_with_force(region, pressure=pressure))
+                    continue
+                selection_regions(load, bounds)  # Validate metadata before mapping pressure.
                 pressure_patches = _pressure_load_patches(load, bounds)
                 if not pressure_patches:
-                    logger.warning(
-                        "TopologyOptVoxelNode: pressure load could not be "
-                        "mapped to voxel patch forces."
-                    )
-                    continue
+                    raise ValueError(f"Connected pressure load {index} could not be mapped to voxel patch forces.")
                 for frac_box, fx, fy, fz in pressure_patches:
                     local_boxes.append((*frac_box, fx, fy, fz))
             else:
-                logger.debug(
-                    "TopologyOptVoxelNode: load type %r is not supported by "
-                    "the voxel optimiser.",
-                    load_type,
-                )
-                continue
+                raise ValueError(f"Connected load {index} has unsupported type {load_type!r}.")
 
             if not local_boxes:
                 continue
 
-            if is_independent:
-                c_name = str(load.get("name") or "").strip() or f"LC_{idx + 1}"
-                c_weight = float(load.get("weight") or 1.0)
-                bc.load_cases.append(
-                    LoadCase(
-                        name=c_name,
-                        weight=c_weight,
-                        box_forces=local_boxes,
-                    )
-                )
-            else:
-                bc.box_forces.extend(local_boxes)
+            # One study is one simultaneous operating scenario. Alternative
+            # scenarios belong in separate study/project copies.
+            bc.box_forces.extend(local_boxes)
 
     def _merge_graph_joints(
         self,
@@ -531,16 +463,14 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
         bounds: tuple[np.ndarray, np.ndarray],
         joints: list[Any],
     ) -> None:
-        """Convert graph joints and preserve selected pin/bore interfaces."""
+        """Convert graph joints and infer their separate pin hardware."""
         for payload in joints:
             joint = _joint_from_graph_payload(payload, bounds)
             bc.joints.append(joint)
             if not isinstance(payload, dict):
                 continue
-            # A penalty coupling transfers load but does not itself create
-            # material or void. Preserve cylindrical anchor faces explicitly
-            # as a solid sleeve around the original bore so recovery and STEP
-            # export cannot fill the hole or erase its load-transfer interface.
+            # Joint hardware is separate from the optimized body. Preserved
+            # material and keep-outs come only from connected CAD bodies.
             anchor_cylinders: dict[str, list[tuple[Any, ...]]] = {
                 "anchor_a_geometries": [],
                 "anchor_b_geometries": [],
@@ -550,7 +480,6 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
                     cylinder = _cylinder_void_region_from_face(geometry, bounds)
                     if cylinder is not None:
                         anchor_cylinders[key].append(cylinder)
-                        _add_cylindrical_contact_region(bc, cylinder)
             pin = _joint_pin_from_anchor_cylinders(
                 anchor_cylinders["anchor_a_geometries"],
                 anchor_cylinders["anchor_b_geometries"],
@@ -590,6 +519,8 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
             point_forces=list(local_bc.point_forces),
             box_forces=list(local_bc.box_forces),
             distributed_forces=list(local_bc.distributed_forces),
+            boundary_forces=list(local_bc.boundary_forces),
+            boundary_supports=list(local_bc.boundary_supports),
             fixed_boxes=list(local_bc.fixed_boxes),
             replace_supports=bool(payload.get("replace_supports", True)),
             joints=list(local_bc.joints),

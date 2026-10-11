@@ -313,9 +313,6 @@ class WorkbenchTopologyMixin:
             "max_iter": 100,
             "tol": 0.005,
             "convergence_patience": 5,
-            "exclusion_scope": "None",
-            "exclusion_thickness_mode": "Program Controlled",
-            "exclusion_thickness_mm": 2.0,
         }
         if node.has_property("lattice_settings_mode"):
             # A lattice study's cell family is its definition and is never
@@ -599,6 +596,11 @@ class WorkbenchTopologyMixin:
     def _cancel_execution(self):
         worker = getattr(self, "worker", None)
         if worker is None or not worker.isRunning():
+            cad_worker = getattr(getattr(self, "properties", None), "_topopt_cad_preview_worker", None)
+            if cad_worker is not None and cad_worker.isRunning():
+                cad_worker.requestInterruption()
+                self.statusBar().showMessage("Stopping CAD reconstruction...")
+                return
             self.statusBar().showMessage("Nothing running")
             return
         # Stopping is an explicit request to end work, so drop anything that

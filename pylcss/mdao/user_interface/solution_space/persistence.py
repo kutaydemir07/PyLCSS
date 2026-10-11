@@ -201,13 +201,13 @@ class SolutionPersistenceMixin:
 
             # --- IMPROVEMENT 2: Combined Title (Name + Status) ---
             if platform_exists:
-                status_text = "Common Platform Feasible"
+                status_text = "Shared range"
                 status_color = "#008800"
             elif "Platform_Infeasible" in results and results["Platform_Infeasible"]:
-                status_text = "Platform Infeasible (No Commonality)"
+                status_text = "No shared range"
                 status_color = "#cc0000"
             else:
-                status_text = "No Commonality"
+                status_text = "No shared range"
                 status_color = "#cc0000"
 
             # The axis label already names the variable, so the title carries status only
