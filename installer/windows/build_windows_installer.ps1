@@ -243,6 +243,24 @@ foreach ($directoryName in @("pylcss", "data")) {
     }
 }
 $scriptStage = Join-Path $appStage "scripts"
+$reconstructionManifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot "reconstruction-tools.json") -Raw | ConvertFrom-Json
+$reconstructionSource = Join-Path $repoRoot $reconstructionManifest.source_directory
+$reconstructionStage = Join-Path $appStage "external_solvers\amrto"
+New-Item -ItemType Directory -Path $reconstructionStage -Force | Out-Null
+foreach ($artifact in $reconstructionManifest.files) {
+    $source = Join-Path $reconstructionSource $artifact.file
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+        throw "Required reconstruction tool is missing: $source"
+    }
+    if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne $artifact.sha256) {
+        throw "Reconstruction tool checksum mismatch: $source"
+    }
+    Copy-Item -LiteralPath $source -Destination $reconstructionStage
+}
+foreach ($notice in $reconstructionManifest.notices) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot $notice) -Destination $reconstructionStage
+}
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot "reconstruction-tools.json") -Destination $reconstructionStage
 New-Item -ItemType Directory -Path $scriptStage -Force | Out-Null
 foreach ($scriptName in @(
     "install_solvers.py",
@@ -255,6 +273,13 @@ foreach ($scriptName in @(
 
 # Never ship local bytecode, logs, credentials, settings, or generated
 # runtime data. These can exist in a developer checkout even when ignored.
+foreach ($directoryName in @("generated_models", "data_surrogate")) {
+    $generatedDirectory = Join-Path $appStage "pylcss\$directoryName"
+    Assert-ChildPath -Parent $appStage -Candidate $generatedDirectory
+    if (Test-Path -LiteralPath $generatedDirectory -PathType Container) {
+        Remove-Item -LiteralPath $generatedDirectory -Recurse -Force
+    }
+}
 $cacheDirectories = Get-ChildItem -LiteralPath $appStage -Recurse -Directory |
     Where-Object { $_.Name -eq "__pycache__" }
 foreach ($directory in $cacheDirectories) {

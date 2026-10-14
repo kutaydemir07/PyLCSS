@@ -55,17 +55,8 @@ def minimum_feature_voxels(
 
 
 def node_minimum_feature_size(node: Any) -> float:
-    """Return the printable feature floor a study states, in model units.
-
-    The topology node already carries this as the thinnest member the design
-    may contain. For a lattice study that is the same process capability — a
-    minimum printable wall or strut — so it governs the cell as well as the
-    envelope rather than being restated as a second number.
-    """
-    try:
-        return max(0.0, float(node.get_property("minimum_member_size_mm") or 0.0))
-    except (TypeError, ValueError):
-        return 0.0
+    """Compatibility helper: withdrawn process constraints do not resize cells."""
+    return 0.0
 
 
 #: Supersampling the recovery grid is expected to apply to a cell pitch stated
@@ -133,14 +124,8 @@ def guided_lattice_voxel_dimensions(
         # bound `ManufacturingStructureOptions` validates. Widening the pitch
         # rather than clipping the member keeps the printable floor exact.
         cell_size = max(cell_size, MINIMUM_CELL_TO_MEMBER_RATIO * member_size)
-    # No skin. A guided lattice study used to wrap its result in a solid
-    # boundary shell, and that shell is not a detail: it seals the cell family
-    # inside an opaque solid, so the manufactured mesh shows no lattice at all,
-    # and on a powder-bed process it traps unfused powder with no evacuation
-    # path. The study already emitted both of those as warnings while building
-    # it anyway. A skin is a legitimate design choice — it is still available in
-    # Manual mode — but it cannot be what a study does by default.
-    skin_size = 0.0
+    # A thin boundary skin closes clipped cells and joins them to the envelope.
+    skin_size = max(0.5, cell_size / 40.0)
     return cell_size, member_size, skin_size
 
 
@@ -232,6 +217,10 @@ def _infill_structure_options(
         0.0,
         allow_zero=True,
     )
+    if skin_voxels <= 0.0:
+        # Zero selects an automatic, resolved skin. Its union with the clipped
+        # core is contoured once, so no separate shells can leave seam gaps.
+        skin_voxels = max(1.5, cell_voxels / 40.0)
     skin_voxels = min(float(skin_voxels), 0.25 * cell_voxels)
     target = float(node.get_property("lattice_target_relative_density") or 0.0)
     return structure_options_from_values(

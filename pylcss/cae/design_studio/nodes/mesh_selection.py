@@ -18,6 +18,7 @@ _MESH_FACE_DIRECTIONS = ("<X", ">X", "<Y", ">Y", "<Z", ">Z")
 _MESH_COMPONENT_INDEX_BASE = 1000
 _MESH_COMPONENT_INDEX_STRIDE = 1000
 _MESH_FEATURE_INDEX_BASE = 100000
+_MESH_LAYOUT_INDEX_BASE = 2000000
 _MESH_FEATURE_ANGLE_DEG = 35.0
 
 
@@ -656,6 +657,17 @@ def _mesh_component_selection(
     import numpy as np
 
     stored_index = int(stored_index)
+    if stored_index >= _MESH_LAYOUT_INDEX_BASE:
+        layout = mesh_like.get('surface_layout') if isinstance(mesh_like, dict) else None
+        if not isinstance(layout, dict):
+            return 'Surface Group', np.array([], dtype=int), None
+        group = stored_index - _MESH_LAYOUT_INDEX_BASE
+        faces = np.asarray(mesh_like.get('faces'), dtype=int)
+        groups = np.asarray(layout.get('source_group_ids'), dtype=int)
+        if groups.shape != (len(faces),):
+            return 'Surface Group', np.array([], dtype=int), None
+        selected = faces[groups == group]
+        return 'Surface Group', np.unique(selected), selected
     if stored_index >= _MESH_FEATURE_INDEX_BASE:
         component_index = stored_index - _MESH_FEATURE_INDEX_BASE
         components = _mesh_feature_components(mesh_like)

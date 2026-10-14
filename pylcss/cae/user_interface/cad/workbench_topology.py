@@ -16,13 +16,14 @@ from pylcss.cae.design_studio.topology_optimization.integration.study_identity i
 )
 
 from .execution_workers import GraphExecutionWorker
+from .workbench_non_design import NonDesignWorkbenchMixin
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["WorkbenchTopologyMixin"]
 
 
-class WorkbenchTopologyMixin:
+class WorkbenchTopologyMixin(NonDesignWorkbenchMixin):
     @staticmethod
     def _port_has_connections(node, port_name):
         try:
@@ -88,59 +89,19 @@ class WorkbenchTopologyMixin:
                 "mass, and downstream FEA use consistent units."
             )
 
-        # Physics-specific study nodes are required explicitly; no hidden
-        # default support, load, or heat condition is fabricated.
-        goal = str(node.get_property("design_goal") or "").strip().lower()
-        physics = str(node.get_property("physics_mode") or "Structural").strip().lower()
-        if goal == "thermal conduction":
-            physics = "thermal"
-        elif goal in {
-            "thermo-mechanical",
-            "coupled structural + thermal",
-        }:
-            physics = "thermo-mechanical"
-        elif goal in {
-            "lightweight stiffness",
-            "minimum mass under stress",
-        }:
-            physics = "structural"
-
-        if physics in {"structural", "thermo-mechanical"}:
-            # Joints are optional and self-declaring: a study that has them is
-            # multi-body, one that does not is a single body. Neither case is
-            # announced through the design goal any more.
-            if not self._topopt_has_boundary_connection(
-                node,
-                "supports",
-                "supports",
-            ):
-                return (
-                    "Structural TopOpt needs a Support, connected "
-                    "directly or through a Topology Load Case and scoped "
-                    "to a selected design-domain interface."
-                )
-            if not self._topopt_has_boundary_connection(
-                node,
-                "loads",
-                "loads",
-            ):
-                return (
-                    "Structural TopOpt needs a Force, connected "
-                    "directly or through a Topology Load Case and scoped "
-                    "to a selected design-domain interface."
-                )
-
-        if physics in {"thermal", "thermo-mechanical"}:
-            if not self._port_has_connections(node, "thermal_sinks"):
-                return (
-                    "Thermal TopOpt needs a connected Reference Temperature "
-                    "scoped to a selected design-domain interface."
-                )
-            if not self._port_has_connections(node, "thermal_loads"):
-                return (
-                    "Thermal TopOpt needs a connected Topology Heat Load scoped to a "
-                    "selected design-domain interface."
-                )
+        # TopOpt always solves a structural study with explicit boundaries.
+        if not self._topopt_has_boundary_connection(node, "supports", "supports"):
+            return (
+                "Structural TopOpt needs a Support, connected "
+                "directly or through a Topology Load Case and scoped "
+                "to a selected design-domain interface."
+            )
+        if not self._topopt_has_boundary_connection(node, "loads", "loads"):
+            return (
+                "Structural TopOpt needs a Force, connected "
+                "directly or through a Topology Load Case and scoped "
+                "to a selected design-domain interface."
+            )
 
         return None
 
@@ -276,16 +237,6 @@ class WorkbenchTopologyMixin:
         }
         goal = str(node.get_property("design_goal") or "").lower()
         stress_goal = "stress" in goal
-        physics_mode = (
-            "Thermal"
-            if goal == "thermal conduction"
-            else "Coupled Structural + Thermal"
-            if goal in {
-                "thermo-mechanical",
-                "coupled structural + thermal",
-            }
-            else "Structural"
-        )
         settings = {
             "advanced_settings_visible": False,
             "formulation": "Density (SIMP)",
@@ -296,23 +247,13 @@ class WorkbenchTopologyMixin:
             "penal": 3.0,
             "density_cutoff": 0.30,
             "visualization": "Density",
-            "optimizer": (
-                "GCMMA"
-                if stress_enabled or stress_goal
-                else "MMA"
-                if goal
-                in {
-                    "thermo-mechanical",
-                    "coupled structural + thermal",
-                }
-                else "Auto"
-            ),
-            "physics_mode": physics_mode,
+            "optimizer": "GCMMA" if stress_enabled or stress_goal else "Auto",
+            "physics_mode": "Structural",
             # `load_aggregation` is the user's call about the load envelope and
             # is deliberately not reset here.
-            "max_iter": 100,
-            "tol": 0.005,
-            "convergence_patience": 5,
+            "max_iter": 120,
+            "tol": 0.0035,
+            "convergence_patience": 6,
         }
         if node.has_property("lattice_settings_mode"):
             # A lattice study's cell family is its definition and is never
@@ -459,6 +400,16 @@ class WorkbenchTopologyMixin:
             return
         if not self._confirm_project_code_execution():
             return
+        lattice_worker = getattr(getattr(self, "properties", None), "_topopt_lattice_worker", None)
+        if lattice_worker is not None and lattice_worker.isRunning():
+            self._queue_execute(skip_simulation=skip_simulation, skip_meshing=skip_meshing, nodes=nodes)
+            self.statusBar().showMessage("Update queued until lattice generation finishes.")
+            return
+        fea_worker = getattr(getattr(self, "properties", None), "_topopt_fea_worker", None)
+        if fea_worker is not None and fea_worker.isRunning():
+            self._queue_execute(skip_simulation=skip_simulation, skip_meshing=skip_meshing, nodes=nodes)
+            self.statusBar().showMessage("Update queued until FEA analysis finishes.")
+            return
         if self.worker and self.worker.isRunning():
             # Do not discard the request. Property edits, connection changes
             # and node selection all schedule a refresh, and dropping the ones
@@ -596,6 +547,18 @@ class WorkbenchTopologyMixin:
     def _cancel_execution(self):
         worker = getattr(self, "worker", None)
         if worker is None or not worker.isRunning():
+            lattice_worker = getattr(getattr(self, "properties", None), "_topopt_lattice_worker", None)
+            if lattice_worker is not None and lattice_worker.isRunning():
+                self._pending_execute = None
+                lattice_worker.requestInterruption()
+                self.statusBar().showMessage("Stopping lattice generation...")
+                return
+            fea_worker = getattr(getattr(self, "properties", None), "_topopt_fea_worker", None)
+            if fea_worker is not None and fea_worker.isRunning():
+                self._pending_execute = None
+                fea_worker.requestInterruption()
+                self.statusBar().showMessage("Stopping FEA analysis...")
+                return
             cad_worker = getattr(getattr(self, "properties", None), "_topopt_cad_preview_worker", None)
             if cad_worker is not None and cad_worker.isRunning():
                 cad_worker.requestInterruption()

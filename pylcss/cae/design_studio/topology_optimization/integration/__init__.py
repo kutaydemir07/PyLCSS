@@ -9,7 +9,6 @@ from pylcss.cae.design_studio._lazy_imports import load_attribute, public_names
 
 __all__ = [
     "LatticeInfillNode",
-    "LatticeOptVoxelNode",
     "TopologyLoadNode",
     "TopologyOptVoxelNode",
     "TopologySupportNode",
@@ -22,10 +21,6 @@ _LAZY_EXPORTS = {
     "LatticeInfillNode": (
         "pylcss.cae.design_studio.topology_optimization.integration.lattice_infill_node",
         "LatticeInfillNode",
-    ),
-    "LatticeOptVoxelNode": (
-        "pylcss.cae.design_studio.topology_optimization.integration.lattice_node",
-        "LatticeOptVoxelNode",
     ),
     "TopologyLoadNode": (_STUDY_NODES, "TopologyLoadNode"),
     "TopologyOptVoxelNode": (

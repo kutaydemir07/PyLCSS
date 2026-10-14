@@ -94,7 +94,7 @@ class ImpactConditionNode(CadQueryNode):
     Scenarios:
     - ``Fixed specimen + moving impactor``: the selected face is struck by a
       moving rigid wall/impactor while connected constraints remain active.
-      With zero impactor mass, OpenRadioss treats the wall speed as imposed
+      With zero impactor mass, OpenCourant treats the wall speed as imposed
       velocity rather than an inertial impact.
     - ``Moving body + fixed wall``: the whole mesh receives an initial velocity
       and hits a generated stationary rigid wall. Disconnect supports for this

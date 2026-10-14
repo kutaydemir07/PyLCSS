@@ -57,6 +57,7 @@ _NON_EXECUTION_PROPERTIES = {
     "deformation_scale",
     "disp_scale",
     "advanced_settings_visible",
+    "advanced_overrides",
     "cad_export_filename",
     "cad_export_format",
     "cad_reconstruction_method",
@@ -107,10 +108,17 @@ def _execution_properties(node: NodeLike) -> dict[str, object]:
     custom = raw_properties.get("custom", {})
     if not isinstance(custom, Mapping):
         return {}
+    from pylcss.cae.design_studio.topology_optimization.configuration.fea_meshing import (
+        is_topopt_fea_setting,
+    )
     return {
         str(key): value
         for key, value in custom.items()
         if key not in _NON_EXECUTION_PROPERTIES
+        and not (
+            is_topopt_fea_setting(node, key)
+            and not custom.get("validate_after_optimize", False)
+        )
     }
 
 
@@ -451,7 +459,11 @@ def execute_graph(
             _set_execution_state(
                 node,
                 result=result,
-                input_hash=current_input_hash,
+                # run() can resolve grid/default properties. Cache those final
+                # values so downstream infill edits reuse the unchanged solve.
+                input_hash=_hash_value((
+                    _input_signature(node), _execution_properties(node), bool(skip_simulation)
+                )),
                 dirty=False,
             )
             node._persisted_result = False  # type: ignore[attr-defined]

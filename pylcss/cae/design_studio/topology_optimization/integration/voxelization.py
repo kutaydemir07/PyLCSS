@@ -18,6 +18,7 @@ from ..configuration.length_scale import (
     resolve_physical_length_scale,
 )
 from .geometry_mapping import _surface_mesh_arrays
+from ..configuration.voxel_meshing import voxel_grid_from_size
 
 logger = logging.getLogger(__name__)
 
@@ -138,10 +139,7 @@ def _guided_voxel_grid(
     try:
         elem_size = float(element_size)
         if elem_size > 0.0:
-            dims = np.maximum(np.ceil(span / max(elem_size, 1e-6)).astype(int), 2)
-            dims = _inactive_dims(dims, max(elem_size, 1e-6))
-            dims = np.maximum(dims - (dims % 2), 2)
-            return int(dims[0]), int(dims[1]), int(dims[2])
+            return voxel_grid_from_size(span, elem_size)
     except (TypeError, ValueError):
         pass
 
@@ -824,6 +822,49 @@ def _surface_design_domain_grid(
         return None
 
 
+def _cad_design_domain_grid(
+    geometry: Any,
+    bounds: tuple[np.ndarray, np.ndarray],
+    nelx: int,
+    nely: int,
+    nelz: int,
+) -> Optional[np.ndarray]:
+    """Classify cell centres against valid CAD when tessellation has gaps."""
+    from ..geometry.non_design import design_domain_shape
+    try:
+        shape = design_domain_shape(geometry)
+        if not shape.isValid():
+            return None
+    except (ValueError, TypeError, AttributeError):
+        return None
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.TopAbs import TopAbs_IN, TopAbs_ON
+    from OCP.gp import gp_Pnt
+
+    dims = np.asarray((nelx, nely, nelz), dtype=int)
+    mins, maxs = (np.asarray(value, dtype=float)[:3] for value in bounds)
+    step = (maxs - mins) / dims
+    axes = [mins[i] + (np.arange(dims[i]) + 0.5) * step[i] for i in range(3)]
+    mask = np.zeros(tuple(dims), dtype=bool)
+    tolerance = max(1e-9, float(np.min(step)) * 1e-8)
+    for solid in shape.Solids():
+        box = solid.BoundingBox()
+        lower = (box.xmin, box.ymin, box.zmin)
+        upper = (box.xmax, box.ymax, box.zmax)
+        indices = [np.flatnonzero((axis >= lo - tolerance) & (axis <= hi + tolerance))
+                   for axis, lo, hi in zip(axes, lower, upper)]
+        classifier = BRepClass3d_SolidClassifier(solid.wrapped)
+        for ix in indices[0]:
+            for iy in indices[1]:
+                for iz in indices[2]:
+                    if mask[ix, iy, iz]:
+                        continue
+                    classifier.Perform(gp_Pnt(axes[0][ix], axes[1][iy], axes[2][iz]), tolerance)
+                    mask[ix, iy, iz] = classifier.State() in (TopAbs_IN, TopAbs_ON)
+    logger.info("TopologyOptVoxelNode: classified CAD cell centres after tessellation rejection.")
+    return mask
+
+
 def _mesh_design_domain_grid(
     mesh: Any,
     bounds: Optional[tuple[np.ndarray, np.ndarray]],
@@ -839,7 +880,10 @@ def _mesh_design_domain_grid(
     if mesh is None or bounds is None:
         return None
     if not hasattr(mesh, "p") or not hasattr(mesh, "t"):
-        return _surface_design_domain_grid(mesh, bounds, nelx, nely, nelz)
+        surface_mask = _surface_design_domain_grid(mesh, bounds, nelx, nely, nelz)
+        if surface_mask is not None:
+            return surface_mask
+        return _cad_design_domain_grid(mesh, bounds, nelx, nely, nelz)
     try:
         points = np.asarray(mesh.p, dtype=float)
         cells = np.asarray(mesh.t, dtype=int)
@@ -933,8 +977,8 @@ def _non_design_region_masks(
         mask = _mesh_design_domain_grid(geometry, bounds, nelx, nely, nelz)
         if mask is None or not np.any(mask):
             raise ValueError(
-                "A Preserved or Obstacle CAD body could not be voxelized into the design grid. "
-                "Connect a closed CAD solid that intersects the design domain, not an open face or surface."
+                "A non-design face layer could not be resolved on the design grid. "
+                "Increase its thickness or refine the grid in Advanced Settings."
             )
         if region_type == "void":
             void |= np.asarray(mask, dtype=bool)

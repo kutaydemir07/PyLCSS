@@ -16,9 +16,8 @@ node inside the named ``.cad`` graph:
 function          terminal node identifier       backend
 ================  =============================  =======================
 ``cad.fea``       ``com.cad.sim.solver``         CalculiX (linear static)
-``cad.impact``    ``com.cad.sim.crash_solver``   OpenRadioss (explicit dynamics)
+``cad.impact``    ``com.cad.sim.crash_solver``   OpenCourant (explicit dynamics)
 ``cad.topopt``    ``com.cad.sim.topopt_voxel``   Density / level-set topology
-                  ``com.cad.sim.lattice_voxel``  Variable-density lattice
 ================  =============================  =======================
 
 Inputs are matched against ``NumberNode`` / ``VariableNode`` instances in the
@@ -64,7 +63,7 @@ __all__ = [
 # ──────────────────────────────────────────────────────────────────────
 _FEA_ID    = "com.cad.sim.solver"
 _CRASH_ID  = "com.cad.sim.crash_solver"
-_TOPOPT_IDS = ("com.cad.sim.topopt_voxel", "com.cad.sim.lattice_voxel")
+_TOPOPT_IDS = ("com.cad.sim.topopt_voxel",)
 
 
 # Numeric Design Studio controls that are safe and meaningful to drive from a
@@ -73,7 +72,7 @@ _TOPOPT_IDS = ("com.cad.sim.topopt_voxel", "com.cad.sim.lattice_voxel")
 _OVERRIDEABLE_PROPERTIES = {
     "com.cad.sim.material": (
         "youngs_modulus", "poissons_ratio", "density",
-        "thermal_conductivity", "yield_strength", "tangent_modulus",
+        "yield_strength", "tangent_modulus",
     ),
     "com.cad.sim.crash_material": (
         "youngs_modulus", "poissons_ratio", "density", "yield_strength",
@@ -104,27 +103,14 @@ _OVERRIDEABLE_PROPERTIES = {
     "com.cad.sim.topopt_voxel": (
         "nelx", "nely", "nelz", "volfrac", "rmin", "penal",
         "density_cutoff", "max_iter", "tol", "convergence_patience",
-        "stress_constraint", "yield_stress", "max_member_size_voxels",
-        "maximum_member_size_mm",
-        "minimum_member_size_mm", "minimum_void_size_mm",
-        "overhang_angle_deg",
+        "stress_constraint", "yield_stress",
+
+
+
         "topology_convergence_enabled", "topology_convergence_levels",
-        "pattern_repeat",
+
     ),
 }
-# The lattice study drives the same solver, so it exposes the topology
-# controls plus the manufacturing dimensions of its cell.
-_OVERRIDEABLE_PROPERTIES["com.cad.sim.lattice_voxel"] = (
-    *_OVERRIDEABLE_PROPERTIES["com.cad.sim.topopt_voxel"],
-    "structure_cell_size_voxels", "structure_member_thickness_voxels",
-    "structure_skin_thickness_voxels",
-    "lattice_cell_size_mm", "lattice_member_thickness_mm",
-    "lattice_skin_thickness_mm", "lattice_target_relative_density",
-    "lattice_variable_density",
-    "lattice_min_relative_density", "lattice_max_relative_density",
-    "lattice_solid_transition_density", "lattice_porosity",
-)
-
 _OVERRIDE_GROUPS = {
     "com.cad.sim.material": "Material",
     "com.cad.sim.mesh": "Mesh",
@@ -135,14 +121,12 @@ _OVERRIDE_GROUPS = {
     "com.cad.sim.impact": "Impact",
     "com.cad.sim.crash_solver": "Impact solver",
     "com.cad.sim.topopt_voxel": "Topology optimization",
-    "com.cad.sim.lattice_voxel": "Lattice optimization",
 }
 
 _PROPERTY_LABELS = {
     "youngs_modulus": "Young's modulus",
     "poissons_ratio": "Poisson's ratio",
     "density": "Density",
-    "thermal_conductivity": "Thermal conductivity",
     "yield_strength": "Yield strength",
     "tangent_modulus": "Tangent modulus",
     "failure_strain": "Failure strain",
@@ -150,7 +134,6 @@ _PROPERTY_LABELS = {
     "force_y": "Force Y",
     "force_z": "Force Z",
     "relative_stiffness": "Relative joint stiffness",
-    "total_heat": "Total heat input",
     "weight": "Case weight",
     "element_size": "Element size",
     "refinement_size": "Refinement size",
@@ -395,9 +378,6 @@ def _standardize(kind: str, raw: Mapping[str, Any]) -> Dict[str, Any]:
         std["final_vol_frac"] = final_vol_frac
         std["target_vol_frac"] = float(raw.get("target_vol_frac") or 0.0)
         std["compliance"] = float(raw.get("compliance") or 0.0)
-        std["thermal_compliance"] = float(
-            raw.get("thermal_compliance") or 0.0
-        )
         std["mass"] = float(
             raw.get("recovered_design_mass", raw.get("mass")) or 0.0
         )
@@ -442,7 +422,7 @@ def _study_dependency_fingerprint(cad_path: str) -> tuple:
     """Fingerprint geometry/deck files referenced by a saved study.
 
     The runtime cache previously watched only the ``.cad`` JSON timestamp, so
-    editing an imported STEP/STL/FreeCAD model or a referenced Radioss deck
+    editing an imported STEP/STL/FreeCAD model or a referenced Courant deck
     could return an old solve. Missing paths are included too, which means the
     cache also invalidates when a previously missing dependency appears.
     """
@@ -830,7 +810,6 @@ def _apply_property_overrides(graph, settings: Mapping[str, float]) -> int:
         # silently ignore the requested value.
         if identifier == "com.cad.sim.material" and prop in {
             "youngs_modulus", "poissons_ratio", "density",
-            "thermal_conductivity",
         }:
             node.set_property("preset", "Custom")
         elif identifier == "com.cad.sim.crash_material" and prop in {

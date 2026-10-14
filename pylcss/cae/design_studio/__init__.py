@@ -7,7 +7,7 @@ Package structure:
     ``core``                    shared node and graph contracts
     ``nodes``                   CAD authoring and selection nodes
     ``fem``                     meshing, loads, and CalculiX studies
-    ``crash``                   impact setup and OpenRadioss studies
+    ``crash``                   impact setup and OpenCourant studies
     ``topology_optimization``   topology studies and shape recovery
     ``freecad_bridge``          FreeCAD document synchronization
     ``engine``                  dependency-aware graph execution

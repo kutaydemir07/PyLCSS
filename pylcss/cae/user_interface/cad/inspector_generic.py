@@ -18,7 +18,7 @@ __all__ = ["GenericInspectorMixin"]
 
 class GenericInspectorMixin:
     # Trailing tokens in a property name that encode the physical unit rather
-    # than a word.  `minimum_member_size_mm` has to read "Minimum Member Size
+    # than a word.  `infill_cell_size_mm` has to read "Infill Cell Size
     # (mm)", not "Minimum Member Size Mm".  Longest suffix wins, so `per_s`
     # is matched before the single-token `s`.
     _PROPERTY_UNIT_SUFFIXES = (
@@ -141,7 +141,7 @@ class GenericInspectorMixin:
         h.addWidget(btn)
         return container
 
-    def _build_generic_ui(self, node):
+    def _build_generic_ui(self, node, *, property_names=None):
         """Generic Clean UI - uses node.properties() for custom properties.
 
         Properties are grouped into semantic sections (External Solver,
@@ -200,6 +200,8 @@ class GenericInspectorMixin:
 
         # Skip empty/optional properties so the inspector isn't a wall of blanks.
         def _should_skip(name, val):
+            if property_names is not None:
+                return name not in property_names
             if name.startswith("_"):
                 return True
             if name in self._PROPERTY_HIDE_ALWAYS:
@@ -351,18 +353,12 @@ class GenericInspectorMixin:
                 "Density",
                 "CAD",
             ],
-            "cad_reconstruction_method": [
-                "Auto",
-                "Smooth spline",
-                "Analytic beam lattice",
-                "Fused beam lattice",
-            ],
             "source_geometry": [
                 "Recovered Shape",
             ],
             "filter_type": ["sensitivity", "density"],
             "update_scheme": ["MMA", "OC"],
-            # New combos introduced by the CalculiX / OpenRadioss rewrites.
+            # New combos introduced by the CalculiX / OpenCourant rewrites.
             "analysis_type": ["Linear", "Nonlinear (Geometric)", "Nonlinear (Plastic)"],
             "deformation_scale": ["Auto", "1x", "5x", "10x", "50x", "100x", "200x"],
             "application_scope": [
@@ -417,6 +413,8 @@ class GenericInspectorMixin:
 
             for name, val in entries:
                 label_text = self._human_property_label(name)
+                if node.__class__.__name__ == "TopologyOptVoxelNode":
+                    label_text += ":"
                 attrs = prop_attrs.get(name, {})
                 combo_items = attrs.get("items") if isinstance(attrs, dict) else None
                 if name == "application_scope":

@@ -174,13 +174,8 @@ LIGHT_SYSTEM_NODE_PALETTES = {
         (195, 95, 80, 255),
         (90, 48, 42, 255),
     ),
-    # CAE Topology & Lattice Optimization (warm amber gold matching MDAO primary)
+    # CAE Topology and lattice geometry (warm amber gold matching MDAO primary)
     "com.cad.sim.topopt_voxel": (
-        (253, 250, 242, 255),
-        (190, 140, 30, 255),
-        (95, 70, 25, 255),
-    ),
-    "com.cad.sim.lattice_voxel": (
         (253, 250, 242, 255),
         (190, 140, 30, 255),
         (95, 70, 25, 255),
@@ -260,9 +255,8 @@ DARK_SYSTEM_NODE_PALETTES = {
     "com.cad.sim.pressure_load": ((35, 35, 35, 255), (215, 110, 95, 255), (252, 244, 242, 255)),
     "com.cad.topopt.support": ((35, 35, 35, 255), (215, 110, 95, 255), (252, 244, 242, 255)),
     "com.cad.topopt.load": ((35, 35, 35, 255), (215, 110, 95, 255), (252, 244, 242, 255)),
-    # CAE Topology & Lattice Optimization
+    # CAE Topology and lattice geometry
     "com.cad.sim.topopt_voxel": ((35, 35, 35, 255), (210, 153, 34, 255), (252, 248, 238, 255)),
-    "com.cad.sim.lattice_voxel": ((35, 35, 35, 255), (210, 153, 34, 255), (252, 248, 238, 255)),
     "com.cad.sim.lattice_infill": ((35, 35, 35, 255), (210, 153, 34, 255), (252, 248, 238, 255)),
     # CAE Impact & Crash Dynamics
     "com.cad.sim.impact": ((35, 35, 35, 255), (195, 80, 75, 255), (252, 242, 242, 255)),

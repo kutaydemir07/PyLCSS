@@ -28,7 +28,6 @@ SIMULATION_NODE_IDENTIFIERS = {
     "com.cad.sim.solver",
     "com.cad.sim.modal_solver",
     "com.cad.sim.topopt_voxel",
-    "com.cad.sim.lattice_voxel",
     "com.cad.sim.impact",
     "com.cad.sim.crash_solver",
     # Standalone decks can launch Starter and Engine with no graph inputs.

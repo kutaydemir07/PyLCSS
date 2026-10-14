@@ -14,7 +14,7 @@ def _get_node_category_badge(node_item) -> tuple[str, QtGui.QColor]:
 
     badge = ""
     # Specific engineering disciplines checked first before generic substrings
-    if "crash" in node_type or "impact" in node_type or "radioss" in node_type:
+    if "crash" in node_type or "impact" in node_type or "courant" in node_type:
         badge = "IMPACT"
     elif "topopt" in node_type or "topology" in node_type or "lattice" in node_type:
         badge = "OPT"
@@ -363,8 +363,61 @@ def install_modern_port_painter() -> bool:
     return True
 
 
+def _draw_modern_pipe_direction_pointer(pipe_item) -> None:
+    """Use the existing arrow item, oriented from the output to the input."""
+    pointer = pipe_item._dir_pointer
+    path = pipe_item.path()
+    out_port = pipe_item.output_port
+    path_length = path.length()
+    if (
+        out_port is None
+        or pipe_item.input_port is None
+        or pipe_item.disabled()
+        or path_length < 18.0
+    ):
+        pointer.hide()
+        return
+
+    # NodeGraphQt normally builds paths from input to output, but cyclic
+    # paths can use the opposite order. Identify the source by its position.
+    source_pos = pipe_item.mapFromScene(
+        out_port.mapToScene(out_port.boundingRect().center())
+    )
+    start_distance = QtCore.QLineF(path.pointAtPercent(0.0), source_pos).length()
+    end_distance = QtCore.QLineF(path.pointAtPercent(1.0), source_pos).length()
+    if end_distance < start_distance:
+        path = path.toReversed()
+
+    t = path.percentAtLength(path_length * 0.5)
+    p1 = path.pointAtPercent(max(0.0, t - 0.015))
+    p2 = path.pointAtPercent(min(1.0, t + 0.015))
+    dx = p2.x() - p1.x()
+    dy = p2.y() - p1.y()
+    seg_len = (dx * dx + dy * dy) ** 0.5
+    if seg_len <= 1e-4:
+        pointer.hide()
+        return
+
+    ux, uy = dx / seg_len, dy / seg_len
+    nx, ny = -uy, ux
+    arrow_len, arrow_w = 8.5, 4.5
+    back = QtCore.QPointF(-ux * arrow_len, -uy * arrow_len)
+    wing = QtCore.QPointF(nx * arrow_w, ny * arrow_w)
+    pointer.setPolygon(QtGui.QPolygonF([
+        QtCore.QPointF(ux * 2.5, uy * 2.5),
+        back + wing,
+        back * 0.65,
+        back - wing,
+    ]))
+    pointer.setPos(path.pointAtPercent(t))
+    pointer.setRotation(0.0)
+    pointer.setScale(1.0)
+    pointer.show()
+
+
 def paint_modern_pipe(pipe_item, painter: QtGui.QPainter, option, widget) -> None:
     """Modern pipe connection painter with smooth glowing curves and sleek directional arrowheads."""
+    _draw_modern_pipe_direction_pointer(pipe_item)
     painter.save()
     painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
 
@@ -422,37 +475,10 @@ def paint_modern_pipe(pipe_item, painter: QtGui.QPainter, option, widget) -> Non
     painter.setBrush(QtCore.Qt.NoBrush)
     painter.drawPath(path)
 
-    # Sleek directional arrowhead at path midpoint (data flow direction)
-    if not is_disabled and path.length() >= 18.0:
-        t = 0.52
-        p1 = path.pointAtPercent(max(0.0, t - 0.015))
-        p2 = path.pointAtPercent(min(1.0, t + 0.015))
-        dx = p2.x() - p1.x()
-        dy = p2.y() - p1.y()
-        seg_len = (dx * dx + dy * dy) ** 0.5
-        if seg_len > 1e-4:
-            ux = dx / seg_len
-            uy = dy / seg_len
-            nx = -uy
-            ny = ux
-            pt = path.pointAtPercent(t)
-            arrow_len = 8.5
-            arrow_w = 4.5
-            tip = pt + QtCore.QPointF(ux * 2.5, uy * 2.5)
-            left_wing = pt - QtCore.QPointF(ux * arrow_len, uy * arrow_len) + QtCore.QPointF(nx * arrow_w, ny * arrow_w)
-            right_wing = pt - QtCore.QPointF(ux * arrow_len, uy * arrow_len) - QtCore.QPointF(nx * arrow_w, ny * arrow_w)
-            notch = pt - QtCore.QPointF(ux * (arrow_len * 0.65), uy * (arrow_len * 0.65))
-
-            arrow_path = QtGui.QPainterPath()
-            arrow_path.moveTo(tip)
-            arrow_path.lineTo(left_wing)
-            arrow_path.lineTo(notch)
-            arrow_path.lineTo(right_wing)
-            arrow_path.closeSubpath()
-
-            painter.setPen(QtCore.Qt.NoPen)
-            painter.setBrush(pipe_color)
-            painter.drawPath(arrow_path)
+    # Keep the arrow in a child graphics item so Qt includes its full shape
+    # in rendering bounds, including on horizontal or vertical connections.
+    pipe_item._dir_pointer.setPen(QtGui.QPen(QtCore.Qt.NoPen))
+    pipe_item._dir_pointer.setBrush(pipe_color)
 
     painter.restore()
 
@@ -477,6 +503,7 @@ def install_modern_pipe_painter() -> bool:
                 original(self, painter, option, widget)
 
     safe_modern_pipe_paint._pylcss_modern_pipe_painter = True
+    PipeItem._draw_direction_pointer = _draw_modern_pipe_direction_pointer
     PipeItem.paint = safe_modern_pipe_paint
     return True
 

@@ -32,20 +32,17 @@ def _intersecting_triangles(first: np.ndarray, second: np.ndarray, tolerance: fl
 
 
 def screen_mesh_intersections(vertices: np.ndarray, faces: np.ndarray, *,
-                              max_faces: int = 100_000, max_pairs: int = 1_000_000) -> dict:
+                              max_faces: int | None = None, max_pairs: int | None = None) -> dict:
     """Check all spatially overlapping, topologically non-adjacent faces.
 
     Shared-vertex neighbours are excluded; closure, winding and degenerate
-    faces are checked separately. An exhausted budget reports an incomplete
-    check rather than a false zero or a missing-dependency diagnosis.
+    faces are checked separately. Candidate pairs are streamed in batches;
+    the legacy budget arguments are ignored and never skip a large mesh.
     """
     report = {"self_intersecting_faces": None, "screening_scope": "not_run",
               "screening_method": "Non-adjacent triangle separating-axis test",
               "screened_candidate_pairs": 0}
     vertices, faces = np.asarray(vertices, dtype=float), np.asarray(faces, dtype=np.int64)
-    if len(faces) > max_faces:
-        report.update(screening_scope="face_budget", screening_reason=f"the surface exceeds the {max_faces:,}-face screening budget")
-        return report
     if not len(faces):
         report.update(self_intersecting_faces=0, screening_scope="full")
         return report
@@ -64,25 +61,34 @@ def screen_mesh_intersections(vertices: np.ndarray, faces: np.ndarray, *,
         return report
 
     intersected = set()
+    pending_first, pending_second = [], []
+
+    def check_batch():
+        if not pending_first:
+            return
+        left = np.asarray(pending_first, dtype=np.int64)
+        right = np.asarray(pending_second, dtype=np.int64)
+        pending_first.clear()
+        pending_second.clear()
+        adjacent = np.any(faces[right, :, None] == faces[left, None, :], axis=(1, 2))
+        left, right = left[~adjacent], right[~adjacent]
+        report['screened_candidate_pairs'] += len(left)
+        for start in range(0, len(left), 4096):
+            a, b = left[start:start+4096], right[start:start+4096]
+            hits = _intersecting_triangles(triangles[a], triangles[b], tolerance)
+            intersected.update(a[hits].tolist())
+            intersected.update(b[hits].tolist())
+
     try:
         for index, bbox in enumerate(bounds):
-            candidates = np.asarray([other for other in tree.intersection(bbox) if other > index], dtype=int)
+            candidates = [other for other in tree.intersection(bbox) if other > index]
             if not len(candidates):
                 continue
-            adjacent = np.any(faces[candidates, :, None] == faces[index, None, :], axis=(1, 2))
-            candidates = candidates[~adjacent]
-            if not len(candidates):
-                continue
-            if report["screened_candidate_pairs"] + len(candidates) > max_pairs:
-                report.update(screening_scope="pair_budget", screening_reason=f"the check exceeds the {max_pairs:,}-pair screening budget")
-                report["self_intersecting_faces"] = len(intersected) or None
-                return report
-            report["screened_candidate_pairs"] += len(candidates)
-            first = np.broadcast_to(triangles[index], (len(candidates), 3, 3))
-            hits = candidates[_intersecting_triangles(first, triangles[candidates], tolerance)]
-            if len(hits):
-                intersected.add(index)
-                intersected.update(hits.tolist())
+            pending_first.extend([index]*len(candidates))
+            pending_second.extend(candidates)
+            if len(pending_first) >= 4096:
+                check_batch()
+        check_batch()
     except Exception as exc:
         report.update(screening_scope="screening_error", screening_reason=f"the geometric check failed ({exc})")
         report["self_intersecting_faces"] = len(intersected) or None

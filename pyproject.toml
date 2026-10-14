@@ -23,7 +23,7 @@ keywords = [
     "CAD",
     "FEA",
     "CalculiX",
-    "OpenRadioss",
+    "OpenCourant",
     "topology-optimization",
     "sensitivity-analysis",
     "surrogate-modeling",
@@ -72,6 +72,7 @@ mdao = [
     "openpyxl==3.1.5",
 ]
 cae = [
+    "geomdl==5.4.0",
     "cadquery==2.6.1",
     "vtk==9.3.1",
     "scikit-fem==11.0.0",
@@ -90,6 +91,7 @@ cae = [
     "threadpoolctl==3.6.0",
 ]
 all = [
+    "geomdl==5.4.0",
     "nevergrad==1.0.4",
     "SALib==1.5.2",
     "torch==2.9.1",

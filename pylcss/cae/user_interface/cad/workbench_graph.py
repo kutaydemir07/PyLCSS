@@ -157,16 +157,42 @@ class WorkbenchGraphMixin:
 
     def _on_graph_property_changed(self, node, prop_name, prop_value):
         """Handle property changes from the graph (including widgets on nodes)."""
+        from pylcss.cae.design_studio.topology_optimization.configuration.fea_meshing import (
+            is_topopt_fea_setting,
+        )
+        if is_topopt_fea_setting(node, prop_name):
+            cached = getattr(node, "_last_result", None)
+            if isinstance(cached, dict) and (cached.get("validation") or {}).get("source") == "topopt_cad_fea":
+                cached["fea_analysis_status"] = "settings_changed"
+            if self.properties.current_node is node and not self.properties._updating_property:
+                self.properties.display_node(node)
+            return
         # Export destinations and formats do not change engineering geometry.
         # Preserve dirty state and editor focus, and avoid a mesh/graph refresh
         # competing with the export that this property change is preparing.
-        if prop_name in {"cad_export_filename", "cad_export_format"}:
+        if prop_name in {"cad_export_filename", "cad_export_format", "advanced_settings_visible", "advanced_overrides"}:
             return
         # Mark node as dirty so it re-executes
         setattr(node, "_dirty", True)
 
         if getattr(self, "_suppress_graph_property_changed", False):
             return False
+
+        if prop_name in {"non_design_enabled", "non_design_regions"}:
+            timer = getattr(self, "_non_design_preview_timer", None)
+            if timer is None:
+                timer = QtCore.QTimer(self)
+                timer.setSingleShot(True)
+                self._non_design_preview_timer = timer
+            else:
+                timer.stop()
+                try:
+                    timer.timeout.disconnect()
+                except RuntimeError:
+                    pass
+            timer.timeout.connect(lambda n=node: self._preview_topopt_non_design(n, render_domain=True))
+            timer.start(180)
+            return
 
         # Update the properties panel if this node is selected.
         # Skip if the inspector itself triggered the change to avoid a reset loop.
@@ -272,12 +298,10 @@ class WorkbenchGraphMixin:
                         )
                     return
 
-        # Mark both nodes as dirty
+        # Wiring a new consumer changes its inputs, not the provider's result.
+        # Connecting infill to an already solved topology must reuse that solve.
         if port_in:
             node = port_in.node()
-            setattr(node, "_dirty", True)
-        if port_out:
-            node = port_out.node()
             setattr(node, "_dirty", True)
 
         # Auto-execute with skip_simulation for fast CAD preview
@@ -450,6 +474,11 @@ class WorkbenchGraphMixin:
                 target_node = None
                 geom = None
                 prefer_topopt = bool(getattr(self, "_prefer_topopt_after_run", False))
+                if selected is not None and selected.__class__.__name__ in {'LatticeInfillNode'}:
+                    own = results.get(selected, getattr(selected, '_last_result', None))
+                    if self._is_renderable_result(own):
+                        target_node, geom = selected, own
+                        prefer_topopt = False
 
                 if prefer_topopt:
                     sim_node = self._find_renderable_simulation_node()
@@ -503,14 +532,32 @@ class WorkbenchGraphMixin:
                     if target_node is not None:
                         self._last_rendered_node = target_node
                     self._render_result_in_viewer(geom)
+                    if target_node is getattr(self, '_section_new_infill', None):
+                        self._section_new_infill = None
+                        self.viewer._section_axis.setCurrentText('Z')
+                        self.viewer._section_slider.setValue(50)
+                        self.viewer._btn_section.setChecked(True)
                     try:
                         self._show_bc_for_node(target_node)
                     except Exception:
                         logger.debug("Optional UI operation failed.", exc_info=True)
                     if hasattr(self, "_update_results_panel_visibility"):
                         self._update_results_panel_visibility(target_node)
+                    if (not was_preview and target_node is not None
+                            and target_node.__class__.__name__ == 'TopologyOptVoxelNode'
+                            and isinstance(geom, dict) and geom.get('visualization_mode') == 'CAD'):
+                        # Present the recovered surface immediately, then
+                        # replace it with the automatically validated CAD body.
+                        QtCore.QTimer.singleShot(0, lambda n=target_node: self.properties._preview_topopt_cad(n))
                 else:
                     self.viewer.clear()
+
+                if selected is not None and selected.has_property("non_design_regions"):
+                    self._preview_topopt_non_design(selected, cached_only=True)
+
+                refresh_estimate = getattr(self.properties, "_topopt_mesh_estimate_refresh", None)
+                if callable(refresh_estimate):
+                    refresh_estimate()
 
             except Exception:
                 logger.debug("Optional UI operation failed.", exc_info=True)

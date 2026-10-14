@@ -128,12 +128,7 @@ def _attribute_text(value: Any) -> str:
     return str(value or "")
 
 
-# NodeGraphQt regenerates node ids during deserialization, so a sidecar is
-# matched to its study by identifier and display name. Lattice optimization
-# used to be a mode of the topology node: a project saved before the split
-# records the topology identifier for a study that now loads as the lattice
-# node, and matching those two literally would silently restore nothing. They
-# are one identity here so an existing result keeps loading.
+# NodeGraphQt regenerates ids; match sidecars by study identity and name.
 def _identity_key(identifier: Any, name: Any) -> tuple[str, str]:
     """Return the save-stable identity used to match a result to a node."""
     from pylcss.cae.design_studio.topology_optimization.integration.study_identity import (
@@ -141,6 +136,9 @@ def _identity_key(identifier: Any, name: Any) -> tuple[str, str]:
     )
 
     text = str(identifier or "")
+    if text == "com.cad.sim.lattice_voxel":  # Retired project sidecar identity.
+        text = "com.cad.sim.topopt_voxel"
+        name = str(name or "").replace("Lattice Solver", "Topology Solver", 1)
     if text in DENSITY_STUDY_IDENTIFIERS:
         text = "com.cad.sim.density_study"
     return (text, str(name or ""))

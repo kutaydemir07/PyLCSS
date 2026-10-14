@@ -2,7 +2,7 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 """Download and install the external solver components PyLCSS can launch.
 
-CalculiX (``ccx``), OpenRadioss
+CalculiX (``ccx``), OpenCourant
 (``starter_*`` / ``engine_*`` / ``anim_to_vtk`` / ``th_to_csv``)
 and FreeCAD (``FreeCAD.exe`` for the interactive sketch/FEM authoring node) are
 external components, not Python packages that ship in ``requirements.txt``.
@@ -12,20 +12,20 @@ variables to ``<repo>/external_solvers/env.txt``.
 
 Usage
 -----
-    python scripts/install_solvers.py                # everything
-    python scripts/install_solvers.py --only ccx     # CalculiX only
-    python scripts/install_solvers.py --only radioss # OpenRadioss only
-    python scripts/install_solvers.py --only freecad # FreeCAD only
-    python scripts/install_solvers.py --list         # show what would be installed
+    python scripts/install_solvers.py                    # everything
+    python scripts/install_solvers.py --only ccx         # CalculiX only
+    python scripts/install_solvers.py --only opencourant # OpenCourant only
+    python scripts/install_solvers.py --only freecad     # FreeCAD only
+    python scripts/install_solvers.py --list             # show what would be installed
 
 Once the components are unpacked, point PyLCSS at them either by sourcing the
 written env file or by setting these variables yourself:
 
     PYLCSS_CALCULIX_CCX             -> full path to ``ccx`` / ``ccx.exe``
-    PYLCSS_OPENRADIOSS_STARTER      -> full path to ``starter_*``
-    PYLCSS_OPENRADIOSS_ENGINE       -> full path to ``engine_*``
-    PYLCSS_OPENRADIOSS_ANIM2VTK     -> full path to ``anim_to_vtk``
-    PYLCSS_OPENRADIOSS_TH2CSV       -> full path to ``th_to_csv``
+    PYLCSS_OPENCOURANT_STARTER      -> full path to ``starter_*``
+    PYLCSS_OPENCOURANT_ENGINE       -> full path to ``engine_*``
+    PYLCSS_OPENCOURANT_ANIM2VTK     -> full path to ``anim_to_vtk``
+    PYLCSS_OPENCOURANT_TH2CSV       -> full path to ``th_to_csv``
     PYLCSS_FREECAD_EXE              -> full path to ``FreeCAD.exe`` / ``FreeCAD`` / ``FreeCAD.AppImage``
 
 The script is intentionally conservative: it never overwrites an existing
@@ -109,50 +109,49 @@ SOLVERS: Dict[str, Dict[str, SolverAsset]] = {
             env_var="PYLCSS_CALCULIX_CCX",
         ),
     },
-    "radioss": {
-        # Pin the current stable OpenRadioss build and its GitHub-published
-        # asset digest. This avoids silently changing the engineering solver
-        # beneath an otherwise reproducible PyLCSS installation.
+    "opencourant": {
+        # Pin the current stable OpenCourant build and its GitHub-published
+        # asset digest under GNU AGPLv3.
         "Windows": SolverAsset(
-            name="OpenRadioss",
+            name="OpenCourant",
             url=(
-                "https://github.com/OpenRadioss/OpenRadioss/releases/download/"
-                "latest-20260615/OpenRadioss_win64.zip"
+                "https://github.com/OpenCourant/OpenCourant/releases/download/"
+                "latest-20261011/OpenCourant_win64.zip"
             ),
-            archive="OpenRadioss_win64.zip",
+            archive="OpenCourant_win64.zip",
             binary_glob="**/starter_win64.exe",
-            env_var="PYLCSS_OPENRADIOSS_STARTER",
-            sha256="096698f9d08f420ae2d14a3da1610b52dff98cd3206462cbbcc8573163cae2d6",
+            env_var="PYLCSS_OPENCOURANT_STARTER",
+            sha256="6d0ea8b43b68aa12f0a2787b339384a554978cbb65a5d3dbaf1e40598f02e7e6",
             extra_globs={
-                "PYLCSS_OPENRADIOSS_ENGINE": "**/engine_win64.exe",
-                "PYLCSS_OPENRADIOSS_ANIM2VTK": "**/anim_to_vtk*.exe",
-                "PYLCSS_OPENRADIOSS_TH2CSV": "**/th_to_csv*.exe",
+                "PYLCSS_OPENCOURANT_ENGINE": "**/engine_win64.exe",
+                "PYLCSS_OPENCOURANT_ANIM2VTK": "**/anim_to_vtk*.exe",
+                "PYLCSS_OPENCOURANT_TH2CSV": "**/th_to_csv*.exe",
             },
         ),
         "Linux": SolverAsset(
-            name="OpenRadioss",
+            name="OpenCourant",
             url=(
-                "https://github.com/OpenRadioss/OpenRadioss/releases/download/"
-                "latest-20260615/OpenRadioss_linux64.zip"
+                "https://github.com/OpenCourant/OpenCourant/releases/download/"
+                "latest-20261011/OpenCourant_linux64.zip"
             ),
-            archive="OpenRadioss_linux64.zip",
+            archive="OpenCourant_linux64.zip",
             binary_glob="**/starter_linux64_gf",
-            env_var="PYLCSS_OPENRADIOSS_STARTER",
-            sha256="2afc007190b8058194959304918ec21baaaad9017570d9bbf6330f965c28f329",
+            env_var="PYLCSS_OPENCOURANT_STARTER",
+            sha256="6cb419677ca36d73acb96218cc0cf5e4f7d50494d9c7812ba27935e3c0f8ec94",
             extra_globs={
-                "PYLCSS_OPENRADIOSS_ENGINE": "**/engine_linux64_gf",
-                "PYLCSS_OPENRADIOSS_ANIM2VTK": "**/anim_to_vtk*",
-                "PYLCSS_OPENRADIOSS_TH2CSV": "**/th_to_csv*",
+                "PYLCSS_OPENCOURANT_ENGINE": "**/engine_linux64_gf",
+                "PYLCSS_OPENCOURANT_ANIM2VTK": "**/anim_to_vtk*",
+                "PYLCSS_OPENCOURANT_TH2CSV": "**/th_to_csv*",
             },
         ),
         "Darwin": SolverAsset(
-            name="OpenRadioss",
+            name="OpenCourant",
             # No official macOS binary is shipped upstream — Apple Silicon
             # builds must come from source.
-            url="manual:see https://github.com/OpenRadioss/OpenRadioss#building-from-source",
+            url="manual:see https://github.com/OpenCourant/OpenCourant#building-from-source",
             archive="",
             binary_glob="starter_*",
-            env_var="PYLCSS_OPENRADIOSS_STARTER",
+            env_var="PYLCSS_OPENCOURANT_STARTER",
         ),
     },
     "freecad": {
@@ -216,14 +215,13 @@ COMPONENT_LICENSES: Dict[str, Dict[str, str]] = {
         "license_url": "https://www.calculix.de/",
         "source_url": "https://www.dhondt.de/ccx_2.23.src.tar.bz2",
     },
-    "radioss": {
+    "opencourant": {
         "license": "GNU Affero General Public License version 3 or later",
         "license_url": (
-            "https://github.com/OpenRadioss/OpenRadioss/blob/"
-            "latest-20260615/LICENSE.md"
+            "https://github.com/OpenCourant/OpenCourant/blob/main/LICENSE.md"
         ),
         "source_url": (
-            "https://github.com/OpenRadioss/OpenRadioss/tree/latest-20260615"
+            "https://github.com/OpenCourant/OpenCourant"
         ),
     },
     "freecad": {
@@ -255,8 +253,8 @@ def _download(url: str, target: Path, expected_sha256: Optional[str]) -> None:
         raise SystemExit(
             f"\nDownload failed: HTTP {exc.code} for {url}\n"
             "The upstream filename may have changed.  Visit the project page "
-            "(dhondt.de for CalculiX, github.com/OpenRadioss/OpenRadioss/"
-            "releases for OpenRadioss), grab the correct archive name, and "
+            "(dhondt.de for CalculiX, github.com/OpenCourant/OpenCourant/"
+            "releases for OpenCourant), grab the correct archive name, and "
             "rerun with --url-override <full-url>."
         ) from exc
     if expected_sha256:
@@ -511,6 +509,17 @@ def _remove_excluded_solver_artifacts(
     archive_path: Path,
 ) -> None:
     """Remove unused components that PyLCSS intentionally does not distribute."""
+    if key == "opencourant":
+        # PyLCSS supplies the authoring and launch UI; the upstream standalone
+        # GUI is unused and still carries the predecessor's launcher names.
+        for candidate in extract_dir.glob("*/*_gui"):
+            resolved_gui = candidate.resolve()
+            if candidate.is_dir() and resolved_gui.is_relative_to(extract_dir.resolve()):
+                shutil.rmtree(resolved_gui)
+                print(f"  removed unused standalone launcher: {candidate.name}")
+        if archive_path.is_file():
+            archive_path.unlink()
+        return
     if key != "ccx":
         return
 
@@ -568,12 +577,16 @@ def install_solver(key: str, force: bool, url_override: Optional[str]) -> Dict[s
     if extract_dir.exists() and not force:
         print(f"[{asset.name}] already installed at {extract_dir} (use --force to redo).")
     else:
-        if extract_dir.exists():
-            shutil.rmtree(extract_dir)
         if archive_path.exists() and not force:
             print(f"[{asset.name}] reusing cached archive {archive_path.name}")
         else:
             _download(asset.url, archive_path, asset.sha256)
+        if extract_dir.exists():
+            resolved_extract = extract_dir.resolve()
+            resolved_install = INSTALL_ROOT.resolve()
+            if not resolved_extract.is_relative_to(resolved_install):
+                raise SystemExit(f"Refusing to remove unpacked files outside {resolved_install}.")
+            shutil.rmtree(resolved_extract)
         _extract(archive_path, extract_dir)
 
     _remove_excluded_solver_artifacts(key, extract_dir, archive_path)
@@ -833,7 +846,12 @@ def write_env_file(env: Dict[str, str]) -> None:
         lines.append(f"export {key}={value}")
         lines.append(f"set {key}={win_val}")
     ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"Wrote {ENV_FILE}  (optional - only needed if you launch CCX/Radioss outside PyLCSS).")
+    print(f"Wrote {ENV_FILE}  (optional - only needed if you launch CCX/OpenCourant outside PyLCSS).")
+
+
+SOLVER_ALIASES: Dict[str, str] = {
+    "courant": "opencourant",
+}
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -841,8 +859,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--only",
         action="append",
-        choices=sorted(SOLVERS.keys()),
-        help="Install a specific component (can be repeated, e.g. --only ccx --only freecad).",
+        choices=sorted(set(SOLVERS.keys()) | set(SOLVER_ALIASES.keys())),
+        help="Install a specific component (e.g. --only ccx, --only opencourant, --only freecad).",
     )
     parser.add_argument("--all", action="store_true",
                         help="Install every supported component non-interactively.")
@@ -874,9 +892,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     #   --all                   -> everything, no prompt (CI / unattended use)
     #   (no flag)               -> interactive Y/N per component, so users
     #                              who only want FreeCAD don't get CalculiX
-    #                              + OpenRadioss forced on them.
+    #                              + OpenCourant forced on them.
     if args.only:
-        keys = list(dict.fromkeys(args.only))  # de-dup, preserve order
+        keys = list(dict.fromkeys(SOLVER_ALIASES.get(k, k) for k in args.only))
     elif args.all:
         keys = list(SOLVERS.keys())
     else:
@@ -930,7 +948,7 @@ def _component_purpose(key: str) -> str:
     """One-line description shown next to each component during the prompt."""
     return {
         "ccx": "CalculiX -- linear static FEA solver (~10 MB download)",
-        "radioss": "OpenRadioss -- explicit crash / impact solver (~250 MB)",
+        "opencourant": "OpenCourant -- explicit crash / impact solver (~335 MB download)",
         "freecad": "FreeCAD 1.x -- interactive parametric CAD GUI (~1 GB, runs Windows installer wizard with UAC)",
     }.get(key, "external component")
 

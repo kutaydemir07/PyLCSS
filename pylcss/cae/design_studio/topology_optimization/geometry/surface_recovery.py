@@ -91,26 +91,31 @@ def _recover_voxel_shape(
         # Resolve periodic cells on a manufacturing grid, retaining the physical
         # cell pitch. Refinement is a geometry operation, independent of FE size.
         quality_key = str(kwargs.get("surface_quality") or "Professional").strip().lower()
-        min_samples, point_budget = {"standard": (24, 1_000_000), "high": (36, 2_000_000)}.get(
-            quality_key, (48, 3_500_000)
-        )
+        quality_scale = {"standard": 1., "high": 1.5}.get(quality_key, 2.)
         is_lattice = structure_options is not None and structure_options.mode != "solid"
-        if not is_lattice:
-            # Solid continuum topology density is already computed on the FE grid.
-            # Avoid isotropic over-refinement driven by thin structural dimensions
-            # (e.g., thickness=8 driving 6x zoom and 8M voxels).
-            refine = 1.0
-            if max(grid.shape) < min_samples:
-                refine = max(1.0, float(np.ceil(min_samples / max(grid.shape))))
-            refine = min(refine, 2.0)
-        else:
-            refine = max(1.0, float(np.ceil(min_samples / min(grid.shape))))
-            if structure_options.family is not None:
-                refine = max(refine, float(np.ceil(
-                    structure_options.family.minimum_cell_voxels / structure_options.cell_size_voxels
-                )))
-            refine = min(refine, max(1.0, (point_budget / float(grid.size)) ** (1.0 / 3.0)), 12.0)
+        refine = 1.
+        if is_lattice:
+            # Resolve the actual unit cell and wall, rather than upsampling
+            # every axis because the part has one thin overall dimension.
+            family = structure_options.family
+            cell_samples = family.minimum_cell_voxels if family is not None else 12
+            refine = max(1., quality_scale*cell_samples/structure_options.cell_size_voxels,
+                         3./structure_options.member_thickness_voxels)
         zoom = np.full(3, refine, dtype=float)
+        cubic_grid = bool(is_lattice and kwargs.get("cubic_lattice_grid"))
+        if cubic_grid:
+            # Keep cells physically cubic even when the saved analysis voxels
+            # have different X/Y/Z edge lengths.
+            nominal_edge = float(np.mean(analysis_cell))
+            build_edge = min(float(np.min(analysis_cell)), nominal_edge / refine)
+            target_counts = np.ceil(analysis_shape * analysis_cell / build_edge)
+            zoom = target_counts / analysis_shape
+        point_budget = kwargs.get("max_recovery_voxels")
+        if point_budget and float(np.prod(np.round(analysis_shape * zoom))) > int(point_budget):
+            raise ValueError(
+                "The requested lattice needs more than the build-grid voxel budget. "
+                "Increase cell size or minimum wall/strut thickness."
+            )
         extrusion_index = {"x": 0, "y": 1, "z": 2}.get(str(extrusion_axis or "").lower())
         if extrusion_index is not None and not is_lattice:
             grid = np.broadcast_to(np.mean(grid, axis=extrusion_index, keepdims=True), grid.shape).copy()
@@ -126,6 +131,8 @@ def _recover_voxel_shape(
         zoom = np.asarray(grid.shape, dtype=float) / analysis_shape
         resolution_scale = float(np.max(zoom))
         spacing = analysis_cell / zoom
+        if cubic_grid:
+            resolution_scale = float(np.mean(analysis_cell) / np.mean(spacing))
         source_field = _resample_source_mask(source_mask, tuple(grid.shape))
         solid_field = _resample_source_mask(passive_solid_mask, tuple(grid.shape))
         void_field = _resample_source_mask(passive_void_mask, tuple(grid.shape))
@@ -265,6 +272,10 @@ def _recover_voxel_shape(
                 removed_volume = candidate_volume
                 tm = trimesh.util.concatenate(kept)
                 verts, faces = np.asarray(tm.vertices), np.asarray(tm.faces)
+        from .mesh_reduction import compact_mesh
+        verts, faces, reduction_report = compact_mesh(
+            verts, faces, tolerance=float(np.min(spacing))*0.2)
+        tm = trimesh.Trimesh(verts, faces, process=False)
         mesh_volume = abs(float(tm.volume)) if tm.is_watertight else None
         is_watertight = bool(tm.is_watertight)
         boundary_shells = tm.split(only_watertight=False)
@@ -307,8 +318,13 @@ def _recover_voxel_shape(
             "structure_resolution_scale": resolution_scale,
             "recovery_grid_shape": [int(value) for value in grid.shape],
             "surface_recovery_report": recovery_report,
+            "mesh_reduction": reduction_report,
             "is_watertight": is_watertight,
         }
+        if is_lattice and kwargs.get("include_manufacturing_field"):
+            # Preserve explicit resolved cells for downstream voxel FEA; the
+            # graded macro field describes their thickness, not solid occupancy.
+            recovered_shape["manufactured_density"] = np.asarray(grid >= eff_cutoff, dtype=np.uint8)
         return recovered_shape
     except Exception:
         logger.exception("Voxel boundary recovery failed")

@@ -216,15 +216,9 @@ class SolutionSpaceWidget(
                 )
 
     def closeEvent(self, event):
-        self.request_background_stop()
-        if self.has_active_background_tasks():
-            QtWidgets.QMessageBox.information(
-                self,
-                "Background Tasks Running",
-                "Solution-space work is still running. Stop or wait for the active computation before closing this view.",
-            )
-            event.ignore()
-            return
+        from pylcss.user_interface.background_shutdown import prepare_window_close
+
+        prepare_window_close(self)
         event.accept()
 
     def on_app_quit(self):

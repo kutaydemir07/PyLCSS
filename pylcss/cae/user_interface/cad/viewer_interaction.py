@@ -150,12 +150,15 @@ class CadInteractorStyle(vtk.vtkInteractorStyleTrackballCamera):
 
     def _world_under_cursor(self, renderer, x, y):
         """World point under the pointer — on geometry if hit, else focal plane."""
-        picker = vtk.vtkPropPicker()
+        # Hardware prop picking re-renders the scene. VTK 9.3's custom
+        # SSAA/SSAO passes bypass selector setup, producing invalid prop IDs
+        # ("Too many props") and missed hits. Intersect geometry directly.
+        picker = vtk.vtkCellPicker()
         try:
             if picker.Pick(x, y, 0, renderer) and picker.GetViewProp() is not None:
                 return np.asarray(picker.GetPickPosition(), dtype=float)
         except Exception:
-            _LOG.debug("Prop pick failed during zoom.", exc_info=True)
+            _LOG.debug("Cell pick failed during zoom.", exc_info=True)
         # Nothing under the pointer: unproject onto the plane through the
         # focal point so zooming over empty space still behaves predictably.
         try:
@@ -227,6 +230,9 @@ class ViewerInteractionMixin:
         """Swap VTK's trackball for the zoom-to-cursor variant."""
         try:
             style = CadInteractorStyle(self.renderer)
+            # VTK's built-in keyboard picking uses the interactor's picker.
+            # Keep that path independent of the quality render passes too.
+            self.interactor.SetPicker(vtk.vtkCellPicker())
             self.interactor.SetInteractorStyle(style)
             self._default_interactor_style = style
         except Exception:

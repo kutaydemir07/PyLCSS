@@ -102,8 +102,10 @@ class ManufacturingStructureOptions:
         object.__setattr__(self, "variable_density", bool(self.variable_density))
         object.__setattr__(self, "repair_connections", bool(self.repair_connections))
         is_lattice = self.mode != "solid"
-        if is_lattice and self.cell_size_voxels < 3.0:
-            raise ValueError("A lattice cell must span at least 3 voxels.")
+        if is_lattice and self.cell_size_voxels <= 0.0:
+            # Pitch is measured in source-grid voxels. Surface recovery sizes
+            # its independent build grid to resolve the actual cell family.
+            raise ValueError("A lattice cell size must be positive.")
         if is_lattice and self.member_thickness_voxels <= 0.0:
             raise ValueError("A lattice member thickness must be positive.")
         if is_lattice and self.cell_size_voxels < 4.0 * self.member_thickness_voxels:
@@ -426,17 +428,17 @@ def _strut_radius_field(
             # The law stores member thickness as a fraction of the cell pitch,
             # so it transfers to any cell size and any grid resolution.
             thickness = law.cell_parameter_for_density(density) * float(cell_size)
-            return np.maximum(0.25, 0.5 * thickness * float(member_scale))
+            return np.maximum(radius, 0.5 * thickness * float(member_scale))
         curve = _strut_density_curve(mode, cell_size)
         if curve is not None:
             densities, radii = curve
             # Radii are fractions of the cell pitch, so this transfers to any
             # cell size and any grid resolution, exactly as the law does.
             measured = np.interp(density, densities, radii) * float(cell_size)
-            return np.maximum(0.25, measured * float(member_scale))
+            return np.maximum(radius, measured * float(member_scale))
 
     scale = np.sqrt(density / 0.35)
-    return radius * np.clip(scale, 0.45, 1.8)
+    return radius * np.clip(scale, 1.0, 1.8)
 
 
 def _strut_lattice(

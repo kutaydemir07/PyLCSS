@@ -1,0 +1,438 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "domain": {
+      "type_": "com.cad.import_step.ImportStepNode",
+      "icon": null,
+      "name": "GE Sloped Clevis Bracket Reference CAD",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 180,
+      "height": 100,
+      "pos": [
+        -800,
+        -60
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "filepath": "assets/ge_sloped_bracket.step",
+        "description": "GE reference geometry: original sloped shoulders, two clevis lugs, four counterbored mounting holes and blended feet.",
+        "notes": "The source geometry is bundled beside this project; see assets/README.md for provenance. The five analysis partitions are joined into one solid, and the base is aligned to XY."
+      }
+    },
+    "material": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "Linear Elastic Steel",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 180,
+      "height": 100,
+      "pos": [
+        100,
+        520
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "preset": "Steel (Structural)",
+        "analysis_purpose": "Structural FEA",
+        "youngs_modulus": 210000.0,
+        "poissons_ratio": 0.3,
+        "density": 7.85e-09,
+        "yield_strength": 355.0
+      }
+    },
+    "base_support_selection": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Four Base Bolt Supports Selection",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 180,
+      "height": 100,
+      "pos": [
+        -480,
+        0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "entity_type": "Face",
+        "selector_type": "Coordinate Range",
+        "range_expr": "(z > 3) & (z < 5)"
+      }
+    },
+    "base_support": {
+      "type_": "com.cad.topopt.support.TopologySupportNode",
+      "icon": null,
+      "name": "Four Base Bolt Supports",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 180,
+      "height": 100,
+      "pos": [
+        -160,
+        0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "support_type": "Fixed"
+      }
+    },
+    "lug_load_selection": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Two Clevis Bores - Total 2 kN Downward Selection",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 180,
+      "height": 100,
+      "pos": [
+        -480,
+        170
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "entity_type": "Face",
+        "selector_type": "Coordinate Range",
+        "range_expr": "(x*x > 200) & (x*x < 208) & (y > -36.38) & (y < -36.37) & (z > 44.72) & (z < 44.73)"
+      }
+    },
+    "lug_load": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "Two Clevis Bores - Total 2 kN Downward",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 180,
+      "height": 100,
+      "pos": [
+        -160,
+        170
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "force_x": 0,
+        "force_y": 0,
+        "force_z": -2000
+      }
+    },
+    "study": {
+      "type_": "com.cad.sim.topopt_voxel.TopologyOptVoxelNode",
+      "icon": null,
+      "name": "GE Sloped Clevis Bracket TopOpt",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 180,
+      "height": 100,
+      "pos": [
+        220,
+        0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "design_goal": "Lightweight Stiffness",
+        "volfrac": 0.4,
+        "visualization": "Density",
+        "voxel_mesh_quality": "Very Fine",
+        "voxel_size": 0.0,
+        "non_design_enabled": true,
+        "non_design_regions": "[{\"name\": \"Lower bolt bore collars\", \"face_indices\": [23, 24, 25, 26], \"thickness_mm\": 3, \"face_signatures\": [{\"type\": \"CYLINDER\", \"area\": 263.0419865491104, \"center\": [-74.02830000000002, -13.196569873760353, 3.924300100000065]}, {\"type\": \"CYLINDER\", \"area\": 254.27392033078996, \"center\": [-74.02829999999999, 38.87457940074, 3.9243000999999995]}, {\"type\": \"CYLINDER\", \"area\": 254.27392033079, \"center\": [74.02829999998501, -17.69246910374, 3.924300100001]}, {\"type\": \"CYLINDER\", \"area\": 254.27392033077322, \"center\": [74.02829999998399, 20.408371828785338, 3.924300100000837]}]}, {\"name\": \"Screw counterbore collars\", \"face_indices\": [27, 29, 41, 43], \"thickness_mm\": 3, \"face_signatures\": [{\"type\": \"CYLINDER\", \"area\": 878.713469763584, \"center\": [-73.7458004344089, -13.196570617938665, 17.038768557309524]}, {\"type\": \"CYLINDER\", \"area\": 878.7134697636723, \"center\": [-73.74580043440817, 38.87457865661084, 17.03876855731026]}, {\"type\": \"CYLINDER\", \"area\": 878.7134697640574, \"center\": [73.74580043438903, -17.692468359611198, 17.03876855731343]}, {\"type\": \"CYLINDER\", \"area\": 878.7134697640679, \"center\": [73.74580043438806, 20.408372572913784, 17.038768557313553]}]}, {\"name\": \"Two clevis bore collars\", \"face_indices\": [56, 57], \"thickness_mm\": 5, \"face_signatures\": [{\"type\": \"CYLINDER\", \"area\": 381.2973780208922, \"center\": [14.287500000000005, -36.37778193102958, 44.72459397099253]}, {\"type\": \"CYLINDER\", \"area\": 381.29737802083133, \"center\": [-14.2875, -36.3777819310294, 44.72459397099233]}]}]",
+        "max_iter": 120,
+        "validate_after_optimize": false,
+        "cad_export_filename": "01_sloped_bracket.step",
+        "description": "Optimize the GE reference bracket matching the supplied plain-bracket layout: four counterbored mounts, two raised clevis lugs, tapered base, angled shoulders and blended lug feet.",
+        "notes": "Automatic voxel meshing. Preserve narrow collars around the four screw holes/counterbores and two middle clevis bores. Re-select faces after changing the source geometry.",
+        "automatic_grid": true,
+        "automatic_mesh_refinement": true
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "domain",
+        "shape"
+      ],
+      "in": [
+        "base_support_selection",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "base_support_selection",
+        "selection"
+      ],
+      "in": [
+        "base_support",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "base_support",
+        "supports"
+      ],
+      "in": [
+        "study",
+        "supports"
+      ]
+    },
+    {
+      "out": [
+        "domain",
+        "shape"
+      ],
+      "in": [
+        "lug_load_selection",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "lug_load_selection",
+        "selection"
+      ],
+      "in": [
+        "lug_load",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "lug_load",
+        "loads"
+      ],
+      "in": [
+        "study",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "domain",
+        "shape"
+      ],
+      "in": [
+        "study",
+        "design_domain"
+      ]
+    },
+    {
+      "out": [
+        "material",
+        "material"
+      ],
+      "in": [
+        "study",
+        "material"
+      ]
+    }
+  ],
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "_title": "GE Sloped Clevis Bracket",
+  "_baseline": "Unsolved design domain with all boundary selections supplied.",
+  "_fidelity": "Imported reference CAD with its original angles and fillets. The base is aligned to XY and analysis partitions are fused. Linear elastic steel and a single 2 kN load are demonstration choices, rather than a reproduction of all GE challenge load cases. Start with 3 mm voxels.",
+  "_requirements": [
+    {
+      "requirement": "Convergence and material budget",
+      "target": "Review convergence at 40% volume fraction",
+      "verification": "Objective/change histories and final volume report",
+      "baseline_status": "Not evaluated"
+    },
+    {
+      "requirement": "Preserved interfaces",
+      "target": "Retain the selected non-design material and open bores",
+      "verification": "Non-design face-layer preview and recovered geometry",
+      "baseline_status": "Not evaluated"
+    }
+  ],
+  "_workflow": [
+    "Preview the domain, named support/load selections and non-design face layers.",
+    "Run the TopOpt solver and inspect density, volume fraction and convergence.",
+    "Use automatic voxel meshing. Preserve only the screw-hole and middle clevis-bore collars, then recover CAD and run structural verification."
+  ],
+  "_deliverables": [
+    "Optimized density and convergence report",
+    "Recovered geometry and interface review"
+  ],
+  "_acceptance_criteria": [
+    "Supports and load remain attached to connected material.",
+    "Selected non-design interfaces remain solid and bores stay open.",
+    "Compare convergence and geometry on a finer voxel mesh."
+  ],
+  "_purpose": "Optimize the GE reference bracket matching the supplied plain-bracket layout: four counterbored mounts, two raised clevis lugs, tapered base, angled shoulders and blended lug feet.",
+  "_visual_target": "Connected material from the two clevis bores to all four mounts, within the original inclined CAD envelope.",
+  "_engineering_decision": "Find a load path in the reference CAD at a 40% material budget for the supplied single demonstration load.",
+  "_design_variables": [
+    "Reference CAD bounds: 178.54 x 108.32 x 62.50 mm",
+    "Two coaxial clevis bores: diameter 19.1135 mm",
+    "Original sloped faces and mounting-hole layout retained",
+    "Volume fraction: 40%"
+  ],
+  "_load_cases": [
+    "All four lower base bolt bore walls fixed",
+    "One total 2,000 N force in global -Z, shared by the two clevis bore walls"
+  ],
+  "_geometry_source": "https://github.com/fenics-dolfiny/dolfiny/blob/8d3b71645ee1ac44ea78ebe19ad9bbe672575a9f/demo/structural_optimisation/ge_bracket_rotated_nonds.step",
+  "_engineering_limits": [
+    "Geometry comes from the public GE benchmark provided by dolfiny; source and license texts are in assets/.",
+    "The supplied material and single load are a simplified topology demonstration. Bolt preload, pin contact, fatigue and the full four-case challenge are not modeled."
+  ]
+}

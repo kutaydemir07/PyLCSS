@@ -225,7 +225,7 @@ class WorkbenchBoundaryMixin:
             if cls == "ConstraintNode":
                 # The backend deliberately drops SPC constraints for a
                 # free-flying moving-body barrier impact. Showing them here
-                # would misrepresent the model actually sent to OpenRadioss.
+                # would misrepresent the model actually sent to OpenCourant.
                 if anchor_cls == "CrashSolverNode" and crash_moving_body:
                     continue
                 if anchor_cls == "ConstraintNode" and node is not anchor_node:

@@ -5,8 +5,8 @@
 The join inserts degree-multiplicity knots rather than fitting another surface.
 It works on arbitrary curved patches, not only recognized analytic primitives.
 Creases, incompatible boundaries, and periodic/extraordinary topology delimit
-the charts. Internal parameter continuity is C0; existing geometric G1
-continuity is retained because each polynomial piece remains unchanged.
+the charts. Every polynomial piece remains unchanged with C0 continuity
+at retained internal knots.
 """
 from __future__ import annotations
 
@@ -21,40 +21,56 @@ class SplineChart:
     cells: np.ndarray
     rotations: np.ndarray
 
+    @property
+    def degree(self):
+        return (self.poles.shape[0] - 1) // self.cells.shape[0]
+
 
 def _oriented_quad(quads, face, rotation):
     return np.roll(quads[face], rotation)
 
 
-def consolidate_patches(poles, quads, *, crease_edges=(), maximum_chart_patches=64,
-                        maximum_chart_spans=16, boundary_tolerance=1e-9):
-    """Partition a closed quad layout into bounded rectangular surface charts.
+def consolidate_patches(poles, quads, *, crease_edges=(), boundary_tolerance=1e-9):
+    """Grow compatible rectangular charts without size limits or global solves.
 
-    Quad vertices are topological ids, not points clustered by proximity. A
-    proposed row/column must have all its neighbors, matching oriented control
-    curves, and an injective vertex grid. Thus a chart cannot close a hole,
-    cross a branch point, or join unrelated sheets that happen to be nearby.
+    Edges are checked once. Growth validates only the newly added strip and
+    retains a vertex-to-UV map, so no candidate rescans or copies a whole chart.
+    Topological seams and physical creases, rather than face budgets, delimit
+    the resulting surfaces. Every polynomial piece is retained exactly.
     """
     poles = np.asarray(poles, dtype=float)
     quads = np.asarray(quads, dtype=np.int64)
-    if (poles.ndim != 4 or poles.shape[1:] != (6, 6, 3)
+    if (poles.ndim != 4 or poles.shape[1] != poles.shape[2]
+            or poles.shape[1] < 3 or poles.shape[-1] != 3
             or quads.shape != (len(poles), 4) or not np.isfinite(poles).all()):
-        raise ValueError('Expected one finite biquintic control grid per quad')
-    if maximum_chart_patches < 1 or maximum_chart_spans < 1 or boundary_tolerance < 0:
-        raise ValueError('Chart budgets must be positive and tolerance nonnegative')
+        raise ValueError('Expected one finite square Bezier control grid per quad')
+    if boundary_tolerance < 0:
+        raise ValueError('Boundary tolerance must be nonnegative')
+    degree = poles.shape[1]-1
     creases = {tuple(sorted(map(int, edge))) for edge in crease_edges}
-    owners = {}
-    for face, quad in enumerate(quads):
-        for a, b in zip(quad, np.roll(quad, -1)):
-            owners.setdefault(tuple(sorted((int(a), int(b)))), []).append(face)
-    used = set()
-    charts = []
+    owners, curves = {}, {}
     maximum_gap = 0.
+    incompatible = set()
+    for face, quad in enumerate(quads):
+        patch = poles[face]
+        for side, (a, b) in enumerate(zip(quad, np.roll(quad, -1))):
+            key = tuple(sorted((int(a), int(b))))
+            curve = (patch[:, 0], patch[-1, :], patch[::-1, -1], patch[0, ::-1])[side]
+            if a > b:
+                curve = curve[::-1]
+            owners.setdefault(key, []).append(face)
+            if key in curves:
+                gap = float(np.max(np.abs(curve-curves[key])))
+                maximum_gap = max(maximum_gap, gap)
+                if gap > boundary_tolerance:
+                    incompatible.add(key)
+            else:
+                curves[key] = curve
+    used, charts = set(), []
 
     def neighbor(cell, side):
         face, rotation = cell
         quad = _oriented_quad(quads, face, rotation)
-        # +u, +v, -u, -v: wanted two corners in the neighbor's chart frame.
         edge, corners, values = (
             ((quad[1], quad[2]), (0, 3), (quad[1], quad[2])),
             ((quad[3], quad[2]), (0, 1), (quad[3], quad[2])),
@@ -63,7 +79,7 @@ def consolidate_patches(poles, quads, *, crease_edges=(), maximum_chart_patches=
         )[side]
         key = tuple(sorted(map(int, edge)))
         adjacent = owners[key]
-        if key in creases or len(adjacent) != 2:
+        if key in creases or key in incompatible or len(adjacent) != 2:
             return None
         other = adjacent[0] if adjacent[1] == face else adjacent[1]
         if other in used:
@@ -74,104 +90,94 @@ def consolidate_patches(poles, quads, *, crease_edges=(), maximum_chart_patches=
                 return other, turn
         return None
 
-    def coherent(grid):
-        """Check all shared vertices and polynomial boundaries, not endpoints."""
-        vertices = np.full((len(grid) + 1, len(grid[0]) + 1), -1, dtype=np.int64)
-        controls = np.full((5 * len(grid) + 1, 5 * len(grid[0]) + 1, 3), np.nan)
-        ids = set()
-        gap = 0.
-        for i, row in enumerate(grid):
-            for j, (face, rotation) in enumerate(row):
-                if face in ids:
-                    return None
-                ids.add(face)
-                quad = _oriented_quad(quads, face, rotation)
-                for a, b, vertex in ((i, j, quad[0]), (i + 1, j, quad[1]),
-                                      (i + 1, j + 1, quad[2]), (i, j + 1, quad[3])):
-                    if vertices[a, b] != -1 and vertices[a, b] != vertex:
-                        return None
-                    vertices[a, b] = vertex
-                patch = np.rot90(poles[face], rotation, axes=(0, 1))
-                destination = controls[5*i:5*i+6, 5*j:5*j+6]
-                shared = np.isfinite(destination[..., 0])
-                if shared.any():
-                    gap = max(gap, float(np.max(np.abs(destination[shared] - patch[shared]))))
-                    if gap > boundary_tolerance:
-                        return None
-                # Retain the existing boundary rather than averaging/refitting.
-                destination[~shared] = patch[~shared]
-        if len(np.unique(vertices)) != vertices.size:
-            return None
-        # Reject an internal edge explicitly classified as a physical crease.
-        for i in range(1, len(grid)):
-            for j in range(len(grid[0])):
-                if tuple(sorted((int(vertices[i, j]), int(vertices[i, j+1])))) in creases:
-                    return None
-        for i in range(len(grid)):
-            for j in range(1, len(grid[0])):
-                if tuple(sorted((int(vertices[i, j]), int(vertices[i+1, j])))) in creases:
-                    return None
-        return controls, gap
-
     for seed in range(len(quads)):
         if seed in used:
             continue
-        grid = [[(seed, 0)]]
-        while True:
-            options = []
+        grid = {(0, 0): (seed, 0)}
+        vertices, coordinates = {}, {}
+        chart_ids = {seed}
+        u0 = u1 = v0 = v1 = 0
+
+        def strip_vertices(strip):
+            additions, inverse, ids = {}, {}, set()
+            for (i, j), (face, rotation) in strip:
+                if face in chart_ids or face in ids:
+                    return None
+                ids.add(face)
+                quad = _oriented_quad(quads, face, rotation)
+                for coord, vertex in zip(((i,j), (i+1,j), (i+1,j+1), (i,j+1)), quad):
+                    vertex = int(vertex)
+                    if (coord in vertices and vertices[coord] != vertex
+                            or coord in additions and additions[coord] != vertex
+                            or vertex in coordinates and coordinates[vertex] != coord
+                            or vertex in inverse and inverse[vertex] != coord):
+                        return None
+                    additions[coord], inverse[vertex] = vertex, coord
+                # A new strip can contain a crease between adjacent new cells.
+                for a, b in zip(quad, np.roll(quad, -1)):
+                    key = tuple(sorted((int(a), int(b))))
+                    if key in creases or key in incompatible:
+                        if any(other in ids for other in owners[key] if other != face):
+                            return None
+            return additions, inverse
+
+        quad = quads[seed]
+        for coord, vertex in zip(((0,0), (1,0), (1,1), (0,1)), quad):
+            vertices[coord], coordinates[int(vertex)] = int(vertex), coord
+        blocked = set()
+        while len(blocked) < 4:
             for side in range(4):
-                nu, nv = len(grid), len(grid[0])
-                new_u, new_v = nu + (side % 2 == 0), nv + (side % 2 == 1)
-                if (new_u * new_v > maximum_chart_patches
-                        or max(new_u, new_v) > maximum_chart_spans):
+                if side in blocked:
                     continue
-                boundary = (grid[-1] if side == 0 else [row[-1] for row in grid] if side == 1
-                            else grid[0] if side == 2 else [row[0] for row in grid])
-                extension = [neighbor(cell, side) for cell in boundary]
-                if any(cell is None for cell in extension):
+                boundary = ([(u1,j) for j in range(v0,v1+1)] if side == 0 else
+                            [(i,v1) for i in range(u0,u1+1)] if side == 1 else
+                            [(u0,j) for j in range(v0,v1+1)] if side == 2 else
+                            [(i,v0) for i in range(u0,u1+1)])
+                delta = ((1,0),(0,1),(-1,0),(0,-1))[side]
+                strip = [((i+delta[0], j+delta[1]), neighbor(grid[i,j], side)) for i,j in boundary]
+                if any(cell is None for _, cell in strip):
+                    blocked.add(side)
                     continue
-                if side == 0:
-                    candidate = grid + [extension]
-                elif side == 2:
-                    candidate = [extension] + grid
-                elif side == 1:
-                    candidate = [row + [cell] for row, cell in zip(grid, extension)]
-                else:
-                    candidate = [[cell] + row for row, cell in zip(grid, extension)]
-                result = coherent(candidate)
-                if result is not None:
-                    options.append(((new_u * new_v, -max(new_u, new_v), -side), candidate))
-            if not options:
-                break
-            grid = max(options, key=lambda option: option[0])[1]
-        controls, gap = coherent(grid)
-        maximum_gap = max(maximum_gap, gap)
-        cells = np.array([[cell[0] for cell in row] for row in grid], dtype=np.int64)
-        rotations = np.array([[cell[1] for cell in row] for row in grid], dtype=np.int64)
-        used.update(map(int, cells.ravel()))
+                additions = strip_vertices(strip)
+                if additions is None:
+                    blocked.add(side)
+                    continue
+                vertices.update(additions[0])
+                coordinates.update(additions[1])
+                grid.update(strip)
+                chart_ids.update(cell[0] for _, cell in strip)
+                if side == 0: u1 += 1
+                elif side == 1: v1 += 1
+                elif side == 2: u0 -= 1
+                else: v0 -= 1
+        cells = np.empty((u1-u0+1,v1-v0+1), dtype=np.int64)
+        rotations = np.empty_like(cells)
+        controls = np.empty((degree*cells.shape[0]+1,degree*cells.shape[1]+1,3))
+        for (u, v), (face, rotation) in grid.items():
+            i, j = u-u0, v-v0
+            cells[i,j], rotations[i,j] = face, rotation
+            controls[degree*i:degree*(i+1)+1,degree*j:degree*(j+1)+1] = np.rot90(poles[face],rotation,axes=(0,1))
+        used.update(chart_ids)
         charts.append(SplineChart(controls, cells, rotations))
-    count = len(charts)
     return charts, {
-        'method': 'Exact piecewise Bezier surface consolidation',
-        'input_patch_count': len(poles), 'output_surface_count': count,
-        'merged_patch_count': len(poles) - count,
-        'removed_patch_boundaries': sum((chart.cells.shape[0]-1)*chart.cells.shape[1]
-                                        + (chart.cells.shape[1]-1)*chart.cells.shape[0]
-                                        for chart in charts),
-        'maximum_patches_per_surface': max((chart.cells.size for chart in charts), default=0),
-        'maximum_shared_control_gap': maximum_gap,
-        'boundary_tolerance': float(boundary_tolerance),
+        'method': 'Incremental shared-curve chart consolidation',
+        'input_patch_count': len(poles), 'output_surface_count': len(charts),
+        'merged_patch_count': len(poles)-len(charts),
+        'removed_patch_boundaries': sum((c.cells.shape[0]-1)*c.cells.shape[1]
+                                        +(c.cells.shape[1]-1)*c.cells.shape[0] for c in charts),
+        'maximum_shared_control_gap': maximum_gap, 'boundary_tolerance': float(boundary_tolerance),
         'geometric_pieces_retained': True, 'refitted': False,
-        'parameter_continuity': 'C0 at retained internal knots; original geometric continuity retained',
+        'parameter_continuity': 'C0 at retained internal knots',
     }
 
 
 def chart_surface(chart):
-    """Make the native degree-five B-spline without approximation/knot removal."""
+    """Make a native B-spline with the degree of its Bezier pieces."""
     from OCP.Geom import Geom_BSplineSurface
     from OCP.TColgp import TColgp_Array2OfPnt
     from OCP.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
     from OCP.gp import gp_Pnt
+    degree = chart.degree
     nu, nv = chart.poles.shape[:2]
     points = TColgp_Array2OfPnt(1, nu, 1, nv)
     for i in range(nu):
@@ -183,15 +189,15 @@ def chart_surface(chart):
         multiplicities = TColStd_Array1OfInteger(1, spans + 1)
         for index in range(spans + 1):
             knots.SetValue(index + 1, float(index))
-            multiplicities.SetValue(index + 1, 6 if index in (0, spans) else 5)
+            multiplicities.SetValue(index + 1, degree+1 if index in (0, spans) else degree)
         return knots, multiplicities
 
     uknots, umults = axis(chart.cells.shape[0])
     vknots, vmults = axis(chart.cells.shape[1])
-    return Geom_BSplineSurface(points, uknots, vknots, umults, vmults, 5, 5)
+    return Geom_BSplineSurface(points, uknots, vknots, umults, vmults, degree, degree)
 
 
-def chart_faces(charts, quads, tolerance):
+def chart_faces(charts, quads, tolerance, *, surface_recovery_report=None):
     """Create shared boundary edges with exact pcurves on each chart.
 
     A long natural surface edge can span many neighboring short face edges.
@@ -208,16 +214,33 @@ def chart_faces(charts, quads, tolerance):
     from OCP.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
     from OCP.TopoDS import TopoDS, TopoDS_Face
     from OCP.gp import gp_Pnt, gp_Pnt2d
+    from OCP.GeomProjLib import GeomProjLib
+    from OCP.ShapeCustom import ShapeCustom_Surface
 
     builder = BRep_Builder()
     vertices, edges, faces = {}, {}, []
     knots, multiplicities = TColStd_Array1OfReal(1, 2), TColStd_Array1OfInteger(1, 2)
     for index, value in ((1, 0.), (2, 1.)):
         knots.SetValue(index, value)
-        multiplicities.SetValue(index, 6)
 
     for chart in charts:
+        degree = chart.degree
+        for index in (1, 2):
+            multiplicities.SetValue(index, degree+1)
         surface = chart_surface(chart)
+        converter = ShapeCustom_Surface(surface)
+        analytic = converter.ConvertToAnalytical(max(1e-10, float(tolerance)*.25), False)
+        converted = analytic is not None
+        if converted:
+            surface = analytic
+        if surface_recovery_report is not None:
+            kind = surface.DynamicType().Name().removeprefix('Geom_')
+            types = surface_recovery_report.setdefault('surface_types', {})
+            types[kind] = types.get(kind, 0)+1
+            if converted:
+                surface_recovery_report['analytic_converted_chart_count'] = surface_recovery_report.get('analytic_converted_chart_count', 0)+1
+                surface_recovery_report['maximum_analytic_conversion_gap'] = max(
+                    surface_recovery_report.get('maximum_analytic_conversion_gap', 0.), converter.Gap())
         face = TopoDS_Face()
         builder.MakeFace(face, surface, float(tolerance))
         nu, nv = chart.cells.shape
@@ -229,17 +252,17 @@ def chart_faces(charts, quads, tolerance):
         for i, j, side, start_uv, end_uv in boundary:
             quad = _oriented_quad(quads, chart.cells[i, j], chart.rotations[i, j])
             a, b = int(quad[side]), int(quad[(side+1) % 4])
-            patch = chart.poles[5*i:5*i+6, 5*j:5*j+6]
+            patch = chart.poles[degree*i:degree*(i+1)+1, degree*j:degree*(j+1)+1]
             curve_poles = (patch[:, 0], patch[-1, :], patch[::-1, -1], patch[0, ::-1])[side]
             key = tuple(sorted((a, b)))
             forward = a < b
             if not forward:
                 curve_poles = curve_poles[::-1]
             if key not in edges:
-                points = TColgp_Array1OfPnt(1, 6)
+                points = TColgp_Array1OfPnt(1, degree+1)
                 for k, value in enumerate(curve_poles, 1):
                     points.SetValue(k, gp_Pnt(*map(float, value)))
-                curve = Geom_BSplineCurve(points, knots, multiplicities, 5)
+                curve = Geom_BSplineCurve(points, knots, multiplicities, degree)
                 for vertex, value in zip(key, (curve_poles[0], curve_poles[-1])):
                     if vertex not in vertices:
                         vertices[vertex] = BRepBuilderAPI_MakeVertex(gp_Pnt(*map(float, value))).Vertex()
@@ -249,7 +272,15 @@ def chart_faces(charts, quads, tolerance):
             points_2d = TColgp_Array1OfPnt2d(1, 2)
             for k, value in enumerate(parameters, 1):
                 points_2d.SetValue(k, gp_Pnt2d(*map(float, value)))
-            builder.UpdateEdge(edge, Geom2d_BezierCurve(points_2d), face, float(tolerance))
+            if converted:
+                from OCP.BRep import BRep_Tool
+                curve = BRep_Tool.Curve_s(edge, 0., 1.)
+                pcurve = GeomProjLib.Curve2d_s(curve, 0., 1., surface, max(1e-10, float(tolerance)*.1))
+                if pcurve is None:
+                    raise RuntimeError('An analytic surface boundary could not be parameterized')
+            else:
+                pcurve = Geom2d_BezierCurve(points_2d)
+            builder.UpdateEdge(edge, pcurve, face, float(tolerance))
             builder.Range(edge, face, 0., 1.)
             builder.SameParameter(edge, True)
             builder.SameRange(edge, True)

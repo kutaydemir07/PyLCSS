@@ -12,9 +12,9 @@ from pylcss.cae.solver_backends.calculix import (
     run_calculix_assembly,
     run_calculix_static,
 )
-from pylcss.cae.solver_backends.openradioss import (
-    run_openradioss_crash,
-    run_openradioss_existing_deck,
+from pylcss.cae.solver_backends.opencourant import (
+    run_opencourant_crash,
+    run_opencourant_existing_deck,
 )
 
 __all__ = [
@@ -22,6 +22,6 @@ __all__ = [
     "SolverBackendError",
     "run_calculix_assembly",
     "run_calculix_static",
-    "run_openradioss_crash",
-    "run_openradioss_existing_deck",
+    "run_opencourant_crash",
+    "run_opencourant_existing_deck",
 ]

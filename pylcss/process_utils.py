@@ -16,7 +16,7 @@ def headless_subprocess_kwargs(
     """Return subprocess options that prevent console-window flashes.
 
     PyLCSS is a windowed application, but Windows console executables such as
-    CalculiX, OpenRadioss, ``anim_to_vtk``, and FreeCADCmd otherwise create a
+    CalculiX, OpenCourant, ``anim_to_vtk``, and FreeCADCmd otherwise create a
     short-lived black or white console window.  ``CREATE_NO_WINDOW`` is the
     primary control; the hidden ``STARTUPINFO`` is included for executables
     that inspect the show-window setting themselves.

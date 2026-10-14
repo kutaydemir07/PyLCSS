@@ -63,7 +63,6 @@ class SurrogateTrainer:
 
         auto_strat = AutoSurrogateStrategy()
         self.strategies: dict[str, SurrogateModelStrategy] = {
-            "Auto Mode (Scientific SOTA)": auto_strat,
             "Auto Mode (Recommended)": auto_strat,
             "Auto Mode": auto_strat,
             "MLP Regressor": MLPStrategy(),
@@ -168,6 +167,8 @@ class SurrogateTrainer:
     ) -> tuple[Any, Metrics]:
         """Train the configured model or fail with a list of supported names."""
         model_type = str(config.get("model_type", "MLP Regressor"))
+        if model_type.startswith("Auto Mode"):
+            model_type = "Auto Mode"
         strategy = self.strategies.get(model_type)
         if strategy is None:
             supported = ", ".join(self.available_models)

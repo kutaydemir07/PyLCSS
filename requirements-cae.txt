@@ -15,3 +15,4 @@ py7zr==0.20.8
 numba==0.63.1
 pymeshlab==2025.7.post1
 threadpoolctl==3.6.0
+geomdl==5.4.0

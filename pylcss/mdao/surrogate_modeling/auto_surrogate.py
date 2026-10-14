@@ -91,7 +91,16 @@ class AutoSurrogateModel:
         raise RuntimeError("Champion model does not implement predict().")
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self.champion_model, name)
+        """Expose estimator attributes without forwarding serialization hooks."""
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        # Unpickling probes attributes before restoring champion_model. Bypass
+        # __getattr__ here so a missing champion cannot recursively look itself up.
+        try:
+            champion = object.__getattribute__(self, "champion_model")
+        except AttributeError:
+            raise AttributeError(name) from None
+        return getattr(champion, name)
 
 
 class AutoSurrogateStrategy(SurrogateModelStrategy):
@@ -182,7 +191,7 @@ class AutoSurrogateStrategy(SurrogateModelStrategy):
                 continue
 
         if not leaderboard:
-            raise RuntimeError("All SOTA MDAO surrogate candidates failed to fit.")
+            raise RuntimeError("All automatic surrogate candidates failed to fit.")
 
         # Rank candidates according to chosen optimization metric
         if primary_metric == "RMSE":

@@ -12,6 +12,12 @@ from NodeGraphQt import NodeGraph
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from pylcss.cae.design_studio.node_library import NODE_CLASS_MAPPING
+from pylcss.user_interface.background_shutdown import (
+    finish_background_shutdown,
+    prepare_application_quit,
+    prepare_window_close,
+)
+from pylcss.user_interface.common.responsive_toolbar import ResponsiveToolBar
 
 from .cad_viewer import CQ3DViewer
 from .inspector import PropertiesPanel
@@ -49,9 +55,7 @@ class ProfessionalCadApp(
     )
 
     def closeEvent(self, event):
-        if not self._ensure_idle_for_io("closing PyLCSS CAE"):
-            event.ignore()
-            return
+        prepare_window_close(self)
         super().closeEvent(event)
         if event.isAccepted():
             self.viewer.shutdown()
@@ -414,7 +418,7 @@ class ProfessionalCadApp(
             except Exception:
                 return QtGui.QIcon()
 
-        self.toolbar = QtWidgets.QToolBar("Main Toolbar")
+        self.toolbar = ResponsiveToolBar("Main Toolbar", self)
         self.toolbar.setMovable(False)
         self.toolbar.setIconSize(QtCore.QSize(18, 18))
         self.toolbar.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
@@ -454,11 +458,11 @@ class ProfessionalCadApp(
         # ── Edit ────────────────────────────────────────────────────────
         from PySide6.QtGui import QKeySequence
 
-        act_undo = self.toolbar.addAction(_icon("fa5s.undo"), "", self._undo)
+        act_undo = self.toolbar.addAction(_icon("fa5s.undo"), "Undo", self._undo)
         act_undo.setShortcut(QKeySequence.Undo)
         act_undo.setShortcutContext(QtCore.Qt.WindowShortcut)
         act_undo.setToolTip("Undo (Ctrl+Z)")
-        act_redo = self.toolbar.addAction(_icon("fa5s.redo"), "", self._redo)
+        act_redo = self.toolbar.addAction(_icon("fa5s.redo"), "Redo", self._redo)
         act_redo.setShortcut(QKeySequence.Redo)
         act_redo.setShortcutContext(QtCore.Qt.WindowShortcut)
         act_redo.setToolTip("Redo (Ctrl+Y)")
@@ -520,16 +524,20 @@ class ProfessionalCadApp(
         self._layout_actions["graph"] = self.act_layout_graph
 
         self.act_layout_orient = self.toolbar.addAction(
-            _icon("fa5s.exchange-alt"), "", self.toggle_split_orientation
+            _icon("fa5s.exchange-alt"), "Toggle Split Orientation", self.toggle_split_orientation
         )
         self.act_layout_orient.setToolTip("Toggle Split Orientation: Stacked (Top/Bottom) / Side-by-Side")
         self.toolbar.addSeparator()
 
         # ── View ────────────────────────────────────────────────────────
-        act_fit = self.toolbar.addAction(_icon("fa5s.expand"), "", self._fit_all)
+        act_fit = self.toolbar.addAction(_icon("fa5s.expand"), "Fit View", self._fit_all)
         act_fit.setToolTip("Fit view to all (F)")
-        act_reset = self.toolbar.addAction(_icon("fa5s.compress-arrows-alt"), "", self._reset_view)
+        act_reset = self.toolbar.addAction(_icon("fa5s.compress-arrows-alt"), "Reset View", self._reset_view)
         act_reset.setToolTip("Reset 3D View (R)")
+
+        # Keep these buttons icon-only while giving overflow menus clear names.
+        for action in (act_undo, act_redo, self.act_layout_orient, act_fit, act_reset):
+            action.setPriority(QtGui.QAction.LowPriority)
 
         self._theme_toolbar_icons = (
             (act_new, "fa5s.file"),
@@ -704,7 +712,6 @@ class ProfessionalCadApp(
             apply_display_port_labels(node)
             if node_id in (
                 "com.cad.sim.topopt_voxel",
-                "com.cad.sim.lattice_voxel",
             ):
                 try:
                     self._suppress_graph_property_changed = True
@@ -745,6 +752,7 @@ def main() -> None:
     os.environ["QT_API"] = "pyside6"
 
     app = QtWidgets.QApplication(sys.argv)
+    app.aboutToQuit.connect(prepare_application_quit)
 
     # Apply dark theme
     app.setStyle("Fusion")
@@ -761,7 +769,9 @@ def main() -> None:
     try:
         window = ProfessionalCadApp()
         window.show()
-        sys.exit(app.exec())
+        exit_code = app.exec()
+        finish_background_shutdown(exit_code)
+        sys.exit(exit_code)
     except RuntimeError as e:
         # Suppress NodeGraphQt internal errors
         if "layout direction not valid" in str(e):

@@ -9,9 +9,9 @@ import logging
 
 import numpy as np
 
-from ..models.study import JointDefinition, LoadCase, ThermalBC, VoxelBC
+from ..models.study import JointDefinition, LoadCase, VoxelBC
 from .pymoto_runtime import PyMotoDomain
-from .results import _StructuralCase, _ThermalCase
+from .results import _StructuralCase
 from .boundary_sampling import sample_boundary
 
 logger = logging.getLogger(__name__)
@@ -500,114 +500,7 @@ class _SolverAssemblyMixin:
         result.eliminate_zeros()
         return result
 
-    def _assemble_thermal_supports(
-        self,
-        domain: PyMotoDomain,
-        thermal_bc: ThermalBC,
-    ) -> np.ndarray:
-        """Return scalar node indices held at the reference temperature."""
-        p = self.problem
-        face_nodes = {
-            "left": domain.nodes[0, :, :],
-            "right": domain.nodes[p.nelx, :, :],
-            "top": domain.nodes[:, p.nely, :],
-            "bottom": domain.nodes[:, 0, :],
-            "front": domain.nodes[:, :, 0],
-            "back": domain.nodes[:, :, p.nelz],
-        }
-        nodes: list[int] = []
-        for face in thermal_bc.fixed_faces:
-            selected = face_nodes.get(str(face).lower())
-            if selected is not None:
-                nodes.extend(np.asarray(selected, dtype=int).ravel().tolist())
 
-        def _node_slice(lo: float, hi: float, nmax: int) -> slice:
-            lo_i, hi_i = sorted(
-                (
-                    int(round(float(lo) * nmax)),
-                    int(round(float(hi) * nmax)),
-                )
-            )
-            lo_i = max(0, min(nmax, lo_i))
-            hi_i = max(0, min(nmax, hi_i))
-            return slice(lo_i, hi_i + 1)
-
-        for x0, x1, y0, y1, z0, z1 in thermal_bc.fixed_boxes:
-            selected = domain.nodes[
-                _node_slice(x0, x1, p.nelx),
-                _node_slice(y0, y1, p.nely),
-                _node_slice(z0, z1, p.nelz),
-            ]
-            nodes.extend(np.asarray(selected, dtype=int).ravel().tolist())
-        return np.unique(nodes).astype(int)
-
-    def _assemble_thermal_load_cases(
-        self,
-        domain: PyMotoDomain,
-        thermal_bc: ThermalBC,
-        fixed_nodes: np.ndarray,
-    ) -> list[_ThermalCase]:
-        """Assemble total heat inputs on scalar nodal temperature DOFs."""
-        p = self.problem
-        face_nodes = {
-            "left": domain.nodes[0, :, :],
-            "right": domain.nodes[p.nelx, :, :],
-            "top": domain.nodes[:, p.nely, :],
-            "bottom": domain.nodes[:, 0, :],
-            "front": domain.nodes[:, :, 0],
-            "back": domain.nodes[:, :, p.nelz],
-        }
-
-        def _node_slice(lo: float, hi: float, nmax: int) -> slice:
-            lo_i, hi_i = sorted(
-                (
-                    int(round(float(lo) * nmax)),
-                    int(round(float(hi) * nmax)),
-                )
-            )
-            lo_i = max(0, min(nmax, lo_i))
-            hi_i = max(0, min(nmax, hi_i))
-            return slice(lo_i, hi_i + 1)
-
-        cases: list[_ThermalCase] = []
-        for load_case in thermal_bc.load_cases:
-            heat = np.zeros(int(domain.nnodes), dtype=float)
-            for x, y, z, total in load_case.point_sources:
-                ix = int(np.clip(round(x * p.nelx), 0, p.nelx))
-                iy = int(np.clip(round(y * p.nely), 0, p.nely))
-                iz = int(np.clip(round(z * p.nelz), 0, p.nelz))
-                heat[int(domain.nodes[ix, iy, iz])] += float(total)
-            for x0, x1, y0, y1, z0, z1, total in load_case.box_sources:
-                selected = np.unique(
-                    np.asarray(
-                        domain.nodes[
-                            _node_slice(x0, x1, p.nelx),
-                            _node_slice(y0, y1, p.nely),
-                            _node_slice(z0, z1, p.nelz),
-                        ],
-                        dtype=int,
-                    ).ravel()
-                )
-                if selected.size:
-                    heat[selected] += float(total) / float(selected.size)
-            for face, total in load_case.distributed_sources:
-                selected = np.unique(
-                    np.asarray(face_nodes.get(str(face).lower(), []), dtype=int).ravel()
-                )
-                if selected.size:
-                    heat[selected] += float(total) / float(selected.size)
-            # A prescribed-temperature node cannot simultaneously carry an
-            # independent heat source in this zero-Dirichlet formulation.
-            heat[np.asarray(fixed_nodes, dtype=int)] = 0.0
-            if np.any(np.abs(heat) > 1e-15):
-                cases.append(
-                    _ThermalCase(
-                        name=load_case.name,
-                        weight=load_case.weight,
-                        heat=heat,
-                    )
-                )
-        return cases
 
     def _assemble_passive_masks(
         self,

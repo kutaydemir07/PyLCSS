@@ -23,8 +23,6 @@ BC_PALETTE = {
     "joint": (1.00, 0.62, 0.11),
     "keep_material": (0.41, 0.94, 0.68),
     "keep_void": (1.00, 0.32, 0.32),
-    "thermal_sink": (0.25, 0.77, 1.00),
-    "heat": (1.00, 0.36, 0.12),
 }
 
 
@@ -90,8 +88,6 @@ def constraint_color(metadata: dict | None = None) -> tuple[float, float, float]
         return BC_PALETTE["keep_void"]
     if "keep material" in text or "non-design material" in text:
         return BC_PALETTE["keep_material"]
-    if "thermal" in text or "sink" in text:
-        return BC_PALETTE["thermal_sink"]
     if "displacement" in text or "prescribed" in text:
         return BC_PALETTE["prescribed"]
     return BC_PALETTE["support"]
@@ -137,8 +133,6 @@ def compact_constraint_label(metadata: dict | None = None) -> str:
         return "KEEP"
     if "non-design void" in normalized:
         return "VOID"
-    if "thermal sink" in normalized:
-        return "SINK"
     return constraint_type.upper()[:16]
 
 
@@ -158,8 +152,6 @@ def legend_caption(metadata: dict | None = None) -> str:
         return "KEEP VOID"
     if "keep material" in text or "non-design material" in text:
         return "KEEP MATERIAL"
-    if "thermal" in text or "sink" in text:
-        return "THERMAL SINK"
     if "displacement" in text or "prescribed" in text:
         return "PRESCRIBED U"
     return compact_constraint_label(metadata) or "CONSTRAINT"

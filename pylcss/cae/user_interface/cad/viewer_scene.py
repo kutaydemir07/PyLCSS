@@ -36,6 +36,7 @@ class SceneRenderingMixin:
         self._clear_result_extrema()
         self.clear_silhouettes()
         self._clear_hover_actor()
+        self.render_non_design_layers([], render=False)
 
         # Remove wireframe edge actor
         if self._edge_actor is not None:
@@ -104,6 +105,43 @@ class SceneRenderingMixin:
 
         self.scalar_bar.VisibilityOff()
         self._request_render()
+
+    def render_non_design_layers(self, layers, *, render=True):
+        """Show the actual closed preserved volumes without altering face picking."""
+        for actor in getattr(self, "_non_design_actors", []):
+            self.renderer.RemoveActor(actor)
+        self._non_design_actors = []
+        previous = getattr(self, "_non_design_base_actor", None)
+        if previous is not None:
+            previous[0].GetProperty().SetOpacity(previous[1])
+        self._non_design_base_actor = None
+        if layers and self.current_actor is not None:
+            self._non_design_base_actor = (self.current_actor, self.current_actor.GetProperty().GetOpacity())
+            self.current_actor.GetProperty().SetOpacity(0.22)
+        for layer in layers:
+            vertices, triangles = layer.tessellate(0.05, 0.1)
+            points = vtk.vtkPoints()
+            for vertex in vertices:
+                points.InsertNextPoint(*vertex.toTuple())
+            cells = vtk.vtkCellArray()
+            for triangle in triangles:
+                cells.InsertNextCell(3)
+                for index in triangle:
+                    cells.InsertCellPoint(index)
+            polydata = vtk.vtkPolyData()
+            polydata.SetPoints(points)
+            polydata.SetPolys(cells)
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputData(polydata)
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            actor.GetProperty().SetColor(0.1, 0.8, 0.95)
+            actor.GetProperty().SetOpacity(0.8)
+            actor.PickableOff()
+            self.renderer.AddActor(actor)
+            self._non_design_actors.append(actor)
+        if render:
+            self._request_render()
 
     def clear_cached_results(self):
         """Drop result/playback data that could repopulate an empty scene."""
@@ -965,6 +1003,7 @@ class SceneRenderingMixin:
         initial_edge_visibility=None,
         smooth_across_faces=False,
         material_color=None,
+        display_mesh=None,
     ):
         """
         Accepts a CadQuery Workplane or Shape, tessellates it, and renders it.
@@ -1087,15 +1126,19 @@ class SceneRenderingMixin:
         # Mesh the entire B-rep once with a tolerance in model units. Meshing
         # each face using relative deflection can visibly coarsen large patches.
         absolute_mesh = None
+        if isinstance(display_mesh, dict) and len(display_mesh.get("face_ranges", ())) == len(occ_faces):
+            absolute_mesh = (np.asarray(display_mesh["vertices"]), np.asarray(display_mesh["faces"]),
+                             display_mesh["face_ranges"])
         try:
             from pylcss.cae.design_studio.topology_optimization.geometry.cad_tessellation import (
                 tessellate_cad_absolute,
             )
             box = topo_shape.BoundingBox()
             diagonal = (box.xlen ** 2 + box.ylen ** 2 + box.zlen ** 2) ** .5
-            absolute_mesh = tessellate_cad_absolute(
-                topo_shape, max(1e-4, min(.1, diagonal * 1e-3)), .5, return_face_ranges=True,
-            )
+            if absolute_mesh is None:
+                absolute_mesh = tessellate_cad_absolute(
+                    topo_shape, max(1e-4, min(.1, diagonal * 1e-3)), .5, return_face_ranges=True,
+                )
         except Exception:
             logging.getLogger(__name__).debug("Absolute CAD display mesh unavailable", exc_info=True)
 
@@ -1289,6 +1332,9 @@ class SceneRenderingMixin:
         self._mesh_picking_too_dense = False
 
         if dataset is None:
+            return
+        if dataset.GetCellData().GetArray('SurfaceGroup') is not None:
+            self._configure_surface_group_picking(dataset)
             return
         try:
             n_cells = int(dataset.GetNumberOfCells())
@@ -1572,6 +1618,33 @@ class SceneRenderingMixin:
             self._face_map = {}
             self._all_occ_faces = []
             self._face_polydata_list = []
+
+    def _configure_surface_group_picking(self, dataset):
+        """Pick a whole AMRTO sparse layout from any of its display cells."""
+        from vtk.util.numpy_support import vtk_to_numpy
+        from pylcss.cae.design_studio.nodes.mesh_selection import _MESH_LAYOUT_INDEX_BASE
+        groups = vtk_to_numpy(dataset.GetCellData().GetArray('SurfaceGroup'))
+        points = vtk_to_numpy(dataset.GetPoints().GetData())
+        for group in np.unique(groups):
+            cell_ids = np.flatnonzero(groups == group)
+            region = self._polydata_from_cells(dataset, cell_ids.tolist())
+            region_points = vtk_to_numpy(region.GetPoints().GetData())
+            center = region_points.mean(axis=0)
+            area = 0.
+            for cell_id in cell_ids:
+                cell = dataset.GetCell(int(cell_id))
+                ids = [cell.GetPointId(i) for i in range(cell.GetNumberOfPoints())]
+                corners = points[ids]
+                for i in range(1, len(corners)-1):
+                    area += .5*np.linalg.norm(np.cross(corners[i]-corners[0], corners[i+1]-corners[0]))
+            face_index = len(self._all_occ_faces)
+            self._all_occ_faces.append({
+                'mesh_virtual_face': True, 'selector': 'Surface Group',
+                'stored_index': _MESH_LAYOUT_INDEX_BASE+int(group), 'face_index': face_index,
+                'component_index': int(group), 'label': f'Surface group {int(group)+1}',
+                'center': center.tolist(), 'area': float(area)})
+            self._face_polydata_list.append(region)
+            self._face_map.update((int(cell_id), face_index) for cell_id in cell_ids)
 
     def ensure_mesh_face_picking(self):
         """Build mesh virtual-face picking data lazily for the current render."""

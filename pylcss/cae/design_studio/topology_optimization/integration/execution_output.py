@@ -26,15 +26,8 @@ from ..manufacturing.structures import (
     cell_resolution_warning,
     passive_region_masks,
 )
-from ..manufacturing.printability import (
-    SELF_SUPPORTING_ANGLE_DEG,
-    lattice_feature_size_report,
-    lattice_overhang_report,
-    overhang_advice,
-)
 from ..manufacturing.member_sizing import (
     OptimizedMemberPlan,
-    optimize_lattice_members,
 )
 from ..optimization.results import TopologyOptVoxelResult
 from ..optimization.voxel_solver import _projection_matched_level
@@ -44,7 +37,6 @@ from .execution_setup import PreparedTopologyStudy
 from .lattice_settings import (
     lattice_dimension_range_text,
     lattice_setup_is_guided,
-    node_minimum_feature_size,
     resolve_lattice_structure_options,
 )
 from .voxelization import (
@@ -217,10 +209,6 @@ def build_topology_output(
 
     support_selection_types = _selection_type_counts(study.constraints)
     load_selection_types = _selection_type_counts(study.loads)
-    # The same lookup the solver made. Resolved here rather than carried on the
-    # result so the report cannot claim a two-scale solve the solver did not
-    # actually run; both calls hit one registry with one set of rules.
-    cell_law = problem.homogenized_cell_law(allow_build=False)
     logger.info("TopologyOptVoxelNode: %s", result.message)
     density = np.asarray(result.density, dtype=float)
     density_cutoff = _effective_density_cutoff(
@@ -229,26 +217,8 @@ def build_topology_output(
         target_volfrac=problem.volfrac,
     )
     print_ready = True
-    guided_mode = (
-        str(node.get_property("workflow_mode") or "Guided").strip().lower()
-        == "guided"
-    )
-    # A guided lattice study is the professional variable-density method, not
-    # a fixed infill pattern applied after a different analysis.  Older example
-    # projects stored ``False`` before the guided workflow made that distinction
-    # explicit; honoring that hidden legacy value would make the manufactured
-    # lattice disagree with the homogenized density field used by the solver.
-    guided_lattice_density = bool(
-        lattice_setup_is_guided(
-            node.get_property("lattice_settings_mode")
-        )
-        and problem.lattice_cell_type
-    )
-    visualization_mode = (
-        "Density"
-        if guided_mode
-        else str(node.get_property("visualization") or "Density")
-    )
+    guided_lattice_density = False
+    visualization_mode = "Density" if str(node.get_property("visualization") or "CAD") == "Density" else "CAD"
     decimate = 1.0
     # Lattice dimensions given in model units win over the voxel-denominated
     # ones, because a voxel is a different physical length on every part.
@@ -271,7 +241,7 @@ def build_topology_output(
                 voxel_size,
                 cell_size=node.get_property("lattice_cell_size_mm"),
             )
-        node.set_error(f"Invalid lattice manufacturing settings: {exc}{hint}")
+        node.set_error(f"Invalid lattice geometry: {exc}{hint}")
         return None
     # The CAD stage needs to know which structure was built: a strut lattice is
     # reconstructed from its centrelines rather than from the isosurface.
@@ -280,8 +250,6 @@ def build_topology_output(
         print_ready = True
     # Guided presents the recovered surface while the final solid CAD body is
     # being reconstructed. Lattice studies keep this manufactured-mesh view.
-    if guided_mode and structure_options.mode == "solid":
-        visualization_mode = "Surface"
     surface_requested = True
     passive_solid_mask, passive_void_mask = passive_region_masks(
         tuple(int(v) for v in density.shape),
@@ -294,90 +262,8 @@ def build_topology_output(
     passive_void_mask |= explicit_passive_void_mask
     passive_solid_mask &= ~passive_void_mask
     member_plan: OptimizedMemberPlan | None = None
-    member_sizing_error: str | None = None
     setattr(node, "_last_member_plan", None)
     is_infill_study = callable(getattr(node, "resolve_infill_cell_size", None))
-    guided_member_sizing = bool(
-        not is_infill_study
-        and guided_mode
-        and structure_options.family is not None
-        and structure_options.family.maxwell == "stretch"
-    )
-    if (
-        lattice_cad_strategy(structure_options) == "beam"
-        and (
-            guided_member_sizing
-            or (
-                not guided_mode
-                and as_bool(node.get_property("optimize_lattice_members"))
-            )
-        )
-        and problem.physics_mode != "thermal"
-    ):
-        try:
-            safety_factor = max(
-                1.0,
-                float(
-                    node.get_property("validation_yield_safety_factor")
-                    or 1.0
-                ),
-            )
-            material_yield = float(
-                material.get(
-                    "yield_strength",
-                    material.get(
-                        "yield",
-                        node.get_property("yield_stress") or 0.0,
-                    ),
-                )
-                or 0.0
-            )
-            maximum_member = max(
-                structure_options.member_thickness_voxels,
-                float(
-                    node.get_property(
-                        "lattice_max_member_thickness_voxels"
-                    )
-                    or 3.0
-                ),
-            )
-            span = tuple(
-                float(value)
-                for value in np.maximum(bounds[1][:3] - bounds[0][:3], 0.0)
-            )
-            member_plan = optimize_lattice_members(
-                (
-                    (density >= density_cutoff) | passive_solid_mask
-                )
-                & ~passive_void_mask,
-                mode=structure_options.mode,
-                cell_size_voxels=structure_options.cell_size_voxels,
-                minimum_diameter_voxels=(
-                    structure_options.member_thickness_voxels
-                ),
-                maximum_diameter_voxels=maximum_member,
-                bc=bc,
-                span=span,
-                youngs_modulus=float(problem.E0),
-                allowable_stress=material_yield / safety_factor,
-                displacement_limit=float(
-                    node.get_property("validation_displacement_limit_mm")
-                    or 0.0
-                ),
-                buckling_length_factor=float(
-                    node.get_property("lattice_buckling_length_factor")
-                    or 1.0
-                ),
-                maximum_iterations=int(
-                    node.get_property("lattice_member_sizing_iterations")
-                    or 35
-                ),
-            )
-            setattr(node, "_last_member_plan", member_plan)
-        except (TypeError, ValueError, ArithmeticError) as exc:
-            member_sizing_error = str(exc)
-            setattr(node, "_last_member_plan", None)
-            logger.warning("Lattice member sizing was not completed: %s", exc)
     manufactured_density = None
     if structure_options.mode != "solid":
         manufactured_density = build_manufacturing_field(
@@ -457,7 +343,7 @@ def build_topology_output(
         str(bc.joint_pin_cylinders),
         hash(np.ascontiguousarray(passive_solid_mask).tobytes()),
         hash(np.ascontiguousarray(passive_void_mask).tobytes()),
-        member_plan.signature() if member_plan is not None else member_sizing_error,
+        None,
     )
     if not surface_requested:
         recovered = None
@@ -687,24 +573,24 @@ def build_topology_output(
             else:
                 explicit_solid_shapes.append(geom)
 
+    source_cad_shape = None
+    try:
+        from ..geometry.non_design import design_domain_shape
+        source_cad_shape = design_domain_shape(study.source_design_domain)
+    except (ValueError, TypeError):
+        pass
     output: dict[str, Any] = {
         "type": "topopt_voxel",
+        "source_cad_shape": source_cad_shape,
         "design_goal": design_goal,
         "objective_mode": problem.objective_mode,
         "physics_mode": problem.physics_mode,
-        "physics_model": (
-            "Weighted structural compliance plus steady-state thermal "
-            "compliance; thermal expansion and thermal stress are not modeled."
-            if problem.physics_mode == "thermo_mechanical"
-            else "Steady-state conduction with reduced-order volumetric heat rejection."
-            if problem.physics_mode == "thermal"
-            else "Linear-elastic, small-displacement structural response."
-        ),
+        "physics_model": "Linear-elastic, small-displacement structural response.",
         "optimizer_used": result.optimizer_used,
         "formulation_used": result.formulation_used,
         "physical_length_scale": {
-            "requested_minimum_solid_size": float(node.get_property("minimum_member_size_mm") or 0.0),
-            "requested_minimum_void_size": float(node.get_property("minimum_void_size_mm") or 0.0),
+            "requested_minimum_solid_size": 0.0,
+            "requested_minimum_void_size": 0.0,
             "filter_radius": float(problem.rmin),
             "filter_radius_units": (
                 "model units"
@@ -764,6 +650,8 @@ def build_topology_output(
         "density": density,
         "manufactured_density": manufactured_density,
         "design_domain": design_domain,
+        "passive_solid_mask": passive_solid_mask,
+        "passive_void_mask": passive_void_mask,
         "design_density": (
             np.asarray(result.design_density, dtype=float)
             if result.design_density is not None
@@ -832,7 +720,7 @@ def build_topology_output(
         "manufacturing": {
             "structure": structure_options.display_name,
             "process": str(
-                node.get_property("manufacturing_process") or "None"
+                "Unrestricted"
             ),
             "constraints": {
                 "symmetry_planes": str(problem.mc.symmetry or "none"),
@@ -902,7 +790,7 @@ def build_topology_output(
             "surface_quality_preset": (
                 recovered.get("surface_quality_preset")
                 if isinstance(recovered, dict)
-                else "Sparse G1 spline"
+                else "Compact cubic spline"
             ),
             "material_fraction": manufactured_material_fraction,
             "volume": manufactured_volume,
@@ -934,114 +822,10 @@ def build_topology_output(
             "source_body_count": source_component_count,
             "component_voxels": component_voxels,
         },
-        "lattice_optimization": (
-            {
-                "method": (
-                    (
-                        "homogenized anisotropic cell law driving the macro "
-                        "sensitivity loop, followed by "
-                        if cell_law is not None
-                        else "isotropic continuum surrogate followed by "
-                    )
-                    + (
-                        "field-graded explicit lattice reconstruction"
-                        if structure_options.variable_density
-                        else "fixed-cell explicit lattice reconstruction"
-                    )
-                    + " and optional "
-                    "load-aware member sizing"
-                ),
-                "phase": (
-                    "phase 2 / sized explicit members"
-                    if member_plan is not None
-                    else (
-                        "phase 1 / continuum-density interpretation"
-                        if structure_options.variable_density
-                        else "phase 1 / topology envelope with fixed cells"
-                    )
-                ),
-                "cell_family": structure_options.display_name,
-                "stiffness_model": study.lattice_porosity,
-                "continuum_assumption": study.lattice_porosity,
-                "stiffness_interpolation": (
-                    (
-                        "tabulated C11(rho), C12(rho), C44(rho) with "
-                        "differentiable monotone interpolation"
-                    )
-                    if cell_law is not None
-                    else f"E/E0 = relative_density^{float(problem.penal):g}"
-                ),
-                "continuum_surrogate_penalty": float(problem.penal),
-                "variable_density": bool(structure_options.variable_density),
-                "density_grading_control": (
-                    "Program Controlled (Guided)"
-                    if guided_lattice_density
-                    else "User Controlled (Expert)"
-                ),
-                "minimum_relative_density": (
-                    structure_options.minimum_relative_density
-                ),
-                "maximum_relative_density": (
-                    structure_options.maximum_relative_density
-                ),
-                "solid_transition_density": (
-                    structure_options.solid_transition_density
-                ),
-                "minimum_member_thickness_voxels": (
-                    structure_options.member_thickness_voxels
-                ),
-                "maximum_member_thickness_voxels": float(
-                    node.get_property(
-                        "lattice_max_member_thickness_voxels"
-                    )
-                    or 3.0
-                ),
-                "member_size_optimization": member_plan is not None,
-                "member_sizing": (
-                    member_plan.diagnostics()
-                    if member_plan is not None
-                    else {
-                        "completed": False,
-                        "reason": (
-                            member_sizing_error
-                            or "This cell family uses continuum-density sizing."
-                        ),
-                    }
-                ),
-                "cell_material_law": (
-                    cell_law.diagnostics() if cell_law is not None else None
-                ),
-                "macro_material_model": (
-                    "homogenized anisotropic cell tensor"
-                    if cell_law is not None
-                    else "isotropic continuum power-law surrogate"
-                ),
-                "limitation": (
-                    (
-                        "The macro solve uses this cell family's homogenized "
-                        "anisotropic tensor, so density and stiffness are "
-                        "coupled through the real cell. Orientation is fixed "
-                        "to the global axes and cell size is uniform, so a "
-                        "load path oblique to those axes cannot yet rotate its "
-                        "cells to meet it. A homogenized macro stress would "
-                        "not be strut stress, so explicit-geometry validation "
-                        "is still required. "
-                        if cell_law is not None
-                        else "This cell family has no homogenized law, so the "
-                        "macro solve uses an isotropic continuum power-law "
-                        "surrogate rather than a cell material card. "
-                    )
-                    + "The stretch-dominated Octet can use second-phase axial-"
-                    "truss sizing for stress, Euler buckling, and displacement. "
-                    "BCC is bending-dominated, so axial sizing is only an Expert "
-                    "diagnostic and may expose a mechanism. The beam surrogate "
-                    "does not resolve joint bending or local solid stress "
-                    "concentrations. Honeycomb remains continuum-density sized."
-                ),
-                "independent_validation_required": True,
-            }
-            if structure_options.family is not None
-            else None
+        "lattice_generation": (
+            {"method": "Direct geometric lattice infill", "cell_family": structure_options.display_name,
+             "independent_validation_required": True}
+            if structure_options.family is not None else None
         ),
         "compliance": (
             float(result.compliance_history[-1]) if result.compliance_history else None
@@ -1057,16 +841,6 @@ def build_topology_output(
             }
             for name, value in result.case_compliances.items()
         ],
-        "thermal_cases": [
-            {
-                "name": name,
-                "thermal_compliance": float(value),
-                "maximum_temperature_rise": (
-                    result.thermal_case_max_temperature_rises.get(name)
-                ),
-            }
-            for name, value in result.thermal_case_compliances.items()
-        ],
         "iterations": result.n_iter,
         "max_iterations": problem.max_iter,
         "converged": result.converged,
@@ -1081,12 +855,6 @@ def build_topology_output(
         "stress_history": result.stress_history,
         "case_compliances": getattr(result, "case_compliances", {}),
         "case_max_displacements": getattr(result, "case_max_displacements", {}),
-        "thermal_compliance": (
-            float(result.thermal_compliance_history[-1])
-            if result.thermal_compliance_history
-            else None
-        ),
-        "thermal_compliance_history": result.thermal_compliance_history,
         "multibody": {
             "global_joints": [
                 {
@@ -1253,71 +1021,6 @@ def _apply_lattice_infill_reporting(
     }
 
 
-def _report_lattice_printability(
-    node: Any,
-    output: dict[str, Any],
-    structure_options: Any,
-    problem: Any,
-    block: Callable[[str, str], None],
-    advise: Callable[[str, str], None],
-) -> None:
-    """Check the built cells against the process, not only the envelope.
-
-    The optimizer's manufacturing constraints act on the macro density field.
-    The cells are built afterwards, from the family's own geometry, so neither
-    the printable length scale nor the overhang direction reaches them. Both
-    are measured here on what was actually built and attached to the report.
-    """
-    # The built cell's dimensions are published under `manufacturing`, beside
-    # the voxel length they are denominated in.
-    manufacturing_report = output.get("manufacturing") or {}
-    voxel_size = manufacturing_report.get("voxel_size")
-    minimum_feature = node_minimum_feature_size(node)
-
-    feature_report = lattice_feature_size_report(
-        structure_options,
-        voxel_size,
-        minimum_feature,
-    )
-    if feature_report is not None:
-        output.setdefault("lattice_optimization", {})
-        if isinstance(output["lattice_optimization"], dict):
-            output["lattice_optimization"]["feature_size_check"] = feature_report
-        for violation in feature_report["violations"]:
-            block(
-                "lattice_below_minimum_feature_size",
-                f"The manufactured structure is below the stated printable "
-                f"minimum: {violation} (model units). Raise the minimum member "
-                "size, coarsen the cell, or state a capability the process can "
-                "actually build.",
-            )
-    elif minimum_feature <= 0.0:
-        advise(
-            "lattice_feature_size_unchecked",
-            "No minimum member size is stated, so the manufactured "
-            f"{structure_options.display_name.lower()} wall/strut was not "
-            "checked against a process capability. Set the minimum member "
-            "size under Design Intent to have it enforced.",
-        )
-
-    overhang_report = lattice_overhang_report(
-        structure_options,
-        getattr(problem.mc, "overhang_build_axis", "none"),
-        getattr(problem.mc, "overhang_angle_deg", SELF_SUPPORTING_ANGLE_DEG),
-        voxel_scale=(
-            problem.unitx,
-            problem.unity,
-            problem.unitz,
-        ),
-    )
-    if overhang_report is not None:
-        if isinstance(output.get("lattice_optimization"), dict):
-            output["lattice_optimization"]["overhang_check"] = overhang_report
-        message = overhang_advice(overhang_report)
-        if message:
-            advise("lattice_member_overhang", message)
-
-
 def finalize_topology_output(
     node: Any,
     context: TopologyOutputContext,
@@ -1334,10 +1037,6 @@ def finalize_topology_output(
     material = prepared.material
     constraint_list = prepared.constraints
     load_list = prepared.loads
-    guided_mode = (
-        str(node.get_property("workflow_mode") or "Guided").strip().lower()
-        == "guided"
-    )
     is_infill_study = callable(getattr(node, "resolve_infill_cell_size", None))
     warnings_out: list[str] = []
     failed_checks: list[str] = []
@@ -1542,7 +1241,7 @@ def finalize_topology_output(
     # rounding of free edges, and with no formulation imposing the length scale
     # there is nothing for a hard gate to hand back to the user beyond this
     # number. Stating it with its uncertainty is the honest form of the check.
-    requested_member = float(node.get_property("minimum_member_size_mm") or 0.0)
+    requested_member = 0.0
     if structure_options.mode == "solid" and requested_member > 0.0:
         density_field = (
             manufactured_density
@@ -1621,6 +1320,16 @@ def finalize_topology_output(
             "optimizer_not_converged",
             f"Stopped after {result.n_iter} iterations without convergence."
         )
+    if not is_infill_study:
+        final_fraction = float(output.get("final_vol_frac") or 0.0)
+        volume_tolerance = max(1e-4, 0.01 * float(problem.volfrac))
+        if final_fraction > float(problem.volfrac) + volume_tolerance:
+            block(
+                "topology_volume_constraint",
+                f"Target volume is not satisfied ({final_fraction:.1%} material "
+                f"> {float(problem.volfrac):.1%} budget). The result is not "
+                "feasible under the requested material and stress constraints."
+            )
     if (
         result.stress_history
         and float(result.stress_history[-1]) > float(problem.yield_stress) * 1.01
@@ -1632,81 +1341,6 @@ def finalize_topology_output(
             f"{float(problem.yield_stress):.3g} MPa allowable). The "
             "minimum-mass result is not feasible."
         )
-    lattice_optimization = output.get("lattice_optimization") or {}
-    member_sizing = lattice_optimization.get("member_sizing") or {}
-    guided_member_sizing = bool(
-        guided_mode
-        and structure_options.family is not None
-        and structure_options.family.maxwell == "stretch"
-    )
-    sizing_requested = (
-        lattice_cad_strategy(structure_options) == "beam"
-        and (
-            guided_member_sizing
-            or (
-                not guided_mode
-                and as_bool(node.get_property("optimize_lattice_members"))
-            )
-        )
-    )
-    if sizing_requested and not lattice_optimization.get(
-        "member_size_optimization"
-    ):
-        block(
-            "lattice_member_sizing_failed",
-            "Load-aware lattice member sizing was requested but did not "
-            f"complete: {member_sizing.get('reason') or 'unknown error'}.",
-        )
-    elif sizing_requested:
-        if not bool(member_sizing.get("converged")):
-            block(
-                "lattice_member_sizing_not_converged",
-                "The second-phase member-sizing iteration did not converge.",
-            )
-        stress_utilization = float(
-            member_sizing.get("maximum_stress_utilization") or 0.0
-        )
-        buckling_utilization = float(
-            member_sizing.get("maximum_buckling_utilization") or 0.0
-        )
-        if stress_utilization > 1.005:
-            block(
-                "lattice_member_stress_exceeded",
-                "The axial-truss sizing stage exceeds its allowable-stress "
-                f"limit (utilization {stress_utilization:.3g}).",
-            )
-        if buckling_utilization > 1.005:
-            block(
-                "lattice_member_buckling_exceeded",
-                "The axial-truss sizing stage exceeds Euler buckling "
-                f"(utilization {buckling_utilization:.3g}).",
-            )
-        sizing_displacement_limit = float(
-            node.get_property("validation_displacement_limit_mm") or 0.0
-        )
-        sized_displacement = float(
-            member_sizing.get("maximum_displacement") or 0.0
-        )
-        if (
-            sizing_displacement_limit > 0.0
-            and sized_displacement > 1.005 * sizing_displacement_limit
-        ):
-            block(
-                "lattice_member_displacement_exceeded",
-                "The axial-truss sizing stage exceeds the displacement limit "
-                f"({sized_displacement:.3g} mm > "
-                f"{sizing_displacement_limit:.3g} mm).",
-            )
-        if any(
-            "mechanism" in str(message).lower()
-            for message in member_sizing.get("warnings", ())
-        ):
-            block(
-                "lattice_axial_mechanism",
-                "The lattice beam surrogate contains an axial mechanism or "
-                "near-mechanism; use the stretch-dominated Octet Truss family "
-                "or revise the restraints.",
-            )
     recovered_payload = output.get("recovered_shape")
     resolution_warning = cell_resolution_warning(
         structure_options,
@@ -1749,28 +1383,6 @@ def finalize_topology_output(
             "requested — the cells are larger and there are fewer of them. "
             "Raise Build Quality for the pitch you asked for.",
         )
-    if structure_options.mode != "solid":
-        _report_lattice_printability(
-            node,
-            output,
-            structure_options,
-            problem,
-            block,
-            advise,
-        )
-    if (
-        structure_options.mode != "solid"
-        and structure_options.skin_thickness_voxels > 0.0
-    ):
-        advise(
-            "sealed_lattice_skin",
-            f"{structure_options.display_name} is enclosed by a solid skin "
-            f"({structure_options.skin_thickness_voxels:g} voxels), so the "
-            "lattice is sealed inside and not visible on the recovered "
-            "surface. On a powder-bed process a closed skin also traps "
-            "unfused powder. Set the skin thickness to 0 to expose the "
-            "lattice and allow powder removal."
-        )
     stranded = _loads_stranded_in_void(result, problem)
     if stranded:
         block(
@@ -1781,7 +1393,9 @@ def finalize_topology_output(
             "compliance is then meaningless. Re-check the manufacturing "
             "direction against the load positions."
         )
-    validation_requested = as_bool(node.get_property("validate_after_optimize"))
+    # FEA is an explicit action on the reconstructed CAD body. A legacy flag
+    # must not silently analyse a voxel surrogate after the topology solve.
+    validation_requested = False
     if float(result.min_source_volfrac or 0.0) > float(problem.volfrac) + 1e-6:
         block(
             "passive_material_exceeds_budget",
@@ -1790,14 +1404,7 @@ def finalize_topology_output(
             "solid regions are reduced."
         )
     validation_completed = False
-    if validation_requested and problem.physics_mode == "thermal":
-        block(
-            "thermal_validation_unavailable",
-            "Structural CalculiX validation is not applicable to a "
-            "thermal-only topology study. The result remains concept-level "
-            "until it is checked in an independent thermal model."
-        )
-    elif validation_requested and jointed_multibody:
+    if validation_requested and jointed_multibody:
         output["validation_summary"] = {
             "status": "not applicable",
             "reason": (
@@ -1932,32 +1539,22 @@ def finalize_topology_output(
             "revise the density cutoff before downstream meshing.",
         )
 
-    # An extrusion-constrained solid envelope is a swept profile, so it has an
-    # exact editable B-rep and always receives one. A general 3-D solid does
-    # not: freeform patch fitting used to supply one, and what it delivered was
-    # a smooth body that no longer described the load path.
-    #
-    # A strut lattice does have an exact B-rep, and it does not come from the
-    # isosurface: the sized centrelines already describe the body, so it is one
-    # quadric per member and one ball per joint, with a face count that tracks
-    # the member count instead of the voxel count (measured: 0.1 s and 488
-    # faces for a 140-member BCC envelope, 1.2 s and 703 faces for a 200-member
-    # octet). That path is built and validated in :mod:`..geometry.lattice_cad`
-    # and it is reached here rather than being left for an export button.
-    #
-    # The minimal-surface and prismatic families are the ones with no compact
-    # boundary representation -- a gyroid is not a union of quadrics -- so they
-    # keep the mesh route and are released as STL.
-    analytic_lattice_cad = lattice_cad_strategy(structure_options) == "beam"
-    eager_cad = bool(
-        analytic_lattice_cad
-        or (structure_options.mode == "solid" and output.get("recovered_shape") is not None)
-    )
+    # Recovery supplies the manufacturing mesh immediately. CAD is an
+    # explicit preview/export operation. Legacy automatic-CAD properties
+    # must not start a reconstruction after every solve.
+    mesh_only = lattice_cad_strategy(structure_options) == "isosurface"
+    if mesh_only:
+        output.pop("cad_shape", None)
+        output.pop("shape", None)
+    eager_cad = False
     if eager_cad:
         try:
+            cad_payload = dict(output)
             cad_shape = node._run_embedded_cad_reconstruction(
-                output, progress_callback=progress_callback, cancel_callback=cancel_callback
+                cad_payload, progress_callback=progress_callback, cancel_callback=cancel_callback
             )
+            if cad_payload.get("cad_preview_mesh") is not None:
+                output["cad_preview_mesh"] = cad_payload["cad_preview_mesh"]
             output["cad_shape"] = cad_shape
             output["shape"] = cad_shape
             output["visualization_mode"] = "CAD"
@@ -1967,9 +1564,13 @@ def finalize_topology_output(
             # Validation and mass properties were already evaluated in the
             # CAD child. Repeating OCC calls here can stall the Qt interpreter.
             output["cad_reconstruction"] = reconstruction_report | {
-                "method": reconstruction_report.get("method", "Sparse G1 spline"),
+                "method": reconstruction_report.get("method", "Compact cubic spline"),
                 "volume": reconstruction_report.get("cad_volume"),
             }
+            performance = reconstruction_report.get("mechanical_validation") or {}
+            if performance.get("passed") is False:
+                block("cad_performance_changed", performance.get("reason") or
+                      "Reconstructed CAD failed mechanical performance comparison.")
             if output["cad_reconstruction"].get("valid") is False:
                 block(
                     "cad_reconstruction_invalid",
@@ -1993,16 +1594,11 @@ def finalize_topology_output(
                 )
     elif output.get("recovered_shape") is not None:
         output["cad_reconstruction"] = {
-            "method": "Not requested",
-            "skipped": True,
-            "editable": None,
+            "method": "STL surface mesh" if mesh_only else "On demand",
+            "skipped": True, "editable": False if mesh_only else None,
         }
-    elif output.get("recovered_shape") is not None:
-        output["cad_reconstruction"] = {
-            "method": "Not requested",
-            "skipped": True,
-            "editable": None,
-        }
+    from ..geometry.lattice_cad import topopt_export_formats
+    output["export_formats"] = list(topopt_export_formats(structure_options))
 
     verification_passed = validation_completed and not failed_checks
     # Compatibility alias for existing graph consumers. This means the

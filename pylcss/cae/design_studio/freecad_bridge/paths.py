@@ -3,7 +3,7 @@
 
 """Locate the FreeCAD executable + companion tools.
 
-PyLCSS treats FreeCAD the same way it treats CalculiX and OpenRadioss:
+PyLCSS treats FreeCAD the same way it treats CalculiX and OpenCourant:
 ``scripts/install_solvers.py --only freecad`` downloads the GitHub
 release archive, unpacks it under ``external_solvers/freecad/unpacked``,
 and writes the resolved paths into ``external_solvers/solver_paths.json``.

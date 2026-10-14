@@ -26,7 +26,6 @@ from .pymoto_modules import (
     _make_concat_module,
     _make_heaviside_module,
     _make_linear_grid_projection_module,
-    _make_matrix_sum_module,
     _make_max_member_module,
     _make_passive_clamp_module,
     _make_pattern_repeat_module,
@@ -402,8 +401,6 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
         pym = import_pymoto()
 
         p = self.problem
-        uses_structural = p.physics_mode in {"structural", "thermo_mechanical"}
-        uses_thermal = p.physics_mode in {"thermal", "thermo_mechanical"}
 
         # ── two-scale cell law ────────────────────────────────────────────
         # When the study builds a lattice from a family whose periodic cell has
@@ -441,40 +438,16 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
 
         # ── supports, loads, passive regions ──────────────────────────────
         boundary_dofs = self._assemble_supports(domain, p.bc)
-        load_cases = (
-            self._assemble_load_cases(
-                domain, p.bc, ndof, base_boundary_dofs=boundary_dofs
-            )
-            if uses_structural
-            else []
+        load_cases = self._assemble_load_cases(
+            domain, p.bc, ndof, base_boundary_dofs=boundary_dofs
         )
-        thermal_boundary_nodes = (
-            self._assemble_thermal_supports(domain, p.thermal_bc)
-            if uses_thermal
-            else np.array([], dtype=int)
-        )
-        thermal_cases = (
-            self._assemble_thermal_load_cases(
-                domain, p.thermal_bc, thermal_boundary_nodes
-            )
-            if uses_thermal
-            else []
-        )
-        if uses_structural and not load_cases:
+        if not load_cases:
             raise ValueError(
                 "Structural topology optimization needs a non-zero load case."
             )
-        if uses_structural and any(case.boundary_dofs.size == 0 for case in load_cases):
+        if any(case.boundary_dofs.size == 0 for case in load_cases):
             raise ValueError(
                 "Every structural load/pose case needs at least one support."
-            )
-        if uses_thermal and thermal_boundary_nodes.size == 0:
-            raise ValueError(
-                "Thermal topology optimization needs a temperature-sink boundary."
-            )
-        if uses_thermal and not thermal_cases:
-            raise ValueError(
-                "Thermal topology optimization needs a non-zero heat-input case."
             )
         active_mask, passive_density = self._assemble_passive_masks(domain, p.bc)
         if not np.any(active_mask):
@@ -501,6 +474,13 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
         )
         active_volfrac = float(volume_budget["active_volfrac"])
         total_vol_target = float(volume_budget["flat_total_target"]) / float(domain.nel)
+        if float(volume_budget["min_source_volfrac"]) > float(p.volfrac) + 1e-9:
+            raise ValueError(
+                f"Target Volume {float(p.volfrac):.1%} is below the minimum "
+                f"{float(volume_budget['min_source_volfrac']):.1%} required by "
+                "fixed non-design material and minimum active density. "
+                "Increase Target Volume or reduce the non-design regions."
+            )
         if volume_budget["active_budget_exhausted"] or volume_budget["target_was_clamped"]:
             logger.warning(
                 "Topology volume target %.3f is infeasible with passive regions; "
@@ -532,7 +512,7 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                 passive_density,
             )
 
-        if not load_cases and not thermal_cases:
+        if not load_cases:
             logger.warning(
                 "TopologyOptVoxelNode: no load cases produced a non-zero force "
                 "vector — returning a trivial (uniform) result."
@@ -643,11 +623,7 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
         # there is no exponent to continue.
         penal_init = float(p.penal_init)
         penal_target = float(p.penal)
-        thermal_penal_target = float(p.thermal_penal)
-        widest_penal_range = max(
-            (penal_target - penal_init) if uses_structural else 0.0,
-            (thermal_penal_target - penal_init) if uses_thermal else 0.0,
-        )
+        widest_penal_range = penal_target - penal_init
         use_penal_continuation = bool(
             p.penal_continuation_enabled
             and cell_law is None
@@ -658,9 +634,7 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
             if use_penal_continuation
             else 0
         )
-        # Fraction of the way from `penal_init` to each target. One shared
-        # parameter, so structural and thermal reach full penalization on the
-        # same iteration even when their exponents differ.
+        # Fraction of the way from the initial to the full SIMP exponent.
         penal_progress = 0.0 if use_penal_continuation else 1.0
 
         def _continued_penal(target: float) -> float:
@@ -675,10 +649,7 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
         # Density formulation: raw density -> exact-adjoint manufacturing maps
         # -> physical cone filter -> passive clamp -> optional projection -> SIMP.
         heaviside_module_ref: Any = None
-        # Every SIMP interpolation in the network paired with the exponent it
-        # is continuing toward — the structural penalization, and the thermal
-        # one when the study is coupled. Advancing them together keeps the two
-        # physics describing the same material model at every iteration.
+        # SIMP interpolations paired with their target exponents.
         simp_modules: list[tuple[Any, float]] = []
         # Every projection module in the network, nominal first. beta continuation
         # has to advance all of them together or the branches stop describing the
@@ -962,102 +933,20 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
 
             structural_objective = sg0
 
-            sg0_scaled = (
-                pym.Scaling(scaling=100.0)(structural_objective)
-                if uses_structural
-                else None
-            )
+            sg0_scaled = pym.Scaling(scaling=100.0)(structural_objective)
 
-            # Held on the dilated field under the robust formulation. Bounding
-            # the eroded volume would leave the delivered blueprint free to
-            # overshoot the budget, and bounding the blueprint directly is what
-            # the literature reports as unstable; the dilated bound is
-            # rescaled during the solve so the blueprint lands on the request.
-            volume_density = sx_volume
-            svol = pym.EinSum(expression="i->")(volume_density)
+            # Compliance studies adapt the dilated bound until the delivered
+            # blueprint reaches the requested budget. Minimum-mass studies
+            # may use less material, so constrain their blueprint directly
+            # without rescaling the bound toward a full-budget design. Keep
+            # the robust mass objective on the dilated field in both cases.
+            volume_density = sx_blueprint if minimum_mass_objective else sx_volume
+            svol = pym.EinSum(expression="i->")(sx_volume)
             svol.tag = "volume"
             VolumeConstraint = _make_volume_constraint_module()
             volume_constraint_module_ref = VolumeConstraint(total_vol_target)
             sg1 = volume_constraint_module_ref(volume_density)
             sg1.tag = "volume constraint"
-
-            thermal_compliances: list[Any] = []
-            raw_thermal_compliances: list[Any] = []
-            thermal_states: list[Any] = []
-            if uses_thermal:
-                thermal_simp = SimpCls(
-                    minimum=float(p.thermal_conductivity_min),
-                    full=float(p.thermal_conductivity),
-                    penal=_continued_penal(thermal_penal_target),
-                )
-                simp_modules.append((thermal_simp, thermal_penal_target))
-                sk = thermal_simp(sxphys)
-                sP_raw = pym.AssemblePoisson(
-                    domain=domain,
-                    bc=thermal_boundary_nodes,
-                    material_property=1.0,
-                )(sk)
-                # Reduced-order distributed heat rejection. This is a
-                # volumetric sink proportional to local material; it does not
-                # resolve wetted surface area or fluid flow. Use conjugate CFD
-                # and independent thermal validation for a physical heat sink.
-                convection = float(
-                    getattr(p.thermal_bc, "convection_coefficient", 0.0) or 0.0
-                )
-                if convection > 0.0:
-                    MatrixSum = _make_matrix_sum_module()
-                    sH = pym.AssembleMass(
-                        domain=domain,
-                        bc=thermal_boundary_nodes,
-                        material_property=convection,
-                        ndof=1,
-                    )(sxphys)
-                    sP_raw = MatrixSum()(sP_raw, sH)
-                # Every case shares this operator but needs its own solver
-                # instance, because pyMOTO's linear-dependency-aware wrapper
-                # keeps a per-module solution database. See the structural
-                # branch for why the CSC conversion is direct-solve only.
-                thermal_solvers = [
-                    _linear_solver_for_domain(pym, domain) for _ in thermal_cases
-                ]
-                sP = (
-                    SparseToCSC()(sP_raw)
-                    if any(solver is None for solver in thermal_solvers)
-                    else sP_raw
-                )
-                for thermal_case, thermal_solver in zip(thermal_cases, thermal_solvers):
-                    st_i = pym.LinSolve(
-                        symmetric=True,
-                        positive_definite=True,
-                        solver=thermal_solver,
-                    )(sP, thermal_case.heat)
-                    thermal_states.append(st_i)
-                    sth_i = pym.EinSum(expression="i,i->")(st_i, thermal_case.heat)
-                    sth_i.tag = f"thermal_compliance:{thermal_case.name}"
-                    raw_thermal_compliances.append(sth_i)
-                    if abs(thermal_case.weight - 1.0) > 1e-12:
-                        sth_i = pym.MathExpression(
-                            expression=f"{float(thermal_case.weight)}*inp0"
-                        )(sth_i)
-                    thermal_compliances.append(sth_i)
-                if len(thermal_compliances) == 1:
-                    sg_thermal = thermal_compliances[0]
-                elif p.load_aggregation == "worst_case":
-                    ConcatCls = _make_concat_module()
-                    combined_thermal = ConcatCls()(*thermal_compliances)
-                    sg_thermal = pym.PNorm(p=float(p.load_pnorm_p))(combined_thermal)
-                else:
-                    expression = " + ".join(
-                        f"inp{i}" for i in range(len(thermal_compliances))
-                    )
-                    sg_thermal = pym.MathExpression(expression=expression)(
-                        *thermal_compliances
-                    )
-                sg_thermal.tag = "thermal_compliance"
-                sg_thermal_scaled = pym.Scaling(scaling=100.0)(sg_thermal)
-            else:
-                sg_thermal = None
-                sg_thermal_scaled = None
 
             if minimum_mass_objective:
                 sobjective_raw = pym.MathExpression(expression=f"inp0/{domain.nel}")(
@@ -1065,17 +954,6 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                 )
                 sobjective_raw.tag = "material fraction objective"
                 sobjective_scaled = pym.Scaling(scaling=100.0)(sobjective_raw)
-            elif p.physics_mode == "thermal":
-                sobjective_raw, sobjective_scaled = sg_thermal, sg_thermal_scaled
-            elif p.physics_mode == "thermo_mechanical":
-                sobjective_raw = pym.MathExpression(
-                    expression=(
-                        f"{float(p.structural_weight)}*inp0 + "
-                        f"{float(p.thermal_weight)}*inp1"
-                    )
-                )(sg0_scaled, sg_thermal_scaled)
-                sobjective_raw.tag = "thermo-mechanical objective"
-                sobjective_scaled = sobjective_raw
             else:
                 sobjective_raw, sobjective_scaled = structural_objective, sg0_scaled
             sobjective_scaled.tag = "objective"
@@ -1175,7 +1053,6 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
         change_hist: list[float] = []
 
         objective_hist: list[float] = []
-        thermal_hist: list[float] = []
         beta_hist: list[float] = []
         eta_hist: list[float] = []
         penal_hist: list[float] = []
@@ -1206,14 +1083,10 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
             # ceiling is a bound on the design space, not a display preference.
             # See `TopologyOptVoxelProblem.lattice_maximum_density`.
             xmax = np.full(domain.nel, float(p.lattice_maximum_density))
-            # For minimum mass, ``volfrac`` is the initial design only. Adding
-            # the ordinary volume-fraction response here would turn it into an
-            # unintended upper bound and can make an otherwise feasible stress
-            # problem impossible whenever the optimizer must first add
-            # material. The mass objective itself drives volume downward.
-            mma_responses = [sobjective_scaled]
-            if not minimum_mass_objective:
-                mma_responses.append(sg1)
+            # Target Volume is an upper material budget for both objectives.
+            # A stress-limited study must satisfy it together with the stress
+            # bound; an incompatible pair is an infeasible design request.
+            mma_responses = [sobjective_scaled, sg1]
             if sg_stress is not None:
                 mma_responses.append(sg_stress)
             mma = pym.MMA(
@@ -1457,13 +1330,12 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
             net.response()
 
             comp_val = float(sg0.state)
-            thermal_val = float(sg_thermal.state) if sg_thermal is not None else 0.0
             objective_val = float(sobjective_raw.state)
             objective_hist.append(objective_val)
             beta_hist.append(float(hv_beta))
             penal_hist.append(
                 _continued_penal(
-                    penal_target if uses_structural else thermal_penal_target
+                    penal_target
                 )
             )
             eta_hist.append(
@@ -1480,10 +1352,7 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                 if np.any(active_mask)
                 else float(np.mean(delta))
             )
-            if uses_structural:
-                comp_hist.append(comp_val)
-            if uses_thermal:
-                thermal_hist.append(thermal_val)
+            comp_hist.append(comp_val)
             change_hist.append(change)
             if s_pn_stress is not None:
                 # s_pn_stress.state is the P-norm of vm² → sqrt gives σ_pn
@@ -1497,7 +1366,7 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                 )
                 callback(
                     it,
-                    comp_val if uses_structural else thermal_val,
+                    comp_val,
                     change,
                     density_3d,
                 )
@@ -1539,8 +1408,8 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                 # a settled solution should use essentially all of its upper
                 # material budget. A large shortfall after beta continuation
                 # is normally a transient MMA/projection plateau, not an
-                # optimum. Minimum-mass studies intentionally do not satisfy
-                # this check.
+                # optimum. Minimum-mass studies may finish below the budget,
+                # but must still satisfy its upper bound.
                 # Judge the same density signal and target the active volume
                 # constraint uses, rather than assuming they are the nominal
                 # field and the nominal target.
@@ -1559,12 +1428,16 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                 # blueprint: the robust dilated bound can be satisfied before
                 # its periodic rescaling has reached the requested budget.
                 volume_tolerance = max(1e-4, 0.01 * current_volume_target)
-                material_budget_settled = minimum_mass_objective or (
-                    current_volume_target
-                    - max(0.01, 0.03 * current_volume_target)
-                    <= current_constrained_fraction
+                material_budget_settled = (
+                    current_constrained_fraction
                     <= current_volume_target + volume_tolerance
                 )
+                if not minimum_mass_objective:
+                    material_budget_settled = material_budget_settled and (
+                        current_constrained_fraction
+                        >= current_volume_target
+                        - max(0.01, 0.03 * current_volume_target)
+                    )
                 if use_robust and not minimum_mass_objective:
                     blueprint_fraction = float(np.mean(sx_blueprint.state))
                     material_budget_settled = material_budget_settled and (
@@ -1628,7 +1501,6 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
         result.compliance_history = comp_hist
         result.change_history = change_hist
         result.stress_history = stress_hist
-        result.thermal_compliance_history = thermal_hist
         result.objective_history = objective_hist
         result.beta_history = beta_hist
         result.projection_eta_history = eta_hist
@@ -1647,13 +1519,5 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                 )
             )
             for case, signal in zip(load_cases, sus)
-        }
-        result.thermal_case_compliances = {
-            case.name: float(np.asarray(signal.state).reshape(-1)[0])
-            for case, signal in zip(thermal_cases, raw_thermal_compliances)
-        }
-        result.thermal_case_max_temperature_rises = {
-            case.name: float(np.max(np.asarray(signal.state, dtype=float)))
-            for case, signal in zip(thermal_cases, thermal_states)
         }
         return result

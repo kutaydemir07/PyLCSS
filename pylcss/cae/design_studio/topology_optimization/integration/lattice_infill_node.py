@@ -11,7 +11,8 @@ from typing import Any
 
 from ..manufacturing import PUBLIC_FAMILIES, PUBLIC_FAMILY_KEYS
 from ..manufacturing.lattice_families import family_for
-from .lattice_node import LatticeOptVoxelNode
+from .lattice_definition import LatticeDefinitionMixin
+from .topology_node import TopologyOptVoxelNode
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ WALL_PITCH_CONSTANT_STRUT = 0.44
 WALL_PITCH_CONSTANT_SURFACE = 0.25
 
 
-class LatticeInfillNode(LatticeOptVoxelNode):
+class LatticeInfillNode(LatticeDefinitionMixin, TopologyOptVoxelNode):
     """Fill an existing solid with a lattice. No optimization.
 
     The lattice study next door answers "where should material go, and how
@@ -161,14 +162,13 @@ class LatticeInfillNode(LatticeOptVoxelNode):
         self.set_property("volfrac", 1.0)
         self.set_property("density_cutoff", 0.5)
         self.set_property("lattice_target_relative_density", 0.25)
-        self.set_property("optimize_lattice_members", False)
         self.set_property("validate_after_optimize", False)
-        self.set_property("visualization", "Manufactured Mesh")
-        self.set_property("cad_export_filename", "lattice_infill.step")
-        self.set_property("cad_export_format", "STEP")
-        # Expert, so no guided defaults rewrite the settings below and no
-        # guided lattice interpretation is applied to a uniform field.
-        self.set_property("workflow_mode", "Expert")
+        self.set_property("visualization", "CAD")
+        self.set_property("cad_export_filename", "lattice_infill.stl")
+        self.set_property("cad_export_format", "STL")
+        # An infill owns its build grid and uses a uniform cell definition.
+        self.set_property("automatic_grid", False)
+        self.set_property("automatic_filter_radius", False)
         self.set_property("lattice_settings_mode", "Manual")
 
         self.create_property(
@@ -201,7 +201,7 @@ class LatticeInfillNode(LatticeOptVoxelNode):
             items=list(BUILD_VOXEL_BUDGET),
         )
 
-    # ── settings ─────────────────────────────────────────────────────────────
+    # â”€â”€ settings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def resolve_infill_cell_size(self, characteristic_span: float) -> float:
         """Return the cell pitch this infill will actually build, in model units.
@@ -351,7 +351,7 @@ class LatticeInfillNode(LatticeOptVoxelNode):
         """No guided solver defaults: there is no solve to configure."""
         return {}
 
-    # ── execution ────────────────────────────────────────────────────────────
+    # â”€â”€ execution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _apply_build_grid(self) -> None:
         """Derive and store the cell pitch and build grid from the body."""

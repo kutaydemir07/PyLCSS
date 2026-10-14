@@ -646,7 +646,7 @@ FAMILIES: dict[str, LatticeFamily] = {family.key: family for family in _FAMILY_L
 # The complete registry remains available so projects authored with earlier
 # PyLCSS releases still deserialize and rebuild exactly as saved. New studies
 # deliberately offer a much smaller catalogue: these five cells cover the
-# common structural, flow/thermal and prismatic use cases, have comparatively
+# common structural, flow and prismatic use cases, have comparatively
 # mature geometry paths here, and avoid presenting experimental variants as
 # equivalent production choices.
 PUBLIC_FAMILY_KEYS: tuple[str, ...] = (

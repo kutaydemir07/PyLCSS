@@ -16,7 +16,6 @@ from typing import Any
 
 from pylcss.cae.design_studio.topology_optimization.integration.study_identity import (
     LATTICE_INFILL_CLASS_NAME,
-    LATTICE_SOLVER_CLASS_NAME,
     TOPOLOGY_SOLVER_CLASS_NAME,
     is_density_study_class,
 )
@@ -53,7 +52,6 @@ _TYPE_DESCRIPTIONS = {
     "Topology Region": "Preserved solid or void region",
     "Joint": "Kinematic joint definition",
     "Load Case": "Grouped topology operating case",
-    "Thermal Boundary": "Thermal sink or heat-load definition",
     "Impact Condition": "Initial motion and contact",
     "Impact Setup": "Initial motion and contact",
     "Result Dataset": "Solved fields, histories, quality checks, and summaries",
@@ -72,7 +70,6 @@ _TYPE_DESCRIPTIONS = {
     "Mass": "Mass",
     "Energy / Mass": "Specific energy",
     "Percent": "Percentage",
-    "Thermal Conductivity": "Thermal conductivity",
     "Table": "Structured engineering data",
     "File": "File reference",
     "Any": "Unconstrained data",
@@ -106,8 +103,6 @@ _PORT_LABELS = {
     "constraints": "Supports",
     "supports": "Supports",
     "loads": "Loads",
-    "preserved_regions": "Preserved Bodies (Non-Design)",
-    "obstacle_regions": "Obstacle Bodies (Keep-Out)",
     "impact": "Impact Condition",
     "results": "Results",
     "result_view": "View",
@@ -129,8 +124,6 @@ _EXPLICIT_LABELS = {
     ("TopologyOptVoxelNode", "input", "material"): "Material",
     ("TopologyOptVoxelNode", "input", "supports"): "Supports",
     ("TopologyOptVoxelNode", "input", "loads"): "Forces",
-    ("TopologyOptVoxelNode", "input", "preserved_regions"): "Preserved (Non-Design)",
-    ("TopologyOptVoxelNode", "input", "obstacle_regions"): "Obstacle (Keep-Out)",
     ("TopologyOptVoxelNode", "output", "results"): "Optimization Result",
     ("TopologyOptVoxelNode", "output", "recovered_shape"): "Recovered Surface",
     ("ConstraintNode", "input", "mesh"): "FE Mesh (FEA)",
@@ -164,11 +157,6 @@ _EXPLICIT_LABELS = {
     ("MaterialNode", "input", "youngs_modulus"): "Young's Modulus (MPa)",
     ("MaterialNode", "input", "poissons_ratio"): "Poisson's Ratio",
     ("MaterialNode", "input", "density"): "Density (t/mm³)",
-    (
-        "MaterialNode",
-        "input",
-        "thermal_conductivity",
-    ): "Thermal Conductivity (mW/mm/K)",
     ("LoadNode", "input", "force_x"): "Force X (N)",
     ("LoadNode", "input", "force_y"): "Force Y (N)",
     ("LoadNode", "input", "force_z"): "Force Z (N)",
@@ -205,7 +193,6 @@ _NUMERIC_NAME_TYPES = {
     "refinement_size": "Length",
     "rotation_angle_deg": "Scalar",
     "spacing": "Length",
-    "thermal_conductivity": "Thermal Conductivity",
     "thickness": "Length",
     "translate_x": "Length",
     "translate_y": "Length",
@@ -228,12 +215,10 @@ _GEOMETRY_PORT_NAMES = {
     "base",
     "bodies",
     "design_domain",
-    "obstacle_regions",
     "part_1",
     "part_2",
     "part_3",
     "part_4",
-    "preserved_regions",
     "recovered_shape",
     "region_shape",
     "shape",
@@ -256,8 +241,6 @@ _SELECTION_PORT_NAMES = {
 
 _EXPLICIT_TYPES = {
     ("TopologyOptVoxelNode", "input", "design_domain"): "Design Space",
-    ("TopologyOptVoxelNode", "input", "preserved_regions"): "Solid Geometry",
-    ("TopologyOptVoxelNode", "input", "obstacle_regions"): "Solid Geometry",
     # SelectFaceNode can select entities from either a CAD shape or an FE mesh.
     ("SelectFaceNode", "input", "shape"): "Selection Source",
     # Legacy selection output is deliberately not geometry.
@@ -381,7 +364,6 @@ _NUMERIC_TYPES = {
     "Mass",
     "Energy / Mass",
     "Percent",
-    "Thermal Conductivity",
 }
 
 _REQUIRED_INPUTS = {
@@ -410,7 +392,7 @@ _REQUIRED_INPUTS = {
 def _mirror_topology_study_entries(table: dict) -> None:
     """Give the other density studies the topology study's port vocabulary.
 
-    ``LatticeOptVoxelNode`` and ``LatticeInfillNode`` both descend from the
+    ``LatticeInfillNode`` descends from the
     topology node and declare no ports of their own, so restating these tables
     by hand would only create a second place for the same label, type, and
     requirement to drift from. The infill deletes the ports it does not use
@@ -419,10 +401,8 @@ def _mirror_topology_study_entries(table: dict) -> None:
     """
     for key, value in list(table.items()):
         if isinstance(key, tuple) and key[0] == TOPOLOGY_SOLVER_CLASS_NAME:
-            table[(LATTICE_SOLVER_CLASS_NAME, *key[1:])] = value
             table[(LATTICE_INFILL_CLASS_NAME, *key[1:])] = value
         elif key == TOPOLOGY_SOLVER_CLASS_NAME:
-            table[LATTICE_SOLVER_CLASS_NAME] = value
             table[LATTICE_INFILL_CLASS_NAME] = value
 
 
@@ -581,11 +561,8 @@ def apply_context_port_visibility(node: object) -> None:
         )
         _set_port_visible(node, "impact_face", not is_moving_body)
     elif is_density_study_class(class_name):
-        physics = str(_property(node, "physics_mode", "Structural") or "").lower()
-        structural = "structural" in physics or "coupled" in physics
-        thermal = "thermal" in physics
         for name in ("supports", "loads"):
-            _set_port_visible(node, name, structural)
+            _set_port_visible(node, name, True)
     elif class_name == "AssemblyNode":
         _set_port_visible(node, "bodies", True)
         for index in range(1, 5):

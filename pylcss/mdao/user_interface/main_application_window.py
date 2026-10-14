@@ -576,20 +576,9 @@ class MainWindow(QtWidgets.QMainWindow):
         return False
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
-        active_tasks = self._collect_active_tasks()
-        if self._project_io_busy:
-            active_tasks.append("project save/load")
+        from pylcss.user_interface.background_shutdown import prepare_window_close
 
-        if active_tasks:
-            task_text = ", ".join(active_tasks)
-            QtWidgets.QMessageBox.information(
-                self,
-                "Background Tasks Running",
-                f"Wait for these tasks to finish before closing the application: {task_text}.",
-            )
-            event.ignore()
-            return
-
+        prepare_window_close(self)
         super().closeEvent(event)
 
     def on_tab_changed(self, index: int) -> None:

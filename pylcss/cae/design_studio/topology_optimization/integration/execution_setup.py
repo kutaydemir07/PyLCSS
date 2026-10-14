@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
@@ -18,9 +18,13 @@ from ..configuration.length_scale import (
     resolve_physical_length_scale,
 )
 from ..configuration.presets import migrate_design_goal
-from ..manufacturing.cell_material import cell_material_law
+from ..configuration.voxel_meshing import (
+    VoxelMeshPlan,
+    voxel_mesh_plan,
+    available_voxel_memory_bytes,
+)
 from ..manufacturing.lattice_families import normalize_family_key
-from ..models.study import ManufacturingConstraints, ThermalBC, VoxelBC
+from ..models.study import ManufacturingConstraints, VoxelBC
 from ..optimization.problem import TopologyOptVoxelProblem
 from .boundary_mapping import (
     _bc_feature_bboxes,
@@ -35,16 +39,14 @@ from .lattice_settings import (
 from .geometry_mapping import (
     _flatten,
     _mesh_bounds,
-    _thermal_bc_from_graph_payloads,
 )
 from .voxelization import (
     _cylinder_feature_lengths,
-    _guided_voxel_grid,
     _mesh_design_domain_grid,
     _non_design_region_masks,
-    _use_automatic_guided_grid,
     voxel_size_from_bounds,
 )
+from .voxel_grid_mapping import rebase_voxel_boundary_conditions
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,8 @@ class PreparedTopologyStudy:
     lattice_porosity: str
     source_design_domain: Any = None
     non_design_regions: tuple[Any, ...] = ()
+    voxel_pitch: float | None = None
+    max_voxel_elements: int = 0
 
 
 @dataclass(frozen=True)
@@ -84,8 +88,6 @@ class TopologyGraphInputs:
     constraints: list[Any]
     loads: list[Any]
     non_design_regions: list[Any]
-    thermal_sinks: list[Any]
-    thermal_loads: list[Any]
     bc: VoxelBC
 
 
@@ -112,47 +114,13 @@ class TopologyDomainContext:
     load_aggregation: str
     worst_case_envelope: bool
     physics_mode: str
-    thermal_bc: ThermalBC
     passive_solid_mask: np.ndarray
     passive_void_mask: np.ndarray
     unitx: float
     unity: float
     unitz: float
-    # A variable-density lattice needs a graded density field and therefore
-    # solves a different continuum problem from solid reconstruction.
-    lattice_study: bool
-    # The requested structure mode, carried through so the solver can look up
-    # that family's homogenized cell law and optimize the real cell.
-    lattice_cell_type: str
-    # Density ceiling of that cell, which bounds the design variable itself on a
-    # lattice study. 1.0 for a solid study.
-    lattice_maximum_density: float
 
 
-def _guided_cell_budget(
-    structural_case_count: int,
-    physics_mode: Any,
-    *,
-    idealized_joint_count: int = 0,
-    base_cell_budget: int = 40_000,
-    is_lattice: bool = False,
-) -> int:
-    """Return an interactive grid budget for the requested solve workload."""
-    case_count = max(1, int(structural_case_count))
-    base_budget = 80_000 if is_lattice else int(base_cell_budget)
-    budget = max(12_000, int(base_budget / np.sqrt(float(case_count))))
-    requested_physics = (
-        str(physics_mode or "").strip().lower().replace("_", "-")
-    )
-    if (
-        "thermo-mechanical" in requested_physics
-        or "coupled structural + thermal" in requested_physics
-    ):
-        # Each iteration carries structural and thermal state/adjoint solves.
-        budget = min(budget, max(12_000, int(0.30 * base_budget)))
-    if int(idealized_joint_count) > 0:
-        budget = min(budget, max(8_000, int(0.20 * base_budget)))
-    return budget
 
 
 def _bc_joint_count(bc: VoxelBC) -> int:
@@ -179,13 +147,13 @@ def _can_use_planar_extrusion_grid(
     additional identical density layers only repeat the same in-plane problem.
     Retaining at least two layers keeps the tested 3-D element and multigrid
     path while avoiding the cost of redundant layers.  Any genuinely 3-D
-    boundary condition, connector, point force, or thermal study disables the
+    boundary condition, connector, or point force disables the
     reduction.
     """
     if extrusion_axis not in {0, 1, 2}:
         return False
     physics_key = str(physics_mode or "Structural").strip().lower()
-    if "thermal" in physics_key:
+    if physics_key != "structural":
         return False
     if bc.point_forces or bc.boundary_forces or bc.boundary_supports:
         return False
@@ -321,37 +289,17 @@ def _collect_graph_inputs(node: Any) -> TopologyGraphInputs | None:
     material = node.get_input_value("material", None)
     material = material if isinstance(material, dict) else {}
     # Every support and every force connected to the study is one scenario:
-    # they act together. Independent operating cases, idealized joints, and
-    # the thermal study were removed with their nodes.
+    # they act together. Independent operating cases and idealized joints
+    # were removed with their nodes.
     constraint_list = _flatten(node.get_input_list("supports"))
     load_list = _flatten(node.get_input_list("loads"))
-    preserved_inputs = _flatten(node.get_input_list("preserved_regions"))
-    obstacle_inputs = _flatten(node.get_input_list("obstacle_regions"))
-    non_design_payloads: list[Any] = []
-    for item in preserved_inputs:
-        if item is not None:
-            if isinstance(item, dict) and str(item.get("type", "")).lower() == "topology_non_design_region":
-                non_design_payloads.append(item)
-            else:
-                non_design_payloads.append({
-                    "type": "topology_non_design_region",
-                    "geometry": item,
-                    "region_type": "solid",
-                })
-    for item in obstacle_inputs:
-        if item is not None:
-            if isinstance(item, dict) and str(item.get("type", "")).lower() == "topology_non_design_region":
-                item_copy = dict(item)
-                item_copy["region_type"] = "void"
-                non_design_payloads.append(item_copy)
-            else:
-                non_design_payloads.append({
-                    "type": "topology_non_design_region",
-                    "geometry": item,
-                    "region_type": "void",
-                })
-    thermal_sink_payloads: list[Any] = []
-    thermal_load_payloads: list[Any] = []
+    from ..geometry.non_design import non_design_payloads
+
+    try:
+        non_design_regions = non_design_payloads(node, design_domain_input)
+    except ValueError as exc:
+        node.set_error(f"Invalid non-design region: {exc}")
+        return None
     try:
         bc = node._build_bc()
     except (TypeError, ValueError) as exc:
@@ -415,10 +363,36 @@ def _collect_graph_inputs(node: Any) -> TopologyGraphInputs | None:
         material=material,
         constraints=constraint_list,
         loads=load_list,
-        non_design_regions=non_design_payloads,
-        thermal_sinks=thermal_sink_payloads,
-        thermal_loads=thermal_load_payloads,
+        non_design_regions=non_design_regions,
         bc=bc,
+    )
+
+
+def plan_topology_voxel_mesh(node: Any, bounds: Bounds, *, bc=None, constraints=None, loads=None) -> VoxelMeshPlan:
+    """Shared cheap inspector/backend plan; no geometry rasterization occurs."""
+    lengths = _cylinder_feature_lengths(
+        bounds, solid_cylinders=bc.solid_cylinders if bc else [],
+        void_cylinders=bc.void_cylinders if bc else [],
+    )
+    if as_bool(node.get_property("non_design_enabled")):
+        from ..geometry.non_design import read_non_design_regions
+        lengths.extend(float(region["thickness_mm"]) for region in
+                       read_non_design_regions(node.get_property("non_design_regions") or "[]"))
+    automatic = node.get_property("automatic_grid")
+    available_memory = available_voxel_memory_bytes()
+    return voxel_mesh_plan(
+        bounds, node.get_property("voxel_mesh_quality"),
+        voxel_size=float(node.get_property("voxel_size") or 0),
+        automatic=automatic is None or as_bool(automatic),
+        manual_shape=tuple(node.get_property(key) or default for key, default in
+                           zip(("nelx", "nely", "nelz"), (30, 20, 10))),
+        max_elements=node.get_property("max_voxel_elements"),
+        feature_bboxes=_bc_feature_bboxes(
+            constraints if constraints is not None else _flatten(node.get_input_list("supports")),
+            loads if loads is not None else _flatten(node.get_input_list("loads")),
+        ),
+        feature_lengths=lengths,
+        available_memory_bytes=available_memory,
     )
 
 
@@ -432,99 +406,38 @@ def _prepare_domain(
     constraint_list = graph.constraints
     load_list = graph.loads
     non_design_payloads = graph.non_design_regions
-    thermal_sink_payloads = graph.thermal_sinks
-    thermal_load_payloads = graph.thermal_loads
     bc = graph.bc
     try:
-        nelx = int(node.get_property("nelx") or 30)
-        nely = int(node.get_property("nely") or 20)
-        nelz = int(node.get_property("nelz") or 10)
-    except (TypeError, ValueError):
-        node.set_error("Topology grid dimensions must be integers.")
+        plan = plan_topology_voxel_mesh(node, bounds, bc=bc, constraints=constraint_list, loads=load_list)
+    except (TypeError, ValueError, OverflowError) as exc:
+        node.set_error(f"Invalid voxel meshing: {exc}")
         return None
-    guided_active = _use_automatic_guided_grid(node.get_property("workflow_mode"))
-    try:
-        requested_member = float(
-            node.get_property("minimum_member_size_mm") or 0.0
-        )
-        requested_void = float(
-            node.get_property("minimum_void_size_mm") or 0.0
-        )
-    except (TypeError, ValueError):
-        node.set_error("Minimum solid and void sizes must be numeric.")
-    extrusion_axis = None
-    planar_extrusion_axis = None
-    setattr(node, "_guided_planar_extrusion_axis", None)
-    if guided_active:
-        # Guided mode owns its resolution and length scale. Legacy saved
-        # element counts and voxel-radius values must never silently change a
-        # guided solve. Physical member/void sizes and the selected fidelity
-        # are engineering requirements, however, so they remain authoritative.
-        # Large studies are solved by multigrid-preconditioned CG, whose
-        # memory is linear in the number of voxels, so the budget no longer
-        # has to be set by sparse-factorization fill-in. It still shrinks as
-        # pose/load cases are added, because each case carries its own solve.
-        structural_case_count = max(1, len(bc.load_cases))
-        family_mode = normalize_family_key(
-            str(node.get_property("structure_mode") or "Solid Envelope")
-        )
-        is_lattice_study = bool(family_mode and family_mode != "solid")
-        guided_cell_budget = _guided_cell_budget(
-            structural_case_count,
-            node.get_property("physics_mode"),
-            is_lattice=is_lattice_study,
-        )
-        feature_lengths = _cylinder_feature_lengths(
-            bounds,
-            solid_cylinders=bc.solid_cylinders,
-            void_cylinders=bc.void_cylinders,
-        )
-        feature_lengths.extend(
-            value for value in (requested_member, requested_void) if value > 0.0
-        )
-        # The stated minimum member/void sizes are engineering requirements,
-        # not features that are merely nice to resolve: the length scale
-        # rejects a grid too coarse to represent them. Give the sizer the
-        # binding one so it cannot return a grid that is refused a step later.
-        stated_sizes = [
-            value for value in (requested_member, requested_void) if value > 0.0
-        ]
-        guided_grid = _guided_voxel_grid(
-            bounds,
-            feature_bboxes=_bc_feature_bboxes(constraint_list, load_list),
-            feature_lengths=feature_lengths,
-            max_total_cells=guided_cell_budget,
-            inactive_axes=(
-                (planar_extrusion_axis,)
-                if planar_extrusion_axis is not None
-                else ()
-            ),
-            required_feature_size=min(stated_sizes) if stated_sizes else None,
-        )
-        if guided_grid is not None:
-            nelx, nely, nelz = guided_grid
-
-    structural_case_count = max(1, len(bc.load_cases))
-    safe_cell_cap = max(
-        40_000,
-        int(160_000 / np.sqrt(float(structural_case_count))),
-    )
-    # This cap bounds an FE solve: every voxel is an element, and the factored
-    # system plus its sensitivities is what makes a large grid unaffordable. A
-    # lattice infill assembles nothing and solves nothing — its grid is a
-    # rasterization budget, already bounded by the node's own build quality —
-    # so applying a solver cap to it only forces a cell too coarse to build.
+    nelx, nely, nelz = plan.shape
     is_infill_study = callable(getattr(node, "resolve_infill_cell_size", None))
-    if min(nelx, nely, nelz) < 1 or (
-        not is_infill_study and nelx * nely * nelz > safe_cell_cap
-    ):
-        node.set_error(
-            "Topology grid dimensions must be positive and contain no more "
-            f"than {safe_cell_cap:,} voxels for this number of structural "
-            "load/pose cases. Use Guided mode for safe automatic sizing; "
-            "validate the recovered design with an independent refined mesh."
-        )
+    node._resolved_voxel_meshing = {
+        "mode": plan.mode, "quality": plan.quality,
+        "requested_voxel_size": float(node.get_property("voxel_size") or 0),
+        "voxel_size": plan.pitch, "grid": list(plan.shape),
+        "voxel_edges": plan.voxel_edges, "elements": plan.elements,
+        "max_elements": plan.element_limit,
+        "estimated_memory_bytes": plan.estimated_memory_bytes,
+        "source_bounds": [value.tolist() for value in plan.source_bounds],
+        "grid_bounds": [value.tolist() for value in plan.bounds],
+        "automatic_refinement": as_bool(node.get_property("automatic_mesh_refinement")),
+        "geometric_target_pitch": plan.geometric_target_pitch,
+        "automatic_element_budget": plan.automatic_element_budget,
+        "resource_limited": plan.resource_limited,
+    }
+    if not is_infill_study and plan.resource_error():
+        node.set_error(plan.resource_error())
         return None
+    if plan.pitch is not None:
+        bc = rebase_voxel_boundary_conditions(bc, graph.bounds, plan.bounds)
+        bounds = plan.bounds
+        graph = replace(graph, bounds=bounds, bc=bc)
+    requested_member = requested_void = 0.0
+    extrusion_axis = None
+    setattr(node, "_guided_planar_extrusion_axis", None)
 
     rmin_effective = float(node.get_property("rmin") or 1.5)
     filter_radius_is_physical = False
@@ -533,7 +446,7 @@ def _prepare_domain(
         minimum_solid_size=0.0,
         minimum_void_size=0.0,
     )
-    if guided_active:
+    if node.get_property("automatic_filter_radius") is not False:
         try:
             length_scale = resolve_physical_length_scale(
                 bounds,
@@ -592,53 +505,10 @@ def _prepare_domain(
         == "worst_case"
     )
     minimum_mass_goal = goal_key == "minimum mass under stress"
-    physics_mode = (
-        str(node.get_property("physics_mode") or "Structural")
-        .strip()
-        .lower()
-        .replace("-", "_")
-    )
-    if physics_mode in {
-        "thermo_mechanical",
-        "coupled structural + thermal",
-    }:
-        # Public wording is intentionally explicit: this is a weighted
-        # structural/conduction objective, not thermal-expansion coupling.
-        physics_mode = "thermo_mechanical"
-    if str(node.get_property("workflow_mode") or "Guided").lower() == "guided":
-        if goal_key == "thermal conduction":
-            physics_mode = "thermal"
-        elif goal_key in {
-            "thermo-mechanical",
-            "coupled structural + thermal",
-        }:
-            physics_mode = "thermo_mechanical"
-        elif goal_key in {
-            "lightweight stiffness",
-            "minimum mass under stress",
-        }:
-            physics_mode = "structural"
-    try:
-        if thermal_sink_payloads or thermal_load_payloads:
-            thermal_bc = _thermal_bc_from_graph_payloads(
-                thermal_sink_payloads,
-                thermal_load_payloads,
-                bounds,
-            )
-        else:
-            thermal_bc = ThermalBC()
-        thermal_bc.convection_coefficient = float(
-            node.get_property("convection_coefficient") or 0.0
-        )
-        # Re-validate: the coefficient is assigned after construction.
-        thermal_bc.__post_init__()
-    except (TypeError, ValueError) as exc:
-        node.set_error(f"Invalid TopOpt thermal setup: {exc}")
-        return None
-    uses_structural = physics_mode in {"structural", "thermo_mechanical"}
-    uses_thermal = physics_mode in {"thermal", "thermo_mechanical"}
+    # Retired project values cannot switch this structural node's analysis.
+    physics_mode = "structural"
     is_infill_study = callable(getattr(node, "resolve_infill_cell_size", None))
-    if not is_infill_study and uses_structural and not _bc_has_support(bc):
+    if not is_infill_study and not _bc_has_support(bc):
         node.set_error(
             "Structural TopOpt needs a connected Topology Support, or a "
             "Topology Load Case containing one."
@@ -658,20 +528,10 @@ def _prepare_domain(
     except (TypeError, ValueError) as exc:
         node.set_error(f"Invalid non-design region: {exc}")
         return None
-    if not is_infill_study and uses_structural and not _bc_has_nonzero_load(bc):
+    if not is_infill_study and not _bc_has_nonzero_load(bc):
         node.set_error(
             "Structural TopOpt needs a connected Topology Force, or a "
             "Topology Load Case containing one."
-        )
-        return None
-    if not is_infill_study and uses_thermal and not (thermal_bc.fixed_faces or thermal_bc.fixed_boxes):
-        node.set_error(
-            "Thermal TopOpt needs at least one connected Reference Temperature."
-        )
-        return None
-    if not is_infill_study and uses_thermal and not thermal_bc.load_cases:
-        node.set_error(
-            "Thermal TopOpt needs at least one connected Topology Heat Load."
         )
         return None
     unitx = unity = unitz = 1.0
@@ -686,7 +546,6 @@ def _prepare_domain(
     # every bit as much a lattice study as "Gyroid Lattice", and a substring
     # test on the word "lattice" would quietly send it down the solid path.
     structure_family = normalize_family_key(structure_mode_value)
-    lattice_maximum_density = 1.0
     if structure_family and structure_family != "solid":
         voxel_size = voxel_size_from_bounds(
             (nelx, nely, nelz),
@@ -697,25 +556,11 @@ def _prepare_domain(
             # Validate manufacturing dimensions before starting the costly
             # optimization. Output recovery resolves them again in case a
             # convergence study finishes on a refined grid.
-            resolved_options = resolve_lattice_structure_options(
+            resolve_lattice_structure_options(
                 node,
                 (nelx, nely, nelz),
                 bounds,
             )
-            # The cell's density ceiling bounds the *design variable*, not just
-            # the reconstruction: see `TopologyOptVoxelProblem`. Resolving it
-            # here keeps one source for the number the solve and the build both
-            # use, so a delivered lattice cannot be denser than the cell the
-            # macro tensor was measured from.
-            lattice_maximum_density = float(
-                resolved_options.maximum_relative_density
-            )
-            if callable(getattr(node, "resolve_infill_cell_size", None)):
-                # Lattice infill does not optimize, so there is no design
-                # variable to bound. Its density field is the constant 1.0
-                # meaning "this is all part", and the lattice density it wants
-                # is carried by the target instead.
-                lattice_maximum_density = 1.0
         except (TypeError, ValueError) as exc:
             hint = ""
             if not lattice_setup_is_guided(
@@ -727,7 +572,7 @@ def _prepare_domain(
                     cell_size=node.get_property("lattice_cell_size_mm"),
                 )
             node.set_error(
-                f"Invalid lattice manufacturing settings: {exc}{hint}"
+                f"Invalid lattice geometry: {exc}{hint}"
             )
             return None
 
@@ -749,15 +594,11 @@ def _prepare_domain(
         load_aggregation=load_aggregation_setting,
         worst_case_envelope=worst_case_envelope,
         physics_mode=physics_mode,
-        thermal_bc=thermal_bc,
         passive_solid_mask=explicit_passive_solid_mask,
         passive_void_mask=explicit_passive_void_mask,
         unitx=unitx,
         unity=unity,
         unitz=unitz,
-        lattice_study=bool(structure_family) and structure_family != "solid",
-        lattice_cell_type=structure_family,
-        lattice_maximum_density=lattice_maximum_density,
     )
 
 
@@ -777,30 +618,15 @@ def _build_problem(
     rmin_effective = domain.rmin
     design_domain = domain.design_domain
     design_goal = domain.design_goal
-    goal_key = domain.goal_key
     minimum_mass_goal = domain.minimum_mass_goal
     load_aggregation_setting = domain.load_aggregation
-    worst_case_envelope = domain.worst_case_envelope
     physics_mode = domain.physics_mode
-    thermal_bc = domain.thermal_bc
     explicit_passive_solid_mask = domain.passive_solid_mask
     explicit_passive_void_mask = domain.passive_void_mask
     unitx, unity, unitz = domain.unitx, domain.unity, domain.unitz
-    draw_dir = str(node.get_property("draw_direction") or "none").strip().lower()
-    extr_axis = str(node.get_property("extrusion_axis") or "none").strip().lower()
-    sym_plane = str(node.get_property("symmetry_plane") or "none").strip().lower()
-    oh_dir = str(node.get_property("overhang_direction") or "none").strip().lower()
-    oh_angle = float(node.get_property("overhang_angle_deg") or 45.0)
-    max_member_mm = float(node.get_property("max_member_size_mm") or 0.0)
-
-    mc = ManufacturingConstraints(
-        symmetry=sym_plane,
-        extrusion=extr_axis,
-        overhang_build_axis=oh_dir,
-        overhang_angle_deg=oh_angle,
-        pull_out_axis=draw_dir,
-        max_member_size_physical=max_member_mm,
-    )
+    # Density studies use an unrestricted design domain. Old project
+    # manufacturing controls cannot impose hidden constraints.
+    mc = ManufacturingConstraints()
 
     stress_enabled = (
         as_bool(node.get_property("stress_constraint")) or minimum_mass_goal
@@ -811,9 +637,7 @@ def _build_problem(
     if stress_enabled and optimizer.strip().upper() not in {"MMA", "GCMMA"}:
         optimizer = "GCMMA"
     try:
-        yield_stress = float(node.get_property("yield_stress") or 0.0)
-        if yield_stress <= 0.0:
-            yield_stress = float(material.get("yield_strength") or 0.0)
+        yield_stress = float(material.get("yield_strength") or 0.0)
     except (TypeError, ValueError):
         node.set_error("Topology allowable/yield stress must be numeric.")
         return None
@@ -828,105 +652,14 @@ def _build_problem(
             float(node.get_property("Emin") or 1e-9),
             youngs_modulus * 1e-9,
         )
-        thermal_conductivity = float(
-            material.get(
-                "thermal_conductivity",
-                node.get_property("thermal_conductivity") or 1.0,
-            )
-        )
-        minimum_thermal_conductivity = max(
-            float(node.get_property("thermal_conductivity_min") or 1e-6),
-            thermal_conductivity * 1e-9,
-        )
-        # A solid study and a lattice study are different design problems, not
-        # two renderings of one result.
-        #
-        # SIMP penalization exists to drive the density to 0/1, but a graded
-        # lattice *is* the intermediate density — so the two work against each
-        # other. With penal=3 and the Heaviside projection on, a converged
-        # design reaches rho ~ 1 throughout the structure, every voxel clears
-        # `solid_transition_density`, and the "lattice" comes out fully solid:
-        # measured on a converged 58x38x16 field, 100% of the envelope became
-        # solid and no lattice was generated at all.
-        #
-        # Lattice studies retain intermediate density so that it can size the
-        # explicit cells. Families with a homogenized cell law no longer need a
-        # chosen exponent at all: the macro operator uses that cell's measured
-        # anisotropic tensor, so the density-to-stiffness relation is whatever
-        # the cell actually is. The porosity exponents below remain for the
-        # families that have no law (honeycomb), where they are still an
-        # isotropic continuum assumption. Explicit recovered-geometry
-        # reanalysis remains mandatory for every option.
-        lattice_study = domain.lattice_study
-        lattice_porosity = (
-            "Conservative"
-            if lattice_study
-            and lattice_setup_is_guided(
-                node.get_property("lattice_settings_mode")
-            )
-            else str(
-                node.get_property("lattice_porosity") or "Conservative"
-            ).strip()
-        )
+        # Cellular geometry is generated afterwards; every actual solve uses
+        # the solid SIMP material and its projection.
+        lattice_porosity = "Not applicable"
         material_penal = float(node.get_property("penal") or 3.0)
         study_poisson = float(material.get("nu", node.get_property("nu") or 0.3))
-        # Mirrors TopologyOptVoxelProblem.homogenized_cell_law: a stress
-        # constraint keeps the study on the isotropic surrogate, so the
-        # exponent below is still the physics and must stay reported as such.
-        homogenized_law = (
-            cell_material_law(domain.lattice_cell_type, poisson=study_poisson)
-            if lattice_study and not stress_enabled
-            else None
-        )
-        if lattice_study:
-            porosity_penalties = {
-                "maximum porosity (concept)": 1.0,
-                "balanced (concept)": 1.25,
-                "conservative": 1.8,
-                # Backward compatibility for previously saved studies.
-                "high": 1.0,
-                "medium": 1.25,
-                "low": 1.8,
-                "low (natural)": 1.8,
-            }
-            porosity_key = lattice_porosity.lower()
-            if porosity_key not in porosity_penalties:
-                raise ValueError(
-                    "Lattice continuum assumption must be Conservative, "
-                    "Balanced (Concept), or Maximum Porosity (Concept)."
-                )
-            material_penal = porosity_penalties[porosity_key]
-            if homogenized_law is not None:
-                # The exponent is unused on this path; say so rather than
-                # leaving a stale value in the report to be read as physics.
-                lattice_porosity = (
-                    f"Homogenized {homogenized_law.cell_type} cell law "
-                    "(continuum exponent not used)"
-                )
-        else:
-            lattice_porosity = "Not applicable"
-        guided_mode = (
-            str(node.get_property("workflow_mode") or "Guided")
-            .strip()
-            .lower()
-            == "guided"
-        )
-        if guided_mode:
-            # Hidden legacy solver controls must not silently turn a guided
-            # study into a long expert run. Convergence is not a user-facing
-            # preference either: a solver should converge rather than be told
-            # to stop early, so guided studies always use the strict budget.
-            solver_max_iter, solver_tol, solver_patience = (120, 0.0035, 6)
-            if goal_key == "minimum mass under stress":
-                solver_max_iter = max(solver_max_iter, 120)
-            elif goal_key == "coupled structural + thermal" or worst_case_envelope:
-                solver_max_iter = max(solver_max_iter, 100)
-        else:
-            solver_max_iter = int(node.get_property("max_iter") or 80)
-            solver_tol = float(node.get_property("tol") or 0.01)
-            solver_patience = int(
-                node.get_property("convergence_patience") or 5
-            )
+        solver_max_iter = int(node.get_property("max_iter") or 120)
+        solver_tol = float(node.get_property("tol") or 0.0035)
+        solver_patience = int(node.get_property("convergence_patience") or 6)
         problem = TopologyOptVoxelProblem(
             nelx=nelx,
             nely=nely,
@@ -935,14 +668,13 @@ def _build_problem(
             # to carry the grid, units and cell family to the shared output
             # stage. See `TopologyOptVoxelProblem.solve_enabled`.
             solve_enabled=not is_infill_study,
+            max_voxel_elements=getattr(node, "_resolved_voxel_meshing", {}).get("max_elements", 0),
             E0=youngs_modulus,
             Emin=minimum_stiffness,
             nu=study_poisson,
             penal=material_penal,
-            lattice_cell_type=domain.lattice_cell_type if lattice_study else "",
-            lattice_maximum_density=(
-                domain.lattice_maximum_density if lattice_study else 1.0
-            ),
+            lattice_cell_type="",
+            lattice_maximum_density=1.0,
             volfrac=float(node.get_property("volfrac") or 0.5),
             rmin=rmin_effective,
             filter_radius_is_physical=domain.filter_radius_is_physical,
@@ -954,7 +686,7 @@ def _build_problem(
             # its graded intermediate density is the design, not a defect to
             # be pushed to 0/1.
             robust_length_scale=bool(
-                domain.filter_radius_is_physical and not lattice_study
+                domain.filter_radius_is_physical
             ),
             eta_eroded=domain.eta_eroded,
             eta_dilated=domain.eta_dilated,
@@ -973,27 +705,13 @@ def _build_problem(
             passive_void_mask=explicit_passive_void_mask,
             objective_mode="minimum_mass" if minimum_mass_goal else "compliance",
             physics_mode=physics_mode,
-            thermal_bc=thermal_bc,
-            thermal_conductivity=thermal_conductivity,
-            thermal_conductivity_min=minimum_thermal_conductivity,
-            thermal_penal=float(node.get_property("thermal_penal") or 3.0),
-            structural_weight=float(
-                node.get_property("structural_weight")
-                if node.get_property("structural_weight") is not None
-                else 1.0
-            ),
-            thermal_weight=float(
-                node.get_property("thermal_weight")
-                if node.get_property("thermal_weight") is not None
-                else 1.0
-            ),
             load_aggregation=load_aggregation_setting,
             load_pnorm_p=float(node.get_property("load_pnorm_p") or 8.0),
             stress_constraint_enabled=stress_enabled,
             yield_stress=yield_stress,
             # The projection drives the field to 0/1, which is what a solid
             # study wants and exactly what a graded lattice must not have.
-            heaviside_enabled=not lattice_study,
+            heaviside_enabled=True,
             # Numerical hyperparameters use the dataclass defaults (industrial
             # values: q=0.5 Bruggi qp-approach, p=8.0 PNorm aggregation,
             # Heaviside three-field SIMP on with β: 1 → 16 and physically
@@ -1022,6 +740,8 @@ def _build_problem(
         lattice_porosity=lattice_porosity,
         source_design_domain=graph.design_domain_input,
         non_design_regions=tuple(graph.non_design_regions),
+        voxel_pitch=getattr(node, "_resolved_voxel_meshing", {}).get("voxel_size"),
+        max_voxel_elements=getattr(node, "_resolved_voxel_meshing", {}).get("max_elements", 0),
     )
 
 

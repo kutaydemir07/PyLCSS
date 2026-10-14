@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import math
+import numpy as np
 
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -326,8 +327,6 @@ class StudyInspectorMixin:
                     self.update_property("poissons_ratio", float(p_data["nu"]))
                 if "rho" in p_data:
                     self.update_property("density", float(p_data["rho"]))
-                if "k" in p_data:
-                    self.update_property("thermal_conductivity", float(p_data["k"]))
                 if "yield_strength" in p_data:
                     self.update_property("yield_strength", float(p_data["yield_strength"]))
                 if "tangent_modulus" in p_data:
@@ -351,7 +350,6 @@ class StudyInspectorMixin:
                     "youngs_modulus",
                     "poissons_ratio",
                     "density",
-                    "thermal_conductivity",
                 )
             )
         )
@@ -373,24 +371,6 @@ class StudyInspectorMixin:
             ("poissons_ratio", "nu", "Poisson's ratio"),
             ("density", "rho", "Density (t/mm^3)"),
         ]
-        # Thermal conductivity is useful for Topology (thermal) and Impact/thermal,
-        # but optional for standard structural FEA.
-        if purpose in ("Topology / Lattice", "Impact"):
-            field_specs.append(
-                (
-                    "thermal_conductivity",
-                    "k",
-                    "Thermal conductivity (W/m K)",
-                )
-            )
-        elif not is_impact:
-            field_specs.append(
-                (
-                    "thermal_conductivity",
-                    "k",
-                    "Thermal conductivity (W/m K)",
-                )
-            )
         if is_impact:
             field_specs.extend(
                 [
@@ -538,7 +518,7 @@ class StudyInspectorMixin:
             type_options = {
                 "Tet (Linear C3D4 - Fast)": "Tet",
                 "Tet10 (Quadratic C3D10 - High Precision)": "Tet10",
-                "Shell (2D Surface - OpenRadioss Crash Only)": "Shell",
+                "Shell (2D Surface - OpenCourant Crash Only)": "Shell",
             }
             rev_type_options = {v: k for k, v in type_options.items()}
             combo_type.addItems(list(type_options.keys()))
@@ -613,7 +593,7 @@ class StudyInspectorMixin:
 
                 note = QtWidgets.QLabel(
                     "Shell meshing produces 2D surface triangles with assigned wall thickness. "
-                    "Used exclusively by OpenRadioss Crash Solver for thin structures (tubes, sheet metal); "
+                    "Used exclusively by OpenCourant Crash Solver for thin structures (tubes, sheet metal); "
                     "CalculiX Static FEA requires solid continuum elements (Tet or Tet10)."
                 )
                 note.setWordWrap(True)

@@ -17,19 +17,14 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CAD_CATEGORY_NAMES = {
     "01_fea": "Engineering Challenge - Structural",
     "02_impact": "Engineering Challenge - Impact",
-    "topology_optimization": "Engineering Challenge - Topology",
-    "lattice_optimization": "Engineering Challenge - Lattice",
+    "topology_optimization": "Engineering Challenge - TopOpt",
 }
-# The browser lists categories in discovery order, and a directory name that
-# sorts well on disk is not the order an engineer works in. A lattice study is
-# a topology study whose result is a graded cell rather than a solid, so it
-# follows topology instead of preceding it alphabetically.
+# Keep the bundled challenges in modeling, analysis, then optimization order.
 _CAD_CATEGORY_ORDER = (
     "00_modeling",
     "01_fea",
     "02_impact",
     "topology_optimization",
-    "lattice_optimization",
 )
 
 
@@ -119,7 +114,6 @@ def _cad_capabilities(nodes: dict[str, Any]) -> tuple[str, ...]:
         ("com.cad.sim.pressure_load", "Pressure loading"),
         ("com.cad.sim.crash_solver", "Explicit impact"),
         ("com.cad.sim.topopt_voxel", "Topology optimization"),
-        ("com.cad.sim.lattice_voxel", "Adaptive lattice optimization"),
         ("com.cad.sim.lattice_infill", "Adaptive lattice infill"),
         ("com.cad.assembly", "Multiple CAD bodies"),
         ("com.cad.code_part", "Parametric code geometry"),

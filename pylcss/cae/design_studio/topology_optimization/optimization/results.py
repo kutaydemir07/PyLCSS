@@ -19,14 +19,9 @@ class TopologyOptVoxelResult:
     compliance_history: list[float] = field(default_factory=list)
     objective_history: list[float] = field(default_factory=list)
     change_history: list[float] = field(default_factory=list)
-    thermal_compliance_history: list[float] = field(default_factory=list)
     stress_history: list[float] = field(default_factory=list)  # sigma_pn per iteration
     case_compliances: dict[str, float] = field(default_factory=dict)
     case_max_displacements: dict[str, float] = field(default_factory=dict)
-    thermal_case_compliances: dict[str, float] = field(default_factory=dict)
-    thermal_case_max_temperature_rises: dict[str, float] = field(
-        default_factory=dict
-    )
     solve_time_s: float = 0.0
     n_iter: int = 0
     converged: bool = False
@@ -80,11 +75,6 @@ class _StructuralCase:
     joint_stiffness: object | None = None
 
 
-@dataclass
-class _ThermalCase:
-    name: str
-    weight: float
-    heat: np.ndarray
 
 
 def _density_grid_from_state(

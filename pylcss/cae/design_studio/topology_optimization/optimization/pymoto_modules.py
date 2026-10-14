@@ -448,27 +448,6 @@ def _make_sparse_to_csc_module() -> type[object]:
     return _SparseToCSC
 
 
-def _make_matrix_sum_module() -> type[object]:
-    """Add two assembled system matrices into one operator.
-
-    Used to place a design-dependent convection term alongside the thermal
-    conduction operator, giving ``(K + H) T = Q``. Both operands depend on the
-    density, so the sum has to happen inside the network rather than as a
-    constant offset.
-    """
-    pym = import_pymoto()
-
-    class _MatrixSum(pym.Module):
-        def __call__(self, first: object, second: object) -> object:
-            if second is None:
-                return first
-            return first + second
-
-        def _sensitivity(self, derivative: object) -> list[object]:
-            # d(A + B) is the identity with respect to both operands.
-            return [derivative, derivative]
-
-    return _MatrixSum
 
 
 # Quadratic-form matrix for von Mises stress in 3-D Voigt notation.

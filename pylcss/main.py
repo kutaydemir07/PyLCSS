@@ -136,6 +136,12 @@ def main() -> NoReturn:
         NoReturn: This function never returns due to Qt event loop
     """
     app: QtWidgets.QApplication = QtWidgets.QApplication(sys.argv)
+    from pylcss.user_interface.background_shutdown import (
+        finish_background_shutdown,
+        prepare_application_quit,
+    )
+
+    app.aboutToQuit.connect(prepare_application_quit)
     # Establish the persisted palette before any widgets cache theme-derived
     # colours.  Applying it from inside a half-constructed QMainWindow can
     # also interfere with creation of its native menu bar.
@@ -167,6 +173,7 @@ def main() -> NoReturn:
     QtCore.QTimer.singleShot(100, _signal_launcher_ready)
     
     exit_code = app.exec()
+    finish_background_shutdown(exit_code)
     cleanup_temp_models()
     sys.exit(exit_code)
 

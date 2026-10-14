@@ -18,7 +18,8 @@ from OCP.ShapeFix import ShapeFix_Shape
 from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
 
 
-def export_cad_model(workplane_or_shape, layouts=(), export_path=None, export_format="STEP", *, verify=True):
+def export_cad_model(workplane_or_shape, layouts=(), export_path=None, export_format="STEP", *, verify=True,
+                     product_name="Recovered design"):
     """Export native CAD geometry; check STEP by reimporting the result.
 
     ``layouts`` is retained for callers of the previous public signature.
@@ -31,10 +32,20 @@ def export_cad_model(workplane_or_shape, layouts=(), export_path=None, export_fo
     shape = workplane_or_shape.val() if hasattr(workplane_or_shape, 'val') else workplane_or_shape
     kind = str(export_format).upper()
     if kind in {'STEP', 'STP'}:
-        writer = STEPControl_Writer()
-        if (writer.Transfer(shape.wrapped, STEPControl_AsIs) != IFSelect_RetDone
-                or writer.Write(str(path)) != IFSelect_RetDone):
-            raise RuntimeError(f'STEP export failed: {path}')
+        from cadquery.occ_impl.exporters.assembly import exportAssembly
+        # A compound's members belong to one named material part. XCAF carries
+        # this grouping to CAD consumers instead of importing anonymous solids.
+        assembly = cq.Assembly(name=str(product_name or 'Recovered design'))
+        assembly.add(shape, name='Material')
+        STEPControl_Writer()
+        names = ('write.surfacecurve.mode', 'write.precision.mode', 'write.stepcaf.subshapes.name')
+        previous = {name: Interface_Static.IVal_s(name) for name in names}
+        try:
+            if not exportAssembly(assembly, str(path), mode='default'):
+                raise RuntimeError(f'STEP export failed: {path}')
+        finally:
+            for name, value in previous.items():
+                Interface_Static.SetIVal_s(name, value)
         if verify:
             verify_step_roundtrip(path)
     elif kind in {'IGES', 'IGS'}:
@@ -132,6 +143,26 @@ def _geometry_signature(face, linear_tolerance):
         values = np.r_[direction(torus.Axis().Direction()), point(torus.Location()),
                        torus.MajorRadius(), torus.MinorRadius()]
         tolerances = np.r_[np.full(3, 1e-10), np.full(5, linear_tolerance)]
+    elif kind == "EXTRUSION":
+        from OCP.Geom import Geom_BSplineCurve
+        surface = BRep_Tool.Surface_s(face.wrapped)
+        curve = surface.BasisCurve()
+        if not isinstance(curve, Geom_BSplineCurve):
+            raise RuntimeError("STEP extrusion verification requires a B-spline basis curve")
+        axis = direction(surface.Direction())
+        # Translation of the basis along the extrusion axis describes the
+        # same unbounded surface. Compare its perpendicular control points.
+        values = [*axis, curve.Degree(), curve.NbPoles(), curve.NbKnots(),
+                  int(curve.IsPeriodic())]
+        tolerances = [1e-10] * len(values)
+        for i in range(1, curve.NbPoles() + 1):
+            pole = point(curve.Pole(i))
+            values.extend((*(pole - (pole @ axis) * axis), curve.Weight(i)))
+            tolerances.extend((linear_tolerance, linear_tolerance, linear_tolerance, 1e-10))
+        for i in range(1, curve.NbKnots() + 1):
+            values.extend((curve.Knot(i), curve.Multiplicity(i)))
+            tolerances.extend((1e-10, 1e-10))
+        values, tolerances = np.asarray(values), np.asarray(tolerances)
     else:
         raise RuntimeError(f"STEP surface geometry verification does not support {kind}")
     return kind, values, tolerances

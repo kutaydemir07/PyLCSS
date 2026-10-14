@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from pylcss.cae.user_interface.cad import ProfessionalCadApp
+from pylcss.user_interface.background_shutdown import prepare_window_close
 from pylcss.user_interface.common.theme_manager import THEMES, apply_theme, current_theme
 
 
@@ -387,9 +388,7 @@ class CAEMainWindow(QtWidgets.QMainWindow):
         self.cad_widget._open_project()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
-        if not self.cad_widget._ensure_idle_for_io("closing PyLCSS CAE"):
-            event.ignore()
-            return
+        prepare_window_close(self)
         super().closeEvent(event)
         if event.isAccepted():
             self.cad_widget.viewer.shutdown()

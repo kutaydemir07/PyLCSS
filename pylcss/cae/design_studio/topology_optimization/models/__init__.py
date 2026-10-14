@@ -6,8 +6,6 @@ from .study import (
     JointDefinition,
     LoadCase,
     ManufacturingConstraints,
-    ThermalBC,
-    ThermalLoadCase,
     VoxelBC,
 )
 
@@ -15,7 +13,5 @@ __all__ = [
     "JointDefinition",
     "LoadCase",
     "ManufacturingConstraints",
-    "ThermalBC",
-    "ThermalLoadCase",
     "VoxelBC",
 ]

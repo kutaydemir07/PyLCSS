@@ -45,7 +45,7 @@
       "subgraph_session": {},
       "custom": {
         "description": "Conceptual manufacturable six-cell solid for envelope and approximate mass orientation.",
-        "tags": "explicit-impact, openradioss, engineering-challenge, ev-crash",
+        "tags": "explicit-impact, opencourant, engineering-challenge, ev-crash",
         "notes": "The checked solver deck contains seven geometric trigger bands; this clean solid intentionally omits them.",
         "schema_version": 1,
         "code": "# Conceptual six-cell DP780 extrusion aligned with global X.\n# The checked shell deck contains seven trigger bands; this solid is only the\n# clean manufacturing envelope used for mass and package orientation.\nif min(L, W, H, wall_t) <= 0.0:\n    raise ValueError('All dimensions must be positive.')\nif 2.0 * wall_t >= min(W / 3.0, H / 2.0):\n    raise ValueError('Wall gauge closes a cell.')\ncenter = (0.5 * L, 0.0, 0.0)\nouter = cq.Workplane('XY').box(L, W, H).translate(center)\ninner = cq.Workplane('XY').box(L + 2.0, W - 2.0 * wall_t, H - 2.0 * wall_t).translate(center)\nperimeter = outer.cut(inner)\nweb_left = cq.Workplane('XY').box(L, wall_t, H - 2.0 * wall_t).translate((0.5 * L, -W / 6.0, 0.0))\nweb_right = cq.Workplane('XY').box(L, wall_t, H - 2.0 * wall_t).translate((0.5 * L, W / 6.0, 0.0))\nweb_horizontal = cq.Workplane('XY').box(L, W - 2.0 * wall_t, wall_t).translate(center)\nresult = perimeter.union(web_left).union(web_right).union(web_horizontal)\n",
@@ -499,12 +499,12 @@
       "port_deletion_allowed": false,
       "subgraph_session": {},
       "custom": {
-        "description": "Connected workflow for the exact trigger mesh, material, support, and impact; ready for a fresh OpenRadioss run.",
-        "tags": "explicit-impact, openradioss, checked-baseline",
+        "description": "Connected workflow for the exact trigger mesh, material, support, and impact; ready for a fresh OpenCourant run.",
+        "tags": "explicit-impact, opencourant, checked-baseline",
         "notes": "The deterministic trigger-mesh model is wired for a fresh run.",
         "schema_version": 1,
-        "openradioss_starter_path": "",
-        "openradioss_engine_path": "",
+        "opencourant_starter_path": "",
+        "opencourant_engine_path": "",
         "external_work_dir": "",
         "deck_only": false,
         "external_timeout_s": 2400.0,
@@ -647,7 +647,7 @@
   "_copyright": "Copyright (c) 2026 Kutay Demir.",
   "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
   "_title": "EV Multi-Cell Crash Energy Absorber (56 km/h Frontal)",
-  "_purpose": "Nonlinear explicit dynamic crash simulation of an automotive six-cell frontal energy absorber subjected to a 1850 kg rigid barrier impact at 56 km/h (15.56 m/s).",
+  "_purpose": "Screen progressive crushing of one six-cell module with an 1850 kg moving wall at 15.56 m/s. This module is not specified to stop the complete sled.",
   "_fidelity": "Nonlinear dynamic explicit shell formulation, elasto-plastic material with DP780 strain hardening, contact self-impact, hourglass stabilization.",
   "_visual_target": "Progressive axial fold pattern without global Euler buckling; kinetic energy converting smoothly to plastic strain dissipation; force-displacement curve.",
   "_engineering_decision": "Verify whether the multi-cell DP780 concept module satisfies progressive folding stability, specific energy absorption (SEA >= 28 kJ/kg), and peak force limits (PCF <= 210 kN) under 56 km/h impact.",
@@ -681,9 +681,9 @@
       "baseline_status": "Not evaluated; run the stated verification."
     },
     {
-      "requirement": "Internal Energy Ratio",
-      "target": ">= 0.90",
-      "verification": "Total energy balance check",
+      "requirement": "Physical Dissipation Share",
+      "target": ">= 0.90 of sled kinetic-energy loss",
+      "verification": "Physical module energy / (initial minus current sled kinetic energy), with external work and added-mass effects accounted for. This is not 90% of initial sled energy.",
       "baseline_status": "Not evaluated; run the stated verification."
     }
   ],
@@ -704,6 +704,12 @@
     "SEA >= 28 kJ/kg",
     "PCF <= 210 kN",
     "No unphysical hourglass energy accumulation",
-    "CFE >= 0.65"
+    "CFE >= 0.65",
+    "Report residual sled kinetic energy at the useful-stroke limit; do not claim a full vehicle stop.",
+    "Report added mass, hourglass energy and energy-balance error separately."
+  ],
+  "_engineering_limits": [
+    "Initial sled kinetic energy is 223.955 kJ. At 210 kN peak force and 520 mm useful stroke, module work cannot exceed 109.2 kJ. Residual sled kinetic energy is expected; absorbing 90% of initial sled energy is infeasible with these bounds.",
+    "SEA uses stated module mass and useful crush stroke. Distinguish physical energy dissipation from hourglass energy and added mass."
   ]
 }

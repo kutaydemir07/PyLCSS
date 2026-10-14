@@ -433,7 +433,7 @@ def impact_material_payload(node, *, elastic=None):
         'tangent_modulus': H,
         'failure_strain': ef,
         'enable_fracture': _as_bool(node.get_property('enable_fracture')),
-        # Cowper-Symonds (consumed by the OpenRadioss deck writer; 0 = off).
+        # Cowper-Symonds (consumed by the OpenCourant deck writer; 0 = off).
         'strain_rate_c': src,
         'strain_rate_p': srp,
         'preset_name': preset,

@@ -131,7 +131,7 @@ class SolverNode(CadQueryNode):
         ):
             msg = (
                 "The CalculiX FEA solver supports Tet and Tet10 solid meshes only. "
-                "Shell meshes are supported by the OpenRadioss Crash Solver."
+                "Shell meshes are supported by the OpenCourant Crash Solver."
             )
             self.set_error(msg)
             return None

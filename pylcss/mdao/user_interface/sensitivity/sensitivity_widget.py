@@ -4,7 +4,7 @@
 """
 Sensitivity Analysis Interface for PyLCSS.
 
-Provides a GUI for performing global sensitivity analysis using the State-of-the-Art (SOTA)
+Provides a GUI for performing global sensitivity analysis using the Sobol
 standard in MDAO: Sobol' global variance decomposition (Saltelli sequence sampling).
 Estimates:
 - First-order indices (S1): main effects of individual design variables

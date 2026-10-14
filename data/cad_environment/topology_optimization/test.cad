@@ -334,7 +334,11 @@
         "validate_after_optimize": false,
         "cad_export_filename": "topology_optimized.step",
         "volfrac": 0.29,
-        "visualization": "Density"
+        "visualization": "Density",
+        "voxel_size": 0.0,
+        "automatic_grid": true,
+        "voxel_mesh_quality": "Very Fine",
+        "automatic_mesh_refinement": true
       }
     },
     "0x2013eba53a0": {
@@ -516,10 +520,10 @@
   "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
   "_title": "Quick Verification Benchmark - Topology Optimization",
   "_purpose": "Compact verification model designed for fast end-to-end testing of the topology optimization pipeline.",
-  "_fidelity": "Fast coarse voxel solve with interactive surface picking.",
+  "_fidelity": "Automatic voxel meshing with progressive refinement and interactive surface picking.",
   "_visual_target": "Stable converged density field and valid recovered surface mesh.",
   "_engineering_decision": "Rapid sanity check for solver execution, connectivity gating, and surface recovery pipeline.",
-  "_baseline": "Unsolved reference scenario; execute the study to evaluate convergence and geometry.",
+  "_baseline": "Solver and recovery regression benchmark; convergence and structural acceptance are distinct checks.",
   "_design_variables": [
     "Design-domain bounds: 100 x 40 x 20 mm",
     "Volume fraction: 29%"
@@ -531,7 +535,7 @@
     {
       "requirement": "Solver Convergence",
       "target": "== True",
-      "verification": "Tolerance <= 1e-3",
+      "verification": "Guided objective and density-change convergence criteria; inspect the full convergence history",
       "baseline_status": "Not evaluated; run the stated verification."
     },
     {
@@ -542,8 +546,9 @@
     }
   ],
   "_deliverables": [
-    "Voxel density preview",
-    "Recovered mesh STL"
+    "Optimized density and recovered STL",
+    "Verified native CAD and STEP when reconstruction succeeds",
+    "Convergence and reconstruction reports"
   ],
   "_workflow": [
     "Create box geometry",
@@ -552,7 +557,11 @@
     "Verify output"
   ],
   "_acceptance_criteria": [
-    "Convergence within 30 iterations",
-    "Valid geometry output"
+    "Solver meets the Guided convergence criteria and preserves the support/load interfaces.",
+    "Recovered material remains one connected component at the requested 29% material budget.",
+    "CAD reconstruction must pass geometry checks and STEP reimport; no substitute geometry is exported."
+  ],
+  "_engineering_limits": [
+    "A fresh run converged in 59 iterations at 29.03% material fraction. Independent stress/displacement verification is disabled, so this is a concept and pipeline regression benchmark."
   ]
 }

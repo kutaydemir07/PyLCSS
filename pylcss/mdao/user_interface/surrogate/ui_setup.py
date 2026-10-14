@@ -195,14 +195,14 @@ class SurrogateUiMixin:
 
         self.combo_algo = QtWidgets.QComboBox()
         model_options = [
-            "Auto Mode (Scientific SOTA)",
+            "Auto Mode",
         ]
         if TORCH_AVAILABLE:
             model_options.append("Your Own Architecture (Deep Learning)")
         self.combo_algo.addItems(model_options)
         self.combo_algo.setToolTip(
             "Choose surrogate modeling workflow:\n"
-            "- Auto Mode (Scientific SOTA): Automatic multi-model benchmarking and champion selection across peer-reviewed MDAO algorithms (Kriging, KPLS, Polyharmonic RBF, Sparse PCE, SVR, Goel-Haftka Ensembles)\n"
+            "- Auto Mode: Automatic multi-model benchmarking and champion selection across peer-reviewed MDAO algorithms (Kriging, KPLS, Polyharmonic RBF, Sparse PCE, SVR, Goel-Haftka Ensembles)\n"
             "- Your Own Architecture (Deep Learning): Visual or PyTorch deep learning architecture builder (Residual blocks, Fourier embeddings, LayerNorm, MC Dropout)"
         )
         self.combo_algo.currentIndexChanged.connect(self.update_hyperparams)
@@ -352,7 +352,7 @@ class SurrogateUiMixin:
         self.combo_auto_preset.addItem("Thorough (Full search & Ensembling)", "thorough")
         self.combo_auto_preset.setToolTip(
             "Search Presets:\n"
-            "- Quick: Fast evaluation of 4 core SOTA models (Kriging, RBF, PCE, SVR)\n"
+            "- Quick: Fast evaluation of 4 core models (Kriging, RBF, PCE, SVR)\n"
             "- Standard: Adds high-dimensional KPLS and Matern 3/2 rough response\n"
             "- Thorough: Adds degree-3 PCE, Gaussian Kriging, and full Goel-Haftka ensemble"
         )
@@ -396,7 +396,7 @@ class SurrogateUiMixin:
         # Map algorithm display name -> stack page index. Used by
         # update_hyperparams to switch the hyperparam panel.
         self._algo_to_page = {
-            "Auto Mode (Scientific SOTA)": self._auto_page_index,
+            "Auto Mode": self._auto_page_index,
             "Auto Mode (Recommended)": self._auto_page_index,
             "Auto Mode": self._auto_page_index,
             "Your Own Architecture (Deep Learning)": self._custom_page_index,

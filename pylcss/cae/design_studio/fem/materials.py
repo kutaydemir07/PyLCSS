@@ -47,7 +47,6 @@ class MaterialNode(CadQueryNode):
         self.add_input('youngs_modulus', color=(180, 180, 0))
         self.add_input('poissons_ratio', color=(180, 180, 0))
         self.add_input('density', color=(180, 180, 0))
-        self.add_input('thermal_conductivity', color=(255, 110, 50))
 
         # Preset dropdown. The impact catalogue is offered alongside the
         # elastic one: choosing an impact preset brings its calibrated flow
@@ -66,12 +65,6 @@ class MaterialNode(CadQueryNode):
         self.create_property('youngs_modulus', 210000.0, widget_type='float')  # MPa
         self.create_property('poissons_ratio', 0.3, widget_type='float')
         self.create_property('density', 7.85e-9, widget_type='float')  # tonne/mm^3
-        self.create_property(
-            'thermal_conductivity',
-            45.0,
-            widget_type='float',
-        )
-
         # Yield is an allowable in a linear study. It becomes an isotropic
         # bilinear-hardening law only when the solver explicitly selects
         # Nonlinear (Plastic).
@@ -92,8 +85,6 @@ class MaterialNode(CadQueryNode):
                 super().set_property('poissons_ratio', float(mat['nu']), push_undo=push_undo)
             if 'rho' in mat:
                 super().set_property('density', float(mat['rho']), push_undo=push_undo)
-            if 'k' in mat:
-                super().set_property('thermal_conductivity', float(mat['k']), push_undo=push_undo)
 
     def run(self):
         self.clear_error()
@@ -105,21 +96,7 @@ class MaterialNode(CadQueryNode):
             E = resolve_numeric_input(self.get_input('youngs_modulus'), mat['E'])
             nu = resolve_numeric_input(self.get_input('poissons_ratio'), mat['nu'])
             rho = resolve_numeric_input(self.get_input('density'), mat['rho'])
-            thermal_conductivity = resolve_numeric_input(
-                self.get_input('thermal_conductivity'),
-                mat['k'],
-            )
-        else:
-            # Resolve inputs with fallback to properties
-            E = self.get_input_value('youngs_modulus', 'youngs_modulus')
-            nu = self.get_input_value('poissons_ratio', 'poissons_ratio')
-            rho = self.get_input_value('density', 'density')
-            thermal_conductivity = self.get_input_value(
-                'thermal_conductivity',
-                'thermal_conductivity',
-            )
-
-        # Plasticity is independent of the preset choice — surface as
+            # Plasticity is independent of the preset choice — surface as
         # explicit overrides so a user can mix Steel (preset) + custom
         # yield strength without typing all the elastic fields.
         sigma_y = float(self.get_property('yield_strength')  or 0.0)
@@ -129,11 +106,10 @@ class MaterialNode(CadQueryNode):
             E = float(E)
             nu = float(nu)
             rho = float(rho)
-            thermal_conductivity = float(thermal_conductivity)
         except (TypeError, ValueError):
             self.set_error("Material properties must be numeric.")
             return None
-        values = (E, nu, rho, thermal_conductivity, sigma_y, Et)
+        values = (E, nu, rho, sigma_y, Et)
         if not all(math.isfinite(value) for value in values):
             self.set_error("Material properties must be finite numbers.")
             return None
@@ -145,9 +121,6 @@ class MaterialNode(CadQueryNode):
             return None
         if rho <= 0.0:
             self.set_error("Density must be greater than zero.")
-            return None
-        if thermal_conductivity <= 0.0:
-            self.set_error("Thermal conductivity must be greater than zero.")
             return None
         if sigma_y < 0.0 or Et < 0.0:
             self.set_error("Yield strength and tangent modulus cannot be negative.")
@@ -161,7 +134,6 @@ class MaterialNode(CadQueryNode):
             'E': E,
             'nu': nu,
             'rho': rho,
-            'thermal_conductivity': thermal_conductivity,
         }
         if sigma_y > 0.0:
             out['yield_strength']  = sigma_y

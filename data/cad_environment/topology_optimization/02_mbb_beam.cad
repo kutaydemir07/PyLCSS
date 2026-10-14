@@ -1,0 +1,558 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "domain": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "MBB Beam - Midspan Bending Domain",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 180,
+      "height": 100,
+      "pos": [
+        -800,
+        -60
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "code": "# Full-span rectangular MBB domain. Coplanar face partitions define\n# small bearing/load pads without changing the rectangular envelope.\ncuts = [-L/2, -L/2+6, -6, 6, L/2-6, L/2]\nresult = None\nfor i in range(len(cuts)-1):\n    a, b = cuts[i], cuts[i+1]\n    block = cq.Workplane('XY').box(b-a, H, T).translate(((a+b)/2, 0, 0))\n    result = block if result is None else result.union(block, clean=False)\nresult.edges(cq.NearestToPointSelector((-L/2, -H/2, 0))).tag('left_pin')\nresult.edges(cq.NearestToPointSelector((L/2, -H/2, 0))).tag('right_roller')\nresult.faces(cq.NearestToPointSelector((0, H/2, 0))).tag('midspan_load')\nresult.faces(cq.NearestToPointSelector((-L/2+3, -H/2, 0))).tag('left_pad')\nresult.faces(cq.NearestToPointSelector((L/2-3, -H/2, 0))).tag('right_pad')\n",
+        "parameters": "",
+        "description": "Full-span MBB beam with a rectangular design domain, bottom end supports and a downward load on a small top-midspan pad.",
+        "tags": "bundled-example, topology-optimization",
+        "schema_version": 1,
+        "param_1_name": "L",
+        "param_1_value": 180.0,
+        "param_2_name": "H",
+        "param_2_value": 60.0,
+        "param_3_name": "T",
+        "param_3_value": 12.0,
+        "param_4_name": "",
+        "param_4_value": 0.0,
+        "param_5_name": "",
+        "param_5_value": 0.0,
+        "param_6_name": "",
+        "param_6_value": 0.0
+      }
+    },
+    "material": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "Linear Elastic Steel",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 180,
+      "height": 100,
+      "pos": [
+        100,
+        520
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "preset": "Steel (Structural)",
+        "analysis_purpose": "Structural FEA",
+        "youngs_modulus": 210000.0,
+        "poissons_ratio": 0.3,
+        "density": 7.85e-09,
+        "yield_strength": 355.0
+      }
+    },
+    "left_pin_selection": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Left Bottom Pin Selection",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 180,
+      "height": 100,
+      "pos": [
+        -480,
+        0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "entity_type": "Edge",
+        "selector_type": "Tag",
+        "tag": "left_pin"
+      }
+    },
+    "left_pin": {
+      "type_": "com.cad.topopt.support.TopologySupportNode",
+      "icon": null,
+      "name": "Left Bottom Pin",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 180,
+      "height": 100,
+      "pos": [
+        -160,
+        0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "support_type": "Fixed"
+      }
+    },
+    "right_roller_selection": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Right Bottom Roller - X Free Selection",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 180,
+      "height": 100,
+      "pos": [
+        -480,
+        170
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "entity_type": "Edge",
+        "selector_type": "Tag",
+        "tag": "right_roller"
+      }
+    },
+    "right_roller": {
+      "type_": "com.cad.topopt.support.TopologySupportNode",
+      "icon": null,
+      "name": "Right Bottom Roller - X Free",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 180,
+      "height": 100,
+      "pos": [
+        -160,
+        170
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "support_type": "Block YZ Translation"
+      }
+    },
+    "midspan_load_selection": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Top Midspan Load 1 kN Selection",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 180,
+      "height": 100,
+      "pos": [
+        -480,
+        340
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "entity_type": "Face",
+        "selector_type": "Tag",
+        "tag": "midspan_load"
+      }
+    },
+    "midspan_load": {
+      "type_": "com.cad.topopt.load.TopologyLoadNode",
+      "icon": null,
+      "name": "Top Midspan Load 1 kN",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 180,
+      "height": 100,
+      "pos": [
+        -160,
+        340
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "force_x": 0,
+        "force_y": -1000,
+        "force_z": 0
+      }
+    },
+    "study": {
+      "type_": "com.cad.sim.topopt_voxel.TopologyOptVoxelNode",
+      "icon": null,
+      "name": "MBB Beam - Midspan Bending TopOpt",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 180,
+      "height": 100,
+      "pos": [
+        220,
+        0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "design_goal": "Lightweight Stiffness",
+        "volfrac": 0.4,
+        "visualization": "Density",
+        "voxel_mesh_quality": "Very Fine",
+        "voxel_size": 0.0,
+        "non_design_enabled": true,
+        "non_design_regions": "[{\"name\": \"Left bearing pad\", \"face_indices\": [1], \"thickness_mm\": 4, \"face_signatures\": [{\"type\": \"PLANE\", \"area\": 72.0, \"center\": [-87.0, -30.0, 1.5612511283791264e-16]}]}, {\"name\": \"Right bearing pad\", \"face_indices\": [17], \"thickness_mm\": 4, \"face_signatures\": [{\"type\": \"PLANE\", \"area\": 72.0, \"center\": [87.0, -30.0, 1.5612511283791264e-16]}]}, {\"name\": \"Midspan load pad\", \"face_indices\": [11], \"thickness_mm\": 4, \"face_signatures\": [{\"type\": \"PLANE\", \"area\": 144.0, \"center\": [7.401486830834377e-17, 30.0, 1.5612511283791264e-16]}]}]",
+        "max_iter": 120,
+        "validate_after_optimize": false,
+        "cad_export_filename": "02_mbb_beam.step",
+        "description": "Full-span MBB beam with a rectangular design domain, bottom end supports and a downward load on a small top-midspan pad.",
+        "notes": "Automatic voxel meshing uses geometry and available resources, with progressive refinement. Re-select non-design faces after changing geometry parameters.",
+        "automatic_grid": true,
+        "automatic_mesh_refinement": true
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "domain",
+        "shape"
+      ],
+      "in": [
+        "left_pin_selection",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "left_pin_selection",
+        "selection"
+      ],
+      "in": [
+        "left_pin",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "left_pin",
+        "supports"
+      ],
+      "in": [
+        "study",
+        "supports"
+      ]
+    },
+    {
+      "out": [
+        "domain",
+        "shape"
+      ],
+      "in": [
+        "right_roller_selection",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "right_roller_selection",
+        "selection"
+      ],
+      "in": [
+        "right_roller",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "right_roller",
+        "supports"
+      ],
+      "in": [
+        "study",
+        "supports"
+      ]
+    },
+    {
+      "out": [
+        "domain",
+        "shape"
+      ],
+      "in": [
+        "midspan_load_selection",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "midspan_load_selection",
+        "selection"
+      ],
+      "in": [
+        "midspan_load",
+        "target_region"
+      ]
+    },
+    {
+      "out": [
+        "midspan_load",
+        "loads"
+      ],
+      "in": [
+        "study",
+        "loads"
+      ]
+    },
+    {
+      "out": [
+        "domain",
+        "shape"
+      ],
+      "in": [
+        "study",
+        "design_domain"
+      ]
+    },
+    {
+      "out": [
+        "material",
+        "material"
+      ],
+      "in": [
+        "study",
+        "material"
+      ]
+    }
+  ],
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "_title": "MBB Beam - Midspan Bending",
+  "_baseline": "Unsolved design domain with all boundary selections supplied.",
+  "_fidelity": "Linear elastic 3D SIMP compliance demonstration with automatic voxel meshing and progressive refinement.",
+  "_requirements": [
+    {
+      "requirement": "Convergence and material budget",
+      "target": "Review convergence at 40% volume fraction",
+      "verification": "Objective/change histories and final volume report",
+      "baseline_status": "Not evaluated"
+    },
+    {
+      "requirement": "Preserved interfaces",
+      "target": "Retain the selected non-design material and open bores",
+      "verification": "Non-design face-layer preview and recovered geometry",
+      "baseline_status": "Not evaluated"
+    }
+  ],
+  "_workflow": [
+    "Preview the domain, named support/load selections and non-design face layers.",
+    "Run the TopOpt solver and inspect density, volume fraction and convergence.",
+    "Use automatic voxel meshing, then recover CAD and run structural verification."
+  ],
+  "_deliverables": [
+    "Optimized density and convergence report",
+    "Recovered geometry and interface review"
+  ],
+  "_acceptance_criteria": [
+    "Supports and load remain attached to connected material.",
+    "Selected non-design interfaces remain solid and bores stay open.",
+    "Compare convergence and geometry on a finer voxel mesh."
+  ],
+  "_purpose": "Full-span MBB beam with a rectangular design domain, bottom end supports and a downward load on a small top-midspan pad.",
+  "_visual_target": "An approximately symmetric bending structure linking the center load pad to both bottom end bearings.",
+  "_engineering_decision": "Compare the MBB bending load path and convergence at a 40% material budget.",
+  "_design_variables": [
+    "Rectangular domain: 180 x 60 x 12 mm",
+    "Volume fraction: 40%"
+  ],
+  "_load_cases": [
+    "Left bottom edge: X, Y and Z blocked (pin)",
+    "Right bottom edge: Y and Z blocked, X free (roller)",
+    "Top middle 12 x 12 mm pad: total 1,000 N in -Y"
+  ],
+  "_engineering_limits": [
+    "This is a full-span 3D MBB demonstration with a finite load pad and preserved bearing pads. Z restraints at both bearings stabilize out-of-plane rigid motion.",
+    "The topology is unrestricted in 3D; an exact extrusion constraint is not imposed."
+  ]
+}

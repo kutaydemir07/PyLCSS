@@ -54,12 +54,12 @@ def _energy_error_percent(raw: Mapping[str, object]) -> tuple[float | None, str]
     relative = relative[np.isfinite(relative)]
     if relative.size:
         max_abs = float(np.max(np.abs(relative)))
-        # OpenRadioss post-processors have emitted this channel as both a
+        # OpenCourant post-processors have emitted this channel as both a
         # fraction and a percentage across versions. Values within [-1, 1]
         # are treated as a fraction and normalised to percent.
         return (
             max_abs * 100.0 if max_abs <= 1.0 else max_abs,
-            "OpenRadioss DTE_REL",
+            "OpenCourant DTE_REL",
         )
 
     ke = _array(raw.get("kinetic_energy_kj"))
@@ -130,8 +130,8 @@ def evaluate_crash_quality(
             "pass" if terminated else "fail",
             external_status,
             "engine_completed",
-            "OpenRadioss Engine must exit successfully.",
-            "OpenRadioss model debugging/result-checking guidance",
+            "OpenCourant Engine must exit successfully.",
+            "OpenCourant model debugging/result-checking guidance",
         )
     )
 
@@ -185,7 +185,7 @@ def evaluate_crash_quality(
                 "Starter and Engine OUT summaries must be present; warnings "
                 "remain visible and prevent an unconditional qualification pass."
             ),
-            "OpenRadioss Starter model-check guidance",
+            "OpenCourant Starter model-check guidance",
         )
     )
 
@@ -395,7 +395,7 @@ def evaluate_crash_quality(
 
     if prescribed_wall:
         # A massless prescribed wall supplies external work instead of carrying
-        # initial kinetic energy. OpenRadioss' global-energy histories do not
+        # initial kinetic energy. OpenCourant' global-energy histories do not
         # include that wall work as an external-work channel, so close the
         # balance against the independently integrated wall force-displacement
         # history. This is the physically meaningful balance for a controlled

@@ -1355,5 +1355,11 @@
     "file": "01_16mn_forging_press_frame.cad.results.h5",
     "result_count": 2,
     "saved_at": "2026-10-11T17:43:09.852227"
-  }
+  },
+  "_title": "16 MN Forging Press: Global Frame Screening",
+  "_purpose": "Compare centered, eccentric production and emergency die-jam loads on a continuous S460 frame.",
+  "_fidelity": "Linear elastic CalculiX analysis of a continuous quadratic-tetrahedral frame with self-weight.",
+  "_engineering_limits": [
+    "Weld detail fatigue, connection slip, contact, buckling and local plasticity require separate models. Raw sharp-corner stress peaks are not design allowables."
+  ]
 }

@@ -15,7 +15,8 @@ from ..configuration.length_scale import (
     coarsest_active_edge,
     extrusion_inactive_axes,
 )
-from ..models.study import ManufacturingConstraints, ThermalBC, VoxelBC
+from ..models.study import ManufacturingConstraints, VoxelBC
+from ..configuration.voxel_meshing import DEFAULT_MAX_VOXEL_ELEMENTS
 
 INDUSTRIAL_STRESS_RELAXATION_Q = 0.5
 INDUSTRIAL_STRESS_PNORM_P = 8.0
@@ -52,7 +53,7 @@ class TopologyOptVoxelProblem:
     Emin: float = 1e-9
     nu: float = 0.3
     penal: float = 3.0
-    volfrac: float = 0.5
+    volfrac: float = 0.5  # Upper material budget relative to the source design domain.
     rmin: float = 1.5
     # New studies store the cone-filter radius in physical model units so a
     # mesh refinement does not change the manufacturing requirement. False
@@ -107,16 +108,10 @@ class TopologyOptVoxelProblem:
     # only when nothing will call the solver on this instance.
     solve_enabled: bool = True
     # Compliance minimization at a material budget, or true mass/volume
-    # minimization subject to the stress constraint.
+    # minimization subject to both the stress constraint and material budget.
     objective_mode: str = "compliance"  # compliance | minimum_mass
-    # Structural, steady-state thermal, or a normalized combination of both.
+    # The backend accepts structural studies only.
     physics_mode: str = "structural"
-    thermal_bc: ThermalBC = field(default_factory=ThermalBC)
-    thermal_conductivity: float = 1.0
-    thermal_conductivity_min: float = 1e-6
-    thermal_penal: float = 3.0
-    structural_weight: float = 1.0
-    thermal_weight: float = 1.0
     # Load envelopes can minimize a weighted sum or a smooth worst case.
     load_aggregation: str = "weighted_sum"
     load_pnorm_p: float = 8.0
@@ -141,9 +136,11 @@ class TopologyOptVoxelProblem:
     # `minimum_solid_size` and `minimum_void_size` bind: the objective is
     # evaluated on the eroded projection, so a member thinner than the
     # requested size disappears from the analysed design and costs stiffness,
-    # while the volume budget is held on the dilated projection. Off leaves a
-    # single projection at `heaviside_eta`, which regularizes but constrains
-    # nothing. `eta_eroded`/`eta_dilated` come from the length-scale policy,
+    # while compliance studies hold an adapted budget on the dilated field.
+    # Minimum-mass studies constrain the blueprint volume and minimize the
+    # dilated mass. Off leaves a single projection at `heaviside_eta`, which
+    # regularizes but constrains nothing. `eta_eroded`/`eta_dilated` come from
+    # the length-scale policy,
     # which derives them from the requested sizes and the filter radius.
     robust_length_scale: bool = False
     eta_eroded: float = 0.5 + MAX_THRESHOLD_OFFSET
@@ -165,6 +162,9 @@ class TopologyOptVoxelProblem:
     penal_continuation_enabled: bool = INDUSTRIAL_PENAL_CONTINUATION
     penal_init: float = INDUSTRIAL_PENAL_INIT
     penal_step: float = INDUSTRIAL_PENAL_STEP
+    # Share the explicit resource safeguard with the mesh planner. Zero
+    # disables the cap; the solver must not impose a second hidden limit.
+    max_voxel_elements: int = DEFAULT_MAX_VOXEL_ELEMENTS
 
 
     def __post_init__(self) -> None:
@@ -173,10 +173,14 @@ class TopologyOptVoxelProblem:
         if min(self.nelx, self.nely, self.nelz) < 1:
             raise ValueError("Topology grid dimensions must each be at least 1 voxel.")
         n_voxels = self.nelx * self.nely * self.nelz
-        if self.solve_enabled and n_voxels > 500_000:
+        limit = float(self.max_voxel_elements)
+        if not np.isfinite(limit) or limit < 0 or not limit.is_integer():
+            raise ValueError("Maximum voxel elements must be a non-negative integer.")
+        self.max_voxel_elements = int(limit)
+        if self.solve_enabled and self.max_voxel_elements and n_voxels > self.max_voxel_elements:
             raise ValueError(
-                f"Topology grid has {n_voxels:,} voxels; the supported limit is "
-                "500,000. Reduce expert grid dimensions or use Guided mode."
+                f"Topology grid has {n_voxels:,} voxels; the configured maximum is "
+                f"{self.max_voxel_elements:,}. Increase Maximum Elements or choose a coarser mesh."
             )
 
         finite_fields = {
@@ -197,11 +201,6 @@ class TopologyOptVoxelProblem:
             "heaviside_beta_init": self.heaviside_beta_init,
             "heaviside_beta_max": self.heaviside_beta_max,
             "heaviside_eta": self.heaviside_eta,
-            "thermal_conductivity": self.thermal_conductivity,
-            "thermal_conductivity_min": self.thermal_conductivity_min,
-            "thermal_penal": self.thermal_penal,
-            "structural_weight": self.structural_weight,
-            "thermal_weight": self.thermal_weight,
             "load_pnorm_p": self.load_pnorm_p,
             "minimum_solid_size": self.minimum_solid_size,
             "minimum_void_size": self.minimum_void_size,
@@ -293,9 +292,9 @@ class TopologyOptVoxelProblem:
             )
 
         self.physics_mode = str(self.physics_mode).strip().lower().replace("-", "_")
-        if self.physics_mode not in {"structural", "thermal", "thermo_mechanical"}:
+        if self.physics_mode != "structural":
             raise ValueError(
-                "Topology physics must be structural, thermal, or thermo_mechanical."
+                "Topology optimization supports structural physics only."
             )
         self.load_aggregation = (
             str(self.load_aggregation)
@@ -309,27 +308,6 @@ class TopologyOptVoxelProblem:
         if self.objective_mode == "minimum_mass" and not self.stress_constraint_enabled:
             raise ValueError(
                 "Minimum-mass topology optimization requires the stress constraint."
-            )
-        if self.stress_constraint_enabled and self.physics_mode == "thermal":
-            raise ValueError(
-                "A structural stress constraint cannot be used in thermal-only mode."
-            )
-        if (
-            self.thermal_conductivity <= 0.0
-            or self.thermal_conductivity_min <= 0.0
-            or self.thermal_conductivity_min > self.thermal_conductivity
-            or self.thermal_penal < 1.0
-        ):
-            raise ValueError(
-                "Thermal interpolation requires 0 < k_min <= k and penalization >= 1."
-            )
-        if self.structural_weight < 0.0 or self.thermal_weight < 0.0:
-            raise ValueError("Physics weights must be non-negative.")
-        if self.physics_mode == "thermo_mechanical" and (
-            self.structural_weight + self.thermal_weight <= 0.0
-        ):
-            raise ValueError(
-                "Thermo-mechanical optimization needs a positive physics weight."
             )
         if self.load_pnorm_p <= 1.0:
             raise ValueError("Worst-case load P-norm exponent must be greater than 1.")

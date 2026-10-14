@@ -268,8 +268,10 @@ def _surrogate_body(
         "    else:",
         "        _matrix = np.asarray(_values).reshape(1, -1)",
         f"        _prediction = np.asarray({model_name}.predict(_matrix))",
-        "    if _prediction.ndim == 1:",
-        "        _prediction = _prediction.reshape(-1, 1)",
+        "    if _prediction.ndim < 2:",
+        # Some estimators squeeze both sample and output axes. Use the known
+        # interface to distinguish one multi-output sample from a scalar batch.
+        f"        _prediction = _prediction.reshape(len(_matrix), {len(output_names)})",
     ]
     if len(output_names) == 1:
         lines.append(

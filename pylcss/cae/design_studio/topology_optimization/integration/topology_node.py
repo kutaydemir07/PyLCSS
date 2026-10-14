@@ -19,10 +19,15 @@ from ..models.study import (
 )
 from ..configuration.presets import (
     industrial_topopt_defaults,
-    INDUSTRIAL_WORKFLOW_MODES,
     INDUSTRIAL_DESIGN_GOALS,
     INDUSTRIAL_MANUFACTURING_PROCESSES,
 )
+from ..configuration.voxel_meshing import (
+    DEFAULT_VOXEL_MESH_QUALITY,
+    DEFAULT_MAX_VOXEL_ELEMENTS,
+    VOXEL_MESH_RESOLUTIONS,
+)
+from ..configuration.fea_meshing import FEA_MESH_DEFAULTS, fea_mesh_options_from_node
 from .geometry_mapping import (
     _flatten,
     _mesh_bounds,
@@ -71,14 +76,12 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
     """3-D SIMP topology optimisation using pyMOTO on a structured voxel grid.
 
     The graph-facing inputs describe the topology study directly: a CAD/mesh
-    design domain, material, selected-region supports/loads, joints, operating
-    cases, and thermal conditions. The structured analysis grid is generated
+    design domain, material, and selected-region structural supports/loads.
+    The structured analysis grid is generated
     internally; a prebuilt finite-element mesh is not required.
 
-    The result is a solid envelope. A graded cellular result is a different
-    design problem — it must not be penalized or projected to 0/1 — and is
-    owned by ``LatticeOptVoxelNode``, which subclasses this node and adds the
-    cell family and its manufacturing dimensions.
+    The solver produces a solid envelope. The inspector can subsequently
+    generate a density-graded lattice from the saved result.
     """
 
     __identifier__ = "com.cad.sim.topopt_voxel"
@@ -100,15 +103,19 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
         # node was only ever a way to get more than one of each.
         self.add_input("supports", color=(255, 100, 100), multi_input=True)
         self.add_input("loads", color=(255, 255, 0), multi_input=True)
-        self.add_input("preserved_regions", color=(100, 200, 255), multi_input=True)
-        self.add_input("obstacle_regions", color=(255, 120, 120), multi_input=True)
-        # Guided workflow
+        # Non-design material is authored on design-domain faces in the inspector.
+        self.create_property("non_design_enabled", True, widget_type="bool")
+        self.create_property("non_design_regions", "[]", widget_type="string")
+        self.create_property("automatic_grid", True, widget_type="bool")
         self.create_property(
-            "workflow_mode",
-            "Guided",
-            widget_type="combo",
-            items=list(INDUSTRIAL_WORKFLOW_MODES),
+            "voxel_mesh_quality", DEFAULT_VOXEL_MESH_QUALITY,
+            widget_type="combo", items=list(VOXEL_MESH_RESOLUTIONS),
         )
+        self.create_property("voxel_size", 0.0, widget_type="float")
+        self.create_property("max_voxel_elements", DEFAULT_MAX_VOXEL_ELEMENTS, widget_type="int")
+        self.create_property("automatic_mesh_refinement", False, widget_type="bool")
+        self.create_property("automatic_filter_radius", True, widget_type="bool")
+        self.create_property("advanced_overrides", "[]", widget_type="string")
         self.create_property(
             "design_goal",
             "Lightweight Stiffness",
@@ -119,7 +126,7 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
             "physics_mode",
             "Structural",
             widget_type="combo",
-            items=["Structural", "Thermal", "Coupled Structural + Thermal"],
+            items=["Structural"],
         )
         self.create_property(
             "formulation",
@@ -127,34 +134,30 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
             widget_type="combo",
             items=["Density (SIMP)"],
         )
-        self.create_property(
-            "manufacturing_process",
-            "Normal",
-            widget_type="combo",
-            items=list(INDUSTRIAL_MANUFACTURING_PROCESSES),
-        )
         # The one length-scale control worth exposing in guided mode: the
         # thinnest member the design may contain, in model units. It replaces
         # reasoning about `rmin` in voxels, and is what a process capability or
         # a drawing note is actually stated in. Zero means program controlled.
-        self.create_property(
-            "minimum_member_size_mm",
-            0.0,
-            widget_type="float",
-        )
-        self.create_property(
-            "minimum_void_size_mm",
-            0.0,
-            widget_type="float",
-        )
         self.create_property("advanced_settings_visible", False, widget_type="bool")
         self.create_property("validate_after_optimize", False, widget_type="bool")
+        # Retained for older projects; CAD FEA uses one user-configured mesh.
         self.create_property(
             "validation_quality",
             "Standard",
             widget_type="combo",
-            items=["Standard", "Mesh Convergence"],
+            items=["Standard"],
         )
+        # These controls mesh the final CAD for independent FEA. They do not
+        # select the density optimizer's structured voxel grid.
+        for name, default in FEA_MESH_DEFAULTS.items():
+            if name == "fea_element_order":
+                self.create_property(
+                    name, default, widget_type="combo", items=["C3D10", "C3D4"]
+                )
+            else:
+                self.create_property(
+                    name, default, widget_type="int" if isinstance(default, int) else "float"
+                )
         self.create_property(
             "validation_displacement_limit_mm",
             0.0,
@@ -175,23 +178,10 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
             3,
             widget_type="int",
         )
-        # Compatibility property retained for older project files. The output
-        # contract is now unambiguous and is decided by whether the result has
-        # an exact boundary representation at all: an extrusion-constrained
-        # solid envelope and a strut lattice both do and both receive CAD; a
-        # minimal-surface or honeycomb lattice does not and stays a mesh.
-        self.create_property("generate_cad_after_optimize", True, widget_type="bool")
-        self.create_property(
-            "cad_reconstruction_method",
-            "Auto",
-            widget_type="combo",
-            items=[
-                "Auto",
-                "Smooth spline",
-                "Analytic beam lattice",
-                "Fused beam lattice",
-            ],
-        )
+        # STL and the surface preview use the recovered mesh. Build CAD when
+        # CAD view / STEP export is requested. The old property is retained
+        # only for project compatibility.
+        self.create_property("generate_cad_after_optimize", False, widget_type="bool")
         self.create_property(
             "cad_export_filename", "topology_optimized.step", widget_type="string"
         )
@@ -208,7 +198,7 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
         self.create_property("density_cutoff", 0.30, widget_type="float")
         self.create_property(
             "visualization",
-            "Density",
+            "CAD",
             widget_type="combo",
             items=[
                 "CAD",
@@ -218,6 +208,18 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
         self.create_property("E0", 1.0, widget_type="float")
         self.create_property("Emin", 1e-9, widget_type="float")
         self.create_property("nu", 0.3, widget_type="float")
+
+        # Post-processing choices must never change the continuum solve.
+        from ..manufacturing import PUBLIC_FAMILIES, PUBLIC_FAMILY_KEYS
+        self.create_property(
+            "post_lattice_type", "Gyroid Lattice", widget_type="combo",
+            items=[PUBLIC_FAMILIES[key].display_name for key in PUBLIC_FAMILY_KEYS],
+        )
+        self.create_property("post_lattice_cell_size_mm", 0.0, widget_type="float")
+        self.create_property("post_lattice_min_thickness_mm", 0.0, widget_type="float")
+        self.create_property("post_lattice_skin_thickness_mm", 0.0, widget_type="float")
+        self.create_property("post_lattice_min_density", 0.15, widget_type="float")
+        self.create_property("post_lattice_max_density", 0.60, widget_type="float")
 
         # Solver settings.
         self.create_property(
@@ -233,39 +235,13 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
             items=["Weighted Sum", "Worst Case"],
         )
         self.create_property("load_pnorm_p", 8.0, widget_type="float")
-        self.create_property("max_iter", 80, widget_type="int")
+        self.create_property("max_iter", 120, widget_type="int")
         # `tol` is the relative-compliance-change convergence threshold; the run
         # stops once it holds for `convergence_patience` consecutive iterations.
-        self.create_property("tol", 0.01, widget_type="float")
-        self.create_property("convergence_patience", 5, widget_type="int")
+        self.create_property("tol", 0.0035, widget_type="float")
+        self.create_property("convergence_patience", 6, widget_type="int")
 
         # Manufacturing constraints (casting draw, extrusion, symmetry, AM overhang, member sizing)
-        self.create_property(
-            "draw_direction",
-            "None",
-            widget_type="combo",
-            items=["None", "+X", "-X", "+Y", "-Y", "+Z", "-Z"],
-        )
-        self.create_property(
-            "extrusion_axis",
-            "None",
-            widget_type="combo",
-            items=["None", "X", "Y", "Z"],
-        )
-        self.create_property(
-            "symmetry_plane",
-            "None",
-            widget_type="combo",
-            items=["None", "X", "Y", "Z", "XY", "XZ", "YZ", "XYZ"],
-        )
-        self.create_property(
-            "overhang_direction",
-            "None",
-            widget_type="combo",
-            items=["None", "+X", "-X", "+Y", "-Y", "+Z", "-Z"],
-        )
-        self.create_property("overhang_angle_deg", 45.0, widget_type="float")
-        self.create_property("max_member_size_mm", 0.0, widget_type="float")
 
         # Stress constraint (engineering surface only).
         # User sees: Enable + Yield Stress.  The qp-approach exponent q,
@@ -274,24 +250,12 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
         self.create_property("stress_constraint", False, widget_type="bool")
         self.create_property("yield_stress", 250.0, widget_type="float")
 
-        # Steady-state thermal and coupled thermo-structural controls.
-        self.create_property("thermal_conductivity", 1.0, widget_type="float")
-        self.create_property("thermal_conductivity_min", 1e-6, widget_type="float")
-        self.create_property("thermal_penal", 3.0, widget_type="float")
-        # Reduced-order volumetric heat-rejection coefficient in W/(mm^3 K).
-        # This is not a wetted-surface or conjugate-fluid convection model.
-        # Zero disables it and restores pure conduction.
-        self.create_property("convection_coefficient", 0.0, widget_type="float")
-        self.create_property("structural_weight", 1.0, widget_type="float")
-        self.create_property("thermal_weight", 1.0, widget_type="float")
-
     # Property helpers.
 
     def apply_guided_defaults(self) -> dict[str, Any]:
         """Apply guided workflow defaults to this node and return the changes."""
         settings = industrial_topopt_defaults(
             self.get_property("design_goal"),
-            self.get_property("manufacturing_process"),
             nelx=self.get_property("nelx") or 30,
             nely=self.get_property("nely") or 20,
             nelz=self.get_property("nelz") or 10,
@@ -316,21 +280,15 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
         cancel_callback: Callable[[], bool] | None = None,
     ) -> Optional[dict[str, Any]]:
         """Run the validation stage as an internal TopOpt study action."""
-        from ..verification.calculix_validation import run_topopt_validation
+        from ..verification.fea_analysis import run_topopt_fea
 
-        quality = str(self.get_property("validation_quality") or "Standard")
-        return run_topopt_validation(
+        return run_topopt_fea(
             topo_output,
             material,
             constraint_list,
             load_list,
-            convergence_levels=2 if quality == "Mesh Convergence" else 1,
-            max_validation_elements=500000,
-            run_external_solver=True,
-            deck_only=False,
-            analysis_type="Linear",
-            visualization="Von Mises Stress",
-            deformation_scale="Auto",
+            quality="Standard",
+            mesh_options=fea_mesh_options_from_node(self),
             cancel_callback=cancel_callback,
         )
 
@@ -344,11 +302,7 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, CadQueryNode):
         from ..geometry.cad_reconstruction import normalize_cad_strategy
         from pylcss.cae.user_interface.cad.cad_background import reconstruct_cad_in_background
 
-        method = str(
-            self.get_property("cad_reconstruction_method")
-            or "Auto"
-        )
-        strategy = normalize_cad_strategy(method)
+        strategy = 'auto'
         topo_payload = dict(topo_output or {})
         export_steps_dir = getattr(self, "_export_steps_dir", None) or topo_payload.get("export_steps_dir")
         shape, report, preview_mesh = reconstruct_cad_in_background(

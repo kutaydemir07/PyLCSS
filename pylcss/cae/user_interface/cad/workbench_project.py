@@ -330,7 +330,13 @@ class WorkbenchProjectMixin:
         return self.load_project_file(project_file, preview=False)
 
     def _execution_is_active(self):
-        return bool(self.worker and self.worker.isRunning())
+        fea_worker = getattr(getattr(self, "properties", None), "_topopt_fea_worker", None)
+        lattice_worker = getattr(getattr(self, "properties", None), "_topopt_lattice_worker", None)
+        return bool(
+            (self.worker and self.worker.isRunning())
+            or (fea_worker is not None and fea_worker.isRunning())
+            or (lattice_worker is not None and lattice_worker.isRunning())
+        )
 
     def _set_project_context(self, project_file=None):
         """Attach the saved-project directory used by relative-path nodes."""
@@ -503,7 +509,13 @@ class WorkbenchProjectMixin:
                 f"Property changed: {prop_name} = {new} ({getattr(node, 'name', '')})"
             )
 
-            if prop_name in {"cad_export_filename", "cad_export_format"}:
+            from pylcss.cae.design_studio.topology_optimization.configuration.fea_meshing import (
+                is_topopt_fea_setting,
+            )
+            if is_topopt_fea_setting(node, prop_name):
+                return
+
+            if prop_name in {"cad_export_filename", "cad_export_format", "advanced_settings_visible", "advanced_overrides", "non_design_regions", "non_design_enabled"}:
                 return
 
             # IMPORTANT: When a property changes, the modified node should be rendered
@@ -530,7 +542,7 @@ class WorkbenchProjectMixin:
             # Auto-execute if enabled (for non-visualization properties)
             if True:
                 # Property edits are previews.  Never launch a long CalculiX,
-                # OpenRadioss, or TopOpt run implicitly; the explicit Run action
+                # OpenCourant, or TopOpt run implicitly; the explicit Run action
                 # owns expensive engineering computation.
                 self._execute_graph(skip_simulation=True)
 

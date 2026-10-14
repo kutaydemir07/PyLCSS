@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""Geometry, bounds, and thermal payload mapping for topology nodes."""
+"""Geometry and bounds mapping for topology nodes."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-from ..models.study import JointDefinition, ThermalBC, ThermalLoadCase
+from ..models.study import JointDefinition
 
 
 def _flatten(values: Any) -> list[Any]:
@@ -23,7 +23,9 @@ def _flatten(values: Any) -> list[Any]:
     return [values]
 
 
-def _surface_mesh_arrays(mesh: Any) -> Optional[tuple[np.ndarray, np.ndarray]]:
+def _surface_mesh_arrays(
+    mesh: Any, *, allow_tessellation: bool = True,
+) -> Optional[tuple[np.ndarray, np.ndarray]]:
     """Return row-major vertices/triangles from imported or CAD geometry."""
     if mesh is None:
         return None
@@ -31,7 +33,7 @@ def _surface_mesh_arrays(mesh: Any) -> Optional[tuple[np.ndarray, np.ndarray]]:
         for key in ("mesh", "recovered_shape", "shape", "cad"):
             nested = mesh.get(key)
             if nested is not None and nested is not mesh:
-                arrays = _surface_mesh_arrays(nested)
+                arrays = _surface_mesh_arrays(nested, allow_tessellation=allow_tessellation)
                 if arrays is not None:
                     return arrays
         vertices = mesh.get("vertices")
@@ -60,6 +62,9 @@ def _surface_mesh_arrays(mesh: Any) -> Optional[tuple[np.ndarray, np.ndarray]]:
                 and tris.shape[1] >= 3
             ):
                 return verts[:, :3], tris[:, :3]
+
+    if not allow_tessellation:
+        return None
 
     shape = mesh
     if hasattr(shape, "toCompound"):
@@ -97,15 +102,17 @@ def _surface_mesh_arrays(mesh: Any) -> Optional[tuple[np.ndarray, np.ndarray]]:
     return None
 
 
-def _mesh_bounds(mesh: Any) -> Optional[tuple[np.ndarray, np.ndarray]]:
-    """Bounds for tetra meshes, imported triangle meshes, or CAD solids."""
+def _mesh_bounds(
+    mesh: Any, *, allow_tessellation: bool = True,
+) -> Optional[tuple[np.ndarray, np.ndarray]]:
+    """Bounds for meshes or CAD, optionally avoiding geometry tessellation."""
     if mesh is None:
         return None
     if isinstance(mesh, dict):
         for key in ("mesh", "recovered_shape", "shape", "cad"):
             nested = mesh.get(key)
             if nested is not None and nested is not mesh:
-                bounds = _mesh_bounds(nested)
+                bounds = _mesh_bounds(nested, allow_tessellation=allow_tessellation)
                 if bounds is not None:
                     return bounds
     if hasattr(mesh, "p"):
@@ -113,7 +120,7 @@ def _mesh_bounds(mesh: Any) -> Optional[tuple[np.ndarray, np.ndarray]]:
         if pts.ndim == 2 and pts.shape[0] >= 3 and pts.shape[1] > 0:
             return pts[:3].min(axis=1), pts[:3].max(axis=1)
 
-    arrays = _surface_mesh_arrays(mesh)
+    arrays = _surface_mesh_arrays(mesh, allow_tessellation=allow_tessellation)
     if arrays is not None:
         points = arrays[0]
         if len(points):
@@ -294,43 +301,3 @@ def _joint_from_graph_payload(
     )
 
 
-def _thermal_bc_from_graph_payloads(
-    sink_payloads: list[Any],
-    heat_payloads: list[Any],
-    bounds: tuple[np.ndarray, np.ndarray],
-) -> ThermalBC:
-    thermal_bc = ThermalBC()
-    for payload in sink_payloads:
-        if not isinstance(payload, dict):
-            continue
-        bboxes = _entry_bboxes(payload)
-        thermal_bc.fixed_boxes.extend(_fraction_box(bbox, bounds) for bbox in bboxes)
-
-    grouped: dict[str, dict[str, Any]] = {}
-    for payload in heat_payloads:
-        if not isinstance(payload, dict):
-            continue
-        name = str(payload.get("name") or "Thermal Case")
-        weight = float(payload.get("weight") or 1.0)
-        total_heat = float(payload.get("total_heat") or 0.0)
-        bboxes = _entry_bboxes(payload)
-        if not bboxes:
-            continue
-        group = grouped.setdefault(
-            name,
-            {"weight": weight, "box_sources": []},
-        )
-        share = total_heat / float(len(bboxes))
-        group["box_sources"].extend(
-            (*_fraction_box(bbox, bounds), share) for bbox in bboxes
-        )
-
-    thermal_bc.load_cases = [
-        ThermalLoadCase(
-            name=name,
-            weight=float(values["weight"]),
-            box_sources=list(values["box_sources"]),
-        )
-        for name, values in grouped.items()
-    ]
-    return thermal_bc

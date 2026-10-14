@@ -35,7 +35,7 @@ WizardImageFile={#StagingRoot}\launcher\PyLCSS-wizard.png
 WizardSmallImageFile={#StagingRoot}\launcher\PyLCSS-wizard-small.png
 SetupLogging=yes
 UninstallDisplayIcon={app}\PyLCSS.exe
-VersionInfoVersion={#AppVersion}.0
+VersionInfoVersion={#AppVersion}
 VersionInfoCompany={#AppPublisher}
 VersionInfoDescription=PyLCSS Engineering Design Platform Setup
 VersionInfoCopyright=Copyright (c) 2026 Kutay Demir
@@ -61,7 +61,7 @@ Name: "cae"; Description: "PyLCSS CAE — CAD and simulation"; Types: both cae
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"
 Name: "solvers"; Description: "Download optional engineering solver backends (separately licensed)"; GroupDescription: "Optional third-party components:"; Flags: checkablealone unchecked; Components: cae
 Name: "solvers\calculix"; Description: "CalculiX structural FEA solver (GPL v2 or later; separate terms)"; Flags: unchecked; Components: cae
-Name: "solvers\radioss"; Description: "OpenRadioss crash and impact solver (AGPL v3 or later; separate terms)"; Flags: unchecked; Components: cae
+Name: "solvers\opencourant"; Description: "OpenCourant crash and impact solver (AGPL v3 or later; separate terms)"; Flags: unchecked; Components: cae
 Name: "freecad"; Description: "FreeCAD CAD backend (LGPL v2.1; large download; its own installer and UAC prompt)"; GroupDescription: "Optional third-party components:"; Flags: unchecked; Components: cae
 
 [Files]
@@ -225,11 +225,11 @@ begin
       'Installing CalculiX...',
       False);
 
-  if WizardIsComponentSelected('cae') and WizardIsTaskSelected('solvers\radioss') then
+  if WizardIsComponentSelected('cae') and WizardIsTaskSelected('solvers\opencourant') then
     RunAndWait(
       PythonExe,
-      '"' + InstallerScript + '" --only radioss',
-      'Installing OpenRadioss...',
+      '"' + InstallerScript + '" --only opencourant',
+      'Installing OpenCourant...',
       False);
 
 

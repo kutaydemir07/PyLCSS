@@ -28,7 +28,11 @@ class ExportStepNode(CadQueryNode):
 
     def run(self):
         self.clear_error()
-        shape = self.get_input_shape('shape')
+        from pylcss.cae.design_studio.core.base_node import resolve_any_input
+        port = self.get_input('shape')
+        shape = resolve_any_input(port) if port and port.connected_ports() else None
+        if shape is None:
+            shape = self.get_input_shape('shape')
         if shape is None:
             self.set_error("Connect a CAD shape to Export STEP.")
             return None
@@ -44,6 +48,15 @@ class ExportStepNode(CadQueryNode):
 
         temp_path = None
         try:
+            topology_payload = isinstance(shape, dict)
+            if isinstance(shape, dict):
+                from pylcss.cae.design_studio.topology_optimization.geometry.cad_config import cached_cad_shape
+                from pylcss.cae.user_interface.cad.cad_background import reconstruct_cad_in_background
+                payload = shape
+                shape = cached_cad_shape(payload, 'auto')
+                if shape is None:
+                    shape, report, preview = reconstruct_cad_in_background(payload)
+                    payload.update(cad_shape=shape, cad_reconstruction=report, cad_preview_mesh=preview)
             fd, temp_path = tempfile.mkstemp(
                 prefix=".pylcss_step_",
                 suffix=os.path.splitext(fname)[1],
@@ -51,13 +64,18 @@ class ExportStepNode(CadQueryNode):
             )
             os.close(fd)
             shape_to_export = shape.val() if hasattr(shape, 'val') else shape
-            try:
-                cq.exporters.export(shape_to_export, temp_path)
-            except Exception:
-                if hasattr(shape_to_export, 'save'):
-                    shape_to_export.save(temp_path)
-                else:
-                    raise
+            if topology_payload:
+                from pylcss.cae.design_studio.topology_optimization.geometry.step_export import export_cad_model
+                export_cad_model(shape_to_export, export_path=temp_path,
+                                 product_name=os.path.splitext(os.path.basename(fname))[0])
+            else:
+                try:
+                    cq.exporters.export(shape_to_export, temp_path)
+                except Exception:
+                    if hasattr(shape_to_export, 'save'):
+                        shape_to_export.save(temp_path)
+                    else:
+                        raise
             if not os.path.isfile(temp_path) or os.path.getsize(temp_path) == 0:
                 raise RuntimeError("The STEP exporter did not create a non-empty file.")
             os.replace(temp_path, fname)
@@ -219,6 +237,12 @@ class ExportStlNode(CadQueryNode):
             if smoothing_iters > 0 and vertices is not None and len(faces) > 0:
                 vertices = self._taubin_smooth(vertices, faces, smoothing_iters)
             
+            recovered_mesh = shape.get("recovered_shape", shape) if isinstance(shape, dict) else None
+            if isinstance(recovered_mesh, dict) and (smoothing_iters > 0 or not recovered_mesh.get("mesh_reduction")):
+                from pylcss.cae.design_studio.topology_optimization.geometry.mesh_reduction import compact_mesh
+                tolerance = float(np.linalg.norm(np.ptp(vertices, axis=0)))*1e-3
+                vertices, faces, reduction_report = compact_mesh(vertices, faces, tolerance=tolerance)
+
             # Write binary STL using raw NumPy (no numpy-stl dependency).
             # The writer commits atomically so a failed export cannot destroy
             # an existing good result.

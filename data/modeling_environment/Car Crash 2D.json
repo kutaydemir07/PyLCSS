@@ -3,7 +3,7 @@
   "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
   "_title": "Crashworthiness Trade Space — Screening Surrogate",
   "_purpose": "Explore the coupled mass, intrusion, and acceleration trade space of a crash structure before committing to expensive explicit simulations.",
-  "_fidelity": "Analytical screening response surface, not an impact solver. Refit the equations to correlated OpenRadioss or test data before making safety decisions.",
+  "_fidelity": "Analytical screening response surface, not an impact solver. Refit the equations to correlated OpenCourant or test data before making safety decisions.",
   "_visual_target": "Inspect 2D solution-space trade contours balancing peak deceleration against crush tube energy absorption.",
   "_engineering_decision": "Select Stage 1 and Stage 2 crush tube force levels that decouple deceleration severity from intrusion stroke, bounding maximum pulse acceleration while keeping residual kinetic energy within acceptable dissipation limits.",
   "_baseline": "Stage 1 force = 85.0 kN, Stage 2 force = 120.0 kN, yielding peak acceleration = 24.2 g, force order margin = 35.0 kN, residual energy = 1.8 kJ.",
@@ -36,7 +36,7 @@
   "_workflow": [
     "Explore design-variable bounds and requirement feasibility.",
     "Identify a robust box-shaped region for thickness and crush length.",
-    "Use the selected region to define an OpenRadioss design-of-experiments campaign."
+    "Use the selected region to define an OpenCourant design-of-experiments campaign."
   ],
   "_acceptance_criteria": [
     "All three response requirements are satisfied throughout the retained solution box.",
@@ -228,7 +228,7 @@
               "use_surrogate": false,
               "surrogate_status": "Not Trained",
               "surrogate_train_trigger": 0.0,
-              "code_content": "# Analytical two-stage crashworthiness screening model.\n# Refit constants and equations to correlated test or OpenRadioss data.\nvehicle_mass_kg = 2000.0\nstage_1_stroke_m = 0.3\nstage_2_stroke_m = 0.3\nimpact_speed_mps = 15.6\n\ninitial_kinetic_energy = 0.5 * vehicle_mass_kg * impact_speed_mps**2\nabsorbed_energy = (\n    stage_1_force * stage_1_stroke_m\n    + stage_2_force * stage_2_stroke_m\n)\nresidual_energy = initial_kinetic_energy - absorbed_energy\npeak_acceleration = stage_2_force / vehicle_mass_kg\nforce_order_margin = stage_1_force - stage_2_force"
+              "code_content": "# Analytical two-stage crashworthiness screening model.\n# Refit constants and equations to correlated test or OpenCourant data.\nvehicle_mass_kg = 2000.0\nstage_1_stroke_m = 0.3\nstage_2_stroke_m = 0.3\nimpact_speed_mps = 15.6\n\ninitial_kinetic_energy = 0.5 * vehicle_mass_kg * impact_speed_mps**2\nabsorbed_energy = (\n    stage_1_force * stage_1_stroke_m\n    + stage_2_force * stage_2_stroke_m\n)\nresidual_energy = initial_kinetic_energy - absorbed_energy\npeak_acceleration = stage_2_force / vehicle_mass_kg\nforce_order_margin = stage_1_force - stage_2_force"
             }
           },
           "0x2cb0c861b50": {

@@ -47,7 +47,7 @@
         "code": "result = cq.Workplane('XY').box(L, W, H, centered=(False, True, True))\n",
         "parameters": "",
         "description": "Cantilever Beam",
-        "notes": "Explicit topology region: connect shape to the corresponding solver region input.",
+        "notes": "100 x 10 x 10 mm square steel beam, length along X. The X=0 root is fixed; eigenvector amplitude is arbitrary.",
         "param_1_name": "L",
         "param_1_value": 100.0,
         "param_2_name": "W",

@@ -229,7 +229,7 @@ def mesh_to_shell(
     if dropped:
         warnings.append(
             f"Dropped {dropped}/{triangles.shape[0]} degenerate shell "
-            "triangle(s) before writing the OpenRadioss deck."
+            "triangle(s) before writing the OpenCourant deck."
         )
         triangles = triangles[keep]
     if triangles.shape[0] == 0:

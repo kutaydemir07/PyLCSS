@@ -357,7 +357,7 @@ class CrashPlaybackMixin:
     def _update_crash_wall(self, vis_disp) -> None:
         """Draw / refresh the rigid impact wall (barrier) for the current frame.
 
-        OpenRadioss does not export the rigid wall's trajectory in the
+        OpenCourant does not export the rigid wall's trajectory in the
         animation files, so rather than *guessing* its position kinematically
         (which drifts out of the imported mesh's coordinate frame and cuts
         through the part), we **snap the wall to the deformed mesh itself**:

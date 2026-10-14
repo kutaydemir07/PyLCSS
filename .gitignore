@@ -78,7 +78,7 @@ data_freecad/
 dist/
 build/
 
-# External solver binaries (CalculiX, OpenRadioss) fetched by
+# External solver binaries (CalculiX, OpenCourant) fetched by
 # scripts/install_solvers.py — large, platform-specific, and reproducible
 # via the script, so don't commit them or the auto-generated path config.
 external_solvers/

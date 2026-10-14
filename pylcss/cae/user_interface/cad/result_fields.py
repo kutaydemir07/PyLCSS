@@ -31,18 +31,15 @@ def available_result_fields(data):
                 "Stress XX", "Stress YY", "Stress ZZ", "Stress XY", "Stress YZ", "Stress ZX",
             ])
     elif kind == "topopt_voxel":
-        options = data.get("structure_options")
-        structure_mode = options.get("mode", "solid") if isinstance(options, dict) else getattr(options, "mode", "solid")
         if any(data.get(key) is not None for key in ("cad_shape", "shape", "recovered_shape")):
-            fields.append("CAD" if structure_mode == "solid" else "Manufactured Mesh")
+            fields.append("CAD")
         if has_field(data, "density"):
             fields.append("Density")
         validation = data.get("validation")
         if isinstance(validation, dict):
-            if has_field(validation, "stress"):
-                fields.append("Validated Von Mises Stress")
-            if has_field(validation, "displacement"):
-                fields.append("Validated Displacement")
+            if validation.get("type") in {"fea", "external_solver"}:
+                fields.extend("FEA " + field for field in available_result_fields(validation)
+                              if field != "Default View")
     elif kind == "modal":
         shapes = data.get("mode_displacements_flat") or {}
         for mode in data.get("modes") or []:

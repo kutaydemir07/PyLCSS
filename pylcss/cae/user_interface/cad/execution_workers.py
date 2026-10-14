@@ -41,7 +41,7 @@ class GraphExecutionWorker(QtCore.QThread):
         self._is_running = False
 
     def run(self):
-        self._is_running = True
+        self._is_running = not self.isInterruptionRequested()
         try:
             from pylcss.cae.design_studio.engine import (
                 GraphExecutionCancelled,
@@ -63,7 +63,9 @@ class GraphExecutionWorker(QtCore.QThread):
                 self.nodes,
                 skip_simulation=self.skip_simulation,
                 skip_meshing=self.skip_meshing,
-                cancel_callback=lambda: not self._is_running,
+                cancel_callback=lambda: (
+                    not self._is_running or self.isInterruptionRequested()
+                ),
                 progress_callback=progress_cb,
                 raise_on_error=not self.skip_simulation,
             )
@@ -142,11 +144,8 @@ def _write_step_shape(shape, path, product_name):
     try:
         for key, value in settings.items():
             Interface_Static.SetCVal_s(key, value)
-        status = solid.exportStep(str(path))
-        if status != IFSelect_ReturnStatus.IFSelect_RetDone:
-            raise RuntimeError(f"STEP writer rejected the body (status {status}).")
-        from pylcss.cae.design_studio.topology_optimization.geometry.step_export import verify_step_roundtrip
-        verify_step_roundtrip(path)
+        from pylcss.cae.design_studio.topology_optimization.geometry.step_export import export_cad_model
+        export_cad_model(solid, export_path=path, product_name=name)
     finally:
         for key, value in previous.items():
             Interface_Static.SetCVal_s(key, value)
@@ -197,8 +196,8 @@ def _external_write_cad_brep(payload, path, reconstruction_strategy="auto",
     body = shape.val() if hasattr(shape, "val") else shape
     box = body.BoundingBox()
     tolerance = max(float(np.linalg.norm([box.xlen, box.ylen, box.zlen])) * 1e-3, 1e-7)
-    vertices, faces = tessellate_cad_absolute(body, tolerance, .3)
-    report["_preview_mesh"] = {"vertices": vertices, "faces": faces}
+    vertices, faces, face_ranges = tessellate_cad_absolute(body, tolerance, .3, return_face_ranges=True)
+    report["_preview_mesh"] = {"vertices": vertices, "faces": faces, "face_ranges": face_ranges}
     report["worker_pid"] = os.getpid()
     # Keep the transfer small: the prepared display mesh travels separately,
     # and importing BREP must not reimport OCC's triangulation as well.
@@ -329,6 +328,34 @@ def _topopt_cad_payload(
     return payload
 
 
+class TopOptLatticeWorker(QtCore.QThread):
+    """Generate cells from a saved solve while the inspector stays responsive."""
+
+    lattice_finished = QtCore.Signal(object)
+    lattice_error = QtCore.Signal(str)
+    lattice_cancelled = QtCore.Signal()
+    lattice_progress = QtCore.Signal(object, object, int, int)
+
+    def __init__(self, result, settings, parent=None):
+        super().__init__(parent)
+        self.result = result
+        self.settings = dict(settings)
+
+    def run(self):
+        from pylcss.cae.design_studio.topology_optimization.integration.post_lattice import generate_post_topopt_lattice
+        try:
+            output = generate_post_topopt_lattice(
+                self.result, self.settings, cancel_callback=self.isInterruptionRequested,
+                progress_callback=self.lattice_progress.emit,
+            )
+            self.lattice_finished.emit(output)
+        except InterruptedError:
+            self.lattice_cancelled.emit()
+        except Exception as exc:
+            logger.exception("TopOpt lattice generation failed")
+            self.lattice_error.emit(str(exc))
+
+
 class TopOptCadPreviewWorker(QtCore.QThread):
     """Build the real TopOpt CAD body without blocking the viewer."""
 
@@ -408,62 +435,16 @@ class TopOptMeshExportWorker(QtCore.QThread):
         self.member_plan = member_plan
         self.export_format = str(export_format).lower()
 
-    def _beam_lattice_surface(self):
-        """Tessellate the analytic members, or None if this is not a strut lattice.
-
-        A strut lattice has exact centrelines and radii, so its STL is written
-        from those rather than from the recovered isosurface. The isosurface is
-        a rasterization of the same members on the recovery grid: it carries
-        that grid's terracing, and it is not what the viewer, STEP or 3MF show.
-        One geometry, four outputs.
-        """
-        from pylcss.cae.design_studio.topology_optimization.geometry.cad_reconstruction import (
-            build_topopt_beam_lattice,
-        )
-        from pylcss.cae.design_studio.topology_optimization.geometry.lattice_cad import (
-            beam_lattice_triangles,
-            lattice_cad_strategy,
-        )
-
-        if lattice_cad_strategy(self.structure_options) != "beam":
-            return None
-        if not self.topology_result:
-            return None
-        lattice = build_topopt_beam_lattice(
-            self.topology_result,
-            self.structure_options,
-            self.member_plan,
-        )
-        vertices, faces = beam_lattice_triangles(lattice)
-        if not len(faces):
-            return None
-        return vertices, faces, lattice
-
     def _export_stl(self, temporary: str) -> dict[str, object]:
-        try:
-            beam_surface = self._beam_lattice_surface()
-        except Exception:
-            # The rasterized recovery is still the optimized geometry; fall
-            # back to it rather than failing an export the user asked for.
-            logger.warning(
-                "Analytic lattice STL unavailable; exporting the recovered "
-                "surface instead.",
-                exc_info=True,
-            )
-            beam_surface = None
-        if beam_surface is not None:
-            vertices, faces, lattice = beam_surface
-            triangle_count = _write_binary_stl(temporary, vertices, faces)
-            return {
-                "format": "stl",
-                "path": self.path,
-                "triangles": triangle_count,
-                "source": "analytic beam lattice",
-                "beams": int(len(lattice.beams)),
-                "recovered_shape": None,
-            }
-
-        if self.cad_shape is not None:
+        # The manufacturing boundary includes clipped members, joined material,
+        # skins and passive interfaces. Export it directly instead of replacing
+        # it with intersecting capped cylinders or refitting it through STEP.
+        recovered = self.recovered_shape
+        if not isinstance(recovered, dict):
+            recovered = self.topology_result.get("recovered_shape")
+        if isinstance(recovered, dict):
+            self.recovered_shape = recovered
+        if self.cad_shape is not None and not isinstance(recovered, dict) and not self.topology_result:
             from pylcss.cae.design_studio.topology_optimization.geometry.cad_tessellation import (
                 tessellate_cad_absolute,
             )
@@ -547,25 +528,21 @@ class TopOptMeshExportWorker(QtCore.QThread):
         vertices = np.asarray(recovered.get("vertices"), dtype=float)
         faces = np.asarray(recovered.get("faces"), dtype=int)
 
-        triangle_count = 0
-        try:
-            import trimesh
-
-            mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=True)
-            if not len(mesh.faces):
-                raise ValueError("The recovered topology mesh has no triangles.")
-            mesh.export(temporary, file_type="stl")
-            triangle_count = int(len(mesh.faces))
-        except Exception:
-            logger.debug(
-                "trimesh STL export failed; using the built-in writer",
-                exc_info=True,
-            )
-            triangle_count = _write_binary_stl(temporary, vertices, faces)
+        import trimesh
+        mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=True)
+        if not mesh.is_watertight or not mesh.is_winding_consistent or mesh.volume <= 0:
+            raise ValueError("The recovered manufacturing boundary must be closed and consistently oriented.")
+        reduction = recovered.get("mesh_reduction")
+        if reduction is None:
+            from pylcss.cae.design_studio.topology_optimization.geometry.mesh_reduction import compact_mesh
+            vertices, faces, reduction = compact_mesh(
+                mesh.vertices, mesh.faces, tolerance=float(np.linalg.norm(mesh.extents))*1e-3)
+        else:
+            vertices, faces = mesh.vertices, mesh.faces
+        triangle_count = _write_binary_stl(temporary, vertices, faces)
         return {
-            "format": "stl",
-            "path": self.path,
-            "triangles": triangle_count,
+            "format": "stl", "path": self.path, "triangles": triangle_count,
+            "source": "Recovered manufacturing boundary", "mesh_reduction": reduction,
             "recovered_shape": recovered,
         }
 
@@ -575,8 +552,11 @@ class TopOptMeshExportWorker(QtCore.QThread):
         )
         from pylcss.cae.design_studio.topology_optimization.geometry.lattice_cad import (
             write_beam_lattice_3mf,
+            topopt_export_formats,
         )
 
+        if "3MF" not in topopt_export_formats(self.topology_result):
+            raise ValueError("3MF members would omit preserved material. Export the complete body as STEP or STL.")
         lattice = build_topopt_beam_lattice(
             self.topology_result,
             self.structure_options,
@@ -607,7 +587,7 @@ class TopOptMeshExportWorker(QtCore.QThread):
                 "structure_options": self.structure_options,
                 "member_plan": self.member_plan,
                 "export_format": self.export_format,
-            }, temporary)
+            }, temporary, cancel_callback=self.isInterruptionRequested)
             _commit_export(temporary, self.path)
             temporary = ""
             self.export_finished.emit(details)
@@ -669,6 +649,9 @@ class TopOptStepExportWorker(QtCore.QThread):
     def run(self):
         temporary = ""
         try:
+            from pylcss.cae.design_studio.topology_optimization.geometry.lattice_cad import topopt_export_formats
+            if "STEP" not in topopt_export_formats(self.topo_output):
+                raise ValueError("Export this complete lattice body as STL. A supported CAD representation including all its material is not available.")
             temporary = _temporary_export_path(self.path)
             product_name = Path(self.path).stem
             from .cad_background import run_cad_job
@@ -676,7 +659,10 @@ class TopOptStepExportWorker(QtCore.QThread):
             if self.cached_shape is not None:
                 # Cached exports need the same isolation as a fresh fit: STEP
                 # transfer, validation and OCC's global settings can stall Qt.
-                run_cad_job("step_shape", self.cached_shape, temporary, product_name)
+                run_cad_job(
+                    "step_shape", self.cached_shape, temporary, product_name,
+                    cancel_callback=self.isInterruptionRequested,
+                )
             else:
                 payload = _topopt_cad_payload(
                     self.topo_output,
@@ -691,8 +677,12 @@ class TopOptStepExportWorker(QtCore.QThread):
                 from .cad_background import reconstruct_cad_in_background
                 self.cached_shape, self.reconstruction_report, self.preview_mesh = reconstruct_cad_in_background(
                     payload, reconstruction_strategy=self.reconstruction_strategy,
+                    cancel_callback=self.isInterruptionRequested,
                 )
-                run_cad_job("step_shape", self.cached_shape, temporary, product_name)
+                run_cad_job(
+                    "step_shape", self.cached_shape, temporary, product_name,
+                    cancel_callback=self.isInterruptionRequested,
+                )
 
             _commit_export(temporary, self.path)
             temporary = ""

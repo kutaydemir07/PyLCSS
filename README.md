@@ -35,7 +35,13 @@ python -m pylcss.main
 ```
 
 For one workspace, install `.[mdao]` or `.[cae]` instead. To download CalculiX,
-OpenRadioss and FreeCAD, run `python scripts/install_solvers.py`.
+OpenCourant and FreeCAD, run `python scripts/install_solvers.py`.
+
+Install only the crash solver with `python scripts/install_solvers.py --only
+opencourant`. The installer verifies the pinned upstream archive and configures
+Starter, Engine, animation conversion, and time-history conversion automatically.
+Run `python -m pytest tests/test_opencourant_integration.py` to check the integration
+when the CAE dependencies and solver are installed.
 
 ## Help
 

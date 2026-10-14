@@ -208,7 +208,6 @@ class PropertiesPanel(
                 "cad_export_",
             ),
         ),
-        ("Physics", ("thermal_", "structural_weight")),
         (
             "Material",
             (
@@ -335,7 +334,6 @@ class PropertiesPanel(
             "youngs_modulus": "youngs_modulus",
             "poissons_ratio": "poissons_ratio",
             "density": "density",
-            "thermal_conductivity": "thermal_conductivity",
         },
         "MeshNode": {
             "element_size": "element_size",
@@ -379,8 +377,8 @@ class PropertiesPanel(
             "external_solver_path",
             "external_work_dir",
             "external_timeout_s",
-            "openradioss_starter_path",
-            "openradioss_engine_path",
+            "opencourant_starter_path",
+            "opencourant_engine_path",
             "deck_path",
             "engine_path",
             "engine_executable_path",
@@ -390,8 +388,8 @@ class PropertiesPanel(
             "stress_scale_to_mpa",
             # In-house topology-opt element choice (CalculiX uses C3D4 always).
             "element_type",
-            # In-house crash-solver tuning knobs (OpenRadioss has its own).  The
-            # `time_steps` property remains visible because the OpenRadioss path
+            # In-house crash-solver tuning knobs (OpenCourant has its own).  The
+            # `time_steps` property remains visible because the OpenCourant path
             # uses it as the mass-scaling cycle target (end_time / time_steps).
             "damping_alpha",
             "damping_beta",
@@ -411,7 +409,7 @@ class PropertiesPanel(
             # 'fixed_faces' was a JSON-string condition list — the new ShapeOpt
             #   only supports SelectFaceNode-driven constraints (logged warning);
             # 'moment_x/y/z' on LoadNode were never wired to either CalculiX
-            #   *CLOAD or OpenRadioss; only force_x/y/z are exported.
+            #   *CLOAD or OpenCourant; only force_x/y/z are exported.
             "min_safety_factor",
             "fixed_faces",
             "bc_preset",
@@ -429,7 +427,7 @@ class PropertiesPanel(
             "heaviside_beta_step_iters",
             "heaviside_eta",
             "continuation",
-            # Internal OpenRadioss/crash numerical policy.
+            # Internal OpenCourant/crash numerical policy.
             "hourglass_formulation",
             "hourglass_coefficient",
             # Replaced by the engineering-facing strain_rate_sensitive checkbox.
@@ -459,15 +457,15 @@ class PropertiesPanel(
         "disp_scale": "Multiplier on the displayed displacement (visual only).",
         "n_frames": "Number of animation frames recorded for playback.",
         "end_time": "Simulation duration. For impact: milliseconds.",
-        "time_steps": "Impact only: when mass scaling is enabled, the OpenRadioss target\n"
+        "time_steps": "Impact only: when mass scaling is enabled, the OpenCourant target\n"
         "time step is end_time / time_steps.  Higher = less added mass but\n"
         "a slower run; lower = faster but more artificial inertia.",
         "enable_mass_scaling": "Hold the explicit time step at end_time / time_steps by adding mass to\n"
-        "nodes whose CFL bound is below that value (Radioss /DT/NODA/CST).\n"
+        "nodes whose CFL bound is below that value (Courant /DT/NODA/CST).\n"
         "Prevents the 'estimated remaining time' from drifting upward during\n"
         "the run.  Slight artificial inertia is added — turn off for inertia-\n"
         "sensitive impact studies.",
-        "deck_only": "Write the solver deck (.inp for CalculiX / .k+.rad for OpenRadioss)\n"
+        "deck_only": "Write the solver deck (.inp for CalculiX / .k+.rad for OpenCourant)\n"
         "but do NOT launch the solver — useful for inspecting the deck.",
         "external_solver_path": "Override the auto-discovered CalculiX ccx binary path.",
         "external_work_dir": "Solver working directory.  Empty = a temp dir is created per run.",
@@ -477,8 +475,8 @@ class PropertiesPanel(
         "Every detected interface must be reviewed; this is not frictional contact.",
         "connection_tolerance_mm": "Largest gap allowed for bonded interfaces.",
         "component_name": "Name used in solver output.",
-        "openradioss_starter_path": "Override the auto-discovered OpenRadioss starter binary.",
-        "openradioss_engine_path": "Override the auto-discovered OpenRadioss engine binary.",
+        "opencourant_starter_path": "Override the auto-discovered OpenCourant starter binary.",
+        "opencourant_engine_path": "Override the auto-discovered OpenCourant engine binary.",
         "stress_scale_to_mpa": "Multiplier from anim_to_vtk's native deck stress unit to MPa. "
         "Use 1e6 for tonne-mm-ms decks, 1000 for kg-mm-ms, or 1 when "
         "the converted stress is already MPa.",
@@ -524,14 +522,6 @@ class PropertiesPanel(
         "rmin": "Density-filter radius, in elements. Sets the smallest member "
             "the design can hold (about twice this) and suppresses checkerboards. "
             "Guided mode keeps this program-controlled.",
-        "minimum_member_size_mm": "Thinnest member the design may contain, in "
-        "model units — the wall thickness your process can hold. Leave at 0 to "
-        "let the program pick it from the grid. Explicit sizes remain fixed "
-        "through mesh refinements; an under-resolved request is rejected.",
-        "minimum_void_size_mm": "Smallest hole or channel that must remain open, "
-        "in model units. Zero uses the minimum member size.",
-        "maximum_member_size_mm": "Largest permitted solid-member diameter in "
-        "model units. Zero disables the local-density cap.",
         "topology_convergence_enabled": "Repeat the solve on finer grids.",
         "topology_convergence_levels": "Number of grid levels.",
         "structure_mode": "Manufacturing interpretation applied after the density optimization. "
@@ -555,9 +545,9 @@ class PropertiesPanel(
         "says the pitch was coarsened.",
         "infill_cell_size_mm": "Unit-cell pitch in model units, used when "
         "Cell Size Mode is Manual.",
-        "infill_skin_thickness_mm": "Solid wall wrapping the lattice. 0 leaves "
-        "the cells open at the boundary, which is what a powder process needs "
-        "for evacuation; any skin seals the lattice in and traps powder.",
+        "infill_skin_thickness_mm": "Thickness of the connected outer skin. "
+        "Zero selects an automatic resolved thickness from the cell pitch. "
+        "Use a section cut to inspect the internal cells.",
         "infill_build_quality": "Caps the voxel grid the lattice is rasterized "
         "on. Nothing is solved on it — higher quality buys a finer cell and "
         "more triangles, at more time and memory.",
@@ -573,30 +563,13 @@ class PropertiesPanel(
         "lattice_min_relative_density": "Lowest relative density mapped into a variable-density lattice.",
         "lattice_max_relative_density": "Highest relative density before the solid-transition threshold.",
         "lattice_solid_transition_density": "Density above which the recovered region remains solid instead of lattice.",
-        "lattice_porosity": "Used by Honeycomb, which has no cubic homogenized "
-        "law, and by retired legacy families with the same limitation. Conservative uses p=1.8; "
-        "Balanced and Maximum Porosity are optimistic concept surrogates (p=1.25 "
-        "and p=1.0). Every other family ignores this and uses its measured cell "
-        "tensor instead. Recovered geometry must always be re-analysed.",
-        "optimize_lattice_members": "For BCC and Octet Truss (and retired legacy strut cells), run a "
-        "second axial-truss sizing stage across all structural load cases. It checks "
-        "allowable stress, Euler buckling, and the displacement limit.",
-        "lattice_max_member_thickness_voxels": "Largest strut diameter available to the member-sizing stage, "
-        "expressed in source topology voxels.",
-        "lattice_member_sizing_iterations": "Maximum damped fully-stressed-design iterations for individual "
-        "strut member diameters.",
-        "lattice_buckling_length_factor": "Effective-length factor K in the Euler buckling check. Use the "
-        "value justified by the cell joint and end-restraint assumptions.",
-        "advanced_settings_visible": "Show numerical and manufacturing controls. Leave off for the guided "
-        "engineering workflow; guided defaults remain active.",
-        "workflow_mode": "Guided selects mesh, filter, optimizer, and stopping defaults from engineering intent. "
-        "Expert exposes numerical controls that require a convergence study.",
-        "design_goal": "Engineering objective used to select the structural, stress-constrained, thermal, "
-        "coupled, or multi-load formulation.",
-        "physics_mode": "Physics solved by the topology study. Guided mode derives this from the design goal.",
+        "advanced_settings_visible": "Expand the numerical study controls in the inspector.",
+        "automatic_grid": "Derive grid dimensions from the CAD geometry. Disable to use Nelx, Nely and Nelz below.",
+        "automatic_filter_radius": "Derive the filter from the analysis grid. Disable to use the Rmin value below.",
+        "design_goal": "Engineering objective for structural stiffness or stress-constrained minimum mass.",
+        "physics_mode": "Topology studies use structural analysis.",
         "formulation": "Density (SIMP) is robust and supports explicit lattice interpretation. "
         "Level Set evolves a crisp solid boundary and does not create an explicit lattice.",
-        "manufacturing_process": "Applies standard unrestricted topology optimization without directional constraints.",
         "load_aggregation": "Weighted Sum optimizes average weighted performance. Worst Case protects the least "
         "favourable connected load or operating case.",
         "load_pnorm_p": "Smooth maximum exponent for multiple load cases. Higher approaches a hard worst case "
@@ -610,13 +583,6 @@ class PropertiesPanel(
         "E0": "Solid material modulus used by the voxel optimizer (normally derived from the connected material).",
         "Emin": "Small void stiffness used to keep the voxel system solvable.",
         "nu": "Poisson's ratio used by the structured voxel analysis.",
-        "convection_coefficient": "Reduced-order volumetric heat-rejection coefficient in W/(mm³·K). "
-        "It does not resolve wetted surface area or fluid flow.",
-        "thermal_conductivity": "Solid thermal conductivity used by the voxel thermal solve.",
-        "thermal_conductivity_min": "Small void conductivity used to keep the thermal system solvable.",
-        "thermal_penal": "Penalization that discourages intermediate thermal density.",
-        "structural_weight": "Relative structural-compliance contribution in the coupled structural + thermal objective.",
-        "thermal_weight": "Relative steady-conduction contribution in the coupled structural + thermal objective. This does not model thermal strain.",
         "force_x": "Total force component in X (N), distributed over the connected target region.",
         "force_y": "Total force component in Y (N), distributed over the connected target region.",
         "force_z": "Total force component in Z (N), distributed over the connected target region.",
@@ -628,11 +594,10 @@ class PropertiesPanel(
         "joint_type": "Idealized kinematic connection between two selected anchor regions.",
         "relative_stiffness": "Penalty stiffness relative to the surrounding topology material. Use the default "
         "unless a joint-stiffness sensitivity study is available.",
-        "weight": "Relative importance of this operating or thermal load case.",
+        "weight": "Relative importance of this operating load case.",
         "replace_base_supports": "Use this case's supports instead of the global supports.",
         "replace_global_joints": "Use this case's joints instead of the global joints.",
-        "total_heat": "Total heat input for this thermal case (W), distributed over its selected region.",
-        "time_step_scale": "OpenRadioss stability scale on the automatic CFL time step. The default 0.9 retains margin.",
+        "time_step_scale": "OpenCourant stability scale on the automatic CFL time step. The default 0.9 retains margin.",
         "solver_backend": "Numerical solver used for this analysis. Auto selects the supported installed backend.",
         "run_external_solver": "Run the configured external solver. When disabled, only the solver deck is generated.",
         "history_samples": "Requested number of history samples used for impact quality and response metrics.",
@@ -644,16 +609,16 @@ class PropertiesPanel(
         "validated_rate_max_per_s": "Highest strain rate covered by the material validation evidence.",
         "damping_alpha": "Legacy mass-proportional damping coefficient. Keep zero unless a calibrated damping model requires it.",
         "damping_beta": "Legacy stiffness-proportional damping coefficient. Keep zero unless a calibrated damping model requires it.",
-        "enable_corotation": "Legacy internal-solver geometric nonlinearity switch; OpenRadioss uses its native finite-deformation formulation.",
+        "enable_corotation": "Legacy internal-solver geometric nonlinearity switch; OpenCourant uses its native finite-deformation formulation.",
         "enable_contact": "Enable contact in the selected explicit solver configuration.",
-        "contact_stiffness": "Legacy internal contact penalty scale. OpenRadioss uses the generated native contact settings.",
-        "contact_thickness": "Legacy internal contact search thickness (mm). OpenRadioss derives contact from the shell/deck definition.",
+        "contact_stiffness": "Legacy internal contact penalty scale. OpenCourant uses the generated native contact settings.",
+        "contact_thickness": "Legacy internal contact search thickness (mm). OpenCourant derives contact from the shell/deck definition.",
         "contact_update_interval": "Legacy internal contact-neighbour update interval in explicit time steps.",
-        "mass_scaling_threshold": "Legacy mass-scaling activation threshold. OpenRadioss exposes a physical target time step instead.",
+        "mass_scaling_threshold": "Legacy mass-scaling activation threshold. OpenCourant exposes a physical target time step instead.",
         # ── Mesh / Remesh / Impact ─────────────────────────────────────
         "mesh_type": "Tet: linear C3D4 (fast). Tet10: quadratic C3D10 (more accurate, often several times slower). Shell: 3-node reference-surface triangles for explicit impact.",
         "refinement_size": "Local element size at refinement zones [mm].  0 = no local refinement.",
-        "shell_thickness": "Physical shell thickness [mm] written to the OpenRadioss shell "
+        "shell_thickness": "Physical shell thickness [mm] written to the OpenCourant shell "
         "property. The CAD geometry must represent the intended reference "
         "surface; PyLCSS does not extract a midsurface from a solid.",
         "shell_nip": "Through-thickness shell integration points. Five is a practical "
@@ -771,21 +736,23 @@ class PropertiesPanel(
         "geometry_source": "Voxels are robust; Surface follows the exported shape.",
         "element_order": "Linear for impact; Quadratic for static FEA.",
         "material_lot_id": "Optional material batch/lot identifier used for impact traceability.",
-        "deck_path": "OpenRadioss starter deck (.rad) or keyword deck (.k/.key).",
-        "engine_path": "Optional matching OpenRadioss engine control file.",
-        "starter_path": "Override the auto-discovered OpenRadioss starter executable.",
-        "engine_executable_path": "Override the auto-discovered OpenRadioss engine executable.",
+        "deck_path": "OpenCourant starter deck (.rad) or keyword deck (.k/.key).",
+        "engine_path": "Optional matching OpenCourant engine control file.",
+        "starter_path": "Override the auto-discovered OpenCourant starter executable.",
+        "engine_executable_path": "Override the auto-discovered OpenCourant engine executable.",
         "work_dir": "Solver working directory. Empty creates an isolated temporary run directory.",
         "timeout_s": "Maximum external-solver wall time [s] before PyLCSS stops waiting.",
-        "cad_reconstruction_method": "Auto uses analytic cylinders/cones for beam lattices and constrained G1 B-splines for continuum and TPMS boundaries. Fused beam lattice requests a checked boolean union. Geometry error and STEP reimport are validated.",
+        "cad_reconstruction_method": "Auto uses analytic cylinders/cones for beam lattices and compact cubic surfaces with shared curves for continuum boundaries. TPMS, sheet and honeycomb lattices stay as STL meshes. Fused beam lattice requests a checked boolean union. Geometry error and STEP reimport are validated.",
         "cad_export_filename": "Destination path and filename for the exported model.",
         "cad_export_format": "File format to export (STEP, STL, or 3MF).",
-        "nelx": "Expert voxel count in X. Guided mode derives resolution automatically.",
-        "nely": "Expert voxel count in Y. Guided mode derives resolution automatically.",
-        "nelz": "Expert voxel count in Z. Guided mode derives resolution automatically.",
+        "nelx": "Manual voxel count in X. Disable Automatic Grid to use it.",
+        "nely": "Manual voxel count in Y. Disable Automatic Grid to use it.",
+        "nelz": "Manual voxel count in Z. Disable Automatic Grid to use it.",
     }
 
     _PROPERTY_LABELS = {
+        "automatic_grid": "Automatic Grid",
+        "automatic_filter_radius": "Automatic Filter Radius",
         "length_x": "Length (mm)",
         "width_y": "Width (mm)",
         "height_z": "Height (mm)",
@@ -846,8 +813,8 @@ class PropertiesPanel(
         "stress_scale_to_mpa": "Native Stress to MPa",
         "enable_mass_scaling": "Mass Scaling",
         "external_timeout_s": "Solver Timeout (s)",
-        "openradioss_starter_path": "Starter Path",
-        "openradioss_engine_path": "Engine Path",
+        "opencourant_starter_path": "Starter Path",
+        "opencourant_engine_path": "Engine Path",
         "external_work_dir": "Work Directory",
         "deck_only": "Deck Only",
         "youngs_modulus": "Young's Modulus (MPa)",
@@ -863,7 +830,6 @@ class PropertiesPanel(
         "max_surface_faces": "Surface Triangle Limit",
         "fuse_parts": "Boolean Union Bodies",
         # --- Units that the auto-humanizer cannot infer from the name ---
-        "thermal_conductivity": "Thermal Conductivity (mW/mm/K)",
         "force_x": "Force X (N)",
         "force_y": "Force Y (N)",
         "force_z": "Force Z (N)",
@@ -888,7 +854,6 @@ class PropertiesPanel(
         "box_max_y": "Box Max Y (mm)",
         "box_min_z": "Box Min Z (mm)",
         "box_max_z": "Box Max Z (mm)",
-        "total_heat": "Total Heat Input (mW)",
         "contact_stiffness": "Contact Stiffness (N/mm)",
         "contact_thickness": "Contact Thickness (mm)",
         # --- Selection / study wording ---
@@ -914,11 +879,7 @@ class PropertiesPanel(
         "nelz": "Voxel Grid Cells Z",
         "volfrac": "Target Volume Fraction",
         "rmin": "Filter Radius (voxels)",
-        "minimum_void_size_mm": "Minimum Void Size (mm)",
-        "maximum_member_size_mm": "Maximum Member Size (mm)",
-        "overhang_angle_deg": "Minimum Overhang Angle (deg)",
         "penal": "Density Penalty (SIMP p)",
-        "thermal_penal": "Thermal Density Penalty",
         "E0": "Solid Young's Modulus (MPa)",
         "Emin": "Void Young's Modulus (MPa)",
         "nu": "Poisson's Ratio",
@@ -929,11 +890,6 @@ class PropertiesPanel(
         "load_pnorm_p": "Load-Case Aggregation (p-norm)",
         "projected_gradient_step": "Projected-Gradient Step Size",
         "convergence_patience": "Convergence Patience (iterations)",
-        "convection_coefficient": "Convection Coefficient (mW/mm²/K)",
-        "thermal_conductivity_min": "Void Thermal Conductivity (mW/mm/K)",
-        "structural_weight": "Structural Objective Weight",
-        "thermal_weight": "Thermal Objective Weight",
-        "minimum_member_size_mm": "Minimum Member Size (mm)",
         "validation_displacement_limit_mm": "Displacement Limit (mm)",
         "validation_yield_safety_factor": "Required Yield Safety Factor",
     }
@@ -963,32 +919,32 @@ class PropertiesPanel(
     _PATH_PROP_FILTERS = (
         (
             "deck_path",
-            "Select OpenRadioss or keyword deck",
+            "Select OpenCourant or keyword deck",
             "Solver decks (*.k *.key *.rad *.inp);;All files (*)",
         ),
         (
             "engine_path",
-            "Select OpenRadioss engine file",
-            "Radioss engine files (*.rad *_0001.rad);;All files (*)",
+            "Select OpenCourant engine file",
+            "Courant engine files (*.rad *_0001.rad);;All files (*)",
         ),
         (
             "engine_executable_path",
-            "Select OpenRadioss engine binary",
+            "Select OpenCourant engine binary",
             "Executables (*.exe);;All files (*)",
         ),
         (
             "starter_path",
-            "Select OpenRadioss starter binary",
+            "Select OpenCourant starter binary",
             "Executables (*.exe);;All files (*)",
         ),
         (
-            "openradioss_starter_path",
-            "Select OpenRadioss starter binary",
+            "opencourant_starter_path",
+            "Select OpenCourant starter binary",
             "Executables (*.exe);;All files (*)",
         ),
         (
-            "openradioss_engine_path",
-            "Select OpenRadioss engine binary",
+            "opencourant_engine_path",
+            "Select OpenCourant engine binary",
             "Executables (*.exe);;All files (*)",
         ),
         (
@@ -1296,6 +1252,9 @@ class PropertiesPanel(
     def display_node(self, node):
         """Display specialized inspector for a selected node."""
         self.current_node = node
+        self._topopt_mesh_estimate_refresh = None
+        self._topopt_advanced_property_names = set()
+        self._non_design_status = None
 
         # Replace one hidden page rather than removing dozens of child widgets
         # individually.  On Windows, every removed child can transiently enter
@@ -1382,24 +1341,7 @@ class PropertiesPanel(
         if not groups:
             return
 
-        preferred_open = {
-            "TopologyOptVoxelNode": {"Design Intent", "Export"},
-            "LatticeOptVoxelNode": {"Design Intent", "Export"},
-            "LatticeInfillNode": {"Lattice Infill Settings", "Result", "Export"},
-            "SolverNode": {"Analysis"},
-            "ModalSolverNode": {"Natural Frequencies and Mode Shapes", "Properties"},
-            "CrashSolverNode": {"Analysis"},
-            "MaterialNode": {"Material"},
-            "FEAComponentNode": {"Assembly Component"},
-            "InteractiveSelectFaceNode": {"Geometry Type"},
-            "SelectFaceNode": {"Selector", "Parameters"},
-            "ConstraintNode": {"Support"},
-            "LoadNode": {"Force", "Gravity"},
-            "PressureLoadNode": {"Pressure"},
-            "ImpactConditionNode": {"Impact"},
-        }.get(node_class, set())
-
-        for ordinal, (index, group, title) in enumerate(reversed(groups)):
+        for index, group, title in reversed(groups):
             # Every QFormLayout gets a narrow-panel policy. Long labels move
             # above their editor instead of squeezing the editor to a sliver.
             for form in group.findChildren(QtWidgets.QFormLayout):
@@ -1443,8 +1385,5 @@ class PropertiesPanel(
             item = self.props_layout.takeAt(index)
             if item is None or item.widget() is not group:
                 continue
-            expanded = (
-                title in preferred_open if preferred_open else index == groups[0][0]
-            )
-            wrapper = InspectorSection(title, group, expanded, self.props_widget)
+            wrapper = InspectorSection(title, group, parent=self.props_widget)
             self.props_layout.insertWidget(index, wrapper)

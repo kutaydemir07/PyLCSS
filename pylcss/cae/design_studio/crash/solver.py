@@ -1,10 +1,10 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-"""Crash solver node — runs an external OpenRadioss explicit transient analysis.
+"""Crash solver node — runs an external OpenCourant explicit transient analysis.
 
 The previous in-house CPU/GPU explicit solvers (central-difference, J2
 plasticity, penalty contact, Taichi kernels) were removed: they were not
-validated against an industry reference for crash physics.  OpenRadioss
+validated against an industry reference for crash physics.  OpenCourant
 is the single supported backend.
 """
 import logging
@@ -20,7 +20,7 @@ INDUSTRIAL_HOURGLASS_COEFFICIENT = 0.10
 
 
 class CrashSolverNode(CadQueryNode):
-    """Explicit transient crash solver — dispatches to OpenRadioss."""
+    """Explicit transient crash solver — dispatches to OpenCourant."""
     __identifier__ = 'com.cad.sim.crash_solver'
     NODE_NAME = "Impact Solver"
 
@@ -44,10 +44,10 @@ class CrashSolverNode(CadQueryNode):
         )
         legacy_results.view.setVisible(False)
 
-        self.create_property('openradioss_starter_path', '', widget_type='text')
-        self.create_property('openradioss_engine_path',  '', widget_type='text')
+        self.create_property('opencourant_starter_path', '', widget_type='text')
+        self.create_property('opencourant_engine_path',  '', widget_type='text')
         self.create_property('external_work_dir',        '', widget_type='text')
-        # Write the OpenRadioss deck without launching the starter/engine.
+        # Write the OpenCourant deck without launching the starter/engine.
         self.create_property('deck_only', False, widget_type='checkbox')
         self.create_property('external_timeout_s', 1800.0, widget_type='float')
 
@@ -77,7 +77,7 @@ class CrashSolverNode(CadQueryNode):
         # Multiplies displayed displacement; does not affect physics.
         self.create_property('disp_scale', 3.0, widget_type='float')
 
-        # OpenRadioss mass-scaling target.  When enable_mass_scaling is true,
+        # OpenCourant mass-scaling target.  When enable_mass_scaling is true,
         # the engine deck requests /DT/NODA/CST.  A positive physical target
         # takes precedence; zero retains the legacy end_time / time_steps input.
         self.create_property('time_steps', 500, widget_type='int')
@@ -86,16 +86,16 @@ class CrashSolverNode(CadQueryNode):
             'mass_scaling_target_dt', 0.0, widget_type='float'
         )
         # Courant safety factor for the mass-neutral /DT/NODA/STOP policy.
-        # 0.9 is the OpenRadioss default; lower values support controlled
+        # 0.9 is the OpenCourant default; lower values support controlled
         # temporal-discretisation studies without changing model mass.
         self.create_property('time_step_scale', 0.9, widget_type='float')
 
     def run(self, cancel_callback=None):
-        logger.info("Crash Solver: routing to OpenRadioss backend")
+        logger.info("Crash Solver: routing to OpenCourant backend")
         from pylcss.cae.solver_backends import (
             ExternalRunConfig,
             SolverBackendError,
-            run_openradioss_crash,
+            run_opencourant_crash,
         )
         from pylcss.input_values import as_bool, flatten_inputs
 
@@ -121,12 +121,12 @@ class CrashSolverNode(CadQueryNode):
         if impact is None:
             missing.append('impact')
         if missing:
-            msg = "OpenRadioss backend requires " + ", ".join(missing) + "."
+            msg = "OpenCourant backend requires " + ", ".join(missing) + "."
             self.set_error(msg)
             return None
         if getattr(mesh, "topology_requires_connection_model", False):
             msg = (
-                "This mesh contains idealized joints. Use Radioss Deck with "
+                "This mesh contains idealized joints. Use Courant Deck with "
                 "an explicit contact model."
             )
             self.set_error(msg)
@@ -165,7 +165,7 @@ class CrashSolverNode(CadQueryNode):
             )
             return None
         if not math.isfinite(timeout_s) or timeout_s <= 0.0:
-            self.set_error("OpenRadioss timeout must be finite and greater than zero.")
+            self.set_error("OpenCourant timeout must be finite and greater than zero.")
             return None
         if not math.isfinite(impactor_mass) or impactor_mass < 0.0:
             self.set_error("Impactor mass must be finite and non-negative.")
@@ -188,10 +188,10 @@ class CrashSolverNode(CadQueryNode):
 
         try:
             starter_path = str(
-                self.get_property('openradioss_starter_path') or ''
+                self.get_property('opencourant_starter_path') or ''
             ).strip() or None
             engine_path = str(
-                self.get_property('openradioss_engine_path') or ''
+                self.get_property('opencourant_engine_path') or ''
             ).strip() or None
             work_dir = str(self.get_property('external_work_dir') or '').strip() or None
             project_dir = getattr(self, '_project_dir', None)
@@ -208,7 +208,7 @@ class CrashSolverNode(CadQueryNode):
                 work_dir=work_dir,
                 run_solver=run_flag,
                 timeout_s=timeout_s,
-                job_name='pylcss_openradioss',
+                job_name='pylcss_opencourant',
                 cancel_callback=cancel_callback,
             )
             # Mass scaling (/DT/NODA/CST): add nodal mass when element dt drops
@@ -244,7 +244,7 @@ class CrashSolverNode(CadQueryNode):
             hg_ihq = INDUSTRIAL_HOURGLASS_IHQ
             hg_coef = INDUSTRIAL_HOURGLASS_COEFFICIENT
 
-            result = run_openradioss_crash(
+            result = run_opencourant_crash(
                 mesh=mesh,
                 material=material,
                 constraints=constraints,
@@ -266,17 +266,17 @@ class CrashSolverNode(CadQueryNode):
             )
             warnings = result.get('warnings') or []
             if warnings:
-                logger.warning("OpenRadioss backend warnings: %s", "; ".join(warnings))
+                logger.warning("OpenCourant backend warnings: %s", "; ".join(warnings))
             logger.info(
                 "Crash Solver: status=%s, type=%s, work_dir=%s",
                 result.get('external_status'), result.get('type'), result.get('work_dir'),
             )
             return result
         except SolverBackendError as exc:
-            logger.warning("Crash Solver: OpenRadioss backend error: %s", exc)
+            logger.warning("Crash Solver: OpenCourant backend error: %s", exc)
             self.set_error(str(exc))
             return None
         except Exception as exc:
             logger.exception("Crash Solver: external backend crashed")
-            self.set_error(f"OpenRadioss backend crashed: {exc}")
+            self.set_error(f"OpenCourant backend crashed: {exc}")
             return None

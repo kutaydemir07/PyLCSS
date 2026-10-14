@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import logging
+from functools import reduce
+from math import ceil, gcd, prod
 from dataclasses import replace
 from typing import Sequence
 
@@ -70,7 +72,7 @@ def _refined_shape(
     base_shape: Sequence[int],
     factor: float,
     *,
-    max_voxels: int = 500_000,
+    max_voxels: int | None = 500_000,
 ) -> tuple[int, int, int]:
     """Scale all axes together, keep them even, and respect the solver cap."""
     base = np.maximum(np.asarray(tuple(base_shape)[:3], dtype=float), 1.0)
@@ -81,7 +83,7 @@ def _refined_shape(
         elif value > 1:
             dims[axis] = value + value % 2
     total = int(np.prod(dims))
-    if total > int(max_voxels):
+    if max_voxels is not None and total > int(max_voxels):
         shrink = (float(max_voxels) / float(total)) ** (1.0 / 3.0)
         dims = np.maximum(np.floor(dims * shrink).astype(int), 2)
         dims -= dims % 2
@@ -93,12 +95,26 @@ def refine_prepared_study(
     study: PreparedTopologyStudy,
     factor: float,
     *,
-    max_voxels: int = 500_000,
+    max_voxels: int | None = 500_000,
+    target_shape: Sequence[int] | None = None,
 ) -> PreparedTopologyStudy:
     """Clone a study at a finer grid while preserving physical parameters."""
     old_shape = (study.nelx, study.nely, study.nelz)
-    new_shape = _refined_shape(old_shape, factor, max_voxels=max_voxels)
+    if target_shape is None and study.voxel_pitch is not None:
+        common = reduce(gcd, old_shape)
+        scale_steps = max(1, ceil(factor * common - 1e-12))
+        target_shape = tuple(count // common * scale_steps for count in old_shape)
+    new_shape = (
+        tuple(int(count) for count in target_shape)
+        if target_shape is not None
+        else _refined_shape(old_shape, factor, max_voxels=max_voxels)
+    )
+    if len(new_shape) != 3 or min(new_shape) < 1 or (max_voxels is not None and prod(new_shape) > max_voxels):
+        raise ValueError("Refined voxel grid exceeds the positive-dimension/cell limits.")
     span = np.maximum(study.bounds[1][:3] - study.bounds[0][:3], 1e-12)
+    edges = span / np.asarray(new_shape)
+    if study.voxel_pitch is not None and not np.allclose(edges, edges[0], rtol=1e-10, atol=1e-12):
+        raise ValueError("Refinement of cubic voxels must scale all axes by the same factor.")
 
     problem = study.problem
     if problem.filter_radius_is_physical:
@@ -187,6 +203,7 @@ def refine_prepared_study(
         nelx=new_shape[0],
         nely=new_shape[1],
         nelz=new_shape[2],
+        voxel_pitch=float(edges[0]) if study.voxel_pitch is not None else None,
     )
 
 

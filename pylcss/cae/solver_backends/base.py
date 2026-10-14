@@ -22,7 +22,7 @@ def validate_job_name(value: object, *, default: str) -> str:
 
     Solver job names become filenames and command-line arguments. Restricting
     them to a portable identifier prevents accidental path traversal and keeps
-    CalculiX/OpenRadioss artifact names predictable on every platform.
+    CalculiX/OpenCourant artifact names predictable on every platform.
     """
     name = str(value or default).strip()
     if name in {".", ".."} or not _JOB_NAME_RE.fullmatch(name):

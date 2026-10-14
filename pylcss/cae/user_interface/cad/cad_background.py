@@ -8,6 +8,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import os
 import json
+import logging
 import pickle
 from pathlib import Path
 import subprocess
@@ -16,6 +17,9 @@ import tempfile
 from time import monotonic, sleep
 
 from pylcss.process_utils import headless_subprocess_kwargs
+
+
+logger = logging.getLogger(__name__)
 
 
 class _CadJobPickler(pickle.Pickler):
@@ -70,6 +74,13 @@ class CadJobCancelled(RuntimeError):
     """An isolated CAD job was stopped before it published a result."""
 
 
+class CadJobFailed(RuntimeError):
+    """A concise user-facing reason, with the complete worker diagnostics."""
+    def __init__(self, message, details):
+        super().__init__(message)
+        self.details = details
+
+
 @contextmanager
 def _cad_job_directory(prefix):
     directory = tempfile.TemporaryDirectory(prefix=prefix)
@@ -100,9 +111,9 @@ def _terminate_cad_process(process):
     process.wait()
 
 
-def run_cad_job(operation: str, *arguments, timeout_seconds: float = 900,
+def run_cad_job(operation: str, *arguments, timeout_seconds: float | None = None,
                 progress_callback=None, cancel_callback=None):
-    if operation not in {"brep", "step", "step_shape", "mesh", "worker_environment"}:
+    if operation not in {"brep", "step", "step_shape", "mesh", "surface_layout", "worker_environment"}:
         raise ValueError(f"Unsupported CAD background operation: {operation}")
     with _cad_job_directory("pylcss_cad_job_") as directory:
         job = Path(directory) / "job.pkl"
@@ -126,28 +137,42 @@ def run_cad_job(operation: str, *arguments, timeout_seconds: float = 900,
                     if cancel_callback is not None and cancel_callback():
                         raise CadJobCancelled("CAD reconstruction cancelled")
                     if progress_callback is not None and progress.is_file():
-                        current = progress.read_text(encoding="utf-8")
+                        try:
+                            current = progress.read_text(encoding="utf-8")
+                        except (PermissionError, FileNotFoundError):
+                            # Windows can briefly deny opening a status file
+                            # during atomic replacement. Keep the job alive.
+                            current = previous_progress
                         if current != previous_progress:
                             payload, step, total = json.loads(current)
                             progress_callback(payload, None, step, total)
                             previous_progress = current
-                    remaining = timeout_seconds - (monotonic() - started)
-                    if remaining <= 0:
+                    remaining = None if timeout_seconds is None else timeout_seconds - (monotonic() - started)
+                    if remaining is not None and remaining <= 0:
                         raise RuntimeError(f"CAD {operation} job exceeded {timeout_seconds:g} seconds; "
                                            "the destination file was not replaced.")
                     if process.poll() is not None:
                         break
                     try:
-                        process.wait(timeout=min(.1, remaining))
+                        process.wait(timeout=.1 if remaining is None else min(.1, remaining))
                     except subprocess.TimeoutExpired:
                         pass
             finally:
                 if process.poll() is None:
                     _terminate_cad_process(process)
         if process.returncode or not result.is_file():
-            error = stderr.read_text(encoding="utf-8", errors="replace")[-4000:]
-            output = stdout.read_text(encoding="utf-8", errors="replace")[-4000:]
-            raise RuntimeError(f"CAD background job failed: {error or output}")
+            details = stderr.read_text(encoding="utf-8", errors="replace")
+            if not details.strip():
+                details = stdout.read_text(encoding="utf-8", errors="replace")
+            failure_path = result.with_suffix(".error.json")
+            if failure_path.is_file():
+                failure = json.loads(failure_path.read_text(encoding="utf-8"))
+                reason = failure["message"]
+            else:
+                reason = next((line.strip() for line in reversed(details.splitlines()) if line.strip()),
+                              f"Worker exited with code {process.returncode}")
+            logger.error("CAD %s worker diagnostics:\n%s", operation, details)
+            raise CadJobFailed(f"CAD job failed: {reason}", details)
         with result.open("rb") as stream:
             return pickle.load(stream)
 
@@ -187,9 +212,12 @@ def main():
         )
         functions = {"brep": _external_write_cad_brep, "step": _external_write_cad_step,
                      "step_shape": _write_step_shape, "mesh": _external_write_cad_mesh}
+        if operation == 'surface_layout':
+            from pylcss.cae.design_studio.topology_optimization.geometry.amrto_surface import prepare_amrto_surface
+            functions['surface_layout'] = prepare_amrto_surface
         if operation not in functions:
             raise ValueError(f"Unsupported CAD background operation: {operation}")
-        if operation == "brep":
+        if operation in {"brep", "surface_layout"}:
             def progress_callback(payload, _density, step, total):
                 path = job.parent / "progress.json"
                 temporary = path.with_suffix(".tmp")
@@ -208,4 +236,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as error:
+        import traceback
+        # Structured reasons travel separately from developer diagnostics.
+        Path(sys.argv[2]).with_suffix(".error.json").write_text(
+            json.dumps({"type": type(error).__name__, "message": str(error)}), encoding="utf-8")
+        traceback.print_exc()
+        raise SystemExit(1)

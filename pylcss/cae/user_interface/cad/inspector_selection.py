@@ -510,7 +510,6 @@ class SelectionInspectorMixin:
             "com.cad.sim.modal_solver",
             "com.cad.sim.crash_solver",
             "com.cad.sim.topopt_voxel",
-            "com.cad.sim.lattice_voxel",
             "com.cad.sim.lattice_infill",
         }
         blocked = [

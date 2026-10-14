@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "source_directory": "external_solvers/amrto",
+  "sources": [
+    "https://github.com/rhy-thu/AMRTO",
+    "https://github.com/NSchertler/GeneralizedMotorcycleGraph",
+    "https://github.com/wjakob/instant-meshes"
+  ],
+  "files": [
+    {
+      "file": "Instant Meshes.exe",
+      "sha256": "add0758fa2240dae7e4868258598d2c7a0d359955e06b36fcbcf985b95fe2eba"
+    },
+    {
+      "file": "gmcg_headless.exe",
+      "sha256": "89a2b5320dd3c82567331265ec3f90af5aa241ebaed4d3789dbd0f0484bda837"
+    },
+    {
+      "file": "scaffold_map_headless.exe",
+      "sha256": "def2539109f8d291b21997c96bdb0f567af7a1ec6294b0c6c5f269526d4c41d3"
+    },
+    {
+      "file": "libgcc_s_seh-1.dll",
+      "sha256": "89f1eaf8576f691e1aafc8707173618a74b8c82d6d0ac17a1be62c76a6c79aa1"
+    },
+    {
+      "file": "libstdc++-6.dll",
+      "sha256": "7b787b2436175470328e47193c292b047a4cac9df7ad4b5800b2f876fe305832"
+    },
+    {
+      "file": "libwinpthread-1.dll",
+      "sha256": "4bde68fbb2c6a9a64535928fc505056ebf6f5dc44f82ea2eaac3c714dc22ce79"
+    },
+    {
+      "file": "GMCG-headless-LICENSE.txt",
+      "sha256": "b9cfc57668e40c56b0265f810297c92eab9017ef542b2629836ec322793ec6a7"
+    },
+    {
+      "file": "LICENSE",
+      "sha256": "d9bc0df5f03e17212806beb85fb08660e56fffd5b82b625ab9f8f8616473ce41"
+    }
+  ],
+  "notices": [
+    "Instant-Meshes-LICENSE.txt",
+    "GCC-GPL-3.0.txt",
+    "GCC-Runtime-Exception.txt"
+  ]
+}

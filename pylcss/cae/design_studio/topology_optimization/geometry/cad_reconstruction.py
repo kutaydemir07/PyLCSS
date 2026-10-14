@@ -16,20 +16,20 @@ import trimesh
 
 from .cad_config import CadReconstructionConfig, CAD_RECONSTRUCTION_REVISION
 from .cad_diagnostics import (_export_stage_mesh, _export_cad_animation_mesh,
-                              assess_sampled_mesh_deviation, assess_sampled_surface_deviation)
+                              assess_sampled_mesh_deviation)
 from .cad_features import (_payload_bounds, _apply_passive_regions_to_step,
                            _attach_passive_regions_to_lattice)
 from .cad_mesh_repair import _extract_recovered_mesh, _effective_tolerance
-from .g1_surface import (SurfaceFitError, build_quad_cage, fit_patches, patch_mesh,
+from .spline_recovery import (SurfaceFitError, build_quad_cage, fit_patches, patch_mesh,
                          assemble_solid, _shell_signature)
 from .lattice_cad import (beam_lattice_from_member_plan, beam_lattice_from_structure,
-                          beam_lattice_solid, lattice_cad_strategy)
+                          beam_lattice_solid, lattice_cad_strategy, topopt_export_formats)
 from .mesh_surface import preprocess_and_repair_mesh
 from .step_export import verify_step_roundtrip, assert_unchanged_surface_geometry, export_cad_model
 
 
 class SmoothCadUnavailable(SurfaceFitError):
-    """A recovered boundary could not be converted within the requested limits."""
+    """A recovered boundary could not be converted at the source resolution."""
 
 
 def normalize_cad_strategy(value):
@@ -43,8 +43,9 @@ def normalize_cad_strategy(value):
         return 'spline'
     if key in {'tpms', 'tpms spline'}:
         return 'tpms'
-    # Historical reconstruction selections are migrated; no old engine runs.
-    if key in {'auto', 'amrto', 'auto (amrto)', 'amrto bicubic nurbs',
+    if key in {'amrto', 'amrto bicubic nurbs'}:
+        return 'amrto'
+    if key in {'auto', 'auto (amrto)',
                'recovered shape', 'faceted'}:
         return 'auto'
     raise ValueError(f'Unknown CAD reconstruction strategy: {value}')
@@ -52,7 +53,7 @@ def normalize_cad_strategy(value):
 
 def _structure_options(payload, supplied):
     from ..manufacturing.structures import ManufacturingStructureOptions
-    recovered = payload.get('recovered_shape') or {}
+    recovered = payload.get('recovered_shape') or payload
     value = recovered.get('resolved_structure_options') or supplied or payload.get('structure_options')
     if isinstance(value, dict):
         names = {field.name for field in fields(ManufacturingStructureOptions)}
@@ -102,19 +103,19 @@ def _verify_transfer(shape, folder=None):
 def reconstruct_topopt_cad(
     payload: Any, *, source_geometry='Recovered Shape', reconstruction_strategy='auto',
     sew_tolerance=1e-3, relative_sew_tolerance=1e-6,
-    fit_tolerance=0., relative_fit_tolerance=1e-3, crease_angle_deg=None,
+    fit_tolerance=0., relative_fit_tolerance=5e-3, crease_angle_deg=None,
     maximum_volume_delta=0.05, maximum_relative_deviation=0.01,
     max_faces=None, repair_mesh=True, validate_watertight=True, validate_brep=True,
     void_axial_margin=0.02, void_radial_margin=0., return_report=False,
     structure_options=None, member_plan=None, export_steps_dir=None,
     reconstruction_config: CadReconstructionConfig | None = None,
-    progress_callback=None, **legacy_options,
+    progress_callback=None, quad_layout=None, mechanical_validation=None, amrto_config=None, **legacy_options,
 ):
     """Return a verified STEP-ready Workplane and optional acceptance report.
 
-    Beam families use analytic cylinders/cones. Continuum and implicit/sheet
-    lattices use a topology-checked quad cage and coupled degree-five G1 fit.
-    A failed fit is retried with a finer cage, up to explicit size limits.
+    Beam families use analytic cylinders/cones. Continuum
+    boundaries use compact cubic patches with shared boundaries. Each patch is
+    fitted locally; compatible patches are grouped into native spline faces.
     Historical optional keyword arguments are accepted for saved callers;
     they cannot reactivate a removed reconstruction engine.
     """
@@ -123,8 +124,6 @@ def reconstruct_topopt_cad(
     config = reconstruction_config or CadReconstructionConfig()
     if crease_angle_deg is not None:
         config = replace(config, crease_angle_deg=float(crease_angle_deg))
-    if max_faces is not None:
-        config = replace(config, maximum_patches=int(max_faces))
     for name, value in (('sew_tolerance', sew_tolerance), ('relative_sew_tolerance', relative_sew_tolerance),
                         ('fit_tolerance', fit_tolerance), ('relative_fit_tolerance', relative_fit_tolerance),
                         ('maximum_volume_delta', maximum_volume_delta),
@@ -134,12 +133,13 @@ def reconstruct_topopt_cad(
     strategy = normalize_cad_strategy(reconstruction_strategy)
     options = _structure_options(payload, structure_options)
     kind = lattice_cad_strategy(options)
-    is_tpms = bool(options is not None and options.family is not None and options.family.is_tpms)
-    if kind == 'isosurface' and reconstruction_config is None:
-        config = replace(config, target_triangles=640, maximum_patches=12000,
-                         fairness=.01, tangent_stiffness=100., maximum_refinements=4)
-        if max_faces is not None:
-            config = replace(config, maximum_patches=int(max_faces))
+    if kind == 'beam' and ('STEP' not in topopt_export_formats(options)
+                           or 'STEP' not in topopt_export_formats(payload)):
+        raise ValueError('Analytic member STEP would omit skin or solid features; '
+                         'export the complete body as STL.')
+    if kind == 'isosurface':
+        raise ValueError('This lattice is represented by its manufacturing mesh. Export it as STL; '
+                         'STEP reconstruction is not available for TPMS, sheet or honeycomb lattices.')
     plan = member_plan if member_plan is not None else payload.get('member_plan')
     folder = Path(export_steps_dir) if export_steps_dir else None
     if folder:
@@ -155,15 +155,15 @@ def reconstruct_topopt_cad(
               'configuration': asdict(config)}
     if strategy in {'beam', 'beam_fused'} and kind != 'beam':
         raise ValueError('Analytic beam export requires a strut lattice family')
-    if strategy == 'tpms' and kind != 'isosurface':
-        raise ValueError('TPMS spline export requires an implicit or sheet lattice')
+    if strategy == 'tpms':
+        raise ValueError('TPMS geometry stays as STL; no spline STEP conversion is provided')
 
     if kind == 'beam' and strategy in {'auto', 'beam', 'beam_fused'}:
         progress('Building analytic lattice members')
         lattice = build_topopt_beam_lattice(payload, options, plan)
         workplane, beam_report = beam_lattice_solid(
             lattice, fuse=strategy == 'beam_fused' or config.beam_fuse,
-            maximum_fused_solids=config.maximum_fused_solids, return_report=True)
+            return_report=True)
         if beam_report['fused']:
             shape = _apply_passive_regions_to_step(workplane.val(), payload,
                                                    void_axial_margin=void_axial_margin,
@@ -218,120 +218,161 @@ def reconstruct_topopt_cad(
             _export_stage_mesh(folder, 'recovered_boundary', [('source', vertices, faces)])
         failures = []
         shape = None
-        initial_target = config.target_triangles
+        if strategy == 'auto' and quad_layout is None and payload.get('quad_layout') is None:
+            from .analytic_recovery import recover_analytic_solid
+            progress('Recovering analytic planes and curved primitives')
+            analytic = recover_analytic_solid(source, fit_tolerance=fit_limit,
+                                               deviation_limit=deviation_limit,
+                                               maximum_volume_delta=maximum_volume_delta,
+                                               validation_samples=config.validation_samples)
+            if analytic is not None:
+                shape, recognition = analytic
+                stages['analytic_surface_recovery'] = recognition
+                report.update(method='Recovered analytic surfaces', smooth=True, editable=True,
+                              relative_volume_delta=recognition['relative_volume_delta'],
+                              sampled_surface_deviation=recognition['deviation'],
+                              attempts=1, rejected_attempts=[])
         signature = _shell_signature(source)
-        genus = sum(max(0, 1 - chi / 2) for chi, _ in signature)
-        if reconstruction_config is None:
-            # Handles and disconnected shells need enough charts regardless
-            # of whether the boundary came from topopt or a lattice field.
-            initial_target = max(initial_target, int(800 * genus), 160 * len(signature))
-            if genus:
-                config = replace(config, fairness=max(config.fairness, .01),
-                                 tangent_stiffness=max(config.tangent_stiffness, 100.))
-        report['configuration'] = asdict(config)
+        genus = sum(max(0, 1-chi/2) for chi, _ in signature)
+        initial_target = max(config.target_triangles, int(48*genus), 32*len(signature))
         stages['surface_recovery'].update(boundary_shell_count=len(signature), total_genus=genus)
-        previous_profile = None
-        # Multiply handled voxel boundaries are especially susceptible to
-        # curvature being mistaken for a branching crease graph. Auto starts
-        # with smooth wall charts there; explicit feature settings stay exact.
-        smooth_feature_retry = (reconstruction_config is None and crease_angle_deg is None and genus >= 2)
+        quad_layout = quad_layout if quad_layout is not None else payload.get('quad_layout')
+        if shape is None and strategy in {'auto', 'amrto'} and quad_layout is None:
+            from .amrto_reconstruction import reconstruct_topopt_cad as reconstruct_amrto
+            amrto_payload = dict(payload)
+            amrto_payload['recovered_shape'] = {'vertices': vertices, 'faces': faces}
+            from .amrto_surface import cached_surface_layout
+            cache = cached_surface_layout(payload)
+            if isinstance(cache, dict):
+                amrto_payload['amrto_cached_quadrangulation'] = {
+                    'vertices': cache['vertices'], 'quads': cache['quads'],
+                    'report': {**cache['reports']['quadrangulation'],
+                               'source_geometry_sha256': cache['source_geometry_sha256'],
+                               'requested_settings': cache['requested_settings']}}
+            workplane, amrto_report = reconstruct_amrto(
+                amrto_payload, reconstruction_strategy='amrto',
+                sew_tolerance=sew, relative_sew_tolerance=0.,
+                fit_tolerance=min(fit_limit, .25*deviation_limit) if deviation_limit else fit_limit,
+                relative_fit_tolerance=0., crease_angle_deg=0.,
+                maximum_volume_delta=maximum_volume_delta,
+                maximum_relative_deviation=maximum_relative_deviation,
+                repair_mesh=False, return_report=True, amrto_config=amrto_config,
+                export_steps_dir=folder, progress_callback=progress_callback)
+            shape = workplane.val()
+            report.update(amrto_report, requested_strategy=strategy, backend='in-process',
+                          revision=CAD_RECONSTRUCTION_REVISION, smooth=True, editable=True)
+            stages['amrto'] = amrto_report['stages']
         stages['attempts'] = []
-        for attempt in range(config.maximum_refinements):
-            target = min(config.maximum_patches // 3, initial_target * 2**attempt)
-            implicit_features = is_tpms or smooth_feature_retry
-            profile = (target, implicit_features, config.fairness, config.tangent_stiffness)
-            if profile == previous_profile:
-                break
-            previous_profile = profile
+        attempt = 0
+        target = min(initial_target, len(source.faces))
+        while shape is None:
             attempt_start = perf_counter()
-            attempt_report = {'number': attempt + 1, 'target_triangles': target,
-                              'fairness': config.fairness, 'tangent_stiffness': config.tangent_stiffness,
-                              'crease_policy': 'Clipping planes' if implicit_features else 'Dihedral features'}
+            refinement_factor = 2.
+            attempt_report = {'number': attempt+1, 'target_triangles': target}
             stages['attempts'].append(attempt_report)
-            progress(f'Fitting G1 splines (attempt {attempt + 1})')
+            progress('Creating CAD surfaces')
             try:
-                cage_vertices, quads, cage_report = build_quad_cage(source, target, config.maximum_patches,
-                                                                   config.crease_angle_deg,
-                                                                   implicit_surface=implicit_features)
-                cage_report['crease_policy'] = attempt_report['crease_policy']
+                cage_vertices, quads, cage_report = build_quad_cage(
+                    source, target, config.crease_angle_deg,
+                    quad_layout=quad_layout)
                 poles, fit_report = fit_patches(source, cage_vertices, quads, config,
                                                crease_edges=cage_report['crease_edges'])
                 sampled_vertices, sampled_faces = patch_mesh(poles)
                 deviation = assess_sampled_mesh_deviation(vertices, faces, sampled_vertices,
                                                          sampled_faces, samples=config.validation_samples)
                 if deviation_limit and deviation['maximum_distance'] > deviation_limit:
+                    refinement_factor = max(2., 1.2*deviation['maximum_distance']/deviation_limit)
                     raise SurfaceFitError(f'Sampled geometric deviation {deviation["maximum_distance"]:.6g} '
                                           f'exceeds {deviation_limit:.6g}')
-                if fit_limit and fit_report['fitting_rms_distance'] > fit_limit:
-                    raise SurfaceFitError(f'Fitting RMS distance exceeds {fit_limit:.6g}')
-                shape, assembly = assemble_solid(
-                    poles, sew, quads=quads, crease_edges=cage_report['crease_edges'],
-                    maximum_chart_patches=config.maximum_chart_patches,
-                    maximum_chart_spans=config.maximum_chart_spans)
-                if _shell_signature(trimesh.Trimesh(sampled_vertices, sampled_faces, process=True)) != _shell_signature(source):
+                if fit_limit and deviation['rms_distance'] > fit_limit:
+                    refinement_factor = max(2., 1.2*deviation['rms_distance']/fit_limit)
+                    raise SurfaceFitError(f'Sampled RMS distance exceeds {fit_limit:.6g}')
+                if _shell_signature(trimesh.Trimesh(sampled_vertices, sampled_faces, process=True)) != signature:
                     raise SurfaceFitError('Fitted tessellation changed boundary-shell topology')
-                # Adaptive integration splits at internal spline knots. OCC's
-                # fixed-order default can mismeasure consolidated surfaces.
-                delta = abs(shape.Volume(tol=1e-6) - source.volume) / source.volume
+                shape, assembly = assemble_solid(
+                    poles, sew, quads=quads, crease_edges=cage_report['crease_edges'])
+                delta = abs(shape.Volume(tol=1e-6)-source.volume)/source.volume
                 if maximum_volume_delta and delta > maximum_volume_delta:
                     raise SurfaceFitError(f'Fitting changed material volume by {delta:.1%}')
-                report.update(assembly, method='TPMS G1 spline' if is_tpms else 'Sparse G1 spline',
-                              smooth=True, editable=True, relative_volume_delta=float(delta),
+                report.update(assembly, method='Compact cubic spline',
+                              smooth=True,
+                              editable=True, relative_volume_delta=float(delta),
                               sampled_surface_deviation=deviation, continuity=fit_report,
-                              attempts=attempt + 1, rejected_attempts=failures)
+                              attempts=attempt+1, rejected_attempts=list(failures))
                 stages.update(quad_cage=cage_report, spline_fit=fit_report)
-                cage_report['requested_cage_triangles'] = target
-                if kind == 'isosurface':
-                    report['lattice_surface'] = {'family': options.mode if options else None,
-                                                'source': 'Actual recovered manufacturing boundary',
-                                                'grading_and_clipping_retained': True}
                 if folder:
                     _export_stage_mesh(folder, 'quad_cage', [('cage', cage_vertices, quads)])
                     _export_stage_mesh(folder, 'fitted_surface', [('splines', sampled_vertices, sampled_faces)])
-                attempt_report.update(accepted=True, elapsed_seconds=perf_counter() - attempt_start)
+                attempt_report.update(accepted=True, patch_count=len(quads),
+                                      elapsed_seconds=perf_counter()-attempt_start)
                 break
             except SurfaceFitError as error:
-                attempt_report.update(accepted=False, reason=str(error),
-                                      elapsed_seconds=perf_counter() - attempt_start)
-                failures.append(f'Attempt {attempt + 1} ({target} cage triangles): {error}')
-                progress(f'Fit rejected: {error}')
-                if reconstruction_config is None and len(getattr(error, 'failed_patches', [])):
-                    # Retry a folded general surface with the stabilizing
-                    # tangent/fairness profile too. It still has to satisfy
-                    # the same source-distance and material-volume limits.
-                    config = replace(config, fairness=max(config.fairness, .01),
-                                     tangent_stiffness=max(config.tangent_stiffness, 100.))
-                    report['configuration'] = asdict(config)
-                    # A coarse dihedral graph may interpret curvature as a
-                    # branching sharp feature and create incompatible tangent
-                    # sectors. Auto can retry smoother charts while retaining
-                    # explicit clipping planes and all source acceptance gates.
-                    if crease_angle_deg is None:
-                        smooth_feature_retry = True
                 shape = None
+                attempt_report.update(accepted=False, reason=str(error),
+                                      elapsed_seconds=perf_counter()-attempt_start)
+                failures.append(f'Attempt {attempt+1}: {error}')
+                if quad_layout is not None or target >= len(source.faces):
+                    break
+                # Refine to the source's resolution, never to a fixed face or
+                # retry limit. All fits remain independent local solves.
+                target = min(len(source.faces), int(np.ceil(target*refinement_factor)))
+                attempt += 1
         if shape is None:
             if folder:
                 report.update(valid=False, rejected_attempts=failures,
                               elapsed_seconds=perf_counter() - start)
                 (folder / 'cad_stage_reports.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
-            raise SmoothCadUnavailable('Smooth CAD reconstruction exhausted its bounded refinements: '
-                                       + '; '.join(failures))
-        shape = _apply_passive_regions_to_step(shape, payload,
+            detail = stages['attempts'][-1].get('reason', 'No valid solid was produced')
+            raise SmoothCadUnavailable('CAD conversion could not preserve the recovered surface: '
+                                       + detail + '. The recovered mesh remains available for STL export.')
+        if report.get('method') != 'AMRTO pipeline (Ren et al., 2025)':
+            shape = _apply_passive_regions_to_step(shape, payload,
                                                void_axial_margin=void_axial_margin,
                                                void_radial_margin=void_radial_margin)
-        report['continuity_scope'] = 'Uncreased fitted patch seams before analytic passive feature booleans'
-    progress('Verifying STEP geometry')
-    shape, transfer = _verify_transfer(shape, folder)
+        report['continuity_scope'] = 'Exact shared boundaries; tangent continuity is not imposed'
+    progress('Checking the recovered CAD solid')
+    if not shape.isValid() or not shape.Solids():
+        raise SmoothCadUnavailable('Reconstruction did not produce valid material solids')
+    # STEP reimport is done when a file is exported. A CAD preview does not
+    # need a temporary export/import of every lattice member.
+    transfer = {'status': 'Checked on STEP export'}
+    if folder is not None:
+        shape, transfer = _verify_transfer(shape, folder)
     report.update(step_roundtrip=transfer, valid=bool(shape.isValid()),
                   is_solid=bool(shape.Solids()), cad_volume=float(shape.Volume(tol=1e-6)),
                   cad_face_count=len(shape.Faces()), solid_count=len(shape.Solids()))
+    report['grouping'] = {'product': 'Recovered design', 'part': 'Material',
+                          'solid_count': len(shape.Solids())}
+    request = mechanical_validation if mechanical_validation is not None else payload.get('cad_mechanical_validation')
+    if request is not None:
+        from ..verification.cad_performance import validate_cad_performance
+        progress('Comparing recovered and reconstructed mechanical performance')
+        recovered = _extract_recovered_mesh(payload)
+        if recovered is None:
+            recovered = (vertices, faces) if kind != 'beam' else None
+        if recovered is None:
+            raise SmoothCadUnavailable('Mechanical comparison requires a recovered reference surface')
+        performance = validate_cad_performance(recovered, shape, **request)
+        report['mechanical_validation'] = performance
+        if not performance['passed']:
+            report['valid'] = False
+            if folder:
+                (folder / 'cad_stage_reports.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+            raise SmoothCadUnavailable('Reconstructed CAD failed mechanical performance preservation: '
+                                       + performance['reason'])
+    else:
+        report['mechanical_validation'] = {'status': 'not run', 'passed': None,
+                                            'reason': 'Material, supports and loads were not supplied for CAD comparison'}
     if folder:
         box = shape.BoundingBox()
         report['animation_mesh'] = _export_cad_animation_mesh(
             folder, 'cad', shape, max(np.linalg.norm((box.xlen, box.ylen, box.zlen)) * 1e-3, 1e-7))
     report['elapsed_seconds'] = perf_counter() - start
+    surface_layout = report.pop('_surface_layout', None)
     if folder:
         (folder / 'cad_stage_reports.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+    if surface_layout is not None:
+        report['_surface_layout'] = surface_layout
     workplane = cq.Workplane(obj=shape)
     return (workplane, report) if return_report else workplane
 

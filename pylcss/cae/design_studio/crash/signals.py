@@ -434,7 +434,7 @@ def _global_body_kinematics(
     """Derive independent centre-of-mass motion from global momentum and mass.
 
     In the PyLCSS moving-body setup the added impactor mass is distributed over
-    the deformable body, so there is no rigid impactor reference node.  Radioss
+    the deformable body, so there is no rigid impactor reference node.  Courant
     global momentum divided by global mass is the physically meaningful
     centre-of-mass velocity and is independent of the rigid-wall force history.
     """
@@ -529,7 +529,7 @@ def build_crash_measurements(
     if wall_force_kn.size and history_time.size:
         force_kn = resample_channel(history_time, wall_force_kn, time_ms)
         force_source = (
-            "OpenRadioss /TH/RWALL impulse differentiated on physical time"
+            "OpenCourant /TH/RWALL impulse differentiated on physical time"
             if _array(
                 solver_history.get("rigid_wall_impulse_x_raw")
             ).size
@@ -594,10 +594,10 @@ def build_crash_measurements(
                 0.0,
             )
             pulse_source = (
-                "independent OpenRadioss global momentum / global mass"
+                "independent OpenCourant global momentum / global mass"
             )
             displacement_source = (
-                "integrated OpenRadioss centre-of-mass velocity"
+                "integrated OpenCourant centre-of-mass velocity"
             )
         elif impactor_mass_kg > 0.0 and force_kn.size:
             deceleration_m_s2 = force_kn * 1000.0 / impactor_mass_kg
@@ -629,10 +629,10 @@ def build_crash_measurements(
                 0.0,
             )
             pulse_source = (
-                "independent OpenRadioss rigid-wall main-node acceleration"
+                "independent OpenCourant rigid-wall main-node acceleration"
             )
             displacement_source = (
-                "independent OpenRadioss rigid-wall main-node displacement"
+                "independent OpenCourant rigid-wall main-node displacement"
             )
         elif impactor_mass_kg > 0.0 and force_kn.size:
             deceleration_m_s2 = force_kn * 1000.0 / impactor_mass_kg

@@ -12,6 +12,15 @@ from dataclasses import replace
 from typing import Any
 
 import numpy as np
+from pylcss.input_values import as_bool
+
+from ..configuration.voxel_meshing import (
+    REFINEMENT_MAX_ITERATIONS,
+    REFINEMENT_MIN_ITERATIONS,
+    REFINEMENT_STABILITY_TOLERANCE,
+    estimated_voxel_memory_bytes,
+    progressive_voxel_shapes,
+)
 
 from ..optimization.results import TopologyOptVoxelResult
 from ..optimization.voxel_solver import TopologyOptVoxelSolver
@@ -97,33 +106,15 @@ def _emit_recovery_preview(
     output_context: Any,
     progress_callback: ProgressCallback | None,
 ) -> None:
-    """Publish lattice geometry, but keep solid runs on the voxel actor.
-
-    A recovered solid surface is only a transient triangulation on the way to
-    the final CAD body. Rendering it is expensive and replaces the responsive
-    voxel view with a mesh that is discarded moments later. A lattice has no
-    automatic CAD replacement, so its recovered/manufactured representation
-    remains useful and must still be published.
-    """
+    """Publish the actual recovered geometry without starting CAD conversion."""
     if progress_callback is None:
         return
     try:
-        if study.problem.lattice_cell_type:
-            surface_preview = dict(output_context.payload)
-            surface_preview["_preview"] = True
-            surface_preview["stage"] = "Manufactured lattice ready"
-            progress_callback(surface_preview, None, 1, 1)
-            return
-        progress_callback(
-            {
-                "type": "topopt_progress",
-                "status_only": True,
-                "stage": "Surface recovered — reconstructing CAD in background",
-            },
-            None,
-            1,
-            1,
-        )
+        surface_preview = dict(output_context.payload)
+        surface_preview["_preview"] = True
+        surface_preview["stage"] = "Lattice surface ready" if study.problem.lattice_cell_type else "Surface ready"
+        surface_preview["visualization_mode"] = "Manufactured Mesh" if study.problem.lattice_cell_type else "Surface"
+        progress_callback(surface_preview, None, 1, 1)
     except Exception:
         logger.debug(
             "Recovered topology preview notification failed.",
@@ -140,6 +131,7 @@ def _solve_study(
     progress_offset: int = 0,
     progress_total: int | None = None,
     preview_stage: str = "Design domain preview",
+    refinement_stage: bool = False,
 ) -> TopologyOptVoxelResult | None:
     """Execute one prepared topology study and maintain cancellation state."""
     problem = study.problem
@@ -155,6 +147,9 @@ def _solve_study(
 
     solver = TopologyOptVoxelSolver(problem)
     node._active_solver = solver
+    previous_objective = None
+    stable_steps = 0
+    refinement_ready = False
 
     def _callback(
         iteration: int,
@@ -162,8 +157,24 @@ def _solve_study(
         change: float,
         _density: np.ndarray,
     ) -> None:
+        nonlocal previous_objective, stable_steps, refinement_ready
         if cancel_callback is not None and cancel_callback():
             solver.stop()
+        elif refinement_stage:
+            # Adapt early, once a load path settles, with a hard ten-step
+            # ceiling. Never freeze the coarse material boundary as a mask.
+            relative_change = (
+                abs(compliance - previous_objective) / max(abs(compliance), 1e-12)
+                if previous_objective is not None else float("inf")
+            )
+            stable_steps = stable_steps + 1 if (
+                relative_change < REFINEMENT_STABILITY_TOLERANCE
+                and change < 0.05
+            ) else 0
+            previous_objective = compliance
+            if iteration >= REFINEMENT_MIN_ITERATIONS and stable_steps >= 2:
+                refinement_ready = True
+                solver.stop()
         # Do not send the 3-D field to VTK on every iteration. Queued density
         # arrays, contour extraction, smoothing, and rendering compete with the
         # optimizer and can make the main window appear locked. A tiny status
@@ -189,7 +200,10 @@ def _solve_study(
                 )
 
     try:
-        return solver.run(callback=_callback)
+        result = solver.run(callback=_callback)
+        if refinement_ready:
+            result.message = "Warm-start stage stabilized; advancing to a finer grid."
+        return result
     except Exception as exc:
         logger.exception("TopologyOptVoxelNode: solver error")
         node.set_error(str(exc))
@@ -203,42 +217,10 @@ def _use_progressive_resolution(
     node: Any,
     study: PreparedTopologyStudy,
 ) -> bool:
-    """Return whether a guided compliance study benefits from two grids.
-
-    The target grid is always solved.  A homogenized lattice is especially
-    well suited to this warm start: the analysis mesh represents the smooth
-    macro density field, not the explicit unit-cell geometry, so developing
-    that field first on a smaller grid does not remove lattice detail from the
-    final result.
-    """
-    problem = study.problem
-    extrusion_axis = {
-        "x": 0,
-        "y": 1,
-        "z": 2,
-    }.get(str(problem.mc.extrusion or "none").lower())
-    resolution_axes = [
-        axis for axis in range(3) if axis != extrusion_axis
-    ]
-    if not resolution_axes:
-        resolution_axes = [0, 1, 2]
-    dimensions = (problem.nelx, problem.nely, problem.nelz)
-    profile_is_resolved = min(
-        dimensions[axis] for axis in resolution_axes
-    ) >= 8
-    inactive_axis_is_usable = (
-        extrusion_axis is None or dimensions[extrusion_axis] >= 2
-    )
-    return bool(
-        str(node.get_property("workflow_mode") or "Guided").strip().lower()
-        == "guided"
-        and problem.objective_mode == "compliance"
-        and problem.physics_mode == "structural"
-        and not problem.stress_constraint_enabled
-        and problem.nelx * problem.nely * problem.nelz >= 8_000
-        and profile_is_resolved
-        and inactive_axis_is_usable
-    )
+    """Use coarse-to-fine continuation only when explicitly enabled."""
+    return as_bool(node.get_property("automatic_mesh_refinement")) and len(
+        progressive_voxel_shapes((study.nelx, study.nely, study.nelz), isotropic=study.voxel_pitch is not None)
+    ) > 1
 
 
 def _solve_progressive_study(
@@ -247,108 +229,62 @@ def _solve_progressive_study(
     progress_callback: ProgressCallback | None,
     cancel_callback: CancelCallback | None,
 ) -> TopologyOptVoxelResult | None:
-    """Solve coarse first, then warm-start the target guided resolution."""
+    """Run bounded coarse passes, then solve the exact final grid fully."""
     target_problem = study.problem
-    coarse_study = refine_prepared_study(
-        study,
-        0.5,
-        max_voxels=max(1, target_problem.nelx * target_problem.nely * target_problem.nelz),
-    )
-    coarse_problem = replace(
-        coarse_study.problem,
-        initial_density=None,
-        max_iter=min(20, target_problem.max_iter),
-        tol=max(float(target_problem.tol), 0.015),
-        patience=min(int(target_problem.patience), 3),
-        heaviside_beta_max=min(
-            float(target_problem.heaviside_beta_max),
-            4.0,
-        ),
-    )
-    coarse_study = replace(coarse_study, problem=coarse_problem)
-    coarse_started = time.perf_counter()
-    progressive_total = (
-        int(coarse_problem.max_iter) + int(target_problem.max_iter)
-    )
-    coarse_result = _solve_study(
-        node,
-        coarse_study,
-        progress_callback,
-        cancel_callback,
-        progress_offset=0,
-        progress_total=progressive_total,
-        preview_stage="Fast initialization pass",
-    )
-    coarse_time = time.perf_counter() - coarse_started
-    if coarse_result is None or (
-        cancel_callback is not None and cancel_callback()
-    ):
-        return None
-
-    seed = coarse_result.design_density
-    if seed is None:
-        seed = coarse_result.density
-    target_shape = (
-        target_problem.nelx,
-        target_problem.nely,
-        target_problem.nelz,
-    )
-    initial_density = resample_density_field(seed, target_shape)
-    fine_problem = replace(
-        target_problem,
-        initial_density=initial_density,
-        # The coarse solve is only a topology warm start. The target grid must
-        # solve the engineering problem the user requested: selected fidelity
-        # tolerance and its full convergence budget. The former 24-iteration
-        # cap made Guided results materially different from their reported
-        # settings.
-        max_iter=int(target_problem.max_iter),
-        tol=float(target_problem.tol),
-        heaviside_beta_init=min(
-            max(float(target_problem.heaviside_beta_init), 4.0),
-            float(target_problem.heaviside_beta_max),
-        ),
-    )
-    fine_study = replace(study, problem=fine_problem)
-    fine_started = time.perf_counter()
-    fine_result = _solve_study(
-        node,
-        fine_study,
-        progress_callback,
-        cancel_callback,
-        progress_offset=int(coarse_problem.max_iter),
-        progress_total=progressive_total,
-        preview_stage="Refining topology",
-    )
-    fine_time = time.perf_counter() - fine_started
-    if fine_result is None:
-        return None
-    fine_result.progressive_resolution = {
-        "method": "progressive full-resolution warm start",
-        "levels": [
-            {
-                "grid": [
-                    coarse_problem.nelx,
-                    coarse_problem.nely,
-                    coarse_problem.nelz,
-                ],
-                "voxels": int(
-                    coarse_problem.nelx
-                    * coarse_problem.nely
-                    * coarse_problem.nelz
-                ),
-                "iterations": int(coarse_result.n_iter),
-                "time_s": float(coarse_time),
-            },
-            {
-                "grid": list(target_shape),
-                "voxels": int(np.prod(target_shape)),
-                "iterations": int(fine_result.n_iter),
-                "time_s": float(fine_time),
-            },
-        ],
+    target_shape = (study.nelx, study.nely, study.nelz)
+    shapes = progressive_voxel_shapes(target_shape, isotropic=study.voxel_pitch is not None)
+    warm_iterations = min(REFINEMENT_MAX_ITERATIONS, target_problem.max_iter)
+    progressive_total = warm_iterations * (len(shapes) - 1) + target_problem.max_iter
+    records = []
+    seed = target_problem.initial_density
+    offset = 0
+    for index, shape in enumerate(shapes):
+        if cancel_callback is not None and cancel_callback():
+            return None
+        final_level = index == len(shapes) - 1
+        # Always rebuild from the original geometry and physical settings,
+        # never from a coarse mask or its enlarged regularization radius.
+        level = study if final_level else refine_prepared_study(
+            study, 1.0, max_voxels=int(np.prod(target_shape)), target_shape=shape,
+        )
+        initial_density = resample_density_field(seed, shape) if seed is not None else None
+        problem = replace(level.problem, initial_density=initial_density)
+        if not final_level:
+            beta_max = min(float(problem.heaviside_beta_max), 2.0)
+            problem = replace(
+                problem, max_iter=warm_iterations,
+                tol=max(float(problem.tol), REFINEMENT_STABILITY_TOLERANCE),
+                patience=min(int(problem.patience), 3),
+                heaviside_beta_init=min(float(problem.heaviside_beta_init), beta_max),
+                heaviside_beta_max=beta_max,
+            )
+        level = replace(level, problem=problem)
+        started = time.perf_counter()
+        result = _solve_study(
+            node, level, progress_callback, cancel_callback,
+            progress_offset=offset, progress_total=progressive_total,
+            preview_stage=f"Voxel refinement {index + 1}/{len(shapes)} · " + " × ".join(map(str, shape)),
+            refinement_stage=not final_level,
+        )
+        if result is None or result.message == "Stopped by user" or (
+            cancel_callback is not None and cancel_callback()
+        ):
+            return None
+        records.append({
+            "grid": list(shape), "voxels": int(np.prod(shape)),
+            "iterations": int(result.n_iter), "time_s": time.perf_counter() - started,
+            "final_target": final_level,
+            "transition": "final solve" if final_level else "stabilized" if result.n_iter < warm_iterations else "iteration limit",
+        })
+        seed = result.design_density if result.design_density is not None else result.density
+        offset += problem.max_iter
+    result.progressive_resolution = {
+        "method": "optional global coarse-to-fine voxel continuation",
+        "reference": "https://arxiv.org/abs/1009.4975",
+        "target_grid": list(target_shape),
+        "levels": records,
     }
-    return fine_result
+    return result
 
 
 class _TopologyExecutionMixin:
@@ -382,6 +318,7 @@ class _TopologyExecutionMixin:
         if result is None:
             return None
         result.solve_time_s = time.perf_counter() - solve_started
+        progressive_report = result.progressive_resolution
 
         # Publish the useful engineering result before geometry recovery. The
         # worker remains in the background and replaces this density preview
@@ -411,11 +348,7 @@ class _TopologyExecutionMixin:
                 )
 
         convergence_report: dict[str, object] | None = None
-        if (
-            str(self.get_property("workflow_mode") or "Guided").strip().lower()
-            == "expert"
-            and bool(self.get_property("topology_convergence_enabled"))
-        ):
+        if bool(self.get_property("topology_convergence_enabled")):
             levels = int(self.get_property("topology_convergence_levels") or 3)
             levels = max(2, min(levels, 3))
             studies = [study]
@@ -423,11 +356,16 @@ class _TopologyExecutionMixin:
             for factor in ((1.5, 2.0)[: levels - 1]):
                 if cancel_callback is not None and cancel_callback():
                     return None
-                refined_study = refine_prepared_study(
-                    study,
-                    factor,
-                    max_voxels=500_000,
-                )
+                try:
+                    refined_study = refine_prepared_study(
+                        study, factor, max_voxels=study.max_voxel_elements or None,
+                    )
+                except ValueError as exc:
+                    self.set_error(
+                        f"Topology convergence mesh could not be prepared: {exc} "
+                        "Increase Maximum Elements to allow the requested refinement."
+                    )
+                    return None
                 level_started = time.perf_counter()
                 refined_result = _solve_study(
                     self,
@@ -463,8 +401,17 @@ class _TopologyExecutionMixin:
         )
         if convergence_report is not None:
             output["topology_convergence"] = convergence_report
-        if result.progressive_resolution is not None:
-            output["progressive_resolution"] = result.progressive_resolution
+        if progressive_report is not None:
+            output["progressive_resolution"] = progressive_report
+        output["voxel_meshing"] = dict(getattr(self, "_resolved_voxel_meshing", {}))
+        output["voxel_meshing"].update(
+            target_grid=output["voxel_meshing"].get("grid"),
+            grid=list(result.density.shape),
+            elements=int(np.prod(result.density.shape)),
+            voxel_size=study.voxel_pitch,
+            estimated_memory_bytes=estimated_voxel_memory_bytes(result.density.shape),
+            voxel_edges=((study.bounds[1] - study.bounds[0]) / np.asarray(result.density.shape)).tolist(),
+        )
         output["timing"] = {
             "optimization_s": float(result.solve_time_s),
             "recovery_s": float(recovery_time_s),

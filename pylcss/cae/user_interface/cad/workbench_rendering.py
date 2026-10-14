@@ -180,8 +180,22 @@ class WorkbenchRenderingMixin:
         """Render a previously resolved object using the right viewer path."""
         if obj is None:
             return
+        self.viewer._section_show_interior = False
+        if isinstance(obj, dict) and obj.get('type') == 'topopt_voxel':
+            options = obj.get('structure_options')
+            mode = options.get('mode', 'solid') if isinstance(options, dict) else getattr(options, 'mode', 'solid')
+            self.viewer._section_show_interior = mode != 'solid'
         if self._is_simulation_render_result(obj):
             self.viewer.render_simulation(obj)
+            if isinstance(obj, dict) and obj.get('type') == 'topopt_voxel':
+                options = obj.get('structure_options')
+                mode = options.get('mode', 'solid') if isinstance(options, dict) else getattr(options, 'mode', 'solid')
+                geometry_view = str(obj.get('visualization_mode') or 'CAD') != 'Density'
+                if mode != 'solid' and geometry_view and getattr(self, '_last_rendered_geom', None) is not obj:
+                    self.viewer._section_axis.setCurrentText('Z')
+                    self.viewer._section_slider.setValue(50)
+                    self.viewer._btn_section.setChecked(True)
+                    self.viewer._update_section_cut()
             if self.results is not None:
                 try:
                     if isinstance(obj, dict):
@@ -208,6 +222,9 @@ class WorkbenchRenderingMixin:
         # id(): a freed result's address can be handed to the next run's
         # payload, and the identity test then skipped a render that was needed.
         self._last_rendered_geom = obj
+        selected = getattr(self.properties, "current_node", None)
+        if selected is None or not selected.has_property("non_design_regions"):
+            self.viewer.render_non_design_layers([])
 
     @staticmethod
     def _port_name(port):
@@ -238,7 +255,6 @@ class WorkbenchRenderingMixin:
             "ModalSolverNode",
             "FEAComponentNode",
             "TopologyOptVoxelNode",
-            "LatticeOptVoxelNode",
             "LatticeInfillNode",
             "AssemblyNode",
             "CrashSolverNode",
@@ -455,7 +471,6 @@ class WorkbenchRenderingMixin:
             "ModalSolverNode",
             "CrashSolverNode",
             "TopologyOptVoxelNode",
-            "LatticeOptVoxelNode",
             "LatticeInfillNode",
         }:
             return True
@@ -554,6 +569,8 @@ class WorkbenchRenderingMixin:
 
         self.properties.display_node(node)
         self._update_results_panel_visibility(node)
+        if not node.has_property("non_design_regions"):
+            self.viewer.render_non_design_layers([])
 
         if self._is_topopt_result_consumer(node):
             own = getattr(node, "_last_result", None)
@@ -591,6 +608,8 @@ class WorkbenchRenderingMixin:
                 self._show_bc_for_node(node)
             except Exception:
                 logger.debug("Optional UI operation failed.", exc_info=True)
+            if node.has_property("non_design_regions"):
+                self._preview_topopt_non_design(node, cached_only=True)
         else:
             # Selection is observational. Adding/selecting an incomplete node
             # must never execute the graph or raise setup errors.

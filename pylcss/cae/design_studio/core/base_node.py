@@ -33,14 +33,17 @@ def is_numeric(value: object) -> TypeGuard[Real]:
     return isinstance(value, Real) and not isinstance(value, bool)
 
 
-def _connected_result(node: NodeLike) -> NodeResult:
+def _connected_result(node: NodeLike, *, cached_only: bool = False) -> NodeResult:
     """Return a connected node result without repeating a completed run.
 
     A legitimate result can be ``None`` for a side-effect-only node. Only
     nodes that have never been visited by the engine use lazy execution.
+    Display-only callers use ``cached_only`` to leave missing inputs pending.
     """
     if hasattr(node, "_last_result"):
         return node._last_result  # type: ignore[attr-defined]
+    if cached_only:
+        return None
     return node.run()
 
 
@@ -139,7 +142,9 @@ def resolve_shape_input(port: InputPortLike | None) -> object | None:
     return None
 
 
-def resolve_any_input(port: InputPortLike | None) -> NodeResult:
+def resolve_any_input(
+    port: InputPortLike | None, *, cached_only: bool = False,
+) -> NodeResult:
     """Resolve the first connection without constraining its result type."""
     try:
         connected_port = _first_connected_port(port)
@@ -147,14 +152,16 @@ def resolve_any_input(port: InputPortLike | None) -> NodeResult:
             return None
         return _value_for_connected_output(
             connected_port,
-            _connected_result(connected_port.node()),
+            _connected_result(connected_port.node(), cached_only=cached_only),
         )
     except Exception:
         logger.debug("Could not resolve node input", exc_info=True)
         return None
 
 
-def resolve_all_inputs(port: InputPortLike | None) -> list[NodeResult]:
+def resolve_all_inputs(
+    port: InputPortLike | None, *, cached_only: bool = False,
+) -> list[NodeResult]:
     """Resolve all successful, non-``None`` values connected to an input."""
     if port is None:
         return []
@@ -170,7 +177,7 @@ def resolve_all_inputs(port: InputPortLike | None) -> list[NodeResult]:
         try:
             result = _value_for_connected_output(
                 connected_port,
-                _connected_result(connected_port.node()),
+                _connected_result(connected_port.node(), cached_only=cached_only),
             )
         except Exception:
             logger.debug("Could not resolve one connected input", exc_info=True)
@@ -279,6 +286,14 @@ class CadQueryNode(BaseNode):
     def get_input_list(self, port_name: str) -> list[NodeResult]:
         """Return all values connected to a multi-input port."""
         return resolve_all_inputs(self.get_input(port_name))
+
+    def get_cached_input_value(self, port_name: str) -> NodeResult:
+        """Read a completed input for display without running any upstream node."""
+        return resolve_any_input(self.get_input(port_name), cached_only=True)
+
+    def get_cached_input_list(self, port_name: str) -> list[NodeResult]:
+        """Read completed multi-input values without launching missing work."""
+        return resolve_all_inputs(self.get_input(port_name), cached_only=True)
 
     def get_input_shape(self, port_name: str) -> object | None:
         """Return geometry connected to *port_name*, if valid."""

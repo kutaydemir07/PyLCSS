@@ -670,7 +670,7 @@ class CodeEditorDialog(QtWidgets.QDialog):
             "Impact — explicit-dynamics response and absorbed energy", "impact"
         )
         self.solver_combo.addItem(
-            "Topology / lattice optimization — optimized material layout",
+            "Topology optimization — optimized material layout",
             "topopt",
         )
         self.solver_combo.currentIndexChanged.connect(self._on_solver_changed)
@@ -771,7 +771,7 @@ class CodeEditorDialog(QtWidgets.QDialog):
     _SOLVER_NOTES = {
         "fea": "Runs one static structural solve. This is the normal choice for stress, stiffness, displacement or mass.",
         "impact": "Runs one explicit impact solve. Impact simulations can be slow when the function block is evaluated many times.",
-        "topopt": "Runs a complete topology or lattice optimization each time the function block is evaluated. Usually use this to create a design once, or train a surrogate before the main optimization.",
+        "topopt": "Runs a complete topology optimization each time the function block is evaluated. Usually use this to create a design once, or train a surrogate before the main optimization.",
     }
 
     def _open_port_manager(self) -> None:
@@ -857,7 +857,7 @@ class CodeEditorDialog(QtWidgets.QDialog):
             solver_names = {
                 "fea": "Static FEA",
                 "impact": "Impact",
-                "topopt": "Topology / lattice optimization",
+                "topopt": "Topology optimization",
             }
             details = []
             if solvers:
@@ -1144,7 +1144,7 @@ class CodeEditorDialog(QtWidgets.QDialog):
         (
             "cad.impact(path, **inputs)",
             'cad.impact("file.cad", param=value)',
-            "Run OpenRadioss explicit dynamics for an impact study in a .cad graph file.\n"
+            "Run OpenCourant explicit dynamics for an impact study in a .cad graph file.\n"
             "Args:  cad_path (str), then **inputs matched against\n"
             "       'exposed_name' on Number/Variable nodes, or named\n"
             "       Code Part parameters in the graph.\n"
@@ -1353,7 +1353,7 @@ class CodeEditorDialog(QtWidgets.QDialog):
                 "",
                 "Design Studio connection",
                 "  1. Build and save a .cad graph in Design Studio.",
-                "  2. Add the terminal analysis node you want to call: Static Structural, Explicit Impact, Topology Optimization, or Lattice Optimization.",
+                "  2. Add the terminal analysis node you want to call: Static Structural, Explicit Impact, or Topology Optimization.",
                 "  3. Open the Simulation tab in this editor and select the saved .cad file.",
                 "  4. Connect block inputs to geometry, material, mesh, load, impact, or solver controls.",
                 "  5. PyLCSS creates the cad.fea(...), cad.impact(...), or cad.topopt(...) call for you.",

@@ -380,8 +380,38 @@ class BoundaryConditionInspectorMixin:
                 self._updating_property = True
                 old = self.current_node.get_property(prop_name)
                 self.current_node.set_property(prop_name, value)
+                if (
+                    self.current_node.has_property("advanced_overrides")
+                    and prop_name in getattr(self, "_topopt_advanced_property_names", set())
+                    and not getattr(self, "_applying_topopt_defaults", False)
+                ):
+                    import json
+
+                    overrides = set(json.loads(self.current_node.get_property("advanced_overrides") or "[]"))
+                    overrides.add(prop_name)
+                    self.current_node.set_property("advanced_overrides", json.dumps(sorted(overrides)))
+                if self.current_node.__class__.__name__ in {'LatticeInfillNode'} and prop_name in {
+                    'structure_mode', 'lattice_target_relative_density', 'infill_cell_size_mode',
+                    'infill_cell_size_mm', 'infill_fineness', 'infill_skin_thickness_mm', 'infill_build_quality',
+                    'volfrac', 'lattice_cell_size_mm', 'lattice_settings_mode', 'lattice_member_thickness_mm',
+                    'lattice_variable_density', 'lattice_min_relative_density', 'lattice_max_relative_density'}:
+                    node = self.current_node
+                    timer = getattr(self, '_infill_build_timer', None)
+                    if timer is not None:
+                        timer.stop()
+                        timer.deleteLater()
+                    timer = QtCore.QTimer(self)
+                    timer.setSingleShot(True)
+                    timer.timeout.connect(lambda: self._build_and_show_lattice_infill(node))
+                    self._infill_build_timer = timer
+                    timer.start(350)
                 # Mark node as dirty for recalculation
-                if hasattr(self.current_node, "_last_hash"):
+                from pylcss.cae.design_studio.topology_optimization.configuration.fea_meshing import (
+                    is_topopt_fea_setting,
+                )
+                if hasattr(self.current_node, "_last_hash") and prop_name not in {
+                    "advanced_settings_visible", "advanced_overrides",
+                } and not is_topopt_fea_setting(self.current_node, prop_name):
                     self.current_node._last_hash = None  # Invalidate hash cache
                 try:
                     self.property_changed.emit(self.current_node, prop_name, old, value)

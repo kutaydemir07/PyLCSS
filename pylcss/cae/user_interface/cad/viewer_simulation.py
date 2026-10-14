@@ -664,6 +664,9 @@ class SimulationRenderingMixin:
 
     def _render_topopt_beam_lattice(self, data):
         """Render a strut lattice from its members. True if it was handled."""
+        from pylcss.cae.design_studio.topology_optimization.geometry.lattice_cad import topopt_export_formats
+        if "STEP" not in topopt_export_formats(data):
+            return False
         surface = self._topopt_beam_lattice_surface(data)
         if surface is None:
             return False
@@ -902,7 +905,21 @@ class SimulationRenderingMixin:
                 "Validated Von Mises Stress": "Von Mises Stress",
                 "Validated Displacement": "Displacement",
             }
+            validation = data.get("validation")
+            if isinstance(validation, dict) and validation.get("type") in {"fea", "external_solver"}:
+                from .result_fields import available_result_fields
+                validation_modes.update({"FEA " + field: field
+                                         for field in available_result_fields(validation)})
             requested_mode = str(data.get("visualization_mode") or "")
+            if requested_mode in {'Quads', 'Surface Groups'}:
+                from .viewer_surface_layout import render_surface_layout
+                if render_surface_layout(self, data):
+                    return
+            from pylcss.cae.design_studio.topology_optimization.geometry.lattice_cad import topopt_export_formats
+            if requested_mode in {"CAD", "Reconstructed CAD (B-rep)"} and "STEP" not in topopt_export_formats(data):
+                data = dict(data)
+                requested_mode = "Manufactured Mesh"
+                data["visualization_mode"] = requested_mode
             if requested_mode == "Manufactured Mesh":
                 if self._render_topopt_beam_lattice(data):
                     return
@@ -928,45 +945,28 @@ class SimulationRenderingMixin:
                         if isinstance(reconstruction, dict)
                         else ""
                     )
-                    # The constrained fitter sews shared B-spline patches into a CAD body.
+                    # The compact fitter joins shared cubic patches into larger CAD faces.
                     # Chart boundaries are fitting seams, so use the same
                     # welded display normals as the legacy freeform route.
                     # render_shape retains sharp feature normals and the
                     # original OCC face mapping for picking.
                     smooth_reconstruction = (
                         reconstruction_method == "smooth freeform"
-                        or reconstruction_method in {"sparse g1 spline", "tpms g1 spline"}
+                        or reconstruction_method in {"compact cubic spline", "compact tpms spline", "recovered analytic surfaces", "amrto pipeline (ren et al., 2025)"}
                     )
                     cad_preview = data.get("cad_preview_mesh")
-                    if (
-                        isinstance(cad_preview, dict)
-                        and cad_preview.get("vertices") is not None
-                        and cad_preview.get("faces") is not None
-                    ):
-                        # OCC face-by-face tessellation and edge sampling of a
-                        # 3,000-patch freeform B-rep can block the Qt thread for
-                        # tens of seconds. CAD systems display a cached
-                        # tessellation too; keep the exact live B-rep for
-                        # picking/export and use its saved display mesh here.
-                        data = dict(data)
-                        data["recovered_shape"] = cad_preview
-                        data["visualization_mode"] = "Surface"
-                        data["_cad_preview"] = True
-                    else:
-                        self.render_shape(
-                            cad_shape,
-                            initial_edge_visibility=(
-                                False if smooth_reconstruction else None
-                            ),
-                            smooth_across_faces=smooth_reconstruction,
-                        )
-                        self._render_topopt_joint_overlays(data)
-                        self._request_render()
-                        return
-                # Keep the last recovered surface visible while an on-demand
-                # reconstruction is running in the background.
-                data = dict(data)
-                data["visualization_mode"] = "Surface"
+                    # Retain native face ownership even when displaying the
+                    # worker's cached tessellation. Selecting a CAD face must
+                    # select its whole region, rather than a display triangle.
+                    self.render_shape(
+                        cad_shape,
+                        initial_edge_visibility=(False if smooth_reconstruction else None),
+                        smooth_across_faces=smooth_reconstruction,
+                        display_mesh=cad_preview,
+                    )
+                    self._render_topopt_joint_overlays(data)
+                    self._request_render()
+                    return
             validation = data.get("validation")
             if requested_mode in validation_modes and isinstance(validation, dict):
                 validation_payload = dict(validation)
@@ -983,6 +983,7 @@ class SimulationRenderingMixin:
             isinstance(data, dict)
             and data.get("visualization_mode")
             in {
+                "CAD",
                 "Surface",
                 "Manufactured Mesh",
                 "Recovered Shape",
@@ -995,12 +996,29 @@ class SimulationRenderingMixin:
             else:
                 poly_data = None
             if poly_data is not None:
+                # CAD can display the recovered boundary while its B-rep is
+                # being built. Its triangles are display cells, not CAD edges.
+                cad_surface_preview = bool(
+                    data.get("_cad_preview")
+                    or data.get("visualization_mode") == "CAD"
+                )
+                from pylcss.cae.design_studio.topology_optimization.geometry.amrto_surface import cached_surface_layout
+                layout = cached_surface_layout(data)
+                if isinstance(layout, dict) and len(layout.get('source_group_ids', ())) == poly_data.GetNumberOfCells():
+                    from vtk.util.numpy_support import numpy_to_vtk
+                    groups = numpy_to_vtk(np.asarray(layout['source_group_ids'], dtype=np.int32), deep=True)
+                    groups.SetName('SurfaceGroup')
+                    poly_data.GetCellData().AddArray(groups)
                 normals = vtk.vtkPolyDataNormals()
                 normals.SetInputData(poly_data)
                 normals.ConsistencyOn()
                 normals.AutoOrientNormalsOn()
-                normals.SplittingOff()
-                normals.SetFeatureAngle(80.0)
+                if cad_surface_preview:
+                    normals.SplittingOn()
+                    normals.SetFeatureAngle(50.0)
+                else:
+                    normals.SplittingOff()
+                    normals.SetFeatureAngle(80.0)
 
                 mapper = vtk.vtkPolyDataMapper()
                 mapper.SetInputConnection(normals.GetOutputPort())
@@ -1011,7 +1029,7 @@ class SimulationRenderingMixin:
                 actor.GetProperty().SetOpacity(1.0)
                 actor.GetProperty().SetEdgeVisibility(
                     1
-                    if self._show_edges and not data.get("_cad_preview")
+                    if self._show_edges and not cad_surface_preview
                     else 0
                 )
                 actor.GetProperty().SetEdgeColor(0.06, 0.12, 0.16)
@@ -1025,6 +1043,7 @@ class SimulationRenderingMixin:
 
                 self._pickable_surface_dataset = vtk.vtkPolyData()
                 self._pickable_surface_dataset.DeepCopy(poly_data)
+                self._configure_mesh_face_picking_from_surface(self._pickable_surface_dataset)
 
                 # Update scalar bar to be empty for geometry view
                 self._update_scalar_bar("", 0, 1, None)

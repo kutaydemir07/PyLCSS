@@ -38,7 +38,6 @@ from pylcss.cae.design_studio.nodes import (
 )
 from pylcss.cae.design_studio.topology_optimization.integration import (
     LatticeInfillNode,
-    LatticeOptVoxelNode,
     TopologyLoadNode,
     TopologySupportNode,
 )
@@ -86,7 +85,6 @@ NODE_CLASS_MAPPING = {
     'com.cad.sim.solver':         SolverNode,
     'com.cad.sim.modal_solver':   ModalSolverNode,
     'com.cad.sim.topopt_voxel':    TopologyOptVoxelNode,
-    'com.cad.sim.lattice_voxel':   LatticeOptVoxelNode,
     'com.cad.sim.lattice_infill':  LatticeInfillNode,
     'com.cad.topopt.support':       TopologySupportNode,
     'com.cad.topopt.load':          TopologyLoadNode,

@@ -6,7 +6,7 @@ Members become analytic cylinders or truncated cones, with optional balls at
 their joints. STEP can contain the member compound or an explicitly requested,
 validated Boolean union. 3MF retains the centreline graph and per-end radii.
 
-Continuum and implicit lattice boundaries use the coupled G1 spline fitter in
+Continuum and implicit lattice boundaries use compact cubic surfaces in
 cad_reconstruction instead. Manufacturing re-analysis remains necessary: the
 centreline sizing model does not resolve joint bending or local concentrations.
 """
@@ -30,6 +30,7 @@ __all__ = [
     "beam_lattice_solid",
     "beam_lattice_triangles",
     "lattice_cad_strategy",
+    "topopt_export_formats",
     "write_beam_lattice_3mf",
 ]
 
@@ -39,16 +40,6 @@ __all__ = [
 _CORE_NS = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
 _BEAM_NS = "http://schemas.microsoft.com/3dmanufacturing/beamlattice/2017/02"
 _MODEL_PART = "3D/3dmodel.model"
-
-#: Above this many solids the OCC boolean stops being the right tool. The
-#: general fuse grows sharply worse than linearly in argument count -- measured
-#: here at 3 s for a 229-solid cubic lattice and 105 s for a 564-solid BCC one
-#: -- and the BCC case also came back *invalid*, with 81 faces where it should
-#: have had hundreds, because eight members meeting at a shallow angle on the
-#: body-centre node is exactly the configuration a general fuse handles worst.
-#: The union is therefore opt-in, capped, and checked before it is trusted.
-DEFAULT_MAXIMUM_FUSED_SOLIDS = 250
-
 
 @dataclass(frozen=True)
 class BeamLattice:
@@ -354,6 +345,38 @@ def lattice_cad_strategy(options: Any) -> str:
     return "isosurface"
 
 
+def topopt_export_formats(options: Any) -> tuple[str, ...]:
+    """Only offer CAD when the chosen structure has a supported CAD model."""
+    has_preserved_solids = False
+    if isinstance(options, dict) and options.get('type') == 'topopt_voxel':
+        result = options
+        recovered = result.get('recovered_shape') or {}
+        options = recovered.get('resolved_structure_options') or result.get('structure_options')
+        fit = (result.get('generated_lattice') or {}).get('fit') or {}
+        if fit.get('solid_feature_voxels', 0) > 0:
+            # Solid feature masks have no analytic beam representation.
+            return ('STL',)
+        solid_mask = result.get('passive_solid_mask')
+        has_preserved_solids = solid_mask is not None and bool(np.any(solid_mask))
+        regions = result.get('passive_regions') or {}
+        if lattice_cad_strategy(options) == 'beam' and has_preserved_solids and not any(regions.get(key) for key in (
+            'solid_boxes', 'solid_cylinders', 'explicit_solid_shapes',
+        )):
+            # A mask alone cannot restore the preserved material as CAD.
+            return ('STL',)
+    kind = lattice_cad_strategy(options)
+    if kind == 'isosurface':
+        return ('STL',)
+    if kind == 'beam':
+        skin = options.get('skin_thickness_voxels', 0.0) if isinstance(options, dict) else getattr(options, 'skin_thickness_voxels', 0.0)
+        if float(skin or 0.0) > 0.0:
+            # Analytic beam/3MF exports describe members, not the skin. Never
+            # silently discard that material from the user's closed body.
+            return ('STL',)
+        return ('STEP', 'STL') if has_preserved_solids else ('STEP', 'STL', '3MF')
+    return ('STEP', 'STL')
+
+
 # ── 3MF beam lattice ──────────────────────────────────────────────────────────
 
 
@@ -488,7 +511,7 @@ def beam_lattice_solid(
     *,
     node_balls: bool = True,
     fuse: bool = False,
-    maximum_fused_solids: int = DEFAULT_MAXIMUM_FUSED_SOLIDS,
+    maximum_fused_solids: int | None = None,
     fuzzy_value: float = 0.0,
     return_report: bool = False,
 ) -> Any:
@@ -499,8 +522,9 @@ def beam_lattice_solid(
     than the voxel count. Building the solids is the fast part and is always
     exact.
 
-    ``fuse`` requests a Boolean union, subject to the solid-count budget and
-    validity checks. A failed requested union raises an error. The default
+    ``fuse`` requests a Boolean union with validity checks. The legacy
+    ``maximum_fused_solids`` argument is ignored; there is no solid-count cap. A failed
+    requested union raises an error. The default
     compound retains overlapping member solids and reports their volume sum;
     its junctions do not have guaranteed G1 continuity.
     """
@@ -570,7 +594,7 @@ def beam_lattice_solid(
     }
 
     fused = None
-    if fuse and len(solids) <= int(maximum_fused_solids):
+    if fuse:
         try:
             candidate = _fuse_solids(solids, fuzzy_value=fuzzy_value)
             if _is_valid_shape(candidate):
@@ -585,11 +609,6 @@ def beam_lattice_solid(
                 exc,
             )
             report["fuse_error"] = str(exc)
-    elif fuse:
-        report["fuse_error"] = (
-            f"{len(solids)} solids exceeds the {int(maximum_fused_solids)} the "
-            "union is allowed to attempt"
-        )
 
     if fuse and fused is None:
         raise RuntimeError("Requested lattice union failed: " + report.get("fuse_error", "unknown OCC failure"))
@@ -613,7 +632,7 @@ def beam_lattice_solid(
             f"{len(solids)} exact solids were written without a boolean union. "
             "They overlap at joints. Select Fused beam lattice when the receiving "
             "CAD or meshing workflow requires unioned material; that option is "
-            "bounded and rejects an invalid union."
+            "validated before export."
         )
 
     if return_report:
@@ -631,7 +650,7 @@ def _is_valid_shape(shape: Any) -> bool:
         raise RuntimeError("Could not validate the lattice union") from error
 
 
-def _fuse_solids(solids: list[Any], *, fuzzy_value: float = 0.0) -> Any:
+def _batch_fuse_solids(solids: list[Any], *, fuzzy_value: float = 0.0) -> Any:
     """Union a list of solids in one batch general-fuse call."""
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
     from OCP.TopTools import TopTools_ListOfShape
@@ -654,6 +673,40 @@ def _fuse_solids(solids: list[Any], *, fuzzy_value: float = 0.0) -> Any:
     if not operation.IsDone():
         raise RuntimeError("OCC could not fuse the lattice members.")
     return operation.Shape()
+
+
+def _fuse_solids(solids: list[Any], *, fuzzy_value: float = 0.0) -> Any:
+    """Spatially partition a union into a balanced tree of local operations.
+
+    Default STEP export retains grouped analytic members and does not need
+    any union. When a union is explicitly requested, disjoint spatial branches
+    are kept as compounds, and only overlapping branches reach the CAD kernel.
+    There is no solid-count limit or single all-members general-fuse operation.
+    """
+    import cadquery as cq
+    records = []
+    for solid in solids:
+        box = cq.Shape.cast(solid).BoundingBox()
+        bounds = np.array(((box.xmin,box.ymin,box.zmin),(box.xmax,box.ymax,box.zmax)))
+        records.append((solid,bounds))
+
+    def combine(items):
+        if len(items) == 1:
+            return items[0]
+        centres = np.array([bounds.mean(axis=0) for _,bounds in items])
+        axis = int(np.argmax(np.ptp(centres,axis=0)))
+        order = np.argsort(centres[:,axis],kind='stable')
+        mid = len(items)//2
+        left, lb = combine([items[i] for i in order[:mid]])
+        right, rb = combine([items[i] for i in order[mid:]])
+        bounds = np.stack((np.minimum(lb[0],rb[0]),np.maximum(lb[1],rb[1])))
+        if np.any(lb[1]+fuzzy_value < rb[0]) or np.any(rb[1]+fuzzy_value < lb[0]):
+            result = cq.Compound.makeCompound([cq.Shape.cast(left),cq.Shape.cast(right)]).wrapped
+        else:
+            result = _batch_fuse_solids([left,right],fuzzy_value=fuzzy_value)
+        return result,bounds
+
+    return combine(records)[0]
 
 
 # ── analytic tessellation ─────────────────────────────────────────────────────

@@ -6,7 +6,7 @@ For thin-walled crash parts (crashboxes, tubes, automotive structures) industry
 practice is shell elements on the mid-surface with an assigned thickness, not
 solid Tet4.  ``mesh_type='Shell'`` makes Netgen stop after the SURFACE meshing
 pass — the result is a triangle mesh whose nodes live in R^3 — and tags it
-with ``shell_thickness`` so the OpenRadioss writer emits ``*SECTION_SHELL``
+with ``shell_thickness`` so the OpenCourant writer emits ``*SECTION_SHELL``
 instead of ``*SECTION_SOLID``. For a solid input this is its boundary surface,
 not an automatically extracted sheet-metal midsurface.
 """
@@ -126,7 +126,7 @@ class _ShellSurfaceMesh:
 
     skfem.MeshTri is strictly 2D (``p.shape == (2, N)``), so we cannot use it
     for a surface embedded in R^3.  Downstream code only touches ``mesh.p``
-    and ``mesh.t``, so this duck-typed wrapper is enough for the OpenRadioss
+    and ``mesh.t``, so this duck-typed wrapper is enough for the OpenCourant
     deck writer, the boundary-condition matchers, and the VTK viewer.
     """
 
@@ -166,7 +166,7 @@ class MeshNode(CadQueryNode):
         self.add_output("mesh", color=(200, 100, 200))
 
         # Mesh type selection.  'Shell' produces a 3-node triangle surface
-        # mesh suitable for OpenRadioss *ELEMENT_SHELL crash decks; the
+        # mesh suitable for OpenCourant *ELEMENT_SHELL crash decks; the
         # writer reads `shell_thickness` (mm) off the returned mesh object.
         self.create_property(
             "mesh_source",

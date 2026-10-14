@@ -332,20 +332,35 @@ def _physical_cylinder_to_solid(
 _BOOLEAN_FUZZY_RETRIES = (1e-5, 1e-4, 1e-3)
 
 
+def _native_boolean(body: Any, tool: Any, operation: str, fuzzy: float = 0.0) -> Any:
+    """Preserve shared fitted geometry while protecting the input topology."""
+    import cadquery as cq
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse, BRepAlgoAPI_Cut, BRepAlgoAPI_Common
+    from OCP.TopTools import TopTools_ListOfShape
+    arguments, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
+    arguments.Append(body.wrapped)
+    tools.Append(tool.wrapped)
+    builder = {'fuse': BRepAlgoAPI_Fuse, 'cut': BRepAlgoAPI_Cut,
+               'common': BRepAlgoAPI_Common}[operation]()
+    builder.SetArguments(arguments)
+    builder.SetTools(tools)
+    builder.SetNonDestructive(True)
+    if fuzzy:
+        builder.SetFuzzyValue(fuzzy)
+    builder.Build()
+    if not builder.IsDone():
+        raise RuntimeError(f"OpenCASCADE {operation} failed")
+    return cq.Shape.cast(builder.Shape())
+
+
 def _boolean_or_raise(result: Any, tool: Any, *, operation: str, allow_empty_cut: bool = False) -> Any:
     """Run isolated CadQuery booleans and keep rejected operands unchanged."""
     solid_input = hasattr(result, "Solids") and bool(result.Solids())
 
     def _run(fuzzy: float) -> Any:
-        # CadQuery's boolean wrapper does not enable OCC's NonDestructive
-        # mode. Even an invalid/empty result can modify input edge pcurves or
-        # tolerances, corrupting the fitted body retained by the caller.
-        # Fresh geometric copies also keep one fuzzy attempt from affecting
-        # the next; Shape.copy() copies geometry rather than sharing TShapes.
-        body, cutter = result.copy(), tool.copy()
-        if operation == "fuse":
-            return body.fuse(cutter, tol=fuzzy) if fuzzy else body.fuse(cutter)
-        return body.cut(cutter, tol=fuzzy) if fuzzy else body.cut(cutter)
+        # Copying every fitted surface can break its shared edge geometry.
+        # OCC's non-destructive mode protects operands without that copy.
+        return _native_boolean(result, tool, operation, fuzzy)
 
     last_error: Exception | None = None
     for fuzzy in (0.0, *_BOOLEAN_FUZZY_RETRIES):
@@ -365,12 +380,18 @@ def _boolean_or_raise(result: Any, tool: Any, *, operation: str, allow_empty_cut
                 # A clearance may legitimately remove an entire lattice member
                 # or joint. Confirm complete containment independently before
                 # treating an empty Boolean result as a successful removal.
-                overlap = result.copy().intersect(tool.copy())
+                overlap = _native_boolean(result, tool, 'common')
                 volume = abs(float(result.Volume()))
                 if overlap.isValid() and volume > 0 and abs(abs(overlap.Volume()) - volume) <= volume * 1e-7:
                     return candidate
             last_error = RuntimeError(f"Analytic {operation} erased the solid body")
             continue
+        if solid_input and operation == "fuse":
+            original_volume = abs(float(result.Volume(tol=1e-4)))
+            candidate_volume = abs(float(candidate.Volume(tol=1e-4)))
+            if candidate_volume < original_volume * (1.0 - 1e-3):
+                last_error = RuntimeError("Analytic fuse removed material from the solid body")
+                continue
         if fuzzy:
             logger.info(
                 "Recovered Shape STEP: analytic %s needed a %g fuzzy "
@@ -403,7 +424,7 @@ def _intersecting_tools(shape: Any, tools: list[Any]) -> list[Any]:
             # A common-volume pre-check is read-only from the caller's point
             # of view. OCC may still update its operands before rejecting a
             # detached feature, so isolate both geometries here as well.
-            common = shape.copy().intersect(tool.copy())
+            common = _native_boolean(shape, tool, 'common')
             common_volume = abs(float(common.Volume(tol=1e-4)))
             tool_volume = max(abs(float(tool.Volume(tol=1e-4))), 1.0)
             if common_volume <= max(1e-9, tool_volume * 1e-8):
@@ -515,6 +536,87 @@ def _coerce_to_solid(geom: Any) -> Any:
     return None
 
 
+def _preserved_bore_records(shape: Any, *, minimum_angle: float = 2*np.pi-1e-6) -> list[tuple[Any, ...]]:
+    """Identify inward cylinder walls, excluding short concave fillet arcs."""
+    import cadquery as cq
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    records = []
+    for face in shape.Faces():
+        if face.geomType() != 'CYLINDER':
+            continue
+        adaptor = BRepAdaptor_Surface(face.wrapped)
+        u0, u1 = adaptor.FirstUParameter(), adaptor.LastUParameter()
+        if u1-u0 < minimum_angle:
+            continue
+        cylinder = adaptor.Cylinder()
+        axis = np.asarray(cq.Vector(cylinder.Axis().Direction()).toTuple())
+        location = np.asarray(cq.Vector(cylinder.Location()).toTuple())
+        v0, v1 = adaptor.FirstVParameter(), adaptor.LastVParameter()
+        point = cq.Vector(adaptor.Value((u0+u1)/2, (v0+v1)/2))
+        radial = np.asarray(point.toTuple())-location
+        radial -= (radial @ axis)*axis
+        if np.asarray(face.normalAt(point).toTuple()) @ radial >= 0:
+            continue
+        significant = np.flatnonzero(np.abs(axis)>1e-12)
+        if axis[significant[0]] < 0:
+            axis = -axis
+        origin = location-(location @ axis)*axis
+        ends = [np.asarray(cq.Vector(adaptor.Value((u0+u1)/2,v)).toTuple()) @ axis for v in (v0,v1)]
+        records.append((axis, origin, cylinder.Radius(), min(ends), max(ends)))
+    return records
+
+
+def source_bore_cylinders(payload: dict[str, Any]) -> list[tuple[Any, ...]]:
+    """Carry source-CAD holes into implicit lattice surface recovery.
+
+    A counterbore can open through the edge of a mounting foot, so its wall
+    need not describe a complete circle. Half-circle or larger inward walls
+    are included; small concave blend arcs are not treated as drilled holes.
+    """
+    source = _coerce_to_solid(payload.get('source_cad_shape'))
+    bounds = _payload_bounds(payload)
+    if source is None or bounds is None:
+        return []
+    lower, upper = bounds
+    span = np.asarray(upper)-np.asarray(lower)
+    cylinders = []
+    for axis, origin, radius, start, end in _preserved_bore_records(source, minimum_angle=np.pi-1e-6):
+        index = int(np.argmax(np.abs(axis)))
+        if not np.allclose(axis, np.eye(3)[index], atol=1e-8):
+            continue
+        radial = [i for i in range(3) if i != index]
+        cylinders.append(('xyz'[index],
+            float((origin[radial[0]]-lower[radial[0]])/span[radial[0]]),
+            float((origin[radial[1]]-lower[radial[1]])/span[radial[1]]),
+            float((start-.02-lower[index])/span[index]),
+            float((end+.02-lower[index])/span[index]),
+            float(radius/span[radial[0]]), float(radius/span[radial[1]])))
+    return cylinders
+
+
+def _preserved_bore_tools(shapes: list[Any], axial_margin: float) -> list[Any]:
+    import cadquery as cq
+    groups = {}
+    for shape in shapes:
+        for axis, origin, radius, lower, upper in _preserved_bore_records(shape):
+            key = tuple(np.round(np.r_[axis, origin, radius],6))
+            group = groups.setdefault(key, (axis, origin, radius, []))
+            group[3].append((lower,upper))
+    tools = []
+    for axis, origin, radius, intervals in groups.values():
+        merged = []
+        for lower, upper in sorted(intervals):
+            if merged and lower <= merged[-1][1]+2*axial_margin:
+                merged[-1][1] = max(merged[-1][1],upper)
+            else:
+                merged.append([lower,upper])
+        for lower,upper in merged:
+            if upper-lower > 1e-9:
+                tools.append(cq.Solid.makeCylinder(radius, upper-lower+2*axial_margin,
+                    cq.Vector(*(origin+axis*(lower-axial_margin))), cq.Vector(*axis)))
+    return tools
+
+
 def _collect_passive_tools(
     payload: Any,
     *,
@@ -603,10 +705,16 @@ def _collect_passive_tools(
         payload.get("passive_regions") if isinstance(payload, dict) else None
     )
     if isinstance(passive_info, dict):
+        preserved_shapes = []
         for raw_shape in passive_info.get("explicit_solid_shapes", []):
             tool = _coerce_to_solid(raw_shape)
             if tool is not None:
                 solid_tools.append(tool)
+                preserved_shapes.append(tool)
+        # Reinstating an annular non-design layer must also reinstate its
+        # original bore; adding the ring alone cannot remove fitted material
+        # that intruded into the hole.
+        cut_tools.extend(_preserved_bore_tools(preserved_shapes, void_axial_margin))
         for raw_shape in passive_info.get("explicit_void_shapes", []):
             tool = _coerce_to_solid(raw_shape)
             if tool is not None:
@@ -632,6 +740,12 @@ def _apply_passive_regions_to_step(
         void_axial_margin=void_axial_margin,
         void_radial_margin=void_radial_margin,
     )
+    requested_solid_tools = list(solid_tools)
+    source_domain = _coerce_to_solid(payload.get('source_cad_shape')) if isinstance(payload,dict) else None
+    if source_domain is not None:
+        # Match source bores and outer surfaces before adding face-coincident
+        # protected layers, so both operands share the analytic boundaries.
+        result = _boolean_or_raise(result, source_domain, operation='common')
 
     # First remove the bores from the reconstructed body. This also removes the
     # recovered-mesh copy of a joint pin, allowing the exact analytic pin to
@@ -640,15 +754,23 @@ def _apply_passive_regions_to_step(
         result = _cut_tools_sequentially(result, cut_tools)
 
     solid_tools = _intersecting_tools(result, solid_tools)
-    solid_compound = _compound_or_single(solid_tools)
-    if solid_compound is not None:
-        result = _boolean_or_raise(result, solid_compound, operation="fuse")
+    if solid_tools:
+        # Overlapping preserved regions are material solids, not an already
+        # fused compound. Add them independently to retain the complete body.
+        for tool in solid_tools:
+            for solid in tool.Solids():
+                result = _boolean_or_raise(result, solid, operation="fuse")
         # A sleeve is an outer keep-material cylinder, not a plug. Re-cut the
         # exact bore after the fuse so its running surface stays analytic.
         if cut_tools:
             result = _cut_tools_sequentially(result, cut_tools)
 
     result = _drop_boolean_sliver_solids(result)
+    # Validate the geometry actually returned after face consolidation.
+    # Material checks must not use the pre-consolidation B-rep.
+    if solid_tools or cut_tools:
+        result = _unify_same_domain_shape(result, merge_angle_deg=0.25)
+    material_result = result
 
     # Pins/shafts are assembly hardware. Add exact analytic cylinders after
     # bore cuts and keep them as separate solids; fusing would incorrectly
@@ -665,7 +787,6 @@ def _apply_passive_regions_to_step(
     n_cut = len(cut_tools)
     n_hardware = len(hardware_tools)
     if n_fused or n_cut or n_hardware:
-        result = _unify_same_domain_shape(result, merge_angle_deg=0.25)
         if validate_after_boolean:
             _assert_valid_occ_shape(result, label="STEP body after passive booleans")
         logger.info(
@@ -679,6 +800,42 @@ def _apply_passive_regions_to_step(
     result = _single_solid_if_possible(result)
     if not isinstance(result, cq.Shape):
         result = cq.Shape.cast(result)
+    # A valid solid alone cannot establish preservation: failed booleans can
+    # return a different, still-valid body. Check the requested material.
+    for tool in requested_solid_tools:
+        expected = _cut_tools_sequentially(tool, cut_tools, allow_empty_cut=True) if cut_tools else tool
+        if not expected.Solids():
+            continue
+        missing = _native_boolean(expected, material_result, 'cut')
+        expected_volume = abs(float(expected.Volume(tol=1e-4)))
+        missing_volume = abs(float(missing.Volume(tol=1e-4)))
+        if missing_volume > max(1e-7, expected_volume * 1e-6):
+            raise RuntimeError('Reconstructed CAD did not retain the complete non-design material')
+    for tool in cut_tools:
+        intrusion = _native_boolean(material_result, tool, 'common')
+        if abs(float(intrusion.Volume(tol=1e-4))) > max(1e-7, abs(float(tool.Volume(tol=1e-4)))*1e-6):
+            raise RuntimeError('Reconstructed CAD intruded into a protected bore or void')
+    if source_domain is not None:
+        outside = _native_boolean(material_result, source_domain, 'cut')
+        if abs(float(outside.Volume(tol=1e-4))) > max(1e-7, abs(float(material_result.Volume(tol=1e-4)))*1e-6):
+            # Coincident split planes can make an OCC diagnostic cut return
+            # the entire contained body. For an axis-aligned solid box, exact
+            # bounding containment independently proves domain containment.
+            # This proof cannot apply to a domain with bores or concavities.
+            domain_box, body_box = source_domain.BoundingBox(), material_result.BoundingBox()
+            box_volume = domain_box.xlen*domain_box.ylen*domain_box.zlen
+            is_box = (len(source_domain.Solids()) == 1
+                      and all(face.geomType() == 'PLANE' for face in source_domain.Faces())
+                      and abs(abs(source_domain.Volume(tol=1e-7))-box_volume) <= max(1e-7,box_volume*1e-8))
+            tolerance = max(1e-7,max(domain_box.xlen,domain_box.ylen,domain_box.zlen)*1e-8)
+            contained = all(getattr(body_box,axis+'min') >= getattr(domain_box,axis+'min')-tolerance
+                            and getattr(body_box,axis+'max') <= getattr(domain_box,axis+'max')+tolerance
+                            for axis in 'xyz')
+            if not (is_box and contained):
+                raise RuntimeError(f'Reconstructed material extends outside the source CAD domain '
+                    f'({abs(float(outside.Volume(tol=1e-4))):.6g} model-volume units, '
+                    f'{len(outside.Solids())} solids, {len(outside.Faces())} faces)')
+            logger.info('Verified box-domain containment by exact CAD bounds after an ambiguous diagnostic cut.')
     return result
 
 

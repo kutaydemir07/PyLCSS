@@ -11,7 +11,6 @@ INDUSTRIAL_DESIGN_GOALS = (
     'Lightweight Stiffness',
     'Minimum Mass Under Stress',
 )
-LATTICE_DESIGN_GOALS = INDUSTRIAL_DESIGN_GOALS
 # Retired goals. Each existed only to flip a setting that is now reachable
 # directly: both forced worst-case load aggregation, and the multibody variant
 # additionally switched on joint validation, which is now driven by whether the
@@ -42,15 +41,9 @@ INDUSTRIAL_MANUFACTURING_PROCESSES = (
 )
 EXTRUDED_MANUFACTURING_PROCESSES: Tuple[str, ...] = ()
 SYMMETRIC_MANUFACTURING_PROCESSES: Tuple[str, ...] = ()
-# Guided discretization ceiling. Not a fidelity choice: the grid is sized from
-# the study's physical feature lengths, and these two only stop a large model
-# from being refined past what is solvable in a sitting.
-#
-# The cell budget tracks `_guided_cell_budget`, which is what actually sizes a
-# guided solve. This copy seeds the node's displayed element counts, and those
-# become the real grid the moment a study is switched to Expert -- so a
-# divergence here would hand Expert a silently different study from the one
-# Guided just ran.
+# Default Fine grid budget used to seed legacy/manual element counts.
+# Runtime automatic meshing uses geometric resolution in `voxel_meshing`;
+# its configurable resource safeguard is independent of the chosen pitch.
 _GUIDED_TARGET_MAX_CELLS_PER_AXIS = 220
 _GUIDED_TOTAL_CELL_BUDGET = 40_000
 
@@ -59,8 +52,6 @@ def _choice(value: Any, choices: Tuple[str, ...], default: str) -> str:
     text = str(value or '').strip().lower().replace('_', ' ').replace('-', ' ')
     if text in ('none', 'unrestricted', 'standard', 'normal', ''):
         return 'Normal' if 'Normal' in choices else default
-    if text == 'thermo mechanical':
-        text = 'coupled structural + thermal'
     for choice in choices:
         normalized = choice.lower().replace('_', ' ').replace('-', ' ')
         if text == normalized:
@@ -157,18 +148,11 @@ def industrial_topopt_defaults(
     the Qt property panel without tying the solver backend to Qt.
     """
     goal = _choice(design_goal, INDUSTRIAL_DESIGN_GOALS, 'Lightweight Stiffness')
-    manufacturing = _choice(manufacturing_process, INDUSTRIAL_MANUFACTURING_PROCESSES, 'Normal')
 
-    # There is no fidelity dropdown. What used to be "Analysis Resolution"
-    # bundled six settings across three unrelated concerns -- discretization,
-    # convergence and post-processing -- behind one marketing word, and the
-    # concern it appeared to own was not even its own: the guided grid is
-    # derived from the physical feature lengths (minimum member and void size,
-    # keep-out cylinder diameters), which are manufacturing capabilities rather
-    # than numerical preferences. What is left is a cost ceiling, and that is
-    # computed from the study itself -- load-case count, physics, joints.
-    # Convergence and output quality are simply held at the best setting: a
-    # solver should converge, not be told to stop early.
+    # Mesh resolution is selected independently in the voxel meshing controls.
+    # These counts seed older/manual studies; the runtime sizes automatic
+    # grids using the selected mesh budget and actual geometry. A goal preset
+    # does not change voxel size, mesh quality, or optional refinement.
     out_nelx, out_nely, out_nelz = _scaled_grid(
         nelx,
         nely,
@@ -205,7 +189,7 @@ def industrial_topopt_defaults(
         # judge first.  CAD remains available as a result view, but a plain
         # shaded solid hides intermediate density and the retained/removed
         # material decision.
-        'visualization': 'Density',
+        'visualization': 'CAD',
         **quality_settings,
     }
 
@@ -217,70 +201,6 @@ def industrial_topopt_defaults(
             max_iter=max(int(settings['max_iter']), 120),
             tol=min(float(settings['tol']), 0.005),
         )
-    elif goal == 'Thermal Conduction':
-        settings.update(
-            physics_mode='Thermal',
-            optimizer='Auto',
-        )
-    elif goal == 'Coupled Structural + Thermal':
-        settings.update(
-            physics_mode='Coupled Structural + Thermal',
-            optimizer='MMA',
-            max_iter=max(int(settings['max_iter']), 120),
-        )
-
-    return settings
-
-
-# The cell family a lattice study falls back to when none was saved. Gyroid is
-# the general-purpose default: self-supporting in every build orientation, with
-# no unsupported horizontal members and no stress-concentrating strut joints.
-DEFAULT_LATTICE_STRUCTURE_MODE = 'Gyroid Lattice'
-
-
-def industrial_lattice_defaults(
-    design_goal: Any = 'Lightweight Stiffness',
-    manufacturing_process: Any = 'Normal',
-    *,
-    nelx: Any = 30,
-    nely: Any = 20,
-    nelz: Any = 10,
-    structure_mode: Any = DEFAULT_LATTICE_STRUCTURE_MODE,
-) -> Dict[str, Any]:
-    """Map engineering intent to the lattice optimizer controls.
-
-    A lattice study shares the topology study's discretization, physics and
-    manufacturing-constraint policy, so this extends that mapping rather than
-    restating it. What it adds is the manufacturing definition of the cell.
-    The selected family is intent and is never overwritten by a preset; only
-    an empty or unrecognised value falls back to the default.
-    """
-    settings = industrial_topopt_defaults(
-        design_goal,
-        manufacturing_process,
-        nelx=nelx,
-        nely=nely,
-        nelz=nelz,
-    )
-    settings.update(
-        {
-            'structure_mode': (
-                str(structure_mode).strip()
-                or DEFAULT_LATTICE_STRUCTURE_MODE
-            )
-            if structure_mode
-            else DEFAULT_LATTICE_STRUCTURE_MODE,
-            'lattice_settings_mode': 'Guided',
-            'structure_cell_size_voxels': 8.0,
-            'structure_member_thickness_voxels': 1.0,
-            'structure_skin_thickness_voxels': 0.75,
-            'lattice_porosity': 'Conservative',
-            # The manufactured cells are the result, and unlike a solid
-            # envelope they are not replaced by a reconstructed CAD body a
-            # moment later.
-            'visualization': 'CAD',
-        }
-    )
     return settings
 
 

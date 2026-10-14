@@ -463,13 +463,6 @@ class ResultsPanel(QtWidgets.QWidget):
         if stress.size >= 2 and allowable > 0.0:
             curves.append(("Stress utilization", stress / allowable, "#f85149"))
 
-        thermal = _normalized(data.get("thermal_compliance_history"))
-        if (
-            thermal is not None
-            and str(data.get("physics_mode") or "").lower() == "thermo_mechanical"
-        ):
-            curves.append(("Thermal response / initial", thermal, "#3fb950"))
-
         if not curves:
             return
 
@@ -811,7 +804,6 @@ class LibraryPanel(QtWidgets.QWidget):
         ("com.cad.topopt.support", "fa5s.anchor"),
         ("com.cad.topopt.load", "fa5s.arrow-down"),
         ("com.cad.sim.topopt_voxel", "fa5s.project-diagram"),
-        ("com.cad.sim.lattice_voxel", "fa5s.th"),
         ("com.cad.sim.lattice_infill", "fa5s.border-all"),
         ("com.cad.sim.impact", "fa5s.car-crash"),
         ("com.cad.sim.crash_solver", "fa5s.play-circle"),
@@ -900,20 +892,20 @@ class LibraryPanel(QtWidgets.QWidget):
         return True, f"CalculiX ready: {executable}"
 
     @staticmethod
-    def _openradioss_status():
+    def _opencourant_status():
         """Return a concise, non-launching availability check for the palette."""
         try:
             from pylcss.cae.solver_backends.execution import resolve_executable
-            from pylcss.cae.solver_backends.radioss_reader import resolve_anim_to_vtk
+            from pylcss.cae.solver_backends.courant_reader import resolve_anim_to_vtk
 
             starter = resolve_executable(
                 None,
-                ("PYLCSS_OPENRADIOSS_STARTER", "OPENRADIOSS_STARTER"),
+                ("PYLCSS_OPENCOURANT_STARTER", "OPENCOURANT_STARTER"),
                 ("starter_win64.exe", "starter_win64", "starter_linux64_gf"),
             )
             engine = resolve_executable(
                 None,
-                ("PYLCSS_OPENRADIOSS_ENGINE", "OPENRADIOSS_ENGINE"),
+                ("PYLCSS_OPENCOURANT_ENGINE", "OPENCOURANT_ENGINE"),
                 ("engine_win64.exe", "engine_win64", "engine_linux64_gf"),
             )
             converter = resolve_anim_to_vtk()
@@ -931,11 +923,11 @@ class LibraryPanel(QtWidgets.QWidget):
         ]
         if missing:
             return False, (
-                "OpenRadioss unavailable: missing " + ", ".join(missing) + ".\n"
+                "OpenCourant unavailable: missing " + ", ".join(missing) + ".\n"
                 "Deck-only generation remains available; install with "
-                "`python scripts/install_solvers.py --only radioss`."
+                "`python scripts/install_solvers.py --only opencourant`."
             )
-        return True, "OpenRadioss ready: Starter, Engine, and anim_to_vtk detected."
+        return True, "OpenCourant ready: Starter, Engine, and anim_to_vtk detected."
 
     def __init__(self, spawn_callback):
         super().__init__()
@@ -943,7 +935,7 @@ class LibraryPanel(QtWidgets.QWidget):
         self.layout = QtWidgets.QVBoxLayout(self)
         self.layout.setContentsMargins(6, 6, 6, 6)
         self.layout.setSpacing(4)
-        radioss_ready, radioss_status = self._openradioss_status()
+        courant_ready, courant_status = self._opencourant_status()
         calculix_ready, calculix_status = self._calculix_status()
 
         # Search box — title was redundant with the dock title, dropped.
@@ -1105,13 +1097,6 @@ class LibraryPanel(QtWidgets.QWidget):
                     "Produces a solid envelope.",
                 ),
                 (
-                    "Lattice Optimization",
-                    "com.cad.sim.lattice_voxel",
-                    "Optimize a graded cellular structure — gyroid, Schwarz "
-                    "primitive, BCC, octet, or honeycomb — for the selected "
-                    "objective and constraints.",
-                ),
-                (
                     "Lattice Infill",
                     "com.cad.sim.lattice_infill",
                     "Fill an existing solid with a lattice at a chosen cell "
@@ -1121,7 +1106,7 @@ class LibraryPanel(QtWidgets.QWidget):
                 (
                     "Impact Solver",
                     "com.cad.sim.crash_solver",
-                    "Run OpenRadioss.",
+                    "Run OpenCourant.",
                 ),
             ],
             "Measure": [
@@ -1186,9 +1171,9 @@ class LibraryPanel(QtWidgets.QWidget):
                 elif node_id in (
                     "com.cad.sim.crash_solver",
                 ):
-                    tooltip += "\n\n" + radioss_status
-                    item.setData(0, QtCore.Qt.UserRole + 1, radioss_ready)
-                    if not radioss_ready:
+                    tooltip += "\n\n" + courant_status
+                    item.setData(0, QtCore.Qt.UserRole + 1, courant_ready)
+                    if not courant_ready:
                         item.setForeground(0, QtGui.QColor("#e3b341"))
                 item.setToolTip(0, tooltip)  # Show description on hover
                 cat_item.addChild(item)

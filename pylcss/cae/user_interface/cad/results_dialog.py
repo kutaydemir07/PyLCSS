@@ -19,7 +19,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
-from .result_presentation import analysis_label, crash_check_percent, result_state_rows, run_status
+from .result_presentation import (
+    analysis_label, crash_check_percent, fea_result, result_metric_sections,
+    result_notices, result_state_rows, run_status,
+)
 
 try:
     import pyqtgraph as pg
@@ -471,13 +474,13 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         empty_layout.setAlignment(QtCore.Qt.AlignCenter)
         empty_layout.setSpacing(12)
 
-        lbl_empty_title = QtWidgets.QLabel("No Simulation Results Yet")
+        lbl_empty_title = QtWidgets.QLabel("No Results Yet")
         lbl_empty_title.setStyleSheet("font-weight: bold; font-size: 15px;")
         lbl_empty_title.setAlignment(QtCore.Qt.AlignCenter)
 
         lbl_empty_desc = QtWidgets.QLabel(
-            "Execute an FEA, Modal, Impact, or Topology Optimization study in Setup\n"
-            "to populate structural data tables, convergence curves, and mechanical metrics here."
+            "Run an FEA, Modal, Impact, or Topology Optimization study in Setup,\n"
+            "or generate a lattice to inspect its geometry and available analysis here."
         )
         lbl_empty_desc.setStyleSheet("color: #64748b; font-size: 11px;")
         lbl_empty_desc.setAlignment(QtCore.Qt.AlignCenter)
@@ -525,8 +528,6 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         title_layout.addWidget(self._badge_type)
         title_layout.addStretch(1)
 
-        top_layout.addSpacing(16)
-
         # 3D View Selector
         lbl_3d = QtWidgets.QLabel("3D Field:")
         lbl_3d.setStyleSheet("font-weight: 600; font-size: 11px;")
@@ -550,13 +551,17 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         self._3d_buttons_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.addWidget(self._3d_buttons_widget)
 
-        top_layout.addStretch(1)
+        self._field_controls_widget = QtWidgets.QWidget()
+        controls_layout = QtWidgets.QHBoxLayout(self._field_controls_widget)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(10)
+        bar_layout.addWidget(self._field_controls_widget)
 
         # Undeformed overlay toggle
         self._chk_undeformed = QtWidgets.QCheckBox("Undeformed")
         self._chk_undeformed.setToolTip("Show the undeformed analysis mesh as a wireframe")
         self._chk_undeformed.toggled.connect(self.undeformed_requested.emit)
-        top_layout.addWidget(self._chk_undeformed)
+        controls_layout.addWidget(self._chk_undeformed)
 
         # Deformation scale combo
         self._lbl_scale = QtWidgets.QLabel("Scale:")
@@ -564,11 +569,12 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         self._scale_combo.setMinimumWidth(75)
         self._scale_combo.addItems(["Auto", "True (1x)", "2x", "5x", "10x", "25x", "50x", "100x"])
         self._scale_combo.currentTextChanged.connect(self.deform_scale_requested.emit)
-        top_layout.addWidget(self._lbl_scale)
-        top_layout.addWidget(self._scale_combo)
+        controls_layout.addWidget(self._lbl_scale)
+        controls_layout.addWidget(self._scale_combo)
         self._chk_extrema = QtWidgets.QCheckBox("Min / Max")
         self._chk_extrema.toggled.connect(self.extrema_requested.emit)
-        top_layout.addWidget(self._chk_extrema)
+        controls_layout.addWidget(self._chk_extrema)
+        controls_layout.addStretch(1)
 
         res_layout.addWidget(top_bar)
 
@@ -583,9 +589,9 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         self._init_graphs_tab()
         self._init_summary_tab()
 
-        self._tabs.addTab(self._tab_tables, "Data Tables")
-        self._tabs.addTab(self._tab_graphs, "Graph Results")
-        self._tabs.addTab(self._tab_summary, "Summary")
+        self._tabs.addTab(self._tab_summary, "Overview")
+        self._tabs.addTab(self._tab_tables, "Details")
+        self._tabs.addTab(self._tab_graphs, "Trends")
         res_layout.addWidget(self._tabs, stretch=1)
 
         # ── 3. Bottom Action Bar ───────────────────────────────────────────
@@ -734,8 +740,9 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         for r_idx, row in enumerate(rows):
             for c_idx, val in enumerate(row):
                 item = QtWidgets.QTableWidgetItem(str(val))
+                item.setToolTip(str(val))
                 item.setForeground(QtGui.QBrush(text_color))
-                if c_idx > 0 and any(char.isdigit() for char in str(val)):
+                if c_idx > 0 and not (columns[-1] == "Meaning" and c_idx == len(columns) - 1) and any(char.isdigit() for char in str(val)):
                     item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
                 else:
                     item.setTextAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
@@ -746,6 +753,11 @@ class DetailedResultsWidget(QtWidgets.QWidget):
             w = table.columnWidth(c)
             table.setColumnWidth(c, max(w + 24, 120))
         table.horizontalHeader().setStretchLastSection(True)
+        if columns[-1] == "Meaning":
+            table.setColumnWidth(0, 220)
+            table.setColumnWidth(1, 140)
+            table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
+            table.verticalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
         return table
 
     # ──────────────────────────────────────────────────────────────────
@@ -767,7 +779,9 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         rtype = self._data.get("type", "unknown").lower()
         title = analysis_label(self._data)
         self._lbl_title.setText(f"{title} Results")
-        badge = ("Lattice" if title.startswith("Lattice") else "Topology") if rtype == "topopt_voxel" else {"external_solver": "FEA"}.get(rtype, rtype.upper())
+        badge = ("Lattice" if "Lattice" in title else "Topology") if rtype == "topopt_voxel" else {"external_solver": "FEA"}.get(rtype, rtype.upper())
+        if rtype == "topopt_voxel" and fea_result(self._data):
+            badge += " + FEA"
         self._badge_type.setText(badge)
         self._style_type_badge()
 
@@ -779,6 +793,7 @@ class DetailedResultsWidget(QtWidgets.QWidget):
     def set_active_3d_mode(self, mode_name: str):
         """Update active 3D selector and button state without re-triggering signal."""
         self._current_mode = str(mode_name)
+        self._data["visualization_mode"] = str(mode_name)
         self._updating_controls = True
         try:
             if hasattr(self, "_3d_mode_combo"):
@@ -792,11 +807,15 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         finally:
             self._updating_controls = False
 
+        self._update_field_controls(str(mode_name))
+
     def select_tab(self, tab_name: str):
-        """Select tab: 'tables', 'graphs', 'summary'."""
-        tab_map = {"tables": 0, "graphs": 1, "summary": 2}
-        idx = tab_map.get(str(tab_name).lower(), 0)
-        self._tabs.setCurrentIndex(idx)
+        """Accept both the current tab names and legacy action names."""
+        widgets = {"tables": self._tab_tables, "details": self._tab_tables,
+                   "graphs": self._tab_graphs, "trends": self._tab_graphs}
+        widget = widgets.get(str(tab_name).lower(), self._tab_summary)
+        index = self._tabs.indexOf(widget)
+        self._tabs.setCurrentWidget(widget if self._tabs.isTabVisible(index) else self._tab_summary)
 
     # ── 3D Controls ───────────────────────────────────────────────────
     def _get_available_3d_modes(self) -> List[str]:
@@ -838,19 +857,23 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         finally:
             self._updating_controls = False
 
-        has_disp = (
-            self._data.get("displacement") is not None
-            or self._data.get("peak_displacement") is not None
-        )
+        self._update_field_controls(current)
+
+    def _update_field_controls(self, mode):
+        display_data = fea_result(self._data) if mode.startswith("FEA ") else self._data
+        has_disp = display_data.get("displacement") is not None
         self._lbl_scale.setVisible(has_disp)
         self._scale_combo.setVisible(has_disp)
         self._chk_undeformed.setVisible(has_disp)
-        self._chk_extrema.setVisible(modes != ["Default View"])
+        self._chk_extrema.setVisible(mode not in {"Default View", "CAD", "Manufactured Mesh", "Deformed Animation"})
+        self._field_controls_widget.setVisible(has_disp or not self._chk_extrema.isHidden())
 
     def _on_3d_combo_changed(self, mode: str):
         if self._updating_controls or not mode:
             return
         self._current_mode = mode
+        self._data["visualization_mode"] = mode
+        self._update_field_controls(mode)
         self._updating_controls = True
         try:
             for btn in self._btn_group_3d.buttons():
@@ -866,6 +889,8 @@ class DetailedResultsWidget(QtWidgets.QWidget):
             return
         mode = button.text()
         self._current_mode = mode
+        self._data["visualization_mode"] = mode
+        self._update_field_controls(mode)
         self._updating_controls = True
         try:
             idx = self._3d_mode_combo.findText(mode)
@@ -890,36 +915,24 @@ class DetailedResultsWidget(QtWidgets.QWidget):
             rows = [[m["mode"], _fmt(m.get("frequency_hz")), _fmt(m.get("frequency_rad_s")), _fmt(m.get("period_s"))] for m in data["modes"]]
             self._subtabs_tables.addTab(self._create_table(["Mode", "Frequency (Hz)", "Angular Frequency (rad/s)", "Period (s)"], rows, is_dark=self._is_dark()), "Natural Frequencies")
 
-        if rtype in {"fea", "external_solver", "topopt_voxel"}:
-            metrics = [
-                ("peak_stress_nodal", "Peak Von Mises Stress", "MPa"),
-                ("peak_displacement", "Peak Displacement", "mm"),
-                ("minimum_yield_safety_factor", "Minimum Yield Safety Factor", ""),
-                ("compliance", "Compliance", "N mm"),
-                ("volume", "Volume", "mm³"),
-                ("target_vol_frac", "Target Volume Fraction", ""),
-                ("final_vol_frac", "Final Volume Fraction", ""),
-                ("iterations", "Iterations", ""),
-            ]
-            rows = [[label, _fmt(data[key], unit)] for key, label, unit in metrics if data.get(key) is not None]
-            if data.get("mass") is not None:
-                rows.append(["Mass", _fmt(float(data["mass"]) * 1000, "kg")])
-            if rtype == "topopt_voxel" and data.get("converged") is not None:
-                rows.append(["Convergence", "Converged" if data["converged"] else "Not converged"])
-            if rows:
-                table_title = "Lattice Metrics" if analysis_label(data).startswith("Lattice") else "Topology Metrics" if rtype == "topopt_voxel" else "Structural Metrics"
-                self._subtabs_tables.addTab(self._create_table(["Metric", "Value"], rows, is_dark=self._is_dark()), table_title)
+        for title, rows in result_metric_sections(data):
+            self._subtabs_tables.addTab(
+                self._create_table(["Result", "Value", "Meaning"], rows, is_dark=self._is_dark()), title
+            )
 
-        if rtype == "topopt_voxel" and isinstance(data.get("passive_regions"), dict):
-            regions = data["passive_regions"]
-            rows = [
-                ["Non-design bodies", "Preserve solid material", len(regions.get("explicit_solid_shapes") or []), regions.get("explicit_solid_voxels", 0)],
-                ["Obstacles / keep-out bodies", "Remove material", len(regions.get("explicit_void_shapes") or []), regions.get("explicit_void_voxels", 0)],
-            ]
-            self._subtabs_tables.addTab(self._create_table(["Region", "Behavior", "Bodies", "Explicit Voxels"], rows, is_dark=self._is_dark()), "Non-design & Obstacles")
+        analysis = fea_result(data)
+        detail_data = analysis or data
+        levels = (analysis.get("convergence_study") or {}).get("levels") or []
+        if levels:
+            rows = [[level.get("refine", "—"), level.get("n_nodes", "—"), level.get("n_elements", "—"),
+                     _fmt(level.get("compliance"), "N mm"), _fmt(level.get("peak_von_mises"), "MPa")]
+                    for level in levels if isinstance(level, dict)]
+            self._subtabs_tables.addTab(self._create_table(
+                ["Refinement", "Nodes", "Elements", "Compliance", "Peak stress"], rows, is_dark=self._is_dark()
+            ), "FEA mesh refinement")
 
         # 1. Components Table (FEA multi-body)
-        components = data.get("components")
+        components = detail_data.get("components")
         if isinstance(components, list) and components:
             cols = ["Component Name", "Material", "Elements", "Peak Stress (MPa)", "Yield FoS"]
             rows = []
@@ -936,7 +949,7 @@ class DetailedResultsWidget(QtWidgets.QWidget):
             self._subtabs_tables.addTab(self._create_table(cols, rows, is_dark=self._is_dark()), "Components")
 
         # 2. Assembly Interfaces Table (Tied contact)
-        connections = data.get("connections")
+        connections = detail_data.get("connections")
         if isinstance(connections, list) and connections:
             cols = ["Component Pair", "Connection Type", "Search Tolerance", "Interface Status"]
             rows = []
@@ -949,29 +962,20 @@ class DetailedResultsWidget(QtWidgets.QWidget):
             self._subtabs_tables.addTab(self._create_table(cols, rows, is_dark=self._is_dark()), "Assembly Ties")
 
         # 3. Load Cases Table (TopOpt Multi-load & Cases)
-        cases = data.get("structural_cases")
-        thermal_cases = data.get("thermal_cases")
-        if (isinstance(cases, list) and cases) or (isinstance(thermal_cases, list) and thermal_cases):
-            cols = ["Load Case Name", "Discipline", "Case Weight", "Compliance", "Max Response"]
+        cases = [c for c in data.get("structural_cases") or [] if isinstance(c, dict)]
+        if len(cases) > 1:
+            cols = ["Case", "Discipline", "Compliance", "Peak displacement"]
             rows = []
             for c in (cases or []):
                 if isinstance(c, dict):
                     name = str(c.get("name", "Structural Case"))
-                    weight = _fmt(c.get("weight", 1.0))
                     comp = _fmt(c.get("compliance"), "N mm")
                     disp = _fmt(c.get("maximum_displacement"), "mm")
-                    rows.append([name, "Structural", weight, comp, f"{disp} max disp"])
-            for tc in (thermal_cases or []):
-                if isinstance(tc, dict):
-                    name = str(tc.get("name", "Thermal Case"))
-                    weight = _fmt(tc.get("weight", 1.0))
-                    comp = _fmt(tc.get("thermal_compliance"), "W K")
-                    temp = _fmt(tc.get("maximum_temperature_rise"), "K")
-                    rows.append([name, "Thermal", weight, comp, f"{temp} max rise"])
-            self._subtabs_tables.addTab(self._create_table(cols, rows, is_dark=self._is_dark()), "Load Cases")
+                    rows.append([name, "Structural", comp, disp])
+            self._subtabs_tables.addTab(self._create_table(cols, rows, is_dark=self._is_dark()), "Case comparison")
 
         # 4. Reaction Forces Table
-        rx = data.get("reaction_force")
+        rx = detail_data.get("reaction_force")
         if rx is not None:
             try:
                 rx_arr = np.asarray(rx, dtype=float).reshape(-1)
@@ -989,8 +993,8 @@ class DetailedResultsWidget(QtWidgets.QWidget):
                 pass
 
         # 5. Mesh Quality Metrics Table
-        quality = data.get("mesh_quality")
-        mesh_obj = data.get("mesh")
+        quality = detail_data.get("mesh_quality")
+        mesh_obj = detail_data.get("mesh")
         if quality is None and mesh_obj is not None:
             quality = getattr(mesh_obj, "quality_report", None)
         if isinstance(quality, dict):
@@ -1087,6 +1091,7 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         if not _HAVE_PYQTGRAPH:
             self._no_graphs_label.setVisible(True)
             self._no_graphs_label.setText("Charts unavailable.")
+            self._tabs.setTabVisible(self._tabs.indexOf(self._tab_graphs), False)
             return
 
         data = self._data
@@ -1095,51 +1100,46 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         is_dark = self._is_dark()
         plot_bg = "#181b22" if is_dark else "#ffffff"
 
-        # 1. TopOpt Convergence Plot
-        if rtype == "topopt_voxel":
-            obj = data.get("objective_history")
-            chg = data.get("change_history")
-            if (obj is not None and len(obj) >= 2) or (chg is not None and len(chg) >= 2):
+        # Each optimization response has its own units and interpretation.
+        if rtype == "topopt_voxel" and data.get("study_kind") != "lattice_infill" and not data.get("generated_lattice"):
+            histories = (
+                ("objective_history", "Objective", "Objective value", "#58a6ff"),
+                ("compliance_history", "Stiffness", "Structural compliance (N mm)", "#3fb950"),
+                ("change_history", "Design change", "Mean density change", "#d29922"),
+                ("stress_history", "Stress constraint", "Aggregated stress (MPa)", "#f85149"),
+            )
+            for key, title, axis, color in histories:
+                raw_values = data.get(key)
+                if raw_values is None:
+                    continue
+                values = np.asarray(raw_values, dtype=float).reshape(-1)
+                if values.size < 2 or np.count_nonzero(np.isfinite(values)) < 2:
+                    continue
                 plot = pg.PlotWidget(background=plot_bg)
-                self._configure_plot(plot, "Optimizer Iteration", "Normalized Response")
-
-                if obj is not None:
-                    arr = np.asarray(obj, dtype=float)
-                    if arr.size >= 2 and abs(arr[0]) > 1e-30:
-                        norm_obj = arr / abs(arr[0])
-                        iters = np.arange(1, len(norm_obj) + 1)
-                        plot.plot(
-                            iters, norm_obj, name="Objective / initial",
-                            pen=pg.mkPen("#58a6ff" if is_dark else "#0969da", width=2)
-                        )
-
-                if chg is not None:
-                    arr_c = np.asarray(chg, dtype=float)
-                    if arr_c.size >= 2:
-                        iters = np.arange(1, len(arr_c) + 1)
-                        plot.plot(
-                            iters, arr_c, name="Design Change",
-                            pen=pg.mkPen("#d29922" if is_dark else "#9a6700", width=2)
-                        )
-
-                stress = data.get("stress_history")
-                stress_meta = data.get("stress_aggregation")
-                allowable = float(stress_meta.get("allowable_stress", 0.0)) if isinstance(stress_meta, dict) else 0.0
-                if stress is not None and allowable > 0.0:
-                    arr_s = np.asarray(stress, dtype=float)
-                    if arr_s.size >= 2:
-                        iters = np.arange(1, len(arr_s) + 1)
-                        plot.plot(
-                            iters, arr_s / allowable, name="Stress Utilization",
-                            pen=pg.mkPen("#f85149" if is_dark else "#cf222e", width=2)
-                        )
-                        plot.addLine(
-                            y=1.0,
-                            pen=pg.mkPen("#f85149" if is_dark else "#cf222e", width=1, style=QtCore.Qt.DashLine)
-                        )
-
-                self._subtabs_graphs.addTab(plot, "Convergence History")
+                self._configure_plot(plot, "Optimization iteration", axis)
+                plot.plot(np.arange(1, values.size + 1), values, name=title,
+                          pen=pg.mkPen(color if is_dark else "#0969da", width=2), connect="finite")
+                if key == "stress_history":
+                    allowable = float((data.get("stress_aggregation") or {}).get("allowable_stress") or 0)
+                    if allowable > 0:
+                        plot.addItem(pg.InfiniteLine(pos=allowable, angle=0, label="Allowable stress",
+                            pen=pg.mkPen("#f85149", width=1, style=QtCore.Qt.DashLine)))
+                self._subtabs_graphs.addTab(plot, title)
                 has_any_plot = True
+
+        analysis = fea_result(data)
+        levels = (analysis.get("convergence_study") or {}).get("levels") or []
+        solved_levels = [level for level in levels if isinstance(level, dict)
+                         and level.get("solved") and level.get("n_elements") is not None
+                         and level.get("compliance") is not None]
+        if len(solved_levels) >= 2:
+            plot = pg.PlotWidget(background=plot_bg)
+            self._configure_plot(plot, "FEA elements", "Structural compliance (N mm)")
+            plot.plot([level["n_elements"] for level in solved_levels],
+                      [level["compliance"] for level in solved_levels], name="FEA compliance",
+                      symbol="o", pen=pg.mkPen("#58a6ff" if is_dark else "#0969da", width=2))
+            self._subtabs_graphs.addTab(plot, "FEA mesh convergence")
+            has_any_plot = True
 
         # 2. Crash SAE J211 Plots
         if rtype == "crash":
@@ -1208,7 +1208,7 @@ class DetailedResultsWidget(QtWidgets.QWidget):
                     has_any_plot = True
 
         # 3. FEA Component Comparison Bar Chart
-        components = data.get("components")
+        components = (analysis or data).get("components")
         if isinstance(components, list) and len(components) >= 2:
             names = [str(c.get("name", f"P{idx+1}")) for idx, c in enumerate(components)]
             stresses = [float(c.get("peak_stress_mpa") or 0.0) for c in components]
@@ -1235,6 +1235,7 @@ class DetailedResultsWidget(QtWidgets.QWidget):
             self._subtabs_graphs.addTab(plot, "Frequency Spectrum")
             has_any_plot = True
         self._no_graphs_label.setVisible(not has_any_plot)
+        self._tabs.setTabVisible(self._tabs.indexOf(self._tab_graphs), has_any_plot)
 
     def _configure_plot(self, plot, xlabel: str = "", ylabel: str = ""):
         """Apply MDAO-aligned axis styles and grid visibility to pyqtgraph plot."""
@@ -1250,6 +1251,77 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         plot.addLegend(offset=(10, 10), labelTextColor=fg_col)
 
     # ── Summary Tab Population ────────────────────────────────────────
+    def _add_overview_section(self, title, rows):
+        group = QtWidgets.QGroupBox(title)
+        grid = QtWidgets.QGridLayout(group)
+        grid.setContentsMargins(12, 10, 12, 10)
+        grid.setHorizontalSpacing(24)
+        grid.setVerticalSpacing(8)
+        grid.setColumnStretch(0, 1)
+        for index, row in enumerate(rows):
+            label, value = row[:2]
+            meaning = row[2] if len(row) > 2 else ""
+            key_widget = QtWidgets.QLabel(label)
+            key_widget.setWordWrap(True)
+            key_widget.setToolTip(meaning)
+            value_widget = QtWidgets.QLabel(value)
+            value_widget.setWordWrap(True)
+            value_widget.setToolTip(meaning)
+            value_widget.setStyleSheet("font-weight: 600;")
+            value_widget.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            value_widget.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            grid.addWidget(key_widget, index, 0)
+            grid.addWidget(value_widget, index, 1)
+        self._summary_layout.addWidget(group)
+
+    def _populate_performance_overview(self):
+        data = self._data
+        sections = result_metric_sections(data)
+        metrics = {label: (value, meaning) for _, rows in sections for label, value, meaning in rows}
+        preferred = ("Lattice mass", "Simulated material mass", "Mass", "Material retained",
+                     "Peak von Mises stress", "Peak displacement", "Minimum yield safety factor",
+                     "Cell size", "Structural compliance")
+        highlights = [label for label in preferred if label in metrics][:4]
+        if highlights:
+            cards = QtWidgets.QWidget()
+            grid = QtWidgets.QGridLayout(cards)
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setSpacing(8)
+            for index, label in enumerate(highlights):
+                value, meaning = metrics[label]
+                card_title = f"FEA {label.lower()}" if data.get("type") == "topopt_voxel" and fea_result(data) and label in {"Peak von Mises stress", "Peak displacement", "Minimum yield safety factor"} else label
+                card = QtWidgets.QGroupBox(card_title)
+                layout = QtWidgets.QVBoxLayout(card)
+                value_widget = QtWidgets.QLabel(value)
+                value_widget.setObjectName("ResultHighlightValue")
+                value_widget.setWordWrap(True)
+                value_widget.setStyleSheet("font-size: 22px; font-weight: 600;")
+                value_widget.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+                layout.addWidget(value_widget)
+                card.setToolTip(meaning)
+                grid.addWidget(card, index // 2, index % 2)
+            grid.setColumnStretch(0, 1)
+            grid.setColumnStretch(1, 1)
+            self._summary_layout.addWidget(cards)
+
+        self._add_overview_section("Run status", result_state_rows(data))
+        sections.sort(key=lambda section: section[0] != "FEA analysis")
+        for title, rows in sections:
+            self._add_overview_section(title, rows)
+        for notice in result_notices(data):
+            label = QtWidgets.QLabel(notice)
+            label.setTextFormat(QtCore.Qt.PlainText)
+            label.setWordWrap(True)
+            label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            label.setStyleSheet("padding: 8px; border-left: 2px solid #d29922;")
+            self._summary_layout.addWidget(label)
+        elapsed = data.get("solver_elapsed_s")
+        if elapsed is None and isinstance(data.get("timing"), dict):
+            elapsed = sum(float(value or 0) for value in data["timing"].values())
+        if elapsed is not None:
+            self._add_overview_section("Run time", [("Elapsed time", _fmt(elapsed, "s"))])
+        self._summary_layout.addStretch(1)
+
     def _populate_summary(self):
         while self._summary_layout.count():
             item = self._summary_layout.takeAt(0)
@@ -1259,6 +1331,9 @@ class DetailedResultsWidget(QtWidgets.QWidget):
                 w.deleteLater()
 
         data = self._data
+        if data.get("type") in {"topopt_voxel", "fea", "external_solver"}:
+            self._populate_performance_overview()
+            return
         is_dark = self._is_dark()
         key_color = "#aebbd0" if is_dark else "#64748b"
         value_color = "#f1f5f9" if is_dark else "#1e293b"
@@ -1340,7 +1415,7 @@ class DetailedResultsWidget(QtWidgets.QWidget):
                 self._summary_layout.addWidget(group)
         else:
             # Performance / Key Results Group
-            section_title = {"MODAL": "Natural Frequencies", "TOPOPT_VOXEL": "Lattice Results" if analysis_label(data).startswith("Lattice") else "Topology Results"}.get(rtype, "Structural Results")
+            section_title = "Natural Frequencies" if rtype == "MODAL" else "Structural Results"
             res_group = QtWidgets.QGroupBox(section_title)
             res_grid = QtWidgets.QGridLayout(res_group)
             res_grid.setContentsMargins(10, 8, 10, 8)
@@ -1366,16 +1441,6 @@ class DetailedResultsWidget(QtWidgets.QWidget):
                 res_rows.append(("Volume", _fmt(data["volume"], "mm³")))
             if data.get("mass") is not None:
                 res_rows.append(("Mass", _fmt(float(data["mass"]) * 1000.0, "kg")))
-            if rtype == "TOPOPT_VOXEL":
-                for key, label in (("target_vol_frac", "Target Material Fraction"), ("final_vol_frac", "Final Material Fraction"), ("iterations", "Iterations")):
-                    if data.get(key) is not None:
-                        res_rows.append((label, _fmt(data[key])))
-                regions = data.get("passive_regions") or {}
-                if regions:
-                    res_rows.extend([
-                        ("Preserved Solid Voxels", str(regions.get("explicit_solid_voxels", 0))),
-                        ("Obstacle / Keep-out Voxels", str(regions.get("explicit_void_voxels", 0))),
-                    ])
 
             for idx, (lbl, val) in enumerate(res_rows):
                 k = QtWidgets.QLabel(lbl)
@@ -1454,9 +1519,9 @@ class DetailedResultsWidget(QtWidgets.QWidget):
                 if val is not None:
                     lines.append(f"{lbl}: {_fmt(val, u)}")
         else:
-            for k in ("peak_stress_nodal", "peak_displacement", "minimum_yield_safety_factor", "compliance", "volume", "mass"):
-                if data.get(k) is not None:
-                    lines.append(f"{k.replace('_', ' ').title()}: {_fmt(data[k])}")
+            for title, rows in result_metric_sections(data):
+                lines.extend(["", title, *(f"{label}: {value}" for label, value, _ in rows)])
+            lines.extend(result_notices(data))
         text = "\n".join(lines)
         QtGui.QGuiApplication.clipboard().setText(text)
         QtWidgets.QToolTip.showText(QtGui.QCursor.pos(), "Summary copied to clipboard!")

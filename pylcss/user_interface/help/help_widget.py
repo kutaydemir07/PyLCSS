@@ -59,7 +59,7 @@ _PAGES: dict[str, str] = {
 <table>
 <tr><th>Workspace</th><th>What You Can Do</th></tr>
 <tr><td><b>PyLCSS MDAO</b></td><td>System modeling, surrogate training, solution-space exploration, optimization, and sensitivity analysis.</td></tr>
-<tr><td><b>PyLCSS CAE</b></td><td>Parametric CAD, geometry selection, meshing, static FEA, modal analysis, impact simulation, topology optimization, and lattice optimization.</td></tr>
+<tr><td><b>PyLCSS CAE</b></td><td>Parametric CAD, geometry selection, meshing, static FEA, modal analysis, impact simulation, topology optimization, and lattice generation.</td></tr>
 </table>
 <h2>Start Work in MDAO</h2>
 <ol>
@@ -83,11 +83,11 @@ _PAGES: dict[str, str] = {
     "Installation and Workspaces": _page("""
 <h1>Installation and Workspaces</h1>
 <p>Run the Windows setup installer and choose one option: <b>PyLCSS MDAO only</b>, <b>PyLCSS CAE only</b>, or <b>PyLCSS MDAO and CAE</b>. Setup installs a shared Python runtime and required packages.</p>
-<p>CalculiX, OpenRadioss, and FreeCAD are optional external tools. Install only the external tools your workflows require.</p>
+<p>CalculiX, OpenCourant, and FreeCAD are optional external tools. Install only the external tools your workflows require.</p>
 <h2>Install External Solvers</h2>
 <p>For a source installation in an activated environment, run the solver installer script:</p>
 <pre>python scripts/install_solvers.py --only ccx
-python scripts/install_solvers.py --only radioss
+python scripts/install_solvers.py --only opencourant
 python scripts/install_solvers.py --only freecad</pre>
 <h2>Launch Options</h2>
 <p>The main PyLCSS shortcut opens the workspace chooser. Dedicated shortcuts open MDAO or CAE directly. From a command prompt:</p>
@@ -154,8 +154,8 @@ pip install -e ".[mdao,cae]"</pre>
 <ul>
 <li><b>Static FEA:</b> CalculiX solid solver for linear and non-linear stress analysis.</li>
 <li><b>Modal Solver:</b> CalculiX natural frequency extraction and mode shape visualization.</li>
-<li><b>Impact:</b> OpenRadioss transient non-linear crash solver.</li>
-<li><b>Topology:</b> SIMP density optimization with constrained G1 spline CAD reconstruction.</li>
+<li><b>Impact:</b> OpenCourant transient non-linear crash solver.</li>
+<li><b>Topology:</b> SIMP density optimization with compact, on-demand CAD recovery.</li>
 <li><b>Lattice:</b> Homogenized cellular synthesis with 3MF beam and STEP export.</li>
 </ul>
 """, "CAE — CAD and Simulation"),
@@ -183,7 +183,7 @@ pip install -e ".[mdao,cae]"</pre>
 <tr><th>Mesh Type</th><th>Element Type</th><th>Recommended Application</th></tr>
 <tr><td><b>Tet (Linear)</b></td><td>C3D4</td><td>Fast preliminary checks and coarse screening.</td></tr>
 <tr><td><b>Tet10 (Quadratic)</b></td><td>C3D10</td><td>Static solid stress, bending, and modal frequency analysis.</td></tr>
-<tr><td><b>Shell Triangles</b></td><td>S3 / Thin Shell</td><td>OpenRadioss crash models. The CAD input must be a true midsurface.</td></tr>
+<tr><td><b>Shell Triangles</b></td><td>S3 / Thin Shell</td><td>OpenCourant crash models. The CAD input must be a true midsurface.</td></tr>
 </table>
 <p>The node rejects collapsed elements and calculates mean-ratio quality. Always inspect element quality and perform mesh convergence studies on key design values.</p>
 <div class="warn"><b>Midsurface warning:</b> Meshing the outer skin of a thick solid as a Shell does not extract a physical midsurface. Use dedicated midsurface geometry or import shell sheets.</div>
@@ -237,7 +237,7 @@ pip install -e ".[mdao,cae]"</pre>
 
     "Impact": _page("""
 <h1>Impact and Crashworthiness</h1>
-<p>The <b>Impact Solver</b> node runs dynamic transient impact simulations with OpenRadioss.</p>
+<p>The <b>Impact Solver</b> node runs dynamic transient impact simulations with OpenCourant.</p>
 <h2>Scenario Setup</h2>
 <ul>
 <li><b>Fixed specimen + moving impactor:</b> Requires impact face selection and rear support.</li>
@@ -271,35 +271,32 @@ pip install -e ".[mdao,cae]"</pre>
 <h2>Study Configuration</h2>
 <p>Connect the design domain, material, supports, forces, passive regions, and joints. A <b>Passive Region</b> node protects critical CAD volumes as solid material or void clearance.</p>
 <h2>Smooth CAD Reconstruction</h2>
-<p>Continuum and TPMS boundaries are fitted with coupled degree-five B-spline patches. Shared boundary curves and tangent-plane equations enforce G1 continuity across smooth seams. Sharp creases and analytic passive features remain explicit.</p>
+<p>The recovered smooth surface appears as soon as optimization finishes and exports directly to STL. Select CAD or STEP export to prepare a CAD body separately. Geometric recognition recovers planes, cylinders, and extruded closed profiles first; an extruded profile with holes can use just two cap faces and one face per profile. General freeform shapes use checked surface recovery. Compatible surfaces are consolidated into larger selectable faces.</p>
 <ol>
 <li><b>Recovered Boundary:</b> Physical voxel contours with feature-constrained smoothing.</li>
-<li><b>Quad Cage:</b> Topology-checked simplification and triangle-to-quad subdivision.</li>
-<li><b>Constrained Fit:</b> Sparse least squares with shared controls and G1 equations.</li>
+<li><b>Quad Surface:</b> Instant Meshes creates field-aligned quadrilaterals.</li>
+<li><b>Sparse Layouts:</b> Generalized motorcycle graphs group the surface into larger regions.</li>
+<li><b>Surface Fit:</b> Harmonic parameterization, adaptive sampling and NURBS fitting with shared boundaries and multi-resolution control.</li>
 <li><b>Validation:</b> Sampled geometric error, orientation, material volume, cavity preservation, and STEP reimport.</li>
 </ol>
-<p>No external reconstruction executables are required. Fits retry within a bounded patch budget and report an error if accuracy cannot be met.</p>
+<p>CAD conversion checks material volume, cavities, sampled surface deviation, and STEP reimport. If conversion cannot preserve the shape, the recovered surface remains available for STL export. Conversion progress shows preparation stages.</p>
+<p>The result views are <b>Density</b> and <b>CAD</b>. After solving TopOpt, use <b>Generate Lattice</b> in its inspector to choose a cell family and create graded cells within the optimized envelope. Preserved interfaces remain solid. <b>Lattice Infill</b> fills an existing body with uniform cells.</p>
 <p>Use <b>Volume Remesh</b> to create a solid tetrahedral mesh for downstream CalculiX validation.</p>
 """, "CAE — CAD and Simulation"),
 
-    "Lattice Optimization": _page("""
-<h1>Lattice Optimization</h1>
-<p>The <b>Lattice Solver</b> optimizes variable-density cellular structures across a continuous design space.</p>
-<h2>Cell Families</h2>
+    "Generate Lattice": _page("""
+<h1>Generate Lattice after TopOpt</h1>
+<p>Run the <b>Topology Solver</b>, then open <b>Generate Lattice</b> in its inspector. Choose the lattice type, cell size, minimum printable wall or strut thickness, boundary skin, and minimum/maximum cell density. Zero cell size selects <b>Auto fit</b>: local design thickness controls pitch, non-design pads are excluded, and features too small for printable cells stay solid. Boundary cells are trimmed and joined to the skin. Zero wall and skin dimensions use automatic sizing.</p>
+<p>Generation maps the smoothed optimized density field to local cell thickness inside the retained topology envelope. It preserves solid non-design interfaces and voids. Changing a cell family and generating again uses the saved original solve; <b>Show Solid TopOpt Result</b> restores its geometry.</p>
 <ul>
-<li><b>Strut Lattices (BCC, Octet Truss):</b> Compliant or stretch-dominated truss structures with member diameter grading.</li>
-<li><b>Sheet TPMS (Gyroid, Schwarz Primitive):</b> Continuous triply periodic minimal surfaces for multifunctional stiffness and fluid flow.</li>
-<li><b>Honeycomb:</b> Extruded prismatic cells providing high directional stiffness.</li>
+<li><b>Octet Truss:</b> Stretch-dominated reference for structural stiffness.</li>
+<li><b>BCC:</b> Compliant strut cells.</li>
+<li><b>Gyroid:</b> Continuous curved sheets.</li>
+<li><b>Schwarz Primitive:</b> Sheet cells with straight channels.</li>
+<li><b>Honeycomb:</b> Directional prismatic cells.</li>
 </ul>
-<p>Optimization uses homogenized anisotropic elasticity tensors. The density field is converted into explicit cellular geometry after convergence.</p>
-<h2>Cell Sizing Modes</h2>
-<p><b>Guided Mode</b> calculates pitch, wall thickness, and skin thickness from grid bounds. <b>Manual Mode</b> exposes physical dimensions in millimeters together with a target relative density.</p>
-<h2>Results and Export</h2>
-<ul>
-<li><b>Manufactured Mesh:</b> High-resolution STL mesh for additive manufacturing.</li>
-<li><b>3MF Beam Lattice:</b> Node-and-beam network with per-end radii for AM software tools.</li>
-<li><b>B-rep STEP / IGES:</b> Strut lattices export cylinders/cones and node balls as a compound of overlapping solids. Fused beam lattice requests a bounded, checked union; node junctions are not guaranteed G1. TPMS and honeycomb cellular models are reconstructed into watertight B-rep CAD models using the constrained G1 spline fitter.</li>
-</ul>
+<p>No cell is best for all loads and manufacturing processes. Density mapping creates a candidate lattice; the original solid solve does not verify its stiffness, stress, buckling or fatigue. Remesh the generated geometry and validate it under the original loads. Existing solid validation is cleared on generation.</p>
+<p>Export the complete generated surface as <b>STL</b>. Supported strut-only representations may also export STEP or 3MF. A skin is retained in mesh export. <b>Lattice Infill</b> remains available for uniform geometric filling of other solids.</p>
 """, "CAE — CAD and Simulation"),
 
     "Units and Solvers": _page("""
@@ -316,7 +313,7 @@ pip install -e ".[mdao,cae]"</pre>
 <h2>External Solvers Installation</h2>
 <p>Install external tools using the setup utility script:</p>
 <pre>python scripts/install_solvers.py --only ccx
-python scripts/install_solvers.py --only radioss
+python scripts/install_solvers.py --only opencourant
 python scripts/install_solvers.py --only freecad</pre>
 <p>PyLCSS detects solvers automatically. Check node library tooltips to inspect detection status.</p>
 """, "CAE — CAD and Simulation"),
@@ -484,7 +481,7 @@ _NAV = [
             "Modal Analysis",
             "Impact",
             "Topology Optimization",
-            "Lattice Optimization",
+            "Generate Lattice",
             "Units and Solvers",
         ],
     ),

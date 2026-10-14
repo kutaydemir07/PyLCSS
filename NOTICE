@@ -38,12 +38,12 @@ embeddable runtime, and the pinned pip 26.1.2 zipapp. During installation pip
 downloads the exact Windows CPython 3.12 wheels and SHA-256 values recorded in
 `requirements-windows-py312.lock`, including every transitive dependency, from
 the configured Python package index. CalculiX,
-OpenRadioss, and FreeCAD are downloaded only when their optional tasks are
+OpenCourant, and FreeCAD are downloaded only when their optional tasks are
 selected.
 
 Setup asks for acceptance of the PyLCSS license and displays this notice before
 installation. It does not add a separate click-through for CalculiX,
-OpenRadioss, FreeCAD, or Python packages. Selecting or downloading a component
+OpenCourant, FreeCAD, or Python packages. Selecting or downloading a component
 does not relicense it: its own license still governs use, modification, and
 redistribution.
 
@@ -65,14 +65,14 @@ download archive but retains remaining upstream material, including
 `README_Install`. Redistributors must independently satisfy the GPL source and
 notice conditions for every binary they retain.
 
-### OpenRadioss stable build dated 2026-06-15
+### OpenCourant stable build dated 2026-10-11
 
 - Purpose: Starter, Engine, and conversion processes for crash/impact work.
-- Copyright: Copyright (C) 1986-2026 Altair Engineering Inc.
+- Copyright: Copyright (C) 2026 OpenCourant contributors.
 - License: GNU Affero General Public License version 3 or later.
-- Release: https://github.com/OpenRadioss/OpenRadioss/releases/tag/latest-20260615
-- Corresponding source: https://github.com/OpenRadioss/OpenRadioss/tree/latest-20260615
-- License: https://github.com/OpenRadioss/OpenRadioss/blob/latest-20260615/LICENSE.md
+- Release: https://github.com/OpenCourant/OpenCourant/releases/tag/latest-20261011
+- Corresponding source: https://github.com/OpenCourant/OpenCourant/tree/latest-20261011
+- License: https://github.com/OpenCourant/OpenCourant/blob/main/LICENSE.md
 
 The archive includes `COPYRIGHT.md`, `licenses/`, and additional material under
 `extlib/`. Those files remain beside the installed solver and must be preserved

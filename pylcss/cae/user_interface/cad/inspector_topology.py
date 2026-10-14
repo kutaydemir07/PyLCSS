@@ -11,46 +11,39 @@ from pathlib import Path
 import numpy as np
 from PySide6 import QtCore, QtWidgets
 from .result_presentation import result_state_rows
+from pylcss.cae.design_studio.topology_optimization.geometry.lattice_cad import topopt_export_formats
 
-from pylcss.cae.design_studio.topology_optimization.manufacturing import (
-    PUBLIC_FAMILY_KEYS,
-    normalize_family_key,
-)
 from pylcss.cae.design_studio.topology_optimization.manufacturing.structures import (
     PUBLIC_LATTICE_FAMILY_NAMES,
 )
 from pylcss.cae.design_studio.topology_optimization.integration.lattice_infill_node import (
     AUTOMATIC_FINENESS_FRACTIONS,
-    BUILD_VOXEL_BUDGET,
-    DEFAULT_BUILD_QUALITY,
-)
-from pylcss.cae.design_studio.topology_optimization.integration.lattice_settings import (
-    guided_lattice_voxel_dimensions,
-    lattice_dimension_range_text,
-    lattice_setup_is_guided,
-    node_minimum_feature_size,
-)
-from pylcss.cae.design_studio.topology_optimization.integration.voxelization import (
-    voxel_size_from_bounds,
 )
 from pylcss.cae.design_studio.topology_optimization.configuration.presets import (
     INDUSTRIAL_DESIGN_GOALS,
-    INDUSTRIAL_MANUFACTURING_PROCESSES,
-    INDUSTRIAL_WORKFLOW_MODES,
-    LATTICE_DESIGN_GOALS,
     industrial_topopt_defaults,
+)
+from pylcss.cae.design_studio.topology_optimization.configuration.voxel_meshing import (
+    DEFAULT_VOXEL_MESH_QUALITY,
+    DEFAULT_MAX_VOXEL_ELEMENTS,
+    VOXEL_MESH_RESOLUTIONS,
 )
 
 from .execution_workers import (
     TopOptCadPreviewWorker,
+    TopOptLatticeWorker,
     TopOptMeshExportWorker,
     TopOptStepExportWorker,
 )
+from .inspector_controls import InspectorSection
+from .inspector_non_design import NonDesignInspectorMixin
+from .inspector_topopt_fea import TopOptFeaInspectorMixin
+from .result_fields import available_result_fields
 
 __all__ = ["TopologyInspectorMixin"]
 
 
-class TopologyInspectorMixin:
+class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
     def _build_topopt_definition_ui(self, node):
         """Engineer-facing inspector for TopOpt study-definition nodes.
 
@@ -197,10 +190,7 @@ class TopologyInspectorMixin:
             note = ""
 
         if note:
-            hint = QtWidgets.QLabel(note)
-            hint.setWordWrap(True)
-            hint.setStyleSheet("color:#8f98a5; font-size:10px;")
-            layout.addRow(hint)
+            definition.setToolTip(note)
         self.props_layout.addWidget(definition)
 
     def _build_topopt_voxel_ui(self, node):
@@ -328,39 +318,19 @@ class TopologyInspectorMixin:
                 lambda n=node: self.display_node(n) if self.current_node is n else None,
             )
 
-        guided_preserved_properties = {
-            "structure_mode",
-            "lattice_settings_mode",
-            "structure_cell_size_voxels",
-            "structure_member_thickness_voxels",
-            "structure_skin_thickness_voxels",
-            # Manufacturing capabilities, not preset-derived numerics: a preset
-            # change must not silently resize the lattice or the length scale.
-            "lattice_cell_size_mm",
-            "lattice_member_thickness_mm",
-            "lattice_skin_thickness_mm",
-            "minimum_member_size_mm",
-            "minimum_void_size_mm",
-            "maximum_member_size_mm",
-            # The load envelope is an engineering decision about the load
-            # cases, so a fidelity or process preset must not silently reset it.
-            "load_aggregation",
-            "lattice_target_relative_density",
-            "lattice_variable_density",
-            "lattice_min_relative_density",
-            "lattice_max_relative_density",
-            "lattice_solid_transition_density",
-            "lattice_porosity",
-            "optimize_lattice_members",
-            "lattice_max_member_thickness_voxels",
-            "lattice_member_sizing_iterations",
-            "lattice_buckling_length_factor",
-        }
+        guided_preserved_properties = {"load_aggregation"}
 
         def _apply_guided_settings(settings):
-            for key, setting in settings.items():
-                if key not in guided_preserved_properties:
-                    self.update_property(key, setting)
+            import json
+
+            overrides = set(json.loads(node.get_property("advanced_overrides") or "[]"))
+            self._applying_topopt_defaults = True
+            try:
+                for key, setting in settings.items():
+                    if key not in guided_preserved_properties | overrides and node.has_property(key):
+                        self.update_property(key, setting)
+            finally:
+                self._applying_topopt_defaults = False
 
         def _intent_combo(prop, items, default=None, display_labels=None):
             labels = display_labels or {}
@@ -388,12 +358,6 @@ class TopologyInspectorMixin:
             def _changed(value, p=prop):
                 internal_value = reverse_labels.get(value, value)
                 self.update_property(p, internal_value)
-                # Guided mode translates engineering intent into conservative
-                # numerical defaults. Expert mode must preserve the controls
-                # the engineer explicitly set.
-                if str(node.get_property("workflow_mode") or "Guided") != "Guided":
-                    _refresh_topopt_later()
-                    return
                 goal = (
                     internal_value
                     if p == "design_goal"
@@ -418,47 +382,9 @@ class TopologyInspectorMixin:
             widget.currentTextChanged.connect(_changed)
             return widget
 
-        expert_mode = (
-            str(node.get_property("workflow_mode") or "Guided").strip().lower()
-            == "expert"
-        )
-
         intent_group = QtWidgets.QGroupBox("Design Intent")
         intent_layout = QtWidgets.QFormLayout()
-        workflow_combo = _combo(
-            "workflow_mode",
-            list(INDUSTRIAL_WORKFLOW_MODES),
-            "Guided",
-        )
-
-        def _workflow_changed(value):
-            if str(value) == "Guided":
-                settings = industrial_topopt_defaults(
-                    node.get_property("design_goal"),
-                    nelx=node.get_property("nelx") or 30,
-                    nely=node.get_property("nely") or 20,
-                    nelz=node.get_property("nelz") or 10,
-                )
-                _apply_guided_settings(settings)
-            _refresh_topopt_later()
-
-        workflow_combo.currentTextChanged.connect(_workflow_changed)
-        workflow_combo.setToolTip(
-            "Guided derives the grid/filter/numerical controls from the "
-            "selected fidelity and engineering goal. Expert exposes the raw "
-            "numerical controls."
-        )
-        intent_layout.addRow("Workflow:", workflow_combo)
-        # No fidelity row. The grid follows the study's physical feature sizes
-        # and the convergence budget is fixed, so there is nothing here for a
-        # user to trade off -- the one control that sets resolution is the
-        # minimum member size, which is a manufacturing capability.
-        lattice_study = normalize_family_key(
-            node.get_property("structure_mode")
-        ) not in {"", "solid"}
-        design_goals = (
-            LATTICE_DESIGN_GOALS if lattice_study else INDUSTRIAL_DESIGN_GOALS
-        )
+        design_goals = INDUSTRIAL_DESIGN_GOALS
         intent_layout.addRow(
             "Objective:",
             _intent_combo(
@@ -471,38 +397,6 @@ class TopologyInspectorMixin:
                 },
             ),
         )
-        intent_layout.addRow("Loads:", QtWidgets.QLabel("All connected loads act simultaneously."))
-
-        formulation_combo = _combo(
-            "formulation",
-            [
-                "Density (SIMP)",
-                "Level Set (Reaction-Diffusion)",
-            ],
-            "Density (SIMP)",
-        )
-        formulation_combo.currentTextChanged.connect(
-            lambda _value: _refresh_topopt_later()
-        )
-        # Density-versus-level-set is a solver formulation, not design intent. No
-        # commercial guided workflow asks for it, and the guided defaults already
-        # pick the density formulation every preset was calibrated on.
-        if expert_mode:
-            intent_layout.addRow("Formulation:", formulation_combo)
-        else:
-            formulation_combo.setParent(None)
-        # The update scheme is a solver choice, not design intent: no commercial
-        # guided workflow offers OC against MMA against GCMMA, and the guided
-        # defaults already pick the one each design goal was calibrated with.
-        if expert_mode:
-            intent_layout.addRow(
-                "Algorithm:",
-                _combo(
-                    "optimizer",
-                    ["Auto", "OC", "MMA", "GCMMA"],
-                    "Auto",
-                ),
-            )
 
         volfrac = max(0.01, min(0.99, _get_float("volfrac", 0.5)))
         material_container = QtWidgets.QWidget()
@@ -516,6 +410,14 @@ class TopologyInspectorMixin:
         material_spin.setRange(1, 99)
         material_spin.setSuffix("%")
         material_spin.setValue(int(round(volfrac * 100)))
+        material_tooltip = (
+            "Maximum optimized material volume as a percentage of the source "
+            "design domain, including non-design material within that domain. "
+            "Both objectives enforce this budget. Stress-Limited Mass may use "
+            "less material; it must also satisfy the material's stress limit."
+        )
+        material_slider.setToolTip(material_tooltip)
+        material_spin.setToolTip(material_tooltip)
 
         def update_material_volfrac(percent):
             material_slider.blockSignals(True)
@@ -530,690 +432,136 @@ class TopologyInspectorMixin:
         material_spin.valueChanged.connect(update_material_volfrac)
         material_layout.addWidget(material_slider, 1)
         material_layout.addWidget(material_spin)
-        if (
-            str(node.get_property("design_goal") or "").strip().lower()
-            == "minimum mass under stress"
-        ):
-            intent_layout.addRow(
-                "Allowable Stress (MPa):",
-                _double(
-                    "yield_stress",
-                    250.0,
-                    0.001,
-                    1_000_000.0,
-                    decimals=3,
-                    step=10.0,
-                ),
-            )
         intent_layout.addRow("Target Volume:", material_container)
-        # Physical length scale is a manufacturing requirement, not a numerical
-        # expert knob. Industrial guided workflows expose minimum thickness in
-        # model units and derive the filter/grid from it.
-        minimum_member = _double(
-            "minimum_member_size_mm",
-            0.0,
-            0.0,
-            10_000.0,
-            decimals=2,
-            step=0.5,
-            suffix=" mm",
-        )
-        minimum_member.setSpecialValueText("Auto (from grid)")
-        minimum_member.setToolTip(
-            "Thinnest rib or wall the design may contain, in millimetres.\n\n"
-            "This is a manufacturing capability, not a solver setting: the "
-            "thinnest section you can actually weld, cast or print. It also "
-            "sets the analysis resolution, because the grid has to resolve it.\n\n"
-            "Set it to 0 for Auto, which uses three grid cells -- a numerical "
-            "floor, not a manufacturing one, so a released design should state "
-            "the real value."
-        )
-        solid_envelope = (
-            normalize_family_key(node.get_property("structure_mode")) == "solid"
-        )
-        if solid_envelope:
-            intent_layout.addRow("Minimum Member Size:", minimum_member)
-        minimum_void = _double(
-            "minimum_void_size_mm",
-            0.0,
-            0.0,
-            10_000.0,
-            decimals=2,
-            step=0.5,
-            suffix=" mm",
-        )
-        minimum_void.setSpecialValueText("Same as member size")
-        minimum_void.setToolTip(
-            "Narrowest gap or hole the design may contain, in millimetres.\n\n"
-            "The counterpart of the minimum member size: that one stops "
-            "material getting too thin, this one stops the space between two "
-            "members getting too narrow. They are separate because processes "
-            "differ -- a cutter, a core, or a drain path needs room to reach "
-            "in, and that clearance is rarely the same number as the wall "
-            "thickness.\n\n"
-            "Leave it at 0 to reuse the minimum member size."
-        )
-        if solid_envelope and expert_mode:
-            intent_layout.addRow("Minimum Gap / Hole Size:", minimum_void)
-        maximum_member = _double(
-            "maximum_member_size_mm",
-            0.0,
-            0.0,
-            10_000.0,
-            decimals=2,
-            step=0.5,
-            suffix=" mm",
-        )
-        maximum_member.setSpecialValueText("No limit")
-        maximum_member.setToolTip(
-            "Thickest solid section the design may contain, in millimetres.\n\n"
-            "Caps chunky blocks so material spreads into ribs instead. Useful "
-            "for casting, where a thick section cools unevenly, and for "
-            "welding, where plate stock has an upper gauge.\n\n"
-            "Leave it at 0 for no limit."
-        )
-        if expert_mode:
-            intent_layout.addRow("Maximum Member Size:", maximum_member)
 
         intent_group.setLayout(intent_layout)
         self.props_layout.addWidget(intent_group)
+        self._build_topopt_non_design_ui(node)
 
-        resolution_group = QtWidgets.QGroupBox("Analysis Resolution")
-        resolution_layout = QtWidgets.QFormLayout()
-        # Guided and Expert workflows both keep iteration stopping and shape
-        # recovery program-controlled; only analysis resolution is editable.
-        physics = str(node.get_property("physics_mode") or "Structural").lower()
-        # A reduced-order volumetric rejection term that explicitly does not
-        # resolve wetted area or flow. Zero is the honest default for a guided
-        # study; a non-zero value needs conjugate CFD to justify.
-        if expert_mode and "thermal" in physics:
-            convection = _double(
-                "convection_coefficient", 0.0, 0.0, 1.0, decimals=6, step=1e-4
-            )
-            convection.setToolTip(
-                "Reduced-order distributed heat rejection per unit material "
-                "volume, in W/(mm³·K).\n\n"
-                "Leave at 0 for pure conduction. This term does not resolve "
-                "wetted surface area or fluid flow; validate physical heat "
-                "sinks with conjugate CFD."
-            )
-            resolution_layout.addRow("Volumetric Heat Rejection:", convection)
-        if expert_mode:
-            grid = QtWidgets.QWidget()
-            grid_layout = QtWidgets.QHBoxLayout(grid)
-            grid_layout.setContentsMargins(0, 0, 0, 0)
-            grid_layout.setSpacing(4)
-            for prop, default in (("nelx", 30), ("nely", 20), ("nelz", 10)):
-                field = _int(prop, default, 1, 500)
-                field.setPrefix(prop[-1].upper() + ": ")
-                grid_layout.addWidget(field)
-            grid.setToolTip(
-                "Structured analysis cells along X, Y, and Z. Total cells and "
-                "available memory limit practical resolution."
-            )
-            resolution_layout.addRow("Voxel Grid:", grid)
-            resolution_layout.addRow(
-                "Filter Radius (voxels):",
-                _double("rmin", 1.5, 0.5, 20.0, decimals=2, step=0.1),
-            )
-            if (
-                not str(node.get_property("formulation") or "Density (SIMP)")
-                .lower()
-                .startswith("level set")
-            ):
-                resolution_layout.addRow(
-                    "SIMP Penalization:",
-                    _double("penal", 3.0, 1.0, 6.0, decimals=2, step=0.1),
-                )
-        if expert_mode:
-            # A convergence study repeats the optimization on finer grids. It
-            # is valuable verification, but it is an advanced solve policy—not
-            # part of the short guided study definition.
-            topology_convergence = _check(
-                "topology_convergence_enabled",
-                "Repeat optimization on successively finer grids",
-            )
-            topology_convergence.stateChanged.connect(
-                lambda _state: _refresh_topopt_later()
-            )
-            resolution_layout.addRow(
-                "Resolution convergence:", topology_convergence
-            )
-            if _get_bool("topology_convergence_enabled"):
-                resolution_layout.addRow(
-                    "Topology levels:",
-                    _int("topology_convergence_levels", 3, 2, 3),
-                )
-        resolution_group.setToolTip(
-            "Explicit discretization controls for expert studies."
+        mesh_group = QtWidgets.QGroupBox("Voxel Meshing")
+        mesh_layout = QtWidgets.QFormLayout(mesh_group)
+        automatic_grid = _check("automatic_grid")
+        quality = _combo("voxel_mesh_quality", list(VOXEL_MESH_RESOLUTIONS), DEFAULT_VOXEL_MESH_QUALITY)
+        quality.setToolTip(
+            "Geometry-based final resolution: approximately 24 / 40 / 64 / 96 "
+            "cells across the longest CAD dimension, and at least 3 / 4 / 6 / 8 "
+            "across selected small features, for Coarse / Medium / Fine / Very Fine. "
+            "The physical voxel pitch is the same on X, Y and Z. Automatic mode "
+            "fits the geometric target to Maximum Elements and available RAM; "
+            "the resolved grid and pitch are reported in the estimate."
         )
-        resolution_group.setLayout(resolution_layout)
-        if expert_mode:
-            self.props_layout.addWidget(resolution_group)
-
-
-
-        from pylcss.cae.design_studio.topology_optimization.manufacturing import (
-            FAMILIES as _LATTICE_FAMILIES,
+        size = _double("voxel_size", 0.0, 0.0, 1e6, decimals=6, step=0.1, suffix=" mm")
+        size.setSpecialValueText("Automatic")
+        size.setToolTip(
+            "0 uses the preset or manual element counts. A positive size "
+            "overrides both and sets the exact cubic voxel edge in mm, on X/Y/Z. "
+            "The grid box pads outward to retain that size; CAD geometry defines "
+            "the material. Requests over Maximum Elements are rejected."
         )
+        limit = _int("max_voxel_elements", DEFAULT_MAX_VOXEL_ELEMENTS, 0, 100_000_000)
+        limit.setSpecialValueText("Unlimited")
+        limit.setToolTip(
+            "Default 1,000,000 grid elements. Automatic mode selects its pitch "
+            "within this limit and available RAM. Explicit voxel sizes and manual "
+            "counts are checked without changing them. 0 disables the element cap."
+        )
+        estimate = QtWidgets.QLabel()
+        estimate.setWordWrap(True)
+        estimate.setObjectName("TopOptVoxelMeshEstimate")
+        refinement = _check("automatic_mesh_refinement")
+        refinement.setToolTip(
+            "Optional coarse-to-fine optimization, with up to three short "
+            "warm-start stages before the final mesh. Each stage transfers "
+            "its density design; the final stage keeps the full convergence "
+            "budget. Small Coarse grids need only one solve."
+        )
+        self.property_widgets.update({
+            "automatic_grid": automatic_grid, "voxel_mesh_quality": quality,
+            "voxel_size": size, "automatic_mesh_refinement": refinement,
+            "max_voxel_elements": limit,
+        })
 
-        # Only the lattice study declares a cell family. The topology study
-        # builds a solid envelope and has no structure to pick, so it does not
-        # get a one-entry dropdown that reads like a choice.
-        is_lattice_study = node.has_property("structure_mode")
-        structure_mode = str(
-            node.get_property("structure_mode") or "Solid Envelope"
-        ).lower()
-        # Ask the registry which family this is. Testing the display string for
-        # the word "lattice" used to be enough; it stopped being enough the
-        # moment a family was called "Gyroid Network (Skeletal)".
-        structure_family = _LATTICE_FAMILIES.get(
-            normalize_family_key(node.get_property("structure_mode"))
-        )
-        is_lattice_structure = structure_family is not None
-        is_lattice = structure_family is not None
-        lattice_settings_guided = lattice_setup_is_guided(
-            node.get_property("lattice_settings_mode")
-        )
-        if is_lattice_study:
-            mfg_group = QtWidgets.QGroupBox("Lattice Definition")
-            mfg_layout = QtWidgets.QFormLayout()
-            # Keep the new-study picker focused on the production core. The
-            # full registry remains supported by the builders for saved legacy
-            # studies.
-            structure_items = [
-                _LATTICE_FAMILIES[key].display_name
-                for key in PUBLIC_FAMILY_KEYS
-                if key in _LATTICE_FAMILIES
-            ]
-            current_structure = str(node.get_property("structure_mode") or "")
-            # Do not silently rewrite a saved study that used a retired
-            # catalogue entry. Show its exact value only while that project is
-            # open.
-            if (
-                current_structure
-                and current_structure not in structure_items
-                and normalize_family_key(current_structure) in _LATTICE_FAMILIES
-            ):
-                structure_items.append(current_structure)
-            structure_combo = _combo(
-                "structure_mode",
-                structure_items,
-                structure_items[0],
-            )
-            structure_combo.currentTextChanged.connect(
-                lambda _value: _refresh_topopt_later()
-            )
-            structure_combo.setToolTip(
-                "The unit cell the optimized load paths are built from.\n\n"
-                "Sheet TPMS — Gyroid is the general-purpose default; Schwarz "
-                "Primitive provides straight channels for flow and heat-"
-                "transfer studies. Printability and powder evacuation still "
-                "depend on wall thickness, orientation, process and part "
-                "boundary.\n\n"
-                "Strut lattices — BCC is compliant, widely printed and has no "
-                "horizontal cell members; Octet is stretch dominated, close to "
-                "isotropic and the structural reference. Octet can have member "
-                "diameters sized against axial stress and buckling; both export "
-                "as native 3MF beam lattices.\n\n"
-                "Honeycomb — prismatic cells along one axis; stiff in that "
-                "direction, compliant across it. Diamond and the other retired "
-                "specialist cells remain loadable in projects created by "
-                "earlier PyLCSS versions."
-            )
-            mfg_layout.addRow("Cell Family:", structure_combo)
-            if node.has_property("repair_lattice_connections"):
-                repair = _check("repair_lattice_connections", "Add connecting ligaments")
-                repair.setToolTip(
-                    "Adds material outside the cell pattern to reconnect fragments "
-                    "and preserved interfaces. Changes geometry; requires structural verification."
-                )
-                mfg_layout.addRow("Repair Connections:", repair)
-            if is_lattice:
-                lattice_setup = _combo(
-                    "lattice_settings_mode",
-                    ["Guided", "Manual"],
-                    "Guided",
-                )
-                lattice_setup.currentTextChanged.connect(
-                    lambda _value: _refresh_topopt_later()
-                )
-                lattice_setup.setToolTip(
-                    "Guided chooses a family-safe cell resolution, wall/member "
-                    "size, skin, and density grading from the active grid. "
-                    "Manual exposes the manufacturing dimensions and their "
-                    "accepted range."
-                )
-                mfg_layout.addRow("Lattice Setup:", lattice_setup)
-        # Cell pitch and the minimum printable wall/member are part of the
-        # lattice definition, not numerical solver quality. Professional
-        # lattice workflows expose them even in their short setup; zero keeps
-        # a program-controlled value derived from the analysis grid. Skin is a
-        # reconstruction detail and remains Expert-only.
-        if (
-            structure_mode != "solid envelope"
-            and not lattice_settings_guided
+        manual_counts = {}
+        for prop, label, default in (
+            ("nelx", "Cells X:", 30),
+            ("nely", "Cells Y:", 20),
+            ("nelz", "Cells Z:", 10),
         ):
-            # Physical sizes first: a voxel is a different length on every part
-            # and every quality preset, so a pitch in voxels silently rescales
-            # the lattice when either changes. These override the voxel fields
-            # below when non-zero.
-            physical_fields = [
-                (
-                    "lattice_cell_size_mm",
-                    "Cell Pitch:",
-                    "Lattice unit-cell pitch in model units. This is the size "
-                    "a printer's powder removal or minimum feature dictates.\n\n"
-                    "Program Controlled derives it from the analysis grid, which "
-                    "changes physical size whenever the grid is resized.",
-                ),
-                (
-                    "lattice_member_thickness_mm",
-                    "Min Wall / Member:",
-                    "Thinnest lattice wall or strut, in model units.\n\n"
-                    "Program Controlled derives it from the analysis grid.",
-                ),
-            ]
-            if expert_mode:
-                physical_fields.append((
-                    "lattice_skin_thickness_mm",
-                    "Skin Thickness:",
-                    "Solid skin over the lattice, in model units.\n\n"
-                    "Program Controlled derives it from the analysis grid.",
-                ))
-            for prop, label, tip in physical_fields:
-                field = _double(prop, 0.0, 0.0, 10_000.0, decimals=3, step=0.5)
-                field.setSpecialValueText("Program Controlled")
-                field.setToolTip(tip)
-                mfg_layout.addRow(label, field)
-            if expert_mode:
-                mfg_layout.addRow(
-                    "Cell Pitch (analysis voxels):",
-                    _double(
-                        "structure_cell_size_voxels",
-                        8.0,
-                        3.0,
-                        50.0,
-                        decimals=2,
-                        step=0.5,
-                    ),
-                )
-                mfg_layout.addRow(
-                    "Min Wall / Member (analysis voxels):",
-                    _double(
-                        "structure_member_thickness_voxels",
-                        1.0,
-                        0.25,
-                        20.0,
-                        decimals=2,
-                        step=0.25,
-                    ),
-                )
-                mfg_layout.addRow(
-                    "Skin Thickness (analysis voxels):",
-                    _double(
-                        "structure_skin_thickness_voxels",
-                        0.75,
-                        0.0,
-                        20.0,
-                        decimals=2,
-                        step=0.25,
-                    ),
-                )
-            resolved_voxel_size = getattr(
-                node, "_resolved_lattice_voxel_size", None
-            )
-            last_result = getattr(node, "_last_result", None)
-            if resolved_voxel_size is None and isinstance(last_result, dict):
-                result_density = last_result.get("density")
-                result_bounds = last_result.get("bounds")
-                if (
-                    result_density is not None
-                    and isinstance(result_bounds, dict)
-                    and "min" in result_bounds
-                    and "max" in result_bounds
-                ):
-                    resolved_voxel_size = voxel_size_from_bounds(
-                        tuple(int(v) for v in result_density.shape),
-                        (result_bounds["min"], result_bounds["max"]),
-                    )
-            manual_pitch = _get_float("lattice_cell_size_mm", 0.0)
-            if manual_pitch <= 0.0 and resolved_voxel_size is not None:
-                manual_pitch = (
-                    _get_float("structure_cell_size_voxels", 8.0)
-                    * float(resolved_voxel_size)
-                )
-            range_hint = QtWidgets.QLabel(
-                lattice_dimension_range_text(
-                    node.get_property("structure_mode"),
-                    resolved_voxel_size,
-                    cell_size=manual_pitch,
-                )
-            )
-            range_hint.setWordWrap(True)
-            range_hint.setStyleSheet("color:#d6a85f; font-size:10px;")
-            mfg_layout.addRow("Valid Range:", range_hint)
-        if is_lattice and expert_mode and not lattice_settings_guided:
-            # The mass budget, and the first thing an engineer specifying a
-            # lattice actually knows. Cell pitch and member thickness are
-            # printer capabilities that map onto mass unpredictably -- an 8 mm
-            # octet cell with 1.6 mm struts measures 34% relative density, a
-            # perforated solid rather than the open lattice those two numbers
-            # suggest -- so the thickness is solved to hit this instead.
-            target_density = _double(
-                "lattice_target_relative_density",
-                0.0,
-                0.0,
-                0.95,
-                decimals=3,
-                step=0.05,
-            )
-            target_density.setSpecialValueText("From member thickness")
-            target_density.setToolTip(
-                "Fraction of the optimized envelope the lattice should occupy — "
-                "its mass budget.\n\n"
-                "The member thickness is solved to reach it on the recovered "
-                "grid, and the achieved value is reported in the log. When the "
-                "cell pitch and analysis grid cannot resolve a member thin or "
-                "thick enough, the log says what was reached instead.\n\n"
-                "0 sizes the lattice from an explicit member thickness."
-            )
-            mfg_layout.addRow("Target Relative Density:", target_density)
-            mfg_layout.addRow(
-                "Part-Scale Stiffness Surrogate:",
-                _combo(
-                    "lattice_porosity",
-                    [
-                        "Conservative",
-                        "Balanced (Concept)",
-                        "Maximum Porosity (Concept)",
-                    ],
-                    "Conservative",
-                ),
-            )
-            variable_density = _check("lattice_variable_density")
-            variable_density.stateChanged.connect(
-                lambda _state: _refresh_topopt_later()
-            )
-            mfg_layout.addRow("Grade Local Cell Density:", variable_density)
-            # The grading band and the solid-transition level are numerics of the
-            # density-to-thickness map, not manufacturing capabilities: nothing
-            # a guided user knows tells them what to set here, and the preset
-            # values are the ones every result was tuned against. Expert mode
-            # keeps them.
-            if expert_mode and _get_bool("lattice_variable_density", True):
-                mfg_layout.addRow(
-                    "Minimum Relative Density:",
-                    _double(
-                        "lattice_min_relative_density",
-                        0.12,
-                        0.01,
-                        0.80,
-                        decimals=3,
-                        step=0.01,
-                    ),
-                )
-                mfg_layout.addRow(
-                    "Maximum Relative Density:",
-                    _double(
-                        "lattice_max_relative_density",
-                        0.90,
-                        0.20,
-                        0.99,
-                        decimals=3,
-                        step=0.01,
-                    ),
-                )
-                mfg_layout.addRow(
-                    "Solid Transition:",
-                    _double(
-                        "lattice_solid_transition_density",
-                        0.92,
-                        0.30,
-                        1.0,
-                        decimals=3,
-                        step=0.01,
-                    ),
-                )
-            is_sized_strut_lattice = bool(
-                structure_family is not None and structure_family.is_strut
-            )
-            if is_sized_strut_lattice:
-                optimize_members = _check("optimize_lattice_members")
-                optimize_members.stateChanged.connect(
-                    lambda _state: _refresh_topopt_later()
-                )
-                mfg_layout.addRow(
-                    "Optimize Member Sizes:",
-                    optimize_members,
-                )
-                # Truss-sizing internals: a voxel-denominated diameter cap, an
-                # iteration count, and an effective-length coefficient. The
-                # defaults are the sizing loop's calibration, and nothing a
-                # guided user knows about the part tells them what to move.
-                if expert_mode and _get_bool("optimize_lattice_members", True):
-                    mfg_layout.addRow(
-                        "Max Diameter (analysis voxels):",
-                        _double(
-                            "lattice_max_member_thickness_voxels",
-                            3.0,
-                            0.25,
-                            20.0,
-                            decimals=2,
-                            step=0.25,
-                        ),
-                    )
-                    mfg_layout.addRow(
-                        "Sizing Iterations:",
-                        _int(
-                            "lattice_member_sizing_iterations",
-                            35,
-                            1,
-                            200,
-                        ),
-                    )
-                    mfg_layout.addRow(
-                        "Buckling Length Factor:",
-                        _double(
-                            "lattice_buckling_length_factor",
-                            1.0,
-                            0.1,
-                            4.0,
-                            decimals=2,
-                            step=0.05,
-                        ),
-                    )
-            homogenized = bool(
-                structure_family is not None and structure_family.homogenized
-            )
-            lattice_hint = QtWidgets.QLabel(
-                "Dimensions above are multiples of the topology-analysis voxel; "
-                "use the reported voxel size to convert them to physical units. "
-                + (
-                    f"{structure_family.display_name} optimizes against its own "
-                    "measured homogenized anisotropic tensor, so the continuum "
-                    "exponent below is not used. A family with no shipped "
-                    "table is homogenized once on first use, which takes about "
-                    "a minute and is then cached. "
-                    if homogenized
-                    else
-                    f"{structure_family.display_name} has no cubic homogenized "
-                    "law, so it uses the isotropic continuum surrogate: "
-                    "Conservative (p=1.8) is recommended, Balanced (p=1.25) "
-                    "and Maximum Porosity (p=1.0) are optimistic concepts. "
-                    if structure_family is not None
-                    else ""
-                )
-                + "Cell orientation is fixed to the global axes. Octet can run "
-                "a Phase 2 axial-truss sizing check for member stress, Euler "
-                "buckling and displacement; BCC is bending-dominated. The "
-                "strut families are reconstructed exactly from their "
-                "centrelines and export as STEP, STL and native 3MF Beam "
-                "Lattice; a minimal-surface or honeycomb result has no compact "
-                "B-rep and exports as STL. Final beam/solid reanalysis "
-                "of the explicit lattice remains mandatory."
-            )
-            lattice_hint.setWordWrap(True)
-            lattice_hint.setStyleSheet("color:#8f98a5; font-size:10px;")
-            mfg_layout.addRow(lattice_hint)
-        elif is_lattice and not lattice_settings_guided:
-            minimum_density = _double(
-                "lattice_min_relative_density",
-                0.15,
-                0.01,
-                0.80,
-                decimals=3,
-                step=0.01,
-            )
-            minimum_density.setToolTip(
-                "Lower printable relative density used when converting the "
-                "optimized field into local wall or member thickness."
-            )
-            mfg_layout.addRow("Minimum Relative Density:", minimum_density)
-            maximum_density = _double(
-                "lattice_max_relative_density",
-                0.60,
-                0.20,
-                0.99,
-                decimals=3,
-                step=0.01,
-            )
-            maximum_density.setToolTip(
-                "Upper relative density used for an explicit lattice cell."
-            )
-            mfg_layout.addRow("Maximum Relative Density:", maximum_density)
-            guided_lattice_hint = QtWidgets.QLabel(
-                "Manual uses the dimensions and density band above. The "
-                "accepted range is tied to the active analysis grid; rerun "
-                "after changing quality or grid dimensions so it is checked "
-                "before optimization. The explicit lattice still needs a "
-                "beam or solid reanalysis before release."
-            )
-            guided_lattice_hint.setWordWrap(True)
-            guided_lattice_hint.setStyleSheet("color:#8f98a5; font-size:10px;")
-            mfg_layout.addRow(guided_lattice_hint)
-        elif is_lattice:
-            resolved_voxel_size = getattr(
-                node, "_resolved_lattice_voxel_size", None
-            )
-            last_result = getattr(node, "_last_result", None)
-            if resolved_voxel_size is None and isinstance(last_result, dict):
-                result_density = last_result.get("density")
-                result_bounds = last_result.get("bounds")
-                if (
-                    result_density is not None
-                    and isinstance(result_bounds, dict)
-                    and "min" in result_bounds
-                    and "max" in result_bounds
-                ):
-                    resolved_voxel_size = voxel_size_from_bounds(
-                        tuple(int(v) for v in result_density.shape),
-                        (result_bounds["min"], result_bounds["max"]),
-                    )
-            # Resolve the grid first: the printable floor is stated in model
-            # units, so the guided dimensions depend on what a voxel measures.
-            minimum_feature = node_minimum_feature_size(node)
-            cell_voxels, member_voxels, skin_voxels = (
-                guided_lattice_voxel_dimensions(
-                    node.get_property("structure_mode"),
-                    voxel_size=resolved_voxel_size,
-                    minimum_feature_size=minimum_feature,
-                )
-            )
-            if resolved_voxel_size is not None:
-                automatic_sizes = (
-                    f"On the active grid: {cell_voxels * resolved_voxel_size:.3g} "
-                    f"cell pitch, {member_voxels * resolved_voxel_size:.3g} "
-                    f"minimum wall/member, and "
-                    f"{skin_voxels * resolved_voxel_size:.3g} skin thickness."
-                )
-            else:
-                automatic_sizes = (
-                    f"The resolved values are {cell_voxels:g} voxels per cell, "
-                    f"{member_voxels:g} voxels minimum wall/member, and "
-                    f"{skin_voxels:g} voxels of skin. Physical sizes are shown "
-                    "after the grid is resolved."
-                )
-            if minimum_feature > 0.0:
-                automatic_sizes += (
-                    f" The wall/member is held at or above the "
-                    f"{minimum_feature:.3g} minimum member size stated under "
-                    "Design Intent."
-                )
-            else:
-                automatic_sizes += (
-                    " No minimum member size is stated under Design Intent, so "
-                    "the wall/member follows the grid and is not checked "
-                    "against a process capability."
-                )
-            guided_lattice_hint = QtWidgets.QLabel(
-                "Guided owns all coupled lattice settings, so saved manual "
-                "values cannot invalidate this run. It uses family-safe cell "
-                "resolution and variable-density grading. "
-                + automatic_sizes
-                + " Final beam/solid reanalysis is still required."
-            )
-            guided_lattice_hint.setWordWrap(True)
-            guided_lattice_hint.setStyleSheet(
-                "color:#8f98a5; font-size:10px;"
-            )
-            mfg_layout.addRow("Automatic Values:", guided_lattice_hint)
-        if is_lattice_study:
-            mfg_group.setToolTip(
-                "Lattice unit cell, pitch, wall thickness, skin and mass budget."
-            )
-            mfg_group.setLayout(mfg_layout)
-            self.props_layout.addWidget(mfg_group)
-        else:
-            solid_mfg = QtWidgets.QGroupBox("Manufacturing Constraints")
-            solid_mfg_layout = QtWidgets.QFormLayout()
-            solid_mfg.setToolTip(
-                "Industrial manufacturing constraints enforced in the topology solver graph: "
-                "casting demolding/draw direction, uniform extrusion, planar symmetry, "
-                "additive overhang limits, and member sizing."
-            )
-            draw_combo = _combo(
-                "draw_direction",
-                ["None", "+X", "-X", "+Y", "-Y", "+Z", "-Z"],
-                "None",
-            )
-            draw_combo.setToolTip("Casting/die draw direction. Prevents undercuts along the specified demolding axis.")
-            solid_mfg_layout.addRow("Draw Direction:", draw_combo)
+            widget = _int(prop, default, 1, 10000)
+            manual_counts[prop] = (label, widget)
+            self.property_widgets[prop] = widget
 
-            extr_combo = _combo(
-                "extrusion_axis",
-                ["None", "X", "Y", "Z"],
-                "None",
-            )
-            extr_combo.setToolTip("Uniform prismatic extrusion constraint along the chosen global axis.")
-            solid_mfg_layout.addRow("Extrusion Axis:", extr_combo)
+        def _mesh_controls():
+            explicit_size = size.value() > 0
+            quality.setEnabled(automatic_grid.isChecked() and not explicit_size)
+            automatic_grid.setEnabled(not explicit_size)
+            manual = not automatic_grid.isChecked() and not explicit_size
+            for label, widget in manual_counts.values():
+                widget.setEnabled(manual)
+                mesh_layout.setRowVisible(widget, manual)
+            from pylcss.cae.design_studio.topology_optimization.integration.execution_setup import plan_topology_voxel_mesh
+            from pylcss.cae.design_studio.topology_optimization.integration.geometry_mapping import _flatten, _mesh_bounds
+            try:
+                # Inspecting a node must not use lazy input resolution: an
+                # uncomputed Mesh/support/load can launch Netgen on the GUI
+                # thread. Native CAD bounds also avoid display tessellation.
+                source_bounds = _mesh_bounds(
+                    node.get_cached_input_value("design_domain"),
+                    allow_tessellation=False,
+                )
+                if source_bounds is None:
+                    estimate.setText("Run to estimate")
+                    estimate.setToolTip("Run the upstream geometry or mesh to update this estimate.")
+                    estimate.setStyleSheet("color:#8f98a5; font-size:10px;")
+                    return
+                plan = plan_topology_voxel_mesh(
+                    node, source_bounds,
+                    constraints=_flatten(node.get_cached_input_list("supports")),
+                    loads=_flatten(node.get_cached_input_list("loads")),
+                )
+                ram = plan.estimated_memory_bytes / (1024 ** 3)
+                pitch_text = f"{plan.pitch:.6g} mm · " if plan.pitch is not None else ""
+                estimate.setText(
+                    f"{pitch_text}{' × '.join(map(str, plan.shape))} · {plan.elements:,} elements · {ram:.2f}–{2 * ram:.2f} GiB"
+                    + (" · Resource limited" if plan.resource_limited else "")
+                    + (" · Over limit" if plan.resource_error() else "")
+                )
+                detail = "Estimated grid size and RAM."
+                if plan.resource_limited:
+                    detail = (f"Geometric target {plan.geometric_target_pitch:.6g} mm; "
+                              f"resolved automatic pitch {plan.pitch:.6g} mm to fit "
+                              f"the {plan.automatic_element_budget:,}-element RAM/element budget.")
+                estimate.setToolTip(plan.resource_error() or detail)
+                estimate.setStyleSheet("color:#ffb35c; font-size:10px;" if plan.resource_error() else "color:#8f98a5; font-size:10px;")
+            except (TypeError, ValueError, OverflowError) as exc:
+                estimate.setText(str(exc))
+                estimate.setStyleSheet("color:#ffb35c; font-size:10px;")
 
-            sym_combo = _combo(
-                "symmetry_plane",
-                ["None", "X", "Y", "Z", "XY", "XZ", "YZ", "XYZ"],
-                "None",
-            )
-            sym_combo.setToolTip("Planar reflective symmetry across coordinate planes through the domain centre.")
-            solid_mfg_layout.addRow("Planar Symmetry:", sym_combo)
+        automatic_grid.toggled.connect(lambda _value: _mesh_controls())
+        size.valueChanged.connect(lambda _value: _mesh_controls())
+        quality.currentTextChanged.connect(lambda _value: _mesh_controls())
+        limit.valueChanged.connect(lambda _value: _mesh_controls())
+        self._topopt_mesh_estimate_refresh = _mesh_controls
+        mesh_layout.addRow("Automatic Grid:", automatic_grid)
+        mesh_layout.addRow("Final Resolution:", quality)
+        mesh_layout.addRow("Voxel Size:", size)
+        mesh_layout.addRow("Maximum Elements:", limit)
+        for label, widget in manual_counts.values():
+            mesh_layout.addRow(label, widget)
+            widget.valueChanged.connect(lambda _value: _mesh_controls())
+        mesh_layout.addRow("Estimate:", estimate)
+        mesh_layout.addRow("Automatic Refinement:", refinement)
+        _mesh_controls()
+        previous_result = getattr(node, "_last_result", None)
+        if isinstance(previous_result, dict) and previous_result.get("voxel_meshing"):
+            solved_grid = previous_result.get("grid_shape") or previous_result["voxel_meshing"].get("grid")
+            if solved_grid is not None:
+                mesh_layout.addRow("Last Solved Grid:", QtWidgets.QLabel(" × ".join(map(str, solved_grid))))
+        self.props_layout.addWidget(mesh_group)
+        self._build_topopt_advanced_ui(node)
 
-            oh_combo = _combo(
-                "overhang_direction",
-                ["None", "+X", "-X", "+Y", "-Y", "+Z", "-Z"],
-                "None",
-            )
-            oh_combo.setToolTip("Additive manufacturing build direction for self-supporting overhang constraints.")
-            solid_mfg_layout.addRow("AM Build Direction:", oh_combo)
-
-            oh_angle = _double("overhang_angle_deg", 45.0, 10.0, 80.0, decimals=1, step=5.0, suffix="°")
-            oh_angle.setToolTip("Self-supporting critical overhang angle relative to build platform.")
-            solid_mfg_layout.addRow("Overhang Angle:", oh_angle)
-
-            max_member = _double("max_member_size_mm", 0.0, 0.0, 500.0, decimals=2, step=0.5, suffix=" mm")
-            max_member.setToolTip("Maximum permissible member diameter in physical model units (0 = unconstrained).")
-            solid_mfg_layout.addRow("Max Member Size:", max_member)
-
-            solid_mfg.setLayout(solid_mfg_layout)
-            self.props_layout.addWidget(solid_mfg)
+        previous_result = getattr(node, "_last_result", None)
+        is_lattice_structure = bool(isinstance(previous_result, dict) and previous_result.get("generated_lattice"))
 
         view_group = QtWidgets.QGroupBox("Visualization")
         view_layout = QtWidgets.QFormLayout()
@@ -1226,26 +574,11 @@ class TopologyInspectorMixin:
             and last_result["recovered_shape"].get("vertices") is not None
             and last_result["recovered_shape"].get("faces") is not None
         )
-        visualization_modes = [
-            "Manufactured Mesh" if is_lattice_structure else "CAD",
-        ]
-        # A persisted topology result can restore its solved density and
-        # triangulated recovery without serializing the live OpenCASCADE B-rep.
-        # Expose that saved surface directly instead of making "CAD" the only
-        # geometry choice and then telling the user to run the solver again.
-        if has_recovered_surface and not is_lattice_structure:
-            visualization_modes.append("Surface")
-        visualization_modes.append("Density")
-        validation_result = (
-            last_result.get("validation")
-            if isinstance(last_result, dict)
-            else None
+        visualization_modes = ['CAD', 'Density']
+        visualization_modes.extend(
+            field for field in available_result_fields(last_result)
+            if field.startswith("FEA ")
         )
-        if isinstance(validation_result, dict):
-            if validation_result.get("stress") is not None:
-                visualization_modes.append("Validated Von Mises Stress")
-            if validation_result.get("displacement") is not None:
-                visualization_modes.append("Validated Displacement")
         visualization.addItems(visualization_modes)
         current_view = str(
             (
@@ -1256,9 +589,9 @@ class TopologyInspectorMixin:
             or node.get_property("visualization")
             or "CAD"
         )
-        geometry_view = "Manufactured Mesh" if is_lattice_structure else "CAD"
+        geometry_view = "CAD"
         recovered_view = (
-            "Surface"
+            "CAD"
             if has_recovered_surface and not is_lattice_structure
             else geometry_view
         )
@@ -1277,63 +610,243 @@ class TopologyInspectorMixin:
             lambda v: self._set_topopt_visualization(node, v)
         )
         visualization.setToolTip(
-            "CAD: automatically reconstructed solid envelope\n"
-            "Surface: saved triangulated topology boundary\n"
-            "Manufactured Mesh: explicit lattice, STL-ready\n"
+            "CAD: reconstructed geometry; a surface preview is shown while CAD builds\n"
             "Density: voxel design field"
         )
         view_layout.addRow("Mode:", visualization)
-        if structure_mode != "solid envelope":
-            structure_hint = QtWidgets.QLabel(
-                "Manufactured Mesh shows the explicit lattice; Density shows "
-                "its design field."
-            )
-            structure_hint.setWordWrap(True)
-            structure_hint.setStyleSheet("color:#8f98a5; font-size:10px;")
-            view_layout.addRow(structure_hint)
 
-        # Report an eager or lazily cached CAD body when one exists.
+        # A recovered surface is useful while reconstruction runs, but is not
+        # evidence that an editable CAD body has been built.
+        has_cad_body = bool(
+            isinstance(last_result, dict)
+            and (last_result.get("cad_shape") is not None or last_result.get("shape") is not None)
+        )
+        if has_recovered_surface and not has_cad_body and "STEP" in self._topopt_available_formats(node):
+            triangle_count = len(last_result["recovered_shape"]["faces"])
+            preview_status = QtWidgets.QLabel(
+                f"{triangle_count:,} triangles"
+            )
+            preview_status.setWordWrap(True)
+            preview_status.setStyleSheet("color:#ffb74d; font-size:10px;")
+            view_layout.addRow("Surface:", preview_status)
+            build_cad = QtWidgets.QPushButton("Build CAD")
+            build_cad.clicked.connect(lambda _checked=False: self._preview_topopt_cad(node))
+            view_layout.addRow(build_cad)
+
+        # Report a lazily cached CAD body or a failed reconstruction.
         cad_report = (
             last_result.get("cad_reconstruction")
             if isinstance(last_result, dict)
             else None
         )
-        if isinstance(cad_report, dict):
+        if isinstance(cad_report, dict) and not cad_report.get("skipped"):
             method_name = str(cad_report.get("method") or "CAD B-rep")
             face_count = cad_report.get("cad_face_count_after_feature_healing")
             if face_count is None:
                 face_count = cad_report.get("cad_face_count")
-            edit_label = (
-                ""
-                if cad_report.get("editable") is True
-                else "non-editable"
-                if cad_report.get("editable") is False
-                else "editability not reported"
-            )
             count_label = f", {int(face_count)} faces" if face_count is not None else ""
             cad_status = QtWidgets.QLabel(
-                f"{method_name}{count_label} · {edit_label}"
+                f"{method_name}{count_label}"
             )
             cad_status.setWordWrap(True)
+            if cad_report.get("error"):
+                cad_status.setToolTip(str(cad_report["error"]))
             cad_status.setStyleSheet(
                 "color:#66d17a; font-size:10px;"
                 if cad_report.get("editable") is True
                 else "color:#ffb74d; font-size:10px;"
             )
-            view_layout.addRow(cad_status)
+            view_layout.addRow("CAD:", cad_status)
 
         view_group.setLayout(view_layout)
         self.props_layout.addWidget(view_group)
+        self._build_post_topopt_lattice_ui(node, _combo, _double)
+        self._build_topopt_fea_ui(node)
         pipeline_group = self._build_export_group(
             node,
             default_filename=(
-                "lattice_optimized.step"
+                "topopt_lattice.stl"
                 if is_lattice_structure
                 else "topology_optimized.step"
             ),
             is_lattice=is_lattice_structure,
         )
         self.props_layout.addWidget(pipeline_group)
+
+    def _build_topopt_advanced_ui(self, node):
+        """Expose structural study controls within the single default workflow."""
+        names = {
+            "optimizer", "max_iter", "tol", "convergence_patience", "penal",
+            "automatic_filter_radius", "rmin", "density_cutoff", "stress_constraint",
+            "topology_convergence_enabled", "topology_convergence_levels",
+        }
+        names &= set(node.properties().get("custom", {}))
+        self._topopt_advanced_property_names = names
+        content = QtWidgets.QGroupBox()
+        content_layout = QtWidgets.QVBoxLayout(content)
+        panel_layout = self.props_layout
+        self.props_layout = content_layout
+        try:
+            self._build_generic_ui(node, property_names=names)
+        finally:
+            self.props_layout = panel_layout
+        def _manual_controls():
+            self.property_widgets["rmin"].setEnabled(not bool(node.get_property("automatic_filter_radius")))
+
+        self.property_widgets["automatic_filter_radius"].toggled.connect(lambda _value: _manual_controls())
+        _manual_controls()
+        section = InspectorSection(
+            "Advanced Settings", content, parent=self.props_widget,
+        )
+        self.props_layout.addWidget(section)
+
+    def _build_post_topopt_lattice_ui(self, node, combo, number):
+        group = QtWidgets.QGroupBox("Generate Lattice")
+        layout = QtWidgets.QFormLayout(group)
+        selector = combo("post_lattice_type", PUBLIC_LATTICE_FAMILY_NAMES)
+        selector.setToolTip(
+            "Octet Truss: stretch-dominated structural reference. "
+            "BCC: compliant struts. Gyroid: continuous curved sheets. "
+            "Schwarz Primitive: straight channels. Honeycomb: directional cells. "
+            "Select a family for the intended loads and manufacturing process."
+        )
+        layout.addRow("Lattice Type:", selector)
+        for prop, label in (
+            ("post_lattice_cell_size_mm", "Cell Size:"),
+            ("post_lattice_min_thickness_mm", "Minimum Wall / Strut:"),
+            ("post_lattice_skin_thickness_mm", "Boundary Skin:"),
+        ):
+            widget = number(prop, 0.0, 0.0, 1e6, decimals=4, suffix=" mm")
+            widget.setSpecialValueText("Auto fit" if prop == "post_lattice_cell_size_mm" else "Automatic")
+            if prop == "post_lattice_skin_thickness_mm":
+                from pylcss.cae.design_studio.topology_optimization.manufacturing import family_for
+                def _skin_label(value, field=widget):
+                    family = family_for(value)
+                    field.setSpecialValueText("None" if family and family.is_strut else "Automatic")
+                _skin_label(selector.currentText())
+                selector.currentTextChanged.connect(_skin_label)
+            if prop == "post_lattice_cell_size_mm":
+                widget.setToolTip(
+                    "Auto fit measures local thickness only in design material, "
+                    "excluding non-design pads. It aims for two cells across the "
+                    "remaining core, subject to printable thickness and build resolution. "
+                    "Features too small for a complete cell stay solid. "
+                    "A positive value sets a fixed pitch; boundary cells are trimmed."
+                )
+            layout.addRow(label, widget)
+        for prop, label, default in (
+            ("post_lattice_min_density", "Minimum Cell Density:", 0.15),
+            ("post_lattice_max_density", "Maximum Cell Density:", 0.60),
+        ):
+            widget = QtWidgets.QDoubleSpinBox()
+            widget.setRange(2.0, 80.0)
+            widget.setDecimals(1)
+            widget.setSuffix("%")
+            widget.setValue(100.0 * float(node.get_property(prop) or default))
+            widget.valueChanged.connect(lambda value, name=prop: self.update_property(name, value / 100.0))
+            layout.addRow(label, widget)
+        result = getattr(node, "_last_result", None)
+        active = getattr(self, "_topopt_lattice_worker", None)
+        running = active is not None and active.isRunning()
+        button = QtWidgets.QPushButton("Generate Lattice")
+        button.setEnabled(isinstance(result, dict) and result.get("density") is not None and not running)
+        button.clicked.connect(lambda _checked=False: self._generate_topopt_lattice(node))
+        layout.addRow(button)
+        if isinstance(result, dict) and result.get("generated_lattice"):
+            report = result["generated_lattice"]
+            label = QtWidgets.QLabel(f"{report['cell_family']} · {report['cell_size_mm']:.3g} mm cells")
+            label.setWordWrap(True)
+            layout.addRow("Generated:", label)
+            fit = report.get("fit") or {}
+            if fit:
+                fit_label = QtWidgets.QLabel(
+                    f"{fit.get('mode', 'Fixed pitch')} · "
+                    f"{100 * float(fit.get('solid_feature_fraction') or 0):.1f}% "
+                    "solid"
+                )
+                fit_label.setWordWrap(True)
+                fit_label.setToolTip(
+                    "Non-design regions remain solid. This percentage reports "
+                    "additional design features kept solid because printable cells "
+                    "cannot fit. Boundary cells are trimmed to the envelope."
+                )
+                if fit.get("mode") == "Manual" and fit.get("manual_unfit_fraction"):
+                    fit_label.setText(f"Manual · {100 * float(fit['manual_unfit_fraction']):.1f}% incomplete cells")
+                layout.addRow("Cell Fit:", fit_label)
+            restore = QtWidgets.QPushButton("Show Solid TopOpt Result")
+            restore.setEnabled(not running)
+            restore.clicked.connect(lambda _checked=False: self._restore_topopt_solid(node))
+            layout.addRow(restore)
+        self.props_layout.addWidget(group)
+
+    def _show_post_topopt_result(self, node, result):
+        node._last_result = result
+        node._last_structure_options = result.get("structure_options")
+        node._last_member_plan = None
+        node.set_property("visualization", "CAD")
+        result["visualization_mode"] = "CAD"
+        window = self.window()
+        window = getattr(window, "cad_widget", window)
+        window._last_render_data = result
+        viewer = getattr(window, "viewer", None)
+        if viewer is not None:
+            viewer.render_simulation(result)
+        results_panel = getattr(window, "results", None)
+        if results_panel is not None:
+            results_panel.show_result(result)
+        QtCore.QTimer.singleShot(0, lambda: self.display_node(node) if self.current_node is node else None)
+
+    def _restore_topopt_solid(self, node):
+        from pylcss.cae.design_studio.topology_optimization.integration.post_lattice import topology_source
+        result = getattr(node, "_last_result", None)
+        if isinstance(result, dict):
+            self._show_post_topopt_result(node, topology_source(result))
+
+    def _generate_topopt_lattice(self, node):
+        from pylcss.cae.design_studio.topology_optimization.integration.post_lattice import POST_LATTICE_DEFAULTS
+        window = self.window()
+        window = getattr(window, "cad_widget", window)
+        if callable(getattr(window, "_execution_is_active", None)) and window._execution_is_active():
+            return
+        for name in ("_topopt_lattice_worker", "_topopt_fea_worker", "_topopt_cad_preview_worker", "_topopt_step_export_worker", "_topopt_mesh_export_worker"):
+            active = getattr(self, name, None)
+            if active is not None and active.isRunning():
+                return
+        result = getattr(node, "_last_result", None)
+        if not isinstance(result, dict):
+            return
+        worker = TopOptLatticeWorker(result, {key: node.get_property(key) for key in POST_LATTICE_DEFAULTS}, parent=self)
+        self._topopt_lattice_worker = worker
+        dialog = QtWidgets.QProgressDialog("Generating lattice cells...", "Cancel", 0, 0, self)
+        dialog.setWindowTitle("Generate Lattice")
+        dialog.setWindowModality(QtCore.Qt.WindowModal)
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        dialog.canceled.connect(worker.requestInterruption)
+
+        def finish():
+            dialog.close()
+            self._topopt_lattice_worker = None
+            QtCore.QTimer.singleShot(0, lambda: self.display_node(node) if self.current_node is node else None)
+            pending = getattr(window, "_start_pending_execute", None)
+            if callable(pending):
+                QtCore.QTimer.singleShot(0, pending)
+
+        def completed(output):
+            # A solve or project switch may have replaced this result meanwhile.
+            if getattr(node, "_last_result", None) is result:
+                self._show_post_topopt_result(node, output)
+
+        def failed(message):
+            QtWidgets.QMessageBox.warning(self, "Lattice Generation", message)
+
+        queued = QtCore.Qt.QueuedConnection
+        worker.lattice_finished.connect(completed, queued)
+        worker.lattice_error.connect(failed, queued)
+        worker.lattice_progress.connect(lambda info, _density, _step, _total: dialog.setLabelText(str(info.get("stage") or "Generating lattice...")), queued)
+        worker.finished.connect(finish, queued)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
 
     def _build_topopt_surface_quality_ui(self, result):
         """Surface quality UI omitted to keep the TopOpt inspector clean."""
@@ -1456,23 +969,10 @@ class TopologyInspectorMixin:
             infill_layout.addRow("Cell Fineness", _combo("infill_fineness", list(AUTOMATIC_FINENESS_FRACTIONS.keys()), "Medium"))
         else:
             infill_layout.addRow("Cell Size (mm)", _double("infill_cell_size_mm", 10.0, 0.1, 10000.0, decimals=2, step=1.0, suffix=" mm"))
-        infill_layout.addRow("Outer Skin", _double("infill_skin_thickness_mm", 0.0, 0.0, 100.0, decimals=2, step=0.5, suffix=" mm"))
-        # The printable floor. Without it the result gate reports that the
-        # delivered wall was never checked against a process capability and
-        # tells the user to set it — which, until now, there was nowhere to do
-        # on this node.
-        minimum_member = _double(
-            "minimum_member_size_mm", 0.0, 0.0, 100.0,
-            decimals=2, step=0.1, suffix=" mm",
-        )
-        minimum_member.setToolTip(
-            "Thinnest wall or strut the process can build. Zero leaves it "
-            "unchecked.\n\n"
-            "When set, it becomes a floor on the lattice member, and the cell "
-            "pitch grows with it if the requested relative density would "
-            "otherwise ask for something thinner."
-        )
-        infill_layout.addRow("Min. Wall / Strut", minimum_member)
+        outer_skin = _double("infill_skin_thickness_mm", 0.0, 0.0, 100.0, decimals=2, step=0.5, suffix=" mm")
+        outer_skin.setSpecialValueText("Automatic")
+        outer_skin.setToolTip("A thin connected outer skin closes cells at the boundary. Automatic derives a resolved thickness from the cell pitch.")
+        infill_layout.addRow("Outer Skin", outer_skin)
         infill_group.setLayout(infill_layout)
         self.props_layout.addWidget(infill_group)
 
@@ -1618,15 +1118,6 @@ class TopologyInspectorMixin:
         and STL for the minimal-surface and honeycomb cells that have no
         compact boundary representation.
         """
-        from pylcss.cae.design_studio.topology_optimization.manufacturing import (
-            FAMILIES as _LATTICE_FAMILIES,
-        )
-
-        family = _LATTICE_FAMILIES.get(
-            normalize_family_key(node.get_property("structure_mode"))
-        )
-        has_brep = True
-
         group = self._build_export_group(
             node, default_filename="lattice_infill.step", is_lattice=True
         )
@@ -1635,8 +1126,14 @@ class TopologyInspectorMixin:
     def _set_topopt_visualization(self, node, mode):
         """Switch result views and lazily build the requested CAD body."""
         mode = str(mode)
-        self.update_property("visualization", mode)
         if mode != "CAD":
+            self.update_property("visualization", mode)
+            return
+        if "STEP" not in self._topopt_available_formats(node):
+            self.update_property("visualization", "CAD")
+            result = getattr(node, "_last_result", None)
+            if isinstance(result, dict):
+                result["visualization_mode"] = "CAD"
             return
 
         result = getattr(node, "_last_result", None)
@@ -1652,12 +1149,20 @@ class TopologyInspectorMixin:
         settings = self._topopt_cad_settings(node, result)
         from pylcss.cae.design_studio.topology_optimization.geometry.cad_config import cached_cad_shape
         if cached_cad_shape(result, settings["strategy"]) is not None:
+            self.update_property("visualization", mode)
             result["visualization_mode"] = mode
             viewer = getattr(self.window(), "viewer", None)
             if viewer is not None:
                 viewer.render_simulation(result)
             return
         self._preview_topopt_cad(node)
+
+    def _build_and_show_lattice_infill(self, node):
+        window = self.window()
+        window._last_rendered_node = node
+        window._last_rendered_geom = None
+        window._section_new_infill = node
+        window._execute_graph(nodes=window._upstream_closure(node))
 
     def _topopt_cad_settings(self, node, result):
         """Collect reconstruction settings shared by preview and export."""
@@ -1679,12 +1184,7 @@ class TopologyInspectorMixin:
         if not isinstance(passive_regions, dict):
             passive_regions = {}
 
-        method = str(
-            node.get_property("cad_reconstruction_method")
-            or "Auto"
-        ).strip().lower()
-        from pylcss.cae.design_studio.topology_optimization.geometry.cad_reconstruction import normalize_cad_strategy
-        strategy = normalize_cad_strategy(method)
+        strategy = 'auto'
         cutoff = float(
             result.get("density_cutoff")
             or node.get_property("density_cutoff")
@@ -1698,6 +1198,8 @@ class TopologyInspectorMixin:
 
     def _preview_topopt_cad(self, node):
         """Build, cache, and display the actual STEP-ready TopOpt B-rep."""
+        if "STEP" not in self._topopt_available_formats(node):
+            return
         window = self.window()
         window = getattr(window, "cad_widget", window)
         worker = getattr(self, "_topopt_cad_preview_worker", None)
@@ -1728,9 +1230,14 @@ class TopologyInspectorMixin:
         def _finish(shape, report):
             self._topopt_cad_preview_worker = None
             report = dict(report or {})
+            layout = report.pop('_surface_layout', None)
+            if layout is not None:
+                result['surface_layout'] = layout
+                result['recovered_shape']['surface_layout'] = layout
             result["cad_shape"] = shape
             result["shape"] = shape
             result["cad_reconstruction"] = report
+            result.pop("cad_error", None)
             result["cad_preview_mesh"] = worker.preview_mesh
             result["visualization_mode"] = "CAD"
             node._last_result = result
@@ -1763,7 +1270,6 @@ class TopologyInspectorMixin:
                         exc_info=True,
                     )
 
-            method_name = str(report.get("method") or "CAD B-rep")
             face_count = report.get(
                 "cad_face_count", report.get("cad_face_count_after_feature_healing")
             )
@@ -1772,7 +1278,7 @@ class TopologyInspectorMixin:
             )
             if hasattr(window, "statusBar") and window.statusBar():
                 window.statusBar().showMessage(
-                    f"CAD ready: {method_name}{count_text}",
+                    f"CAD ready{count_text}",
                     12000,
                 )
             QtCore.QTimer.singleShot(
@@ -1782,6 +1288,16 @@ class TopologyInspectorMixin:
 
         def _fail(message):
             self._topopt_cad_preview_worker = None
+            result["cad_error"] = message
+            result["cad_reconstruction"] = {
+                "method": "CAD reconstruction failed", "failed": True,
+                "editable": False, "error": message,
+            }
+            result["visualization_mode"] = "CAD"
+            node.set_property("visualization", "CAD")
+            viewer = getattr(window, "viewer", None)
+            if viewer is not None:
+                viewer.render_simulation(result)
             clear_progress = getattr(window, "_clear_solve_progress", None)
             if callable(clear_progress):
                 clear_progress()
@@ -1790,9 +1306,18 @@ class TopologyInspectorMixin:
                 "CAD Error",
                 message,
             )
+            QtCore.QTimer.singleShot(
+                0,
+                lambda: self.display_node(node) if self.current_node is node else None,
+            )
 
         def _cancelled():
             self._topopt_cad_preview_worker = None
+            result["visualization_mode"] = "CAD"
+            node.set_property("visualization", "CAD")
+            viewer = getattr(window, "viewer", None)
+            if viewer is not None:
+                viewer.render_simulation(result)
             clear_progress = getattr(window, "_clear_solve_progress", None)
             if callable(clear_progress):
                 clear_progress()
@@ -1812,6 +1337,8 @@ class TopologyInspectorMixin:
 
     def _refresh_topopt_recovered_shape(self, node, result):
         """Rebuild recovered_shape from the current density before export."""
+        if isinstance(result, dict) and result.get("generated_lattice"):
+            return result.get("recovered_shape")
         if not isinstance(result, dict) or result.get("density") is None:
             return result.get("recovered_shape") if isinstance(result, dict) else None
         try:
@@ -1876,6 +1403,14 @@ class TopologyInspectorMixin:
             )
         return result.get("recovered_shape")
 
+    def _topopt_available_formats(self, node):
+        result = getattr(node, "_last_result", None)
+        if isinstance(result, dict):
+            return topopt_export_formats(result)
+        if callable(getattr(node, "resolve_infill_cell_size", None)):
+            return ("STL",)
+        return topopt_export_formats(node.get_property("structure_mode"))
+
     def _build_export_group(
         self, node, default_filename: str = "topology_optimized.step", is_lattice: bool = False
     ) -> QtWidgets.QGroupBox:
@@ -1884,7 +1419,11 @@ class TopologyInspectorMixin:
         layout = QtWidgets.QFormLayout()
         layout.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
 
-        cur_fmt = str(node.get_property("cad_export_format") or "STEP").upper()
+        formats = self._topopt_available_formats(node)
+        cur_fmt = str(node.get_property("cad_export_format") or formats[0]).upper()
+        if cur_fmt not in formats:
+            cur_fmt = formats[0]
+            node.set_property("cad_export_format", cur_fmt)
         ext_map = {"STEP": ".step", "STL": ".stl", "3MF": ".3mf"}
         cur_ext = ext_map.get(cur_fmt, ".step")
 
@@ -1914,10 +1453,9 @@ class TopologyInspectorMixin:
 
         # 2) Export As combo box
         format_combo = QtWidgets.QComboBox()
-        format_combo.addItem("STEP (*.step)", "STEP")
-        format_combo.addItem("STL (*.stl)", "STL")
-        if is_lattice:
-            format_combo.addItem("3MF Lattice (*.3mf)", "3MF")
+        format_labels = {"STEP": "STEP (*.step)", "STL": "STL (*.stl)", "3MF": "3MF Lattice (*.3mf)"}
+        for fmt in formats:
+            format_combo.addItem(format_labels[fmt], fmt)
 
         idx = format_combo.findData(cur_fmt)
         if idx >= 0:
@@ -2064,6 +1602,9 @@ class TopologyInspectorMixin:
             self._execute_export_3mf(node, path)
 
     def _execute_export_step(self, node, export_path: str):
+        if "STEP" not in self._topopt_available_formats(node):
+            QtWidgets.QMessageBox.information(self, "STL Geometry", "Export this complete lattice body as STL. Member-only STEP would omit its outer skin.")
+            return
         result = getattr(node, "_last_result", None)
         if not isinstance(result, dict):
             QtWidgets.QMessageBox.warning(self, "No Result", "Run the study first before exporting.")

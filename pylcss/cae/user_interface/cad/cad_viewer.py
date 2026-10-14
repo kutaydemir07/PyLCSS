@@ -1115,6 +1115,11 @@ class CQ3DViewer(
             )
             normal = [0.0, 0.0, 0.0]
             normal[axis] = 1.0
+            if getattr(self, '_section_show_interior', False):
+                camera = self.renderer.GetActiveCamera()
+                # Open the camera-facing skin so the lattice core is visible.
+                if camera.GetPosition()[axis] > origin[axis]:
+                    normal[axis] = -1.0
             # The clip filters observe this plane, so moving it re-executes
             # them on the next render without rebuilding the pipeline.
             self._section_plane.SetOrigin(*origin)

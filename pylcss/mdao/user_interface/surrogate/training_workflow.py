@@ -91,8 +91,8 @@ class SurrogateTrainingMixin:
         algo = self.combo_algo.currentText()
         config = {"model_type": algo}
 
-        if algo in ("Auto Mode (Scientific SOTA)", "Auto Mode (Recommended)", "Auto Mode"):
-            config["model_type"] = "Auto Mode (Scientific SOTA)"
+        if algo.startswith("Auto Mode"):
+            config["model_type"] = "Auto Mode"
             if hasattr(self, "combo_auto_preset"):
                 config["auto_preset"] = self.combo_auto_preset.currentData() or "quick"
                 config["auto_metric"] = self.combo_auto_metric.currentData() or "R2"
@@ -197,7 +197,7 @@ class SurrogateTrainingMixin:
         )
 
         # Show appropriate tab and message based on architecture
-        model_type = config.get("model_type", "Auto Mode (Scientific SOTA)")
+        model_type = config.get("model_type", "Auto Mode")
         is_neural = any(
             k in model_type
             for k in ("Custom", "Your Own", "PyTorch", "Architecture")
