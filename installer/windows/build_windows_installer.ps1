@@ -219,7 +219,6 @@ New-Item -ItemType Directory -Path $licenseCacheRoot -Force | Out-Null
 foreach ($fileName in @(
     "LICENSE",
     "NOTICE",
-    "PRIVACY.md",
     "README.md",
     "pyproject.toml",
     "requirements.txt",

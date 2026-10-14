@@ -85,7 +85,6 @@ Name: "{group}\PyLCSS MDAO"; Filename: "{app}\PyLCSS.exe"; Parameters: "--worksp
 Name: "{group}\PyLCSS CAE"; Filename: "{app}\PyLCSS.exe"; Parameters: "--workspace cae"; WorkingDir: "{app}\app"; Components: cae
 Name: "{group}\PyLCSS License"; Filename: "{app}\app\LICENSE.txt"
 Name: "{group}\Third-Party Notices"; Filename: "{app}\app\THIRD_PARTY_NOTICES.txt"
-Name: "{group}\Privacy Information"; Filename: "{app}\app\PRIVACY.md"
 Name: "{autodesktop}\PyLCSS"; Filename: "{app}\PyLCSS.exe"; WorkingDir: "{app}\app"; Tasks: desktopicon
 
 [Run]

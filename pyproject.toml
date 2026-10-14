@@ -9,7 +9,7 @@ name = "pylcss"
 version = "3.0.0"
 description = "Source-available desktop engineering design, simulation, sensitivity, and optimization workbench"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {text = "PolyForm Shield License 1.0.0"}
 authors = [
     {name = "Kutay Demir"}
@@ -37,7 +37,6 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Physics",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Operating System :: Microsoft :: Windows",
@@ -90,32 +89,7 @@ cae = [
     "pymeshlab==2025.7.post1",
     "threadpoolctl==3.6.0",
 ]
-all = [
-    "geomdl==5.4.0",
-    "nevergrad==1.0.4",
-    "SALib==1.5.2",
-    "torch==2.9.1",
-    "scikit-learn==1.8.0",
-    "hdbscan==0.8.41",
-    "joblib==1.5.3",
-    "openpyxl==3.1.5",
-    "cadquery==2.6.1",
-    "vtk==9.3.1",
-    "scikit-fem==11.0.0",
-    "netgen-mesher==6.2.2506",
-    "meshio==5.3.5",
-    "scikit-image==0.26.0",
-    "numpy-stl==3.2.0",
-    "trimesh==4.5.3",
-    "lxml==5.3.0",
-    "fast-simplification==0.1.13",
-    "rtree==1.4.1",
-    "pymoto==2.0.1",
-    "py7zr==0.20.8",
-    "numba==0.63.1",
-    "pymeshlab==2025.7.post1",
-    "threadpoolctl==3.6.0",
-]
+all = ["pylcss[mdao,cae]"]
 
 
 [tool.setuptools.packages.find]
@@ -124,7 +98,7 @@ include = ["pylcss*"]
 
 [tool.black]
 line-length = 88
-target-version = ["py310"]
+target-version = ["py311"]
 include = '\.pyi?$'
 
 [tool.setuptools.package-data]

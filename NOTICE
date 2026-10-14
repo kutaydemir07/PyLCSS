@@ -24,10 +24,8 @@ The Windows setup installs or retains license materials in:
 - `app/THIRD_PARTY_LICENSES/python-packages/` for the actual Python
   distributions installed into the isolated runtime.
 
-The package exporter generates `INDEX.json` and `INDEX.txt` from the installed
-wheel records. It copies both metadata license files and package-internal
-license trees and preserves wheel-relative paths. This is important for native
-bundles such as CasADi and CadQuery OCP, which carry many separate notices.
+Installed wheel metadata licenses and package-internal license trees are
+indexed in `INDEX.json` and `INDEX.txt`, preserving wheel-relative paths.
 Optional solver archives retain their upstream notices beside their binaries.
 The exact packaged license files control if this summary differs from them.
 
@@ -35,11 +33,12 @@ The exact packaged license files control if this summary differs from them.
 
 The setup contains the PyLCSS source, a small launcher, the CPython 3.12.10
 embeddable runtime, and the pinned pip 26.1.2 zipapp. During installation pip
-downloads the exact Windows CPython 3.12 wheels and SHA-256 values recorded in
-`requirements-windows-py312.lock`, including every transitive dependency, from
-the configured Python package index. CalculiX,
-OpenCourant, and FreeCAD are downloaded only when their optional tasks are
-selected.
+downloads Windows CPython 3.12 wheels from the configured Python package index,
+using exact versions and SHA-256 hashes in the selected workspace lock:
+`requirements-windows-py312.lock` for both, or
+`requirements-{cae,mdao}-windows-py312.lock` for one workspace. These locks
+include transitive dependencies. CalculiX, OpenCourant, and FreeCAD are
+downloaded only when their optional tasks are selected.
 
 Setup asks for acceptance of the PyLCSS license and displays this notice before
 installation. It does not add a separate click-through for CalculiX,
@@ -115,6 +114,7 @@ covers transitive distributions and bundled native libraries.
 | NodeGraphQt | 0.6.43 | MIT |
 | pyqtgraph | 0.14.0 | MIT |
 | QtAwesome | 1.3.1 | MIT; bundled font works have separate terms below |
+| geomdl | 5.4.0 | MIT |
 | cadquery | 2.6.1 | Apache-2.0 |
 | vtk | 9.3.1 | BSD-3-Clause |
 | scikit-fem | 11.0.0 | BSD-3-Clause |
@@ -143,9 +143,7 @@ covers transitive distributions and bundled native libraries.
 | simpleeval | 1.0.3 | MIT |
 | numba | 0.63.1 | BSD-2-Clause and bundled terms |
 | pymeshlab | 2025.7.post1 | GPL-3.0-or-later |
-
-PyLCSS does not use PyAutoGUI, MouseInfo, or a system-wide mouse/keyboard
-automation dependency.
+| threadpoolctl | 3.6.0 | BSD-3-Clause |
 
 ## Icon-font attribution
 

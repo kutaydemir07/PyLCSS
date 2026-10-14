@@ -1,8 +1,5 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-# PyLCSS - Professional Low-Code System Solutions
-# .gitignore file
-
 # Python
 __pycache__/
 *.py[cod]
@@ -25,6 +22,9 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # PyInstaller
 *.manifest
@@ -39,6 +39,7 @@ env/
 # IDE
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
@@ -68,27 +69,16 @@ temp/
 tmp/
 pylcss/generated_models/
 
-
-# Node-owned FreeCAD documents written by the FreeCAD Part bridge
-# (pylcss/design_studio/freecad_bridge/paths.py creates this lazily).
-# These are per-user design files, not source.
+# User-owned FreeCAD documents
 data_freecad/
-
-# Distribution
-dist/
-build/
 
 # Local documentation
 /docs/
 
-# External solver binaries (CalculiX, OpenCourant) fetched by
-# scripts/install_solvers.py — large, platform-specific, and reproducible
-# via the script, so don't commit them or the auto-generated path config.
+# Solver downloads and generated path configuration
 external_solvers/
 
-# Downloaded benchmark decks (e.g. the ~30 MB Neon HPC zip).  Fetched by
-# `python scripts/install_solvers.py --with-neon` and reproducible from the
-# upstream URL, so we don't commit them.
+# Downloaded benchmark decks
 data/cad_environment/benchmarks/neon/
 
 # Generated experiment and solver outputs
