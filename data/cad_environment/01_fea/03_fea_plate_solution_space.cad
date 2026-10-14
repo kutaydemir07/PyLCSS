@@ -1,0 +1,481 @@
+{
+  "graph": {
+    "layout_direction": 0,
+    "acyclic": true,
+    "pipe_collision": false,
+    "pipe_slicing": true,
+    "pipe_style": 1,
+    "accept_connection_types": "{}",
+    "reject_connection_types": "{}"
+  },
+  "nodes": {
+    "cover": {
+      "type_": "com.cad.code_part.CadQueryCodeNode",
+      "icon": null,
+      "name": "Cover: OD 160, PCD 120",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 163.296875,
+      "height": 168.6,
+      "pos": [
+        -700,
+        0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "code": "# Geometry in mm: OD 160; bolt pitch circle diameter 120.\nbody = cq.Workplane('XY').circle(80.0).circle(big_R).extrude(H)\nresult = (body.faces('>Z').workplane()\n          .pushPoints([(60, 0), (-60, 0), (0, 60), (0, -60)])\n          .hole(bolt_d))\n",
+        "parameters": "",
+        "description": "Four-bolt annular proof-pressure cover",
+        "notes": "Single elastic body. Fixed bolt bores are ideal supports; no preload or gasket contact.",
+        "param_1_name": "H",
+        "param_1_value": 12.0,
+        "param_2_name": "big_R",
+        "param_2_value": 25.0,
+        "param_3_name": "bolt_d",
+        "param_3_value": 10.5,
+        "param_4_name": "",
+        "param_5_name": "",
+        "param_6_name": ""
+      }
+    },
+    "material": {
+      "type_": "com.cad.sim.material.MaterialNode",
+      "icon": null,
+      "name": "Steel: E 210 GPa, yield 330 MPa",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 163.296875,
+      "height": 168.6,
+      "pos": [
+        -350,
+        -260
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "preset": "Custom",
+        "youngs_modulus": 210000.0,
+        "poissons_ratio": 0.3,
+        "density": 7.85e-09,
+        "yield_strength": 330.0,
+        "tangent_modulus": 0.0
+      }
+    },
+    "mesh": {
+      "type_": "com.cad.sim.mesh.MeshNode",
+      "icon": null,
+      "name": "Tet10, 6 mm nominal",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 163.296875,
+      "height": 168.6,
+      "pos": [
+        -350,
+        0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "mesh_source": "CAD",
+        "mesh_type": "Tet10",
+        "element_size": 6.0
+      }
+    },
+    "bolts": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Four bolt bore faces",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 163.296875,
+      "height": 168.6,
+      "pos": [
+        -350,
+        230
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "entity_type": "Face",
+        "selector_type": "Coordinate Range",
+        "range_expr": "((x*x + y*y) > 3599.9) & ((x*x + y*y) < 3600.1)"
+      }
+    },
+    "support": {
+      "type_": "com.cad.sim.constraint.ConstraintNode",
+      "icon": null,
+      "name": "Fixed bolt bores",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 163.296875,
+      "height": 168.6,
+      "pos": [
+        0,
+        230
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "constraint_type": "Fixed",
+        "condition": ""
+      }
+    },
+    "wet_face": {
+      "type_": "com.cad.select_face.SelectFaceNode",
+      "icon": null,
+      "name": "Wetted bottom annular face",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 163.296875,
+      "height": 168.6,
+      "pos": [
+        -350,
+        440
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "entity_type": "Face",
+        "selector_type": "Direction",
+        "direction": "<Z"
+      }
+    },
+    "pressure": {
+      "type_": "com.cad.sim.load.LoadNode",
+      "icon": null,
+      "name": "Proof pressure 1.5 MPa",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 163.296875,
+      "height": 168.6,
+      "pos": [
+        0,
+        440
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "load_type": "Pressure",
+        "pressure": 1.5,
+        "direction": "Inward",
+        "case_weight": 1.0,
+        "case_name": "Proof pressure"
+      }
+    },
+    "static": {
+      "type_": "com.cad.sim.solver.SolverNode",
+      "icon": null,
+      "name": "Cover CalculiX static",
+      "color": [
+        13,
+        18,
+        23,
+        255
+      ],
+      "border_color": [
+        74,
+        84,
+        85,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255,
+        180
+      ],
+      "disabled": false,
+      "selected": false,
+      "visible": true,
+      "width": 163.296875,
+      "height": 168.6,
+      "pos": [
+        350,
+        0
+      ],
+      "layout_direction": 0,
+      "port_deletion_allowed": false,
+      "subgraph_session": {},
+      "custom": {
+        "analysis_type": "Linear",
+        "deck_only": false,
+        "visualization": "Von Mises Stress",
+        "deformation_scale": "Auto"
+      }
+    }
+  },
+  "connections": [
+    {
+      "out": [
+        "cover",
+        "shape"
+      ],
+      "in": [
+        "mesh",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "cover",
+        "shape"
+      ],
+      "in": [
+        "bolts",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "cover",
+        "shape"
+      ],
+      "in": [
+        "wet_face",
+        "shape"
+      ]
+    },
+    {
+      "out": [
+        "mesh",
+        "mesh"
+      ],
+      "in": [
+        "support",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "bolts",
+        "selection"
+      ],
+      "in": [
+        "support",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "mesh",
+        "mesh"
+      ],
+      "in": [
+        "pressure",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "wet_face",
+        "selection"
+      ],
+      "in": [
+        "pressure",
+        "target_face"
+      ]
+    },
+    {
+      "out": [
+        "mesh",
+        "mesh"
+      ],
+      "in": [
+        "static",
+        "mesh"
+      ]
+    },
+    {
+      "out": [
+        "material",
+        "material"
+      ],
+      "in": [
+        "static",
+        "material"
+      ]
+    },
+    {
+      "out": [
+        "support",
+        "constraints"
+      ],
+      "in": [
+        "static",
+        "constraints"
+      ]
+    },
+    {
+      "out": [
+        "pressure",
+        "loads"
+      ],
+      "in": [
+        "static",
+        "loads"
+      ]
+    }
+  ],
+  "_copyright": "Copyright (c) 2026 Kutay Demir.",
+  "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
+  "_title": "Four-Bolt Annular Proof-Pressure Cover",
+  "_purpose": "CAE companion of FEA Plate Solution Space.json; expose H, big_R and bolt_d.",
+  "_fidelity": "Linear elastic Tet10 CalculiX study; mm, N, MPa, s, tonne. OD160mm, PCD120mm; all four bore faces fixed; 1.5MPa inward pressure on bottom annular face.",
+  "_baseline": "H=12mm, big_R=25mm, bolt_d=10.5mm. Recompute response values; no mesh-converged reference is claimed.",
+  "_engineering_limits": [
+    "No bolts, preload, gasket, contact, fatigue or buckling model.",
+    "Bore constraints can create stress singularities. Compare refined meshes and structural stress away from ideal supports."
+  ],
+  "_workflow": [
+    "Preview the cover and check four selected bore faces.",
+    "Run Static Solver with CalculiX installed.",
+    "Refine element_size and compare stress, displacement and reactions.",
+    "Use the exposed H, big_R and bolt_d in the matching MDAO model."
+  ],
+  "_acceptance_criteria": [
+    "One valid solid, four bolt bore support faces and one pressure face.",
+    "A successful CalculiX run with finite displacement and stress arrays.",
+    "Applied pressure resultant agrees with support reactions within the study tolerance."
+  ]
+}

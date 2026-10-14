@@ -334,9 +334,9 @@ class ArchitectureBuilderWidget(QtWidgets.QWidget):
             else:
                 return
         except ValueError as exc:
+            self._refresh_table()
             self.lbl_vis_summary.setText(str(exc))
             self.lbl_vis_summary.setToolTip(str(exc))
-            self._refresh_table()
             return
         self.lbl_vis_summary.setToolTip("")
         self._update_summary()
@@ -399,9 +399,8 @@ class ArchitectureBuilderWidget(QtWidgets.QWidget):
         self.spin_fourier_num.setValue(fourier.get("num_features", 32))
         self.spin_fourier_scale.setValue(fourier.get("scale", 1.0))
 
-        layers = spec.get("layers", [])
-        if layers:
-            self.custom_layers = list(layers)
+        if "layers" in spec:
+            self.custom_layers = list(spec["layers"])
             self._refresh_table()
 
         if "custom_code" in cfg:

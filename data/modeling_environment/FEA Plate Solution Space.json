@@ -5,8 +5,8 @@
   "_purpose": "Drive the matching 1.5 MPa Design Studio CalculiX study to balance cover thickness, center clearance, fastener diameter, stress, and displacement.",
   "_fidelity": "The linked CAD study is a quadratic, single-body static idealization with fixed bolt-bearing surfaces. Bolt preload, gasket contact, thermal gradients, and fatigue require a higher-fidelity model.",
   "_visual_target": "Inspect CalculiX static stress and deflection contours mapped across the plate design parameter box.",
-  "_engineering_decision": "Determine robust tolerances for plate thickness, center port radius, and bolt circle diameter that ensure CalculiX proof-pressure stress and deflection remain safely within allowables across all manufacturing variations.",
-  "_baseline": "Plate thickness = 12.0 mm, center hole radius = 25.0 mm, bolt hole diameter = 10.5 mm, yielding von Mises stress = 184 MPa (allowable 220 MPa) and deflection = 0.42 mm.",
+  "_engineering_decision": "Set thickness, center-hole radius and bolt-hole clearance diameter for the explicit OD160mm, PCD120mm annular cover idealization.",
+  "_baseline": "H=12.0mm, big_R=25.0mm, bolt_d=10.5mm. Run the linked CalculiX study; no mesh-converged stress or displacement baseline is supplied.",
   "_design_variables": [
     "Cover plate thickness: 10.0 to 16.0 mm",
     "Center hole radius: 20.0 to 30.0 mm",
@@ -32,7 +32,7 @@
   ],
   "_workflow": [
     "Map the design variables to exposed Design Studio geometry controls.",
-    "Evaluate stress and mass through the saved CalculiX workflow.",
+    "Evaluate peak stress and peak displacement through the saved CalculiX workflow.",
     "Compute a robust solution box and verify its corners with a refined mesh."
   ],
   "_acceptance_criteria": [
@@ -100,8 +100,8 @@
             "custom": {
               "var_name": "H",
               "unit": "mm",
-              "min": "8.0",
-              "max": "18.0"
+              "min": "10.0",
+              "max": "16.0"
             }
           },
           "0x17c1de66b10": {
@@ -149,8 +149,8 @@
             "custom": {
               "var_name": "big_R",
               "unit": "mm",
-              "min": "12.0",
-              "max": "26.0"
+              "min": "20.0",
+              "max": "30.0"
             }
           },
           "0x17c1de76870": {
@@ -198,8 +198,8 @@
             "custom": {
               "var_name": "bolt_d",
               "unit": "mm",
-              "min": "5.0",
-              "max": "9.0"
+              "min": "9.0",
+              "max": "13.0"
             }
           },
           "0x17c1de7cb60": {
@@ -323,7 +323,7 @@
               "var_name": "max_stress",
               "unit": "MPa",
               "req_min": "0.0",
-              "req_max": "180.0",
+              "req_max": "220.0",
               "minimize": false,
               "maximize": false
             }
@@ -374,7 +374,7 @@
               "var_name": "peak_deflection",
               "unit": "mm",
               "req_min": "0.0",
-              "req_max": "0.02",
+              "req_max": "0.60",
               "minimize": false,
               "maximize": false
             }

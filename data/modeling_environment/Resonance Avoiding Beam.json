@@ -18,7 +18,7 @@
   ],
   "_requirements": [
     {
-      "name": "Resonance Avoidance Margin",
+      "name": "Frequency Exclusion",
       "requirement": "The graph output f_n = min(f1 - 60 Hz, 120 Hz - f1) must be <= 0 Hz. Thus f1 <= 60 Hz or f1 >= 120 Hz is feasible; no extra clearance percentage is imposed. f_n is a signed exclusion constraint, not the natural frequency."
     },
     {
