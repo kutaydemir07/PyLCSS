@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import math
 
 
-CAD_RECONSTRUCTION_REVISION = 10
+CAD_RECONSTRUCTION_REVISION = 11
 
 
 def cached_cad_shape(payload, strategy):

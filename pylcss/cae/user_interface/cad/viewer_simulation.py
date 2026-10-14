@@ -1030,7 +1030,10 @@ class SimulationRenderingMixin:
                 normals = vtk.vtkPolyDataNormals()
                 normals.SetInputData(poly_data)
                 normals.ConsistencyOn()
-                normals.AutoOrientNormalsOn()
+                # Recovery already supplies the material boundary winding.
+                # Inward shells bound pores; orienting each shell outwards
+                # turns those voids into solid regions during section capping.
+                normals.AutoOrientNormalsOff()
                 if cad_surface_preview:
                     normals.SplittingOn()
                     normals.SetFeatureAngle(50.0)
@@ -1055,8 +1058,7 @@ class SimulationRenderingMixin:
                 self.renderer.AddActor(actor)
                 self.current_actor = actor
                 self.actors.append(actor)
-                if self._section_enabled:
-                    self._update_section_cut()
+                self.register_section_surface(actor, poly_data)
                 self._render_topopt_joint_overlays(data)
 
                 self._pickable_surface_dataset = vtk.vtkPolyData()
@@ -1067,6 +1069,10 @@ class SimulationRenderingMixin:
                 self._update_scalar_bar("", 0, 1, None)
 
                 self.renderer.ResetCamera()
+                if self._section_enabled:
+                    # Choose the removed half from the final camera position,
+                    # which can move across the plane while framing the part.
+                    self._update_section_cut()
                 self._request_render()
                 return
 

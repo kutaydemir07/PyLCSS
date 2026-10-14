@@ -125,7 +125,8 @@ def fit_nurbs_surface_for_layout(
                 continue
             if fit_tolerance <= 0:
                 break
-            error = _surface_map_residual(layout, surf, grid_size=35, sample_cache=sample_cache)
+            error, error_uv, site_errors = _surface_map_validation(
+                layout, surf, grid_size=35, sample_cache=sample_cache)
             refinement.append({"ctrlpts_u": surf.ctrlpts_size_u, "ctrlpts_v": surf.ctrlpts_size_v,
                                "maximum_dense_map_residual": error})
             if error < best_error:
@@ -136,19 +137,15 @@ def fit_nurbs_surface_for_layout(
             # Add resolution where the harmonic map compresses a feature.
             # Raising a uniform control count alone misses narrow UV strips.
             if layout.parameter_coords is not None:
-                from scipy.interpolate import BSpline as ScipyBSpline
-                ids = np.unique(layout.triangles)
-                uv = np.asarray(layout.parameter_coords)[ids]
-                node_u = ScipyBSpline.design_matrix(uv[:, 0], surf.knotvector_u, degree_u).toarray()
-                node_v = ScipyBSpline.design_matrix(uv[:, 1], surf.knotvector_v, degree_v).toarray()
-                evaluated = np.einsum("ni,ijc,nj->nc", node_u, np.asarray(surf.ctrlpts2d), node_v, optimize=True)
-                node_errors = np.linalg.norm(evaluated - layout.vertices[ids], axis=1)
-                worst = np.argsort(node_errors)[::-1]
+                # A patch can match every mesh vertex while missing the
+                # inverse map between vertices. Refine the failing validation
+                # sites too, using the same independent residual check.
+                worst = np.argsort(site_errors)[::-1]
                 for axis, knots in ((0, local_knots_u), (1, local_knots_v)):
                     added = 0
                     for index in worst:
-                        value = float(round(uv[index, axis], 8))
-                        if node_errors[index] <= 3 * fit_tolerance:
+                        value = float(round(error_uv[index, axis], 8))
+                        if site_errors[index] <= 3 * fit_tolerance:
                             break
                         if 1e-6 < value < 1 - 1e-6 and all(abs(value - knot) > 1e-5 for knot in knots):
                             knots.append(value)
@@ -675,6 +672,16 @@ def _sample_fit_grid(layout, grid_u, grid_v, cache=None):
 
 def _surface_map_residual(layout: QuadLayout, surface: Any, grid_size: int = 35, *, sample_cache=None) -> float:
     """Validate each knot span and mesh vertices, including very narrow UV strips."""
+    return _surface_map_validation(layout, surface, grid_size, sample_cache=sample_cache)[0]
+
+
+def _surface_map_validation(layout: QuadLayout, surface: Any, grid_size: int = 35, *, sample_cache=None):
+    """Return the maximum residual and sites that can guide local refinement.
+
+    Every grid site and source vertex contributes to the maximum. The 256
+    largest grid errors supplement all source vertices when choosing knots;
+    retaining these sites does not reduce the independent validation grid.
+    """
     from scipy.interpolate import BSpline as ScipyBSpline
     coordinates = (np.arange(grid_size) + .5) / grid_size
     test_u = np.unique(np.r_[coordinates, _knot_span_samples(surface.knotvector_u)])
@@ -683,15 +690,23 @@ def _surface_map_residual(layout: QuadLayout, surface: Any, grid_size: int = 35,
     au = ScipyBSpline.design_matrix(test_u, surface.knotvector_u, surface.degree_u).toarray()
     av = ScipyBSpline.design_matrix(test_v, surface.knotvector_v, surface.degree_v).toarray()
     evaluated = np.einsum("ui,ijc,vj->uvc", au, np.asarray(surface.ctrlpts2d), av, optimize=True)
-    maximum = float(np.linalg.norm(evaluated - source, axis=2).max())
+    grid_errors = np.linalg.norm(evaluated - source, axis=2)
+    maximum = float(grid_errors.max())
+    worst = np.argsort(grid_errors.ravel())[-256:]
+    u_indices, v_indices = np.unravel_index(worst, grid_errors.shape)
+    error_uv = np.column_stack((test_u[u_indices], test_v[v_indices]))
+    site_errors = grid_errors.ravel()[worst]
     if layout.parameter_coords is not None:
         ids = np.unique(layout.triangles)
         uv = np.asarray(layout.parameter_coords)[ids]
         node_u = ScipyBSpline.design_matrix(uv[:, 0], surface.knotvector_u, surface.degree_u).toarray()
         node_v = ScipyBSpline.design_matrix(uv[:, 1], surface.knotvector_v, surface.degree_v).toarray()
         nodes = np.einsum("ni,ijc,nj->nc", node_u, np.asarray(surface.ctrlpts2d), node_v, optimize=True)
-        maximum = max(maximum, float(np.linalg.norm(nodes - layout.vertices[ids], axis=1).max()))
-    return maximum
+        node_errors = np.linalg.norm(nodes - layout.vertices[ids], axis=1)
+        maximum = max(maximum, float(node_errors.max()))
+        error_uv = np.vstack((uv, error_uv))
+        site_errors = np.r_[node_errors, site_errors]
+    return maximum, error_uv, site_errors
 
 
 def nurbs_surface_to_occ_face(surf: Any, tol: float = 1e-4) -> Any:

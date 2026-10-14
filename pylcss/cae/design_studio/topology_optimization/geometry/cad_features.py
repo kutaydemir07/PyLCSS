@@ -11,6 +11,7 @@ from typing import Any, Optional
 import numpy as np
 
 from .occ_shapes import (
+    _assess_brep_self_intersections,
     _assert_valid_occ_shape,
     _compound_or_single,
     _single_solid_if_possible,
@@ -330,6 +331,96 @@ def _physical_cylinder_to_solid(
 #: sliver in it. Kept small: this is for degenerate contact, not for repairing
 #: a body that is genuinely wrong.
 _BOOLEAN_FUZZY_RETRIES = (1e-5, 1e-4, 1e-3)
+
+
+def _prepare_boolean_continuity(shape: Any, *, return_parent_face_indices: bool = False) -> Any:
+    """Split internal C0 surface spans without changing their geometry.
+
+    Valid fitted faces can contain cubic knots of multiplicity three. OCC's
+    Boolean intersector can build unusable microscopic intersection edges on
+    such faces. Exact C1 subdivision gives it regular surface spans; bounded
+    topology healing reconnects their shared edges without refitting surfaces.
+    Optional parent indices preserve source-patch provenance for strict checks
+    of the normalized faces before a reconstruction is accepted.
+    """
+    import cadquery as cq
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+    from OCP.GeomAbs import GeomAbs_C0, GeomAbs_C1
+    from OCP.ShapeFix import ShapeFix_Shape
+    from OCP.ShapeUpgrade import ShapeUpgrade_ShapeDivideContinuity
+
+    faces = shape.Faces()
+    needs_split = False
+    for face in faces:
+        surface = BRepAdaptor_Surface(face.wrapped, True)
+        if surface.UContinuity() == GeomAbs_C0 or surface.VContinuity() == GeomAbs_C0:
+            needs_split = True
+            break
+    if not needs_split:
+        return (shape, list(range(len(faces)))) if return_parent_face_indices else shape
+
+    solids = shape.Solids()
+    if (not solids or not shape.isValid()
+            or not all(BRep_Tool.IsClosed_s(shell.wrapped) for shell in shape.Shells())):
+        raise RuntimeError("Analytic Boolean continuity preparation requires a valid closed body")
+    # Copy the complete topology graph while sharing its exact geometry.
+    # Divider/healer edge-tolerance changes must not mutate the fitted input.
+    copied = BRepBuilderAPI_Copy(shape.wrapped, False, False).Shape()
+    divider = ShapeUpgrade_ShapeDivideContinuity(copied)
+    divider.SetSurfaceCriterion(GeomAbs_C1)
+    divider.SetBoundaryCriterion(GeomAbs_C1)
+    divider.SetPCurveCriterion(GeomAbs_C1)
+    divider.SetPrecision(1e-7)
+    if not divider.Perform():
+        return (shape, list(range(len(faces)))) if return_parent_face_indices else shape
+    fixer = ShapeFix_Shape(divider.Result())
+    fixer.SetPrecision(1e-7)
+    fixer.SetMaxTolerance(1e-5)
+    fixer.Perform()
+    candidate = cq.Shape.cast(fixer.Shape())
+    if (not candidate.isValid() or len(candidate.Solids()) != len(solids)
+            or not all(BRep_Tool.IsClosed_s(shell.wrapped) for shell in candidate.Shells())):
+        raise RuntimeError("Exact C1 subdivision did not retain a valid closed CAD body")
+
+    bounds, candidate_bounds = shape.BoundingBox(), candidate.BoundingBox()
+    scale = float(np.linalg.norm([bounds.xlen, bounds.ylen, bounds.zlen]))
+    geometry_tolerance = max(1e-8, scale * 1e-10)
+    if any(getattr(candidate_bounds, axis + "min") < getattr(bounds, axis + "min") - geometry_tolerance
+           or getattr(candidate_bounds, axis + "max") > getattr(bounds, axis + "max") + geometry_tolerance
+           for axis in "xyz"):
+        raise RuntimeError("Exact C1 subdivision changed the CAD bounds")
+    volume = abs(float(shape.Volume(tol=1e-7)))
+    candidate_volume = abs(float(candidate.Volume(tol=1e-7)))
+    if abs(candidate_volume - volume) > max(1e-7, volume * 1e-6):
+        raise RuntimeError("Exact C1 subdivision changed the enclosed CAD volume")
+
+    # The divider uses exact spline segmentation, not approximation. Check
+    # that healing retained each child on an original surface at identical UVs.
+    parents = [(BRep_Tool.Surface_s(face.wrapped), face._uvBounds()) for face in faces]
+    parent_face_indices = []
+    for face in candidate.Faces():
+        surface = BRep_Tool.Surface_s(face.wrapped)
+        u0, u1, v0, v1 = face._uvBounds()
+        um, vm = (u0 + u1) / 2, (v0 + v1) / 2
+        center = surface.Value(um, vm)
+        matches = [(center.Distance(parent.Value(um, vm)), index, parent)
+                   for index, (parent, (pu0, pu1, pv0, pv1)) in enumerate(parents)
+                   if pu0 - 1e-10 <= um <= pu1 + 1e-10
+                   and pv0 - 1e-10 <= vm <= pv1 + 1e-10]
+        if not matches:
+            raise RuntimeError("Exact C1 subdivision lost source surface correspondence")
+        distance, parent_index, parent = min(matches, key=lambda pair: pair[0])
+        if distance > geometry_tolerance or any(
+                surface.Value(u0 + a * (u1 - u0), v0 + b * (v1 - v0)).Distance(
+                    parent.Value(u0 + a * (u1 - u0), v0 + b * (v1 - v0))) > geometry_tolerance
+                for a in (.125, .5, .875) for b in (.125, .5, .875)):
+            raise RuntimeError("C1 topology healing changed the fitted surface geometry")
+        parent_face_indices.append(parent_index)
+    logger.info("Prepared %d fitted CAD faces as %d exact C1 faces for analytic booleans",
+                len(faces), len(candidate.Faces()))
+    return (candidate, parent_face_indices) if return_parent_face_indices else candidate
 
 
 def _native_boolean(body: Any, tool: Any, operation: str, fuzzy: float = 0.0) -> Any:
@@ -737,6 +828,164 @@ def _box_domain_contains_shape(shape: Any, domain: Any) -> bool:
                for axis in "xyz")
 
 
+def _repair_boolean_vertex_contacts(shape: Any, quality: Optional[dict[str, Any]] = None) -> Any:
+    """Merge only existing short contacts in overlapping vertex tolerances.
+
+    Boolean intersections can split a curve twice inside its endpoint
+    uncertainty. Shrinking the resulting vertex tolerances is invalid: those
+    tolerances may be required by the incident curves. OCC's wireframe repair
+    instead merges adjacent short edges while preserving the exact surfaces.
+    A genuine surface/edge intersection is never eligible for this repair.
+    """
+    import cadquery as cq
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+    from OCP.Precision import Precision
+    from OCP.ShapeFix import ShapeFix_Wireframe
+    from OCP.TopTools import TopTools_IndexedMapOfShape
+    from .step_export import (
+        assert_unchanged_surface_geometry, export_cad_model, verify_step_roundtrip,
+    )
+
+    quality = quality if quality is not None else _assess_brep_self_intersections(shape)
+    if quality.get("passed", False):
+        return shape
+
+    def transfer(body):
+        with TemporaryDirectory(prefix="pylcss_boolean_contacts_") as directory:
+            isolated = cq.Shape.cast(BRepBuilderAPI_Copy(body.wrapped, False, False).Shape())
+            path = Path(directory) / "material.step"
+            export_cad_model(isolated, export_path=path, verify=False)
+            canonical, _ = verify_step_roundtrip(path, return_shape=True)
+        assert_unchanged_surface_geometry(body, canonical)
+        if (not canonical.isValid() or not canonical.Solids()
+                or len(canonical.Solids()) != len(body.Solids())
+                or len(canonical.Faces()) != sum(len(solid.Faces()) for solid in canonical.Solids())
+                or not all(BRep_Tool.IsClosed_s(shell.wrapped) for shell in canonical.Shells())):
+            raise RuntimeError("Post-Boolean STEP normalization did not preserve a valid closed solid")
+        before, after = (abs(float(part.Volume(tol=1e-7))) for part in (body, canonical))
+        if abs(after - before) > max(1e-9, before * 1e-6):
+            raise RuntimeError("Post-Boolean STEP normalization changed the enclosed material")
+        bound_tolerance = max(2.0 * Precision.Confusion_s(),
+                              float(body.BoundingBox().DiagonalLength) * 1e-9)
+        if np.max(np.abs(np.asarray(_shape_bounds(body)) - np.asarray(_shape_bounds(canonical)))) > bound_tolerance:
+            raise RuntimeError("Post-Boolean STEP normalization changed the material bounds")
+        return canonical
+
+    def vertex_contacts(report):
+        faults = report.get("self_intersection_faults", [])
+        return (bool(faults) and not report.get("unmapped_fault_count", 0)
+                and not report.get("other_fault_count", 0)
+                and all(fault.get("shape_types") == ["VERTEX"]
+                        and len(fault.get("vertex_indices", [])) == 2 for fault in faults))
+
+    # A failed raw Boolean can acquire consistent pcurve bookkeeping during
+    # STEP transfer. Require a clean result to survive the next transfer too:
+    # a second transfer can expose redundant vertices masked by the first.
+    # Already mapped vertex contacts are repaired directly, without another
+    # transfer changing their graph before the merge.
+    if not vertex_contacts(quality):
+        for _ in range(2):
+            shape = transfer(shape)
+            quality = _assess_brep_self_intersections(shape)
+            if vertex_contacts(quality):
+                break
+            if not quality.get("passed", False):
+                raise RuntimeError("Post-Boolean CAD has intersections beyond repairable vertex contacts")
+        else:
+            return shape
+    faults = quality["self_intersection_faults"]
+
+    vertices = shape.Vertices()
+    points = np.asarray([vertex.Center().toTuple() for vertex in vertices])
+    tolerances = np.asarray([BRep_Tool.Tolerance_s(vertex.wrapped) for vertex in vertices])
+    eligible: set[int] = set()
+    adjacent: set[int] = set()
+    precision = 0.0
+    for fault in faults:
+        first, second = fault["vertex_indices"]
+        if min(first, second) < 0 or max(first, second) >= len(vertices):
+            raise RuntimeError("Post-Boolean CAD contact vertices could not be mapped")
+        tolerance_sum = float(tolerances[first] + tolerances[second])
+        distance = float(np.linalg.norm(points[first] - points[second]))
+        connecting_edges = [edge for edge in shape.Edges() if all(
+            any(vertex.wrapped.IsSame(vertices[index].wrapped) for vertex in edge.Vertices())
+            for index in (first, second))]
+        if (not 0.0 < distance <= tolerance_sum or not connecting_edges
+                or any(edge.Length() > tolerance_sum for edge in connecting_edges)):
+            raise RuntimeError("Post-Boolean CAD vertex contact has no bounded short-edge repair")
+        eligible.update((first, second))
+        precision = max(precision, tolerance_sum)
+    vertex_map = TopTools_IndexedMapOfShape()
+    for vertex in vertices:
+        vertex_map.Add(vertex.wrapped)
+    for edge in shape.Edges():
+        indices = {vertex_map.FindIndex(part.wrapped) - 1 for part in edge.Vertices()}
+        if indices & eligible:
+            adjacent.update(indices)
+
+    # Isolate all topology and tolerances. Sharing the original exact geometry
+    # retains the Boolean surface representation without mutating its owner.
+    isolated = BRepBuilderAPI_Copy(shape.wrapped, False, False).Shape()
+    fixer = ShapeFix_Wireframe(isolated)
+    fixer.SetPrecision(precision)
+    fixer.SetMaxTolerance(precision)
+    fixer.ModeDropSmallEdges = False
+    if not fixer.FixSmallEdges():
+        raise RuntimeError("Post-Boolean CAD vertex contact could not be merged")
+    repaired = cq.Shape.cast(fixer.Shape())
+    if (not repaired.isValid() or not repaired.Solids()
+            or len(repaired.Solids()) != len(shape.Solids())
+            or len(repaired.Faces()) != sum(len(solid.Faces()) for solid in repaired.Solids())
+            or not all(BRep_Tool.IsClosed_s(shell.wrapped) for shell in repaired.Shells())):
+        raise RuntimeError("Post-Boolean vertex repair did not preserve a valid closed solid")
+    assert_unchanged_surface_geometry(shape, repaired)
+    volume_before, volume_after = (abs(float(body.Volume(tol=1e-7))) for body in (shape, repaired))
+    if abs(volume_after - volume_before) > max(1e-9, volume_before * 1e-6):
+        raise RuntimeError("Post-Boolean vertex repair changed the enclosed material")
+    before_bounds, after_bounds = np.asarray(_shape_bounds(shape)), np.asarray(_shape_bounds(repaired))
+    # OCC's optimal bounds use Confusion padding after curve consolidation;
+    # unchanged planes can consequently gain 1e-7 numerical bounds padding.
+    linear_tolerance = max(2.0 * Precision.Confusion_s(),
+                           float(np.linalg.norm(np.ptp(points, axis=0))) * 1e-9)
+    if np.max(np.abs(before_bounds - after_bounds)) > linear_tolerance:
+        raise RuntimeError("Post-Boolean vertex repair changed the material bounds")
+
+    # The high-level OCC operation may inspect other short edges. Accept only
+    # a local merge: every retained vertex remains at an original point and
+    # only fault vertices may disappear. Merged trim curves can carry a new
+    # approximation tolerance; only their existing adjacent endpoints may
+    # inherit that edge tolerance, within the original contact uncertainty.
+    retained: set[int] = set()
+    for vertex in repaired.Vertices():
+        distances = np.linalg.norm(points - np.asarray(vertex.Center().toTuple()), axis=1)
+        index = int(np.argmin(distances))
+        allowed_tolerance = float(tolerances[index])
+        if index in adjacent:
+            incident_tolerances = [BRep_Tool.Tolerance_s(edge.wrapped) for edge in repaired.Edges()
+                if any(part.wrapped.IsSame(vertex.wrapped) for part in edge.Vertices())]
+            edge_tolerance = max(incident_tolerances, default=0.0)
+            if edge_tolerance > precision:
+                raise RuntimeError("Post-Boolean trim repair exceeded the existing contact uncertainty")
+            allowed_tolerance = max(allowed_tolerance, edge_tolerance)
+        if (distances[index] > 1e-10
+                or BRep_Tool.Tolerance_s(vertex.wrapped) > allowed_tolerance * (1.0 + 1e-6) + 1e-12):
+            raise RuntimeError("Post-Boolean vertex repair changed unrelated vertex geometry")
+        retained.add(index)
+    if not (set(range(len(vertices))) - retained).issubset(eligible):
+        raise RuntimeError("Post-Boolean vertex repair removed unrelated vertices")
+    if not _assess_brep_self_intersections(repaired).get("passed", False):
+        raise RuntimeError("Post-Boolean vertex repair left unresolved intersections")
+    logger.info("Recovered Shape STEP: merged %d overlapping Boolean contact vertex/vertices",
+                len(vertices) - len(retained))
+    verified = transfer(repaired)
+    if not _assess_brep_self_intersections(verified).get("passed", False):
+        raise RuntimeError("Post-Boolean vertex repair did not survive verified STEP transfer")
+    return verified
+
+
 def _apply_passive_regions_to_step(
     shape: Any,
     payload: Any,
@@ -744,6 +993,7 @@ def _apply_passive_regions_to_step(
     void_axial_margin: float = 0.02,
     void_radial_margin: float = 0.0,
     validate_after_boolean: bool = True,
+    repair_boolean_contacts: bool = False,
 ) -> Any:
     """Re-apply passive boxes/cylinders as analytic STEP features."""
     import cadquery as cq
@@ -757,6 +1007,8 @@ def _apply_passive_regions_to_step(
     requested_solid_tools = list(solid_tools)
     source_domain = _coerce_to_solid(payload.get('source_cad_shape')) if isinstance(payload,dict) else None
     validation_cut_tools = list(cut_tools)
+    if source_domain is not None or solid_tools or cut_tools:
+        result = _prepare_boolean_continuity(result)
     if source_domain is not None:
         # Match source bores and outer surfaces before adding face-coincident
         # protected layers, so both operands share the analytic boundaries.
@@ -799,6 +1051,8 @@ def _apply_passive_regions_to_step(
     # Material checks must not use the pre-consolidation B-rep.
     if solid_tools or cut_tools:
         result = _unify_same_domain_shape(result, merge_angle_deg=0.25)
+    if repair_boolean_contacts:
+        result = _repair_boolean_vertex_contacts(result)
     material_result = result
 
     # Pins/shafts are assembly hardware. Add exact analytic cylinders after

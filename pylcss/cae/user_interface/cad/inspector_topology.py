@@ -630,13 +630,16 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             and not has_cad_body and not building_cad
         )
         build_cad.clicked.connect(lambda _checked=False: self._preview_topopt_cad(node))
-        view_layout.addRow(build_cad)
-        if building_cad:
+        if not (is_lattice_structure and not supports_cad):
+            view_layout.addRow(build_cad)
+        else:
+            build_cad.hide()
+        if not supports_cad:
+            cad_hint = "Lattice mesh is ready. Export as STL."
+        elif building_cad:
             cad_hint = "Building CAD in the background."
         elif has_cad_body:
             cad_hint = "CAD is ready. Select CAD above to view it or export as STEP."
-        elif not supports_cad:
-            cad_hint = "This lattice supports STL export; a complete CAD body is unavailable."
         elif not (has_recovered_surface or has_density):
             cad_hint = "Run TopOpt first, then use Build CAD to create the CAD body."
         else:
@@ -835,6 +838,7 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         node._last_result = result
         node._last_structure_options = result.get("structure_options")
         node._last_member_plan = None
+        node._last_cad_reconstruction_report = result.get("cad_reconstruction")
         from .result_fields import topopt_view_mode
         mode = "Lattice" if result.get("generated_lattice") else topopt_view_mode(result, result.get("visualization_mode") or "STL Shape")
         node.set_property("visualization", mode)
@@ -880,6 +884,13 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             return
         worker = TopOptLatticeWorker(result, {key: node.get_property(key) for key in POST_LATTICE_DEFAULTS}, parent=self)
         self._topopt_lattice_worker = worker
+        status_bar = window.statusBar() if callable(getattr(window, "statusBar", None)) else None
+        outcome = {"message": "Lattice generation cancelled."}
+        clear_progress = getattr(window, "_clear_solve_progress", None)
+        if callable(clear_progress):
+            clear_progress()
+        if status_bar is not None:
+            status_bar.showMessage("Generating lattice mesh...")
         dialog = QtWidgets.QProgressDialog("Generating lattice cells...", "Cancel", 0, 0, self)
         dialog.setWindowTitle("Generate Lattice")
         dialog.setWindowModality(QtCore.Qt.WindowModal)
@@ -890,6 +901,10 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         def finish():
             dialog.close()
             self._topopt_lattice_worker = None
+            if callable(clear_progress):
+                clear_progress()
+            if status_bar is not None:
+                status_bar.showMessage(outcome["message"])
             QtCore.QTimer.singleShot(0, lambda: self.display_node(node) if self.current_node is node else None)
             pending = getattr(window, "_start_pending_execute", None)
             if callable(pending):
@@ -897,16 +912,28 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
 
         def completed(output):
             # A solve or project switch may have replaced this result meanwhile.
+            outcome["message"] = "Lattice mesh is ready. Export as STL."
             if getattr(node, "_last_result", None) is result:
                 self._show_post_topopt_result(node, output)
 
         def failed(message):
+            outcome["message"] = "Lattice generation failed."
             QtWidgets.QMessageBox.warning(self, "Lattice Generation", message)
+
+        def cancelled():
+            outcome["message"] = "Lattice generation cancelled."
+
+        def progress(info, _density, _step, _total):
+            stage = str(info.get("stage") or "Generating lattice mesh...")
+            dialog.setLabelText(stage)
+            if status_bar is not None:
+                status_bar.showMessage("Lattice: " + stage)
 
         queued = QtCore.Qt.QueuedConnection
         worker.lattice_finished.connect(completed, queued)
         worker.lattice_error.connect(failed, queued)
-        worker.lattice_progress.connect(lambda info, _density, _step, _total: dialog.setLabelText(str(info.get("stage") or "Generating lattice...")), queued)
+        worker.lattice_cancelled.connect(cancelled, queued)
+        worker.lattice_progress.connect(progress, queued)
         worker.finished.connect(finish, queued)
         worker.finished.connect(worker.deleteLater)
         worker.start()
@@ -1425,6 +1452,9 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             from pylcss.cae.design_studio.topology_optimization.geometry.surface_recovery import (
                 _recover_voxel_shape,
             )
+            from pylcss.cae.design_studio.topology_optimization.geometry.recovery_payload import (
+                surface_recovery_constraints,
+            )
             from pylcss.cae.design_studio.topology_optimization.integration.lattice_settings import (
                 resolve_lattice_structure_options,
             )
@@ -1441,9 +1471,6 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
                 if mins.size >= 3 and maxs.size >= 3 and np.all(maxs[:3] > mins[:3]):
                     bounds = (mins[:3], maxs[:3])
 
-            passive_regions = result.get("passive_regions")
-            if not isinstance(passive_regions, dict):
-                passive_regions = {}
             density_array = np.asarray(result["density"], dtype=float)
             structure_options = resolve_lattice_structure_options(
                 node,
@@ -1458,13 +1485,8 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
                     or node.get_property("density_cutoff")
                     or 0.45
                 ),
-                solid_boxes=passive_regions.get("solid_boxes", ()),
-                void_boxes=passive_regions.get("void_boxes", ()),
-                solid_cylinders=passive_regions.get("solid_cylinders", ()),
-                void_cylinders=passive_regions.get("void_cylinders", ()),
-                joint_pin_cylinders=passive_regions.get("joint_pin_cylinders", ()),
+                **surface_recovery_constraints(result),
                 extrusion_axis="none",
-                source_mask=result.get("design_domain"),
                 structure_options=structure_options,
                 member_plan=getattr(node, "_last_member_plan", None),
             )
@@ -1597,7 +1619,10 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         field = result.get("recovery_density") if result.get("recovery_density") is not None else result.get("density")
         if field is None:
             return None
-        bounds = result.get("bounds")
+        from pylcss.cae.design_studio.topology_optimization.geometry.cad_features import (
+            _payload_bounds,
+        )
+        bounds = _payload_bounds(result)
         if bounds is None:
             bb_min = node.get_property("bounding_box_min") or [0.0, 0.0, 0.0]
             bb_max = node.get_property("bounding_box_max") or list(np.shape(field))
@@ -1607,15 +1632,15 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             from pylcss.cae.design_studio.topology_optimization.geometry.surface_recovery import (
                 _recover_voxel_shape,
             )
+            from pylcss.cae.design_studio.topology_optimization.geometry.recovery_payload import (
+                surface_recovery_constraints,
+            )
             recovered = _recover_voxel_shape(
                 np.asarray(field, dtype=float),
                 bounds,
                 cutoff,
-                solid_boxes=result.get("solid_boxes"),
-                void_boxes=result.get("void_boxes"),
-                solid_cylinders=result.get("solid_cylinders"),
-                void_cylinders=result.get("void_cylinders"),
-                joint_pin_cylinders=result.get("joint_pin_cylinders"),
+                **surface_recovery_constraints(result),
+                extrusion_axis=result.get("extrusion_axis") or "none",
                 structure_options=result.get("structure_options"),
                 member_plan=result.get("member_plan"),
             )

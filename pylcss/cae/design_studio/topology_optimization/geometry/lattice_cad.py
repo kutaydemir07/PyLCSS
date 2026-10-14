@@ -349,9 +349,11 @@ def topopt_export_formats(options: Any) -> tuple[str, ...]:
     """Only offer CAD when the chosen structure has a supported CAD model."""
     has_preserved_solids = False
     generated = False
+    mesh_lattice = False
     if isinstance(options, dict) and options.get('type') == 'topopt_voxel':
         result = options
         generated = bool(result.get('generated_lattice'))
+        mesh_lattice = generated or result.get('study_kind') == 'lattice_infill'
         recovered = result.get('recovered_shape') or {}
         options = recovered.get('resolved_structure_options') or result.get('structure_options')
         fit = (result.get('generated_lattice') or {}).get('fit') or {}
@@ -371,7 +373,10 @@ def topopt_export_formats(options: Any) -> tuple[str, ...]:
             return ('STL',)
     kind = lattice_cad_strategy(options)
     if kind == 'isosurface':
-        return ('STL', 'STEP')
+        # Generated TPMS cells are already a complete manufacturing mesh.
+        # Fitting that boundary through CAD adds no value to STL generation
+        # and can spend minutes rebuilding thousands of internal surfaces.
+        return ('STL',) if mesh_lattice else ('STL', 'STEP')
     if kind == 'beam':
         skin = options.get('skin_thickness_voxels', 0.0) if isinstance(options, dict) else getattr(options, 'skin_thickness_voxels', 0.0)
         if float(skin or 0.0) > 0.0:

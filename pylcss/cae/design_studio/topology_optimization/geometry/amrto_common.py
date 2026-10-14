@@ -184,8 +184,12 @@ class AMRTOConfig:
     # Repair is a bounded quality extension run once per patch. Keep its total
     # cost predictable on large layouts; unresolved patches are handled by the
     # existing subdivision and validation path.
-    orientation_repair_seconds: float = 2.0
-    orientation_repair_iterations: int = 2
+    # Allow source fitting and the complete independent verification to finish
+    # before spending far more time subdividing and remapping the same chart.
+    orientation_repair_seconds: float = 4.0
+    # Independent verification adds missed fold sites to the active set.
+    # Two iterations can stop before those additional constraints converge.
+    orientation_repair_iterations: int = 8
 
 
 

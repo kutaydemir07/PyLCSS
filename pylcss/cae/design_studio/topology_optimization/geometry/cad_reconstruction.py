@@ -110,7 +110,7 @@ def reconstruct_topopt_cad(
     maximum_volume_delta=0.05, maximum_relative_deviation=0.01,
     max_faces=None, repair_mesh=True, merge_angle_deg=0.,
     void_axial_margin=0.02, void_radial_margin=0., return_report=False,
-    structure_options=None, member_plan=None, export_steps_dir=None,
+    structure_options=None, member_plan=None, export_steps_dir=None, failure_checkpoint_dir=None,
     reconstruction_config: CadReconstructionConfig | None = None,
     progress_callback=None, quad_layout=None, mechanical_validation=None, amrto_config=None, **legacy_options,
 ):
@@ -190,22 +190,17 @@ def reconstruct_topopt_cad(
                 recovered = (supplied_vertices, triangulate_quad_faces(supplied_vertices, supplied_quads))
         if recovered is None:
             from .surface_recovery import _recover_voxel_shape
+            from .recovery_payload import surface_recovery_constraints
             field = payload.get('recovery_density')
             if field is None:
                 field = payload.get('density')
             if field is None:
                 raise SmoothCadUnavailable('No recovered boundary or voxel density was supplied')
-            regions = payload.get('passive_regions') or {}
             boundary = _recover_voxel_shape(np.asarray(field), _payload_bounds(payload),
                                             float(payload.get('recovery_cutoff') or payload.get('density_cutoff') or .5),
                                             structure_options=options, member_plan=plan,
-                                            source_mask=payload.get('source_mask'),
-                                            passive_solid_mask=payload.get('passive_solid_mask'),
-                                            passive_void_mask=payload.get('passive_void_mask'),
                                             extrusion_axis=payload.get('extrusion_axis') or 'none',
-                                            **{name: regions.get(name) or () for name in
-                                               ('solid_boxes', 'void_boxes', 'solid_cylinders',
-                                                'void_cylinders', 'joint_pin_cylinders')})
+                                            **surface_recovery_constraints(payload))
             if boundary is None:
                 raise SmoothCadUnavailable('Voxel recovery did not produce a boundary')
             recovered = _extract_recovered_mesh(boundary)
@@ -268,7 +263,8 @@ def reconstruct_topopt_cad(
                 maximum_relative_deviation=maximum_relative_deviation,
                 max_faces=max_faces, merge_angle_deg=merge_angle_deg,
                 repair_mesh=False, return_report=True, amrto_config=amrto_config,
-                export_steps_dir=folder, progress_callback=progress_callback)
+                export_steps_dir=folder, failure_checkpoint_dir=failure_checkpoint_dir,
+                progress_callback=progress_callback)
             shape = workplane.val()
             report.update(amrto_report, requested_strategy=strategy, backend='in-process',
                           revision=CAD_RECONSTRUCTION_REVISION, smooth=True, editable=True)

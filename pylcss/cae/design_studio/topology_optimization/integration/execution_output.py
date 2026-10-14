@@ -36,6 +36,19 @@ from .voxelization import (
 
 logger = logging.getLogger(__name__)
 
+# Invalidate surfaces recovered before original CAD boundaries were supplied.
+_SURFACE_RECOVERY_CACHE_REVISION = 2
+
+
+def _cad_shape_cache_identity(shape: Any) -> Any:
+    """Identify preserved CAD topology for the node's in-session mesh cache."""
+    if shape is None:
+        return None
+    if hasattr(shape, "val"):
+        shape = shape.val()
+    hash_code = getattr(shape, "hashCode", None)
+    return hash_code() if callable(hash_code) else id(shape)
+
 
 @dataclass(frozen=True)
 class TopologyOutputContext:
@@ -258,6 +271,31 @@ def build_topology_output(
         density_cutoff,
     )
 
+    # Surface recovery needs the original boundaries as well as their coarse
+    # analysis masks: interpolating those masks can intrude into a CAD bore.
+    explicit_solid_shapes: list[Any] = []
+    explicit_void_shapes: list[Any] = []
+    for region in getattr(study, "non_design_regions", ()):
+        geom = region.get("geometry") if isinstance(region, dict) else region
+        rtype = (
+            str(region.get("region_type") or "solid").lower()
+            if isinstance(region, dict)
+            else "solid"
+        )
+        if geom is not None:
+            if rtype == "void":
+                explicit_void_shapes.append(geom)
+            else:
+                explicit_solid_shapes.append(geom)
+
+    source_cad_shape = None
+    try:
+        from ..geometry.non_design import design_domain_shape
+
+        source_cad_shape = design_domain_shape(study.source_design_domain)
+    except (ValueError, TypeError):
+        pass
+
     def recover_surface(
         field: np.ndarray,
         cutoff: float,
@@ -276,6 +314,9 @@ def build_topology_output(
             source_mask=design_domain,
             passive_solid_mask=passive_solid_mask,
             passive_void_mask=passive_void_mask,
+            explicit_solid_shapes=explicit_solid_shapes,
+            explicit_void_shapes=explicit_void_shapes,
+            source_cad_shape=source_cad_shape,
             structure_options=structure_options,
             member_plan=member_plan,
         )
@@ -299,7 +340,10 @@ def build_topology_output(
         str(bc.joint_pin_cylinders),
         hash(np.ascontiguousarray(passive_solid_mask).tobytes()),
         hash(np.ascontiguousarray(passive_void_mask).tobytes()),
-        None,
+        _SURFACE_RECOVERY_CACHE_REVISION,
+        _cad_shape_cache_identity(source_cad_shape),
+        tuple(_cad_shape_cache_identity(shape) for shape in explicit_solid_shapes),
+        tuple(_cad_shape_cache_identity(shape) for shape in explicit_void_shapes),
     )
     if getattr(node, "_last_recovery_key", None) == cache_key:
         recovered = node._last_recovered_shape
@@ -493,28 +537,6 @@ def build_topology_output(
             return None
         return physical / limiting_voxel_edge
 
-    explicit_solid_shapes: list[Any] = []
-    explicit_void_shapes: list[Any] = []
-    for region in getattr(study, "non_design_regions", ()):
-        geom = region.get("geometry") if isinstance(region, dict) else region
-        rtype = (
-            str(region.get("region_type") or "solid").lower()
-            if isinstance(region, dict)
-            else "solid"
-        )
-        if geom is not None:
-            if rtype == "void":
-                explicit_void_shapes.append(geom)
-            else:
-                explicit_solid_shapes.append(geom)
-
-    source_cad_shape = None
-    try:
-        from ..geometry.non_design import design_domain_shape
-
-        source_cad_shape = design_domain_shape(study.source_design_domain)
-    except (ValueError, TypeError):
-        pass
     output: dict[str, Any] = {
         "type": "topopt_voxel",
         "source_cad_shape": source_cad_shape,
@@ -1210,7 +1232,7 @@ def finalize_topology_output(
         }
     from ..geometry.lattice_cad import topopt_export_formats
 
-    output["export_formats"] = list(topopt_export_formats(structure_options))
+    output["export_formats"] = list(topopt_export_formats(output))
 
     output["quality_gate"] = {
         "base_failed_checks": failed_checks,

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional, Sequence, Tuple
+from typing import Callable, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy import ndimage as ndi
@@ -42,6 +42,7 @@ def extract_isosurface_mesh(
     bounds: Optional[Tuple[Sequence[float], Sequence[float]]] = None,
     smooth_field: bool = True,
     smooth_sigma: float = 0.5,
+    field_constraint: Optional[Callable[[np.ndarray], np.ndarray]] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Extract isosurface from pseudo-density field with physical bounds mapping."""
     grid = np.asarray(field, dtype=float)
@@ -52,6 +53,10 @@ def extract_isosurface_mesh(
 
     if smooth_field and smooth_sigma > 0.0:
         grid = smooth_pseudo_density_field(grid, sigma=smooth_sigma)
+    # Smoothing must not undo prescribed material/voids. Apply geometry to the
+    # actual contoured field, including cutoff-aware original bore boundaries.
+    if field_constraint is not None:
+        grid = np.asarray(field_constraint(grid), dtype=float)
     # Densities live at voxel centres. Smooth the field before padding: blurring
     # the artificial exterior into the field incorrectly shrinks a full box.
     smoothed = np.pad(grid, pad_width=1, mode="constant", constant_values=0.0)
@@ -390,6 +395,7 @@ def generate_topopt_triangular_mesh(
     cutoff: float = 0.5,
     bounds: Optional[Tuple[Sequence[float], Sequence[float]]] = None,
     config: Optional[SurfaceRecoveryConfig] = None,
+    field_constraint: Optional[Callable[[np.ndarray], np.ndarray]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, dict]:
     """Generate a smooth, watertight triangular mesh from TO results."""
     cfg = config or SurfaceRecoveryConfig(density_cutoff=cutoff)
@@ -399,6 +405,7 @@ def generate_topopt_triangular_mesh(
         bounds=bounds,
         smooth_field=True,
         smooth_sigma=cfg.density_smooth_sigma,
+        field_constraint=field_constraint,
     )
 
     verts, faces = preprocess_and_repair_mesh(
@@ -426,6 +433,7 @@ def generate_topopt_triangular_mesh(
         "mesh_smoothing_method": "Feature-constrained Laplacian with per-shell signed-volume preservation",
         "mesh_smoothing_crease_angle_degrees": 30.0,
         "explicit_domain_bounds_retained": bounds is not None,
-        "implementation_revision": "2026-10-10-preserved-edges",
+        "field_constraints_reapplied_after_smoothing": field_constraint is not None,
+        "implementation_revision": "2026-10-14-preserved-bores",
     }
     return verts, faces, report

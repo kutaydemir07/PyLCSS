@@ -61,6 +61,7 @@ from .cad_features import (
     _attach_passive_regions_to_lattice,
     _box_domain_contains_shape,
     _coerce_to_solid,
+    _prepare_boolean_continuity,
 )
 from .cad_mesh_repair import (
     _effective_tolerance,
@@ -215,7 +216,7 @@ def _assert_fitting_residual_quality(quality: dict) -> None:
         raise RuntimeError(
             f"AMRTO spline/map residual exceeds the fit tolerance in patch(es) "
             f"{failed_ids}; worst residual {quality['maximum_dense_map_residual']:.6g}. "
-            "The CAD checkpoint was saved."
+            "The fitted patches could not meet the requested accuracy."
         )
 
 
@@ -240,6 +241,43 @@ def _final_layout_residual(layout) -> float:
         return report["maximum_dense_map_residual"]
     refinements = report.get("adaptive_refinements", [])
     return refinements[-1]["maximum_dense_map_residual"] if refinements else 0.0
+
+
+def _layout_fitting_quality(layouts, fitting_repairs, effective_fit):
+    """Collect local accuracy checks before spending time on CAD assembly."""
+    return {
+        "method": "Shared cubic boundaries, scattered original vertices, localized UV knot refinement",
+        "validation": "Shifted inverse-map grid, quarter points in every knot span, and original mesh vertices",
+        "requested_map_residual": 3 * effective_fit,
+        "local_fitting_partition_repair_count": len(fitting_repairs),
+        "refined_patch_count": sum(len(layout.fitting_report.get("adaptive_refinements", [])) > 1
+                                   for layout in layouts),
+        "patch_count_over_map_residual": sum(not layout.fitting_report.get("dense_map_residual_satisfied", True)
+                                              for layout in layouts),
+        "failed_patch_ids": [layout.layout_id for layout in layouts
+                             if not layout.fitting_report.get("dense_map_residual_satisfied", True)],
+        "accepted_interior_orientation_repairs": sum(bool(layout.fitting_report.get("interior_orientation_repair", {}).get("accepted"))
+                                                     for layout in layouts),
+        "interior_orientation_repair_reports": [
+            {"patch": int(layout.layout_id), **layout.fitting_report["interior_orientation_repair"]}
+            for layout in layouts if "interior_orientation_repair" in layout.fitting_report],
+        "maximum_dense_map_residual": max((_final_layout_residual(layout) for layout in layouts), default=0),
+    }
+
+
+def _layout_orientation_quality(layouts):
+    reports = [layout.fitting_report["surface_orientation"] for layout in layouts]
+    return {
+        "method": "Exact spline derivatives at knot-span and one-sided knot sites versus source UV normals",
+        "passed": all(item["accepted"] for item in reports),
+        "failed_patch_ids": [item["layout_id"] for item in reports if not item["accepted"]],
+        "inverted_site_count": sum(item.get("inverted_site_count", 0) for item in reports),
+        "degenerate_site_count": sum(item.get("degenerate_site_count", 0) for item in reports),
+        "validation_error_patch_ids": [item["layout_id"] for item in reports if item.get("error")],
+        "sample_count": sum(item.get("sample_count", 0) for item in reports),
+        "certified_orientation_or_injectivity_bound": False,
+        "patch_reports": reports,
+    }
 
 
 def _canonicalize_step_geometry(solid, layouts, destination: Optional[Path] = None):
@@ -279,6 +317,51 @@ def _write_stage_reports(folder: Optional[Path], reports: dict[str, Any]) -> Non
         temporary.replace(destination)
 
 
+def _checkpoint_note(folder) -> str:
+    if folder is not None and (Path(folder) / "amrto_stage_reports.json").is_file():
+        return f" Diagnostic checkpoint saved to: {Path(folder).resolve()}"
+    return ""
+
+
+def _write_parameterized_layout_checkpoint(layouts, folder: Path) -> None:
+    """Retain exact source/UV correspondence without exporting display meshes."""
+    arrays = {}
+    for layout in layouts:
+        prefix = f"layout_{int(layout.layout_id)}_"
+        arrays[prefix + "vertices"] = layout.vertices
+        arrays[prefix + "triangles"] = layout.triangles
+        arrays[prefix + "quads"] = layout.quads
+        arrays[prefix + "uv"] = layout.parameter_coords
+        arrays[prefix + "corners"] = np.asarray(layout.corner_indices, dtype=np.int64)
+        arrays[prefix + "sampled_grid_3d"] = np.asarray(layout.sampled_grid_3d).reshape(*layout.sampled_shape, 3)
+        arrays[prefix + "sampled_shape"] = np.asarray(layout.sampled_shape, dtype=np.int64)
+        for index, path in enumerate(layout.boundary_paths):
+            arrays[prefix + f"boundary_{index}"] = np.asarray(path, dtype=np.int64)
+        if hasattr(layout, "source_vertex_indices"):
+            arrays[prefix + "source_vertex_indices"] = layout.source_vertex_indices
+    np.savez_compressed(folder / "step4_parameterized_layouts.npz", **arrays)
+
+
+def _checkpoint_failed_fitting(layouts, vertices, faces, reports, folder):
+    """Save numerical diagnostics on failure, without constructing rejected CAD."""
+    if folder is None:
+        return None
+    folder = Path(folder)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(folder / "recovered_boundary.npz", vertices=vertices, faces=faces)
+        _write_parameterized_layout_checkpoint(layouts, folder)
+        _multiresolution_checkpoint(layouts, folder)
+        reports["step5"]["checkpoint_directory"] = str(folder.resolve())
+        _write_stage_reports(folder, reports)
+    except Exception as error:
+        # Diagnostic IO must never hide the original numerical failure.
+        reports["step5"]["checkpoint_error"] = f"{type(error).__name__}: {error}"
+        logger.warning("Could not save failed AMRTO fitting checkpoint: %s", error)
+        return None
+    return folder.resolve()
+
+
 def _sampled_layout_checkpoints(layouts, folder: Optional[Path]) -> dict:
     """Show the unchanged source surface and save sampling as a point overlay.
 
@@ -309,23 +392,7 @@ def _sampled_layout_checkpoints(layouts, folder: Optional[Path]) -> dict:
                 stream.write("p " + " ".join(str(offset + index + 1) for index in range(len(samples))) + "\n")
                 offset += len(samples)
         (folder / "step4_sampled_grids.json").write_text(json.dumps(grid_info, indent=2), encoding="utf-8")
-        # Exact source/UV correspondence is needed to diagnose folds independently
-        # of sampled positional distance, without rerunning native parameterization.
-        arrays = {}
-        for layout in layouts:
-            prefix = f"layout_{int(layout.layout_id)}_"
-            arrays[prefix + "vertices"] = layout.vertices
-            arrays[prefix + "triangles"] = layout.triangles
-            arrays[prefix + "quads"] = layout.quads
-            arrays[prefix + "uv"] = layout.parameter_coords
-            arrays[prefix + "corners"] = np.asarray(layout.corner_indices, dtype=np.int64)
-            arrays[prefix + "sampled_grid_3d"] = np.asarray(layout.sampled_grid_3d).reshape(*layout.sampled_shape, 3)
-            arrays[prefix + "sampled_shape"] = np.asarray(layout.sampled_shape, dtype=np.int64)
-            for index, path in enumerate(layout.boundary_paths):
-                arrays[prefix + f"boundary_{index}"] = np.asarray(path, dtype=np.int64)
-            if hasattr(layout, "source_vertex_indices"):
-                arrays[prefix + "source_vertex_indices"] = layout.source_vertex_indices
-        np.savez_compressed(folder / "step4_parameterized_layouts.npz", **arrays)
+        _write_parameterized_layout_checkpoint(layouts, folder)
     branches = {}
     for grid in grid_info:
         method = grid["parameterization"].get("branch", grid["parameterization"].get("method", "unknown"))
@@ -632,6 +699,7 @@ def reconstruct_topopt_cad(
     structure_options: Any = None,
     member_plan: Any = None,
     export_steps_dir: Optional[str | Path] = None,
+    failure_checkpoint_dir: Optional[str | Path] = None,
     amrto_config: Optional[AMRTOConfig] = None,
     progress_callback: Any = None,
     **legacy_options: Any,
@@ -660,12 +728,12 @@ def reconstruct_topopt_cad(
     if max_faces is not None and (int(max_faces) != max_faces or max_faces < 1):
         raise ValueError('max_faces must be a positive integer')
 
-    def emit_progress(stage: str) -> None:
+    def emit_progress(stage: str, completed: int = 0, total: int = 0) -> None:
         if not callable(progress_callback):
             return
         try:
             progress_callback({"type": "topopt_progress", "status_only": True,
-                               "stage": f"CAD reconstruction — {stage}"}, None, 0, 0)
+                               "stage": f"CAD reconstruction — {stage}"}, None, completed, total)
         except Exception:
             logger.debug("CAD reconstruction progress update failed", exc_info=True)
 
@@ -774,7 +842,7 @@ def reconstruct_topopt_cad(
     finish_stage("step1")
     _write_stage_reports(save_p, stage_reports)
     if validate_watertight and not tri_mesh.is_watertight:
-        raise RuntimeError("AMRTO stage 1 surface is not watertight; checkpoint mesh was saved.")
+        raise RuntimeError("AMRTO stage 1 surface is not watertight." + _checkpoint_note(save_p))
 
     # -------------------------------------------------------------
     # Step 2: Quadrangulation via Instant-Meshes (AMRTO Section 2.4)
@@ -902,12 +970,12 @@ def reconstruct_topopt_cad(
             raise RuntimeError(
                 f"AMRTO stage 2 sampled source deviation {deviation['maximum_relative_distance']:.2%} "
                 f"exceeds {maximum_relative_deviation:.1%} of the stage 1 bounding-box diagonal. "
-                "The quad checkpoint was saved; increase quadrangulation accuracy before fitting."
+                "Increase quadrangulation accuracy before fitting." + _checkpoint_note(save_p)
             )
         if feature_tolerance is not None and deviation["maximum_vertex_and_feature_distance"] > feature_tolerance:
             raise RuntimeError(
                 f"AMRTO stage 2 vertex/crease deviation {deviation['maximum_vertex_and_feature_distance']:.6g} "
-                f"exceeds edge fitting tolerance {feature_tolerance:.6g}. The quad checkpoint was saved.")
+                f"exceeds edge fitting tolerance {feature_tolerance:.6g}." + _checkpoint_note(save_p))
 
     # -------------------------------------------------------------
     # Step 3: Sparse Quadrilateral Layout Division (AMRTO Section 2.5)
@@ -971,7 +1039,8 @@ def reconstruct_topopt_cad(
     def parameterization_progress(layout_index, current_layouts, lay):
         if layout_index % max(1, len(current_layouts) // 20) == 0 or layout_index == len(current_layouts):
             logger.info("AMRTO parameterization: %d/%d layouts", layout_index, len(current_layouts))
-            emit_progress("Preparing CAD surfaces")
+            emit_progress(f"Preparing CAD surfaces — patch {layout_index}/{len(current_layouts)}",
+                          layout_index, len(current_layouts))
             if save_p is not None:
                 (save_p / "step4_parameterization_progress.json").write_text(json.dumps({
                     "status": "parameterizing", "completed_layouts": layout_index,
@@ -1009,7 +1078,10 @@ def reconstruct_topopt_cad(
     fitting_repairs = []
     workplane = None
     step5_rep = {}
+    refinement_stop_reason = None
     for refinement_pass in range(8):
+        emit_progress(f"Creating CAD surfaces — pass {refinement_pass + 1}/8, patch 0/{len(layouts)}",
+                      0, len(layouts))
         boundary_report = prepare_shared_fit_boundaries(layouts, effective_fit if cfg.preserve_patch_boundaries else 0.)
         boundary_report["shared_cubic_curves"] = prepare_shared_boundary_curves(
             layouts, effective_fit, bounds=cfg.source_box_bounds)
@@ -1021,7 +1093,8 @@ def reconstruct_topopt_cad(
                 failed.add(lay.layout_id)
             if layout_index % progress_interval == 0 or layout_index == len(layouts):
                 logger.info("AMRTO spline fitting pass %d: %d/%d layouts", refinement_pass + 1, layout_index, len(layouts))
-                emit_progress("Creating CAD surfaces")
+                emit_progress(f"Creating CAD surfaces — pass {refinement_pass + 1}/8, patch {layout_index}/{len(layouts)}",
+                              layout_index, len(layouts))
                 if save_p is not None:
                     (save_p / "step5_fitting_progress.json").write_text(json.dumps({
                         "status": "fitting", "refinement_pass": refinement_pass + 1,
@@ -1043,8 +1116,23 @@ def reconstruct_topopt_cad(
                     test_wp, test_rep = retry_wp, retry_rep
             if test_rep.get("is_solid", False) and validate_brep:
                 emit_progress("Checking CAD geometry")
+                source_face_layout_ids = test_rep["face_layout_ids"]
+                normalized, parent_face_indices = _prepare_boolean_continuity(
+                    test_wp.val(), return_parent_face_indices=True)
+                # C0 spans can hide within-face intersections from the OCC
+                # checker. Check the exact C1 representation used by booleans
+                # and retain each child's original sparse-layout provenance.
+                face_layout_ids = [source_face_layout_ids[index] for index in parent_face_indices]
+                test_wp = cq.Workplane().newObject([normalized])
+                test_rep["face_layout_ids"] = face_layout_ids
+                test_rep["boolean_continuity"] = {
+                    "method": "Exact C1 surface subdivision with bounded topology healing",
+                    "source_face_count": len(source_face_layout_ids),
+                    "normalized_face_count": len(face_layout_ids),
+                    "parent_face_indices": parent_face_indices,
+                    "physical_surface_geometry_unchanged": True,
+                }
                 intersections = _assess_brep_self_intersections(test_wp.val())
-                face_layout_ids = test_rep["face_layout_ids"]
                 implicated = {layout_id
                     for index in intersections["failed_face_indices"]
                     for layout_id in face_layout_ids[index]}
@@ -1054,6 +1142,12 @@ def reconstruct_topopt_cad(
                                for index in intersections["failed_face_indices"])):
                     implicated = {lay.layout_id for lay in layouts}
                 intersections["failed_patch_ids"] = sorted(implicated)
+                intrinsic_patch_ids = set()
+                for group in intersections.get("failed_face_groups", []):
+                    group_layouts = {layout_id for index in group for layout_id in face_layout_ids[index]}
+                    if len(group_layouts) == 1:
+                        intrinsic_patch_ids.update(group_layouts)
+                intersections["intrinsic_patch_ids"] = sorted(intrinsic_patch_ids)
                 test_rep["self_intersection_quality"] = intersections
                 logger.info("AMRTO geometric intersection check: passed=%s, patches=%s",
                             intersections["passed"], intersections["failed_patch_ids"])
@@ -1062,6 +1156,7 @@ def reconstruct_topopt_cad(
                     lay.fitting_report["brep_self_intersection"] = lay.layout_id in implicated
 
                 exact_seam_repairs = [lay for lay in layouts if lay.layout_id in implicated
+                                      and lay.layout_id not in intrinsic_patch_ids
                                       and not getattr(lay, "require_exact_boundaries", False)]
                 if exact_seam_repairs and refinement_pass < 7:
                     for lay in exact_seam_repairs:
@@ -1074,9 +1169,12 @@ def reconstruct_topopt_cad(
 
         # Closure does not establish that fitted patches are disjoint. Refine
         # inaccurate or crossing patches before passive feature booleans.
+        # Eight passes bound retries, and subdivision preserves every source
+        # quad exactly once. A global 2x/256 patch cap can strand a handful of
+        # repairable charts simply because their accurate neighbors are many.
         if (failed and refinement_pass < 7
-                and len(layouts) < max(256, 2 * step3_rep["layout_count"])
                 and any(lay.layout_id in failed and len(lay.quads) > 1 for lay in layouts)):
+            emit_progress(f"Refining CAD surfaces — {len(failed)} patches need repair")
             logger.info("AMRTO fitting repair candidates: %s", [
                 {"patch": int(lay.layout_id), "quads": len(lay.quads),
                  "position_passed": bool(lay.fitting_report.get("dense_map_residual_satisfied", True)),
@@ -1085,10 +1183,22 @@ def reconstruct_topopt_cad(
                 for lay in layouts if lay.layout_id in failed])
             layouts, repairs = subdivide_fitting_layouts(layouts, failed)
             fitting_repairs.extend(repairs)
-            layouts, parameterization_repairs = _parameterize_and_sample_layouts(layouts, cfg, only_unsampled=True)
+            layouts, parameterization_repairs = _parameterize_and_sample_layouts(
+                layouts, cfg, only_unsampled=True, progress_callback=parameterization_progress)
             fitting_repairs.extend(parameterization_repairs)
             logger.info("AMRTO subdivided %d inaccurate fits into %d layouts", len(failed), len(layouts))
             continue
+
+        if failed and validate_brep:
+            # Local fit/orientation failures already rule out acceptance. Keep
+            # numerical checkpoints and stop before sewing or STEP roundtrips.
+            refinement_stop_reason = (
+                "maximum_refinement_passes" if refinement_pass == 7 else
+                "indivisible_layouts")
+            workplane = test_wp
+            step5_rep = dict(test_rep or {})
+            step5_rep["unresolved_fitting_patch_ids"] = sorted(failed)
+            break
 
         # Check whether accurate layouts assemble into a watertight B-rep solid.
         if test_wp is None:
@@ -1114,6 +1224,36 @@ def reconstruct_topopt_cad(
             _export_stage_mesh(save_p, "step3_layouts", [(f"layout_{lay.layout_id}", lay.vertices, lay.quads) for lay in layouts])
         stage_reports["step4"] = _sampled_layout_checkpoints(layouts, save_p)
         _write_stage_reports(save_p, stage_reports)
+
+    fitting_quality = _layout_fitting_quality(layouts, fitting_repairs, effective_fit)
+    orientation_quality = _layout_orientation_quality(layouts)
+    if validate_brep and step5_rep.get("unresolved_fitting_patch_ids"):
+        stage_reports["step5"] = {
+            **step5_rep, "status": "fitting_failed", "refinement_passes": refinement_pass + 1,
+            "refinement_stop_reason": refinement_stop_reason,
+            "shared_boundary_approximation": boundary_report,
+            "fitting_quality": fitting_quality, "surface_orientation_quality": orientation_quality,
+        }
+        finish_stage("step5")
+        checkpoint = _checkpoint_failed_fitting(layouts, vertices, faces, stage_reports,
+                                               save_p if save_p is not None else failure_checkpoint_dir)
+        try:
+            _assert_fitting_residual_quality(fitting_quality)
+            _assert_fitting_orientation_quality(orientation_quality,
+                intersection_quality=step5_rep.get("self_intersection_quality"))
+            raise RuntimeError("AMRTO fitted CAD contains geometric self-intersections; "
+                               "the affected patches could not be repaired.")
+        except RuntimeError as error:
+            stop_description = {
+                "maximum_refinement_passes": "the fitting retry limit was reached",
+                "indivisible_layouts": "the remaining patches cannot be subdivided further",
+            }[refinement_stop_reason]
+            suffix = f" Fitting stopped because {stop_description}."
+            if checkpoint is not None:
+                suffix += f" Diagnostic checkpoint saved to: {checkpoint}"
+                error.checkpoint_directory = str(checkpoint)
+            error.args = (str(error) + suffix,)
+            raise
 
     multiresolution_report = _multiresolution_checkpoint(layouts, save_p)
     if workplane is None:
@@ -1149,6 +1289,7 @@ def reconstruct_topopt_cad(
                 void_axial_margin=float(void_axial_margin or 0.0),
                 void_radial_margin=float(void_radial_margin or 0.0),
                 validate_after_boolean=bool(validate_brep),
+                repair_boolean_contacts=True,
             )
         except Exception as exc:
             passive_error = str(exc)
@@ -1159,34 +1300,9 @@ def reconstruct_topopt_cad(
 
     stage_reports["step5"] = {**step5_rep, "shared_boundary_approximation": boundary_report,
         "paper_multiresolution": cfg.multires_enabled and not multiresolution_report["algorithm_error_patch_ids"],
-        "multiresolution": multiresolution_report}
-    stage_reports["step5"]["fitting_quality"] = {
-        "method": "Shared cubic boundaries, scattered original vertices, localized UV knot refinement",
-        "validation": "Shifted inverse-map grid, quarter points in every knot span, and original mesh vertices",
-        "local_fitting_partition_repair_count": len(fitting_repairs),
-        "refined_patch_count": sum(len(getattr(layout, "fitting_report", {}).get("adaptive_refinements", [])) > 1 for layout in layouts),
-        "patch_count_over_map_residual": sum(not getattr(layout, "fitting_report", {}).get("dense_map_residual_satisfied", True) for layout in layouts),
-        "failed_patch_ids": [layout.layout_id for layout in layouts
-                             if not getattr(layout, "fitting_report", {}).get("dense_map_residual_satisfied", True)],
-        "accepted_interior_orientation_repairs": sum(bool(layout.fitting_report.get("interior_orientation_repair", {}).get("accepted"))
-                                                     for layout in layouts),
-        "interior_orientation_repair_reports": [
-            {"patch": int(layout.layout_id), **layout.fitting_report["interior_orientation_repair"]}
-            for layout in layouts if "interior_orientation_repair" in layout.fitting_report],
-        "maximum_dense_map_residual": max((_final_layout_residual(layout) for layout in layouts), default=0),
-    }
-    orientation_reports = [layout.fitting_report["surface_orientation"] for layout in layouts]
-    orientation_quality = {
-        "method": "Exact spline derivatives at knot-span and one-sided knot sites versus source UV normals",
-        "passed": all(item["accepted"] for item in orientation_reports),
-        "failed_patch_ids": [item["layout_id"] for item in orientation_reports if not item["accepted"]],
-        "inverted_site_count": sum(item.get("inverted_site_count", 0) for item in orientation_reports),
-        "degenerate_site_count": sum(item.get("degenerate_site_count", 0) for item in orientation_reports),
-        "validation_error_patch_ids": [item["layout_id"] for item in orientation_reports if item.get("error")],
-        "sample_count": sum(item.get("sample_count", 0) for item in orientation_reports),
-        "certified_orientation_or_injectivity_bound": False,
-        "patch_reports": orientation_reports}
-    stage_reports["step5"]["surface_orientation_quality"] = orientation_quality
+        "multiresolution": multiresolution_report,
+        "refinement_passes": refinement_pass + 1,
+        "fitting_quality": fitting_quality, "surface_orientation_quality": orientation_quality}
     from .amrto_step_export import _closed
 
     roundtrip = None
@@ -1239,6 +1355,20 @@ def reconstruct_topopt_cad(
         cad_surface_types=report["cad_surface_types"], shell_count=len(solid.Shells()),
         solid_count=len(solid.Solids()), cavity_shell_count=max(0, len(solid.Shells()) - len(solid.Solids())),
         relative_volume_delta=report.get("relative_volume_delta"), qa_geometry_source=report["qa_geometry_source"])
+    if validate_brep and report["valid"] and report["is_solid"]:
+        # Analytic clipping can introduce trim defects after the fitted body
+        # passed its own checks. Inspect the actual STEP geometry returned.
+        emit_progress("Checking final CAD geometry")
+        final_intersections = _assess_brep_self_intersections(solid)
+        report["final_self_intersection_quality"] = final_intersections
+        stage_reports["step5"]["final_self_intersection_quality"] = final_intersections
+        logger.info("AMRTO final geometric intersection check: passed=%s, faces=%s",
+                    final_intersections["passed"], final_intersections["failed_face_indices"])
+        if not final_intersections["passed"]:
+            finish_stage("step5")
+            _write_stage_reports(save_p, stage_reports)
+            raise RuntimeError("AMRTO final CAD contains geometric self-intersections after analytic feature reconstruction."
+                               + _checkpoint_note(save_p))
     if report["valid"] and report["is_solid"]:
         try:
             deviation = assess_sampled_surface_deviation(
@@ -1268,7 +1398,7 @@ def reconstruct_topopt_cad(
     if validate_brep:
         if not step5_rep.get("self_intersection_quality", {}).get("passed", True):
             raise RuntimeError("AMRTO fitted CAD contains geometric self-intersections; "
-                               "the affected patches could not be repaired. The CAD checkpoint was saved.")
+                               "the affected patches could not be repaired." + _checkpoint_note(save_p))
         _assert_fitting_residual_quality(stage_reports["step5"]["fitting_quality"])
         _assert_fitting_orientation_quality(orientation_quality,
             intersection_quality=step5_rep.get("self_intersection_quality"))
@@ -1276,32 +1406,29 @@ def reconstruct_topopt_cad(
         if not report["valid"] or not report["is_solid"]:
             raise RuntimeError(
                 "AMRTO stage 5 did not produce a valid closed solid; "
-                f"{step5_rep.get('free_edge_count', 'unknown')} free edge(s). "
-                "The fitted surface checkpoint was saved."
+                f"{step5_rep.get('free_edge_count', 'unknown')} free edge(s)." + _checkpoint_note(save_p)
             )
         if (maximum_volume_delta is not None and report.get("relative_volume_delta", 0.0)
                 > float(maximum_volume_delta)):
             raise RuntimeError(
                 f"AMRTO CAD changed the stage 1 enclosed volume by "
-                f"{report['relative_volume_delta']:.1%}, exceeding {maximum_volume_delta:.1%}. "
-                "The CAD checkpoint was saved."
+                f"{report['relative_volume_delta']:.1%}, exceeding {maximum_volume_delta:.1%}." + _checkpoint_note(save_p)
             )
         if maximum_relative_deviation is not None and "sampled_surface_deviation" not in report:
-            raise RuntimeError("AMRTO surface deviation could not be verified. The CAD checkpoint was saved.")
+            raise RuntimeError("AMRTO surface deviation could not be verified." + _checkpoint_note(save_p))
         if (maximum_relative_deviation is not None and
                 report.get("sampled_surface_deviation", {}).get("maximum_relative_distance", 0.0) > float(maximum_relative_deviation)):
             raise RuntimeError(
                 f"AMRTO sampled surface deviation "
                 f"{report['sampled_surface_deviation']['maximum_relative_distance']:.2%} exceeds "
-                f"{maximum_relative_deviation:.1%} of the stage 1 bounding-box diagonal. "
-                "The CAD checkpoint was saved."
+                f"{maximum_relative_deviation:.1%} of the stage 1 bounding-box diagonal." + _checkpoint_note(save_p)
             )
         if (feature_tolerance is not None and "sampled_surface_deviation" in report
                 and report["sampled_surface_deviation"]["maximum_vertex_and_feature_distance"] > 2 * feature_tolerance):
             raise RuntimeError(
                 f"AMRTO CAD vertex/crease deviation "
                 f"{report['sampled_surface_deviation']['maximum_vertex_and_feature_distance']:.6g} exceeds "
-                f"the cumulative edge fitting tolerance {2 * feature_tolerance:.6g}. The CAD checkpoint was saved.")
+                f"the cumulative edge fitting tolerance {2 * feature_tolerance:.6g}." + _checkpoint_note(save_p))
 
     report['_surface_layout'] = display_layout
     if return_report:

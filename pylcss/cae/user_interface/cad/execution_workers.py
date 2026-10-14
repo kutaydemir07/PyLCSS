@@ -493,7 +493,6 @@ class TopOptMeshExportWorker(QtCore.QThread):
                 from pylcss.cae.design_studio.topology_optimization.geometry.cad_reconstruction import _structure_options
 
                 bounds = _payload_bounds(self.topology_result)
-                regions = self.topology_result.get("passive_regions") or {}
                 cutoff = float(
                     self.topology_result.get("recovery_cutoff")
                     or self.topology_result.get("density_cutoff")
@@ -503,19 +502,15 @@ class TopOptMeshExportWorker(QtCore.QThread):
                     from pylcss.cae.design_studio.topology_optimization.geometry.surface_recovery import (
                         _recover_voxel_shape,
                     )
+                    from pylcss.cae.design_studio.topology_optimization.geometry.recovery_payload import (
+                        surface_recovery_constraints,
+                    )
                     recovered = _recover_voxel_shape(
                         np.asarray(field, dtype=float),
                         bounds,
                         cutoff,
-                        **{name: regions.get(name, self.topology_result.get(name)) or ()
-                           for name in ("solid_boxes", "void_boxes", "solid_cylinders",
-                                        "void_cylinders", "joint_pin_cylinders")},
+                        **surface_recovery_constraints(self.topology_result),
                         extrusion_axis=self.topology_result.get("extrusion_axis") or "none",
-                        source_mask=(self.topology_result.get("source_mask")
-                                     if self.topology_result.get("source_mask") is not None
-                                     else self.topology_result.get("design_domain")),
-                        passive_solid_mask=self.topology_result.get("passive_solid_mask"),
-                        passive_void_mask=self.topology_result.get("passive_void_mask"),
                         structure_options=_structure_options(self.topology_result, self.structure_options),
                         member_plan=self.member_plan,
                     )

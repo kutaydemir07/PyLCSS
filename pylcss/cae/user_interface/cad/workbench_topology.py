@@ -585,7 +585,7 @@ class WorkbenchTopologyMixin(NonDesignWorkbenchMixin):
             if isinstance(mesh, dict) and mesh.get("status_only"):
                 stage = str(mesh.get("stage") or "").strip()
                 if stage:
-                    self._set_solve_progress(stage)
+                    self._set_solve_progress(stage, value=step, maximum=total)
                     self.statusBar().showMessage(f"Topology: {stage}")
                     return
                 objective = mesh.get("objective")

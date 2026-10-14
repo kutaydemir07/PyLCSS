@@ -77,30 +77,52 @@ def _assert_valid_occ_shape(shape: Any, *, label: str = "STEP body") -> None:
 def _assess_brep_self_intersections(shape: Any) -> dict[str, Any]:
     """Check geometric intersections that a closed, valid shell can still hide."""
     from OCP.BOPAlgo import BOPAlgo_ArgumentAnalyzer, BOPAlgo_SelfIntersect
+    from OCP.TopAbs import TopAbs_VERTEX
 
     analyzer = BOPAlgo_ArgumentAnalyzer()
     analyzer.SetShape1(shape.wrapped)
+    analyzer.SetRunParallel(True)
     analyzer.SelfInterMode = True
     analyzer.StopOnFirstFaulty = False
     analyzer.Perform()
     faces = shape.Faces()
+    vertices = shape.Vertices()
     failed_faces: set[int] = set()
+    failed_face_groups: list[list[int]] = []
+    fault_groups: list[dict[str, Any]] = []
     unmapped_faults = 0
+    other_faults = 0
     for fault in analyzer.GetCheckResult():
         if fault.GetCheckStatus() != BOPAlgo_SelfIntersect:
+            other_faults += 1
             continue
+        group_faces: set[int] = set()
+        group_vertices: set[int] = set()
+        group_types: set[str] = set()
         for faulty_shape in fault.GetFaultyShapes1():
+            group_types.add(faulty_shape.ShapeType().name.removeprefix("TopAbs_"))
+            if faulty_shape.ShapeType() == TopAbs_VERTEX:
+                group_vertices.update(index for index, vertex in enumerate(vertices)
+                                      if vertex.wrapped.IsSame(faulty_shape))
             mapped = False
             for index, face in enumerate(faces):
                 if any(part.wrapped.IsSame(faulty_shape)
                        for part in (face, *face.Edges(), *face.Vertices())):
                     failed_faces.add(index)
+                    group_faces.add(index)
                     mapped = True
             unmapped_faults += not mapped
+        failed_face_groups.append(sorted(group_faces))
+        fault_groups.append({"shape_types": sorted(group_types),
+                             "vertex_indices": sorted(group_vertices),
+                             "face_indices": sorted(group_faces)})
     return {
         "method": "OpenCASCADE Boolean argument self-intersection analysis",
         "passed": not analyzer.HasFaulty(),
         "failed_face_indices": sorted(failed_faces),
+        "failed_face_groups": failed_face_groups,
+        "self_intersection_faults": fault_groups,
+        "other_fault_count": other_faults,
         "unmapped_fault_count": unmapped_faults,
     }
 

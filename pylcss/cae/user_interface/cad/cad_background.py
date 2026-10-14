@@ -6,15 +6,18 @@ They retain numpy arrays and typed manufacturing options without conversion.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import os
 import json
 import logging
 import pickle
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 from time import monotonic, sleep
+from uuid import uuid4
 
 from pylcss.process_utils import headless_subprocess_kwargs
 
@@ -81,6 +84,52 @@ class CadJobFailed(RuntimeError):
         self.details = details
 
 
+def _new_failure_checkpoint_directory() -> Path:
+    """Reserve a durable diagnostic destination without doing success-path IO."""
+    if os.name == "nt":
+        root = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    else:
+        root = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return root / "PyLCSS" / "cad_failures" / f"{stamp}_{uuid4().hex[:12]}"
+
+
+def _persist_cad_failure_diagnostics(folder, directory, arguments, reason, returncode):
+    """Retain portable diagnostics, never the private job pickle or native shapes."""
+    folder, directory = Path(folder), Path(directory)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        for name in ("stdout.log", "stderr.log", "progress.json", "result.error.json"):
+            source = directory / name
+            if source.is_file():
+                shutil.copyfile(source, folder / name)
+        (folder / "failure.json").write_text(json.dumps({
+            "operation": "brep", "error": reason, "worker_returncode": returncode,
+            "saved_at_utc": datetime.now(timezone.utc).isoformat(),
+        }, indent=2), encoding="utf-8")
+    except OSError:
+        logger.warning("Could not retain CAD worker diagnostics in %s", folder, exc_info=True)
+
+    # A numerical source mesh makes even failures before the AMRTO checkpoint
+    # reproducible, without retaining executable pickle input or OCC caches.
+    try:
+        payload = arguments[0]
+        mesh = payload.get("recovered_shape") if isinstance(payload, dict) else None
+        if mesh is None and isinstance(payload, dict) and "vertices" in payload and "faces" in payload:
+            mesh = payload
+        if isinstance(mesh, dict) and mesh.get("vertices") is not None and mesh.get("faces") is not None:
+            import numpy as np
+            np.savez_compressed(folder / "source_mesh.npz",
+                                vertices=np.asarray(mesh["vertices"], dtype=float),
+                                faces=np.asarray(mesh["faces"], dtype=np.int64))
+    except (OSError, TypeError, ValueError):
+        logger.warning("Could not retain the failed CAD source mesh in %s", folder, exc_info=True)
+    try:
+        return folder if folder.is_dir() and any(path.is_file() for path in folder.iterdir()) else None
+    except OSError:
+        return None
+
+
 @contextmanager
 def _cad_job_directory(prefix):
     directory = tempfile.TemporaryDirectory(prefix=prefix)
@@ -115,6 +164,16 @@ def run_cad_job(operation: str, *arguments, timeout_seconds: float | None = None
                 progress_callback=None, cancel_callback=None):
     if operation not in {"brep", "step", "step_shape", "mesh", "surface_layout", "worker_environment"}:
         raise ValueError(f"Unsupported CAD background operation: {operation}")
+    failure_checkpoint = None
+    if operation == "brep":
+        # The AMRTO worker writes fitted geometry only when a fit is rejected.
+        # Successful previews never create this directory or export stage files.
+        payload, destination, *optional = arguments
+        strategy = optional[0] if optional else "auto"
+        options = dict(optional[1] or {}) if len(optional) > 1 else {}
+        failure_checkpoint = Path(options.get("failure_checkpoint_dir") or _new_failure_checkpoint_directory()).resolve()
+        options["failure_checkpoint_dir"] = str(failure_checkpoint)
+        arguments = (payload, destination, strategy, options)
     with _cad_job_directory("pylcss_cad_job_") as directory:
         job = Path(directory) / "job.pkl"
         result = Path(directory) / "result.pkl"
@@ -171,6 +230,11 @@ def run_cad_job(operation: str, *arguments, timeout_seconds: float | None = None
             else:
                 reason = next((line.strip() for line in reversed(details.splitlines()) if line.strip()),
                               f"Worker exited with code {process.returncode}")
+            if failure_checkpoint is not None:
+                saved = _persist_cad_failure_diagnostics(
+                    failure_checkpoint, directory, arguments, reason, process.returncode)
+                if saved is not None and str(saved) not in reason:
+                    reason += f"\nDiagnostics saved to: {saved}"
             logger.error("CAD %s worker diagnostics:\n%s", operation, details)
             raise CadJobFailed(f"CAD job failed: {reason}", details)
         with result.open("rb") as stream:
@@ -198,6 +262,8 @@ def reconstruct_cad_in_background(payload, *, reconstruction_strategy="auto",
 
 
 def main():
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     job = Path(sys.argv[1])
     with job.open("rb") as stream:
         operation, arguments = _CadJobUnpickler(stream, job.parent).load()

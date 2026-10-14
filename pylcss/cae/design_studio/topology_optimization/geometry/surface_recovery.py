@@ -74,6 +74,10 @@ def _recover_voxel_shape(
 
     try:
         LAST_LATTICE_SIZING.clear()
+        # Graph-joint pins are separate assembly hardware. Recover the design
+        # body and its bores first, then add the pins after all void constraints.
+        hardware_cylinders = joint_pin_cylinders
+        joint_pin_cylinders = ()
         grid = np.asarray(density, dtype=float)
         if grid.ndim != 3 or min(grid.shape) < 1:
             return None
@@ -148,6 +152,13 @@ def _recover_voxel_shape(
         explicit_solids = kwargs.get("explicit_solid_shapes") or ()
         explicit_voids = kwargs.get("explicit_void_shapes") or ()
         source_cad = kwargs.get("source_cad_shape")
+        from .bore_constraints import source_bore_records
+        bore_records = source_bore_records(source_cad)
+        if source_cad is None:
+            # Older saved outputs contain the exact collars but no source CAD.
+            # Their inward walls still define the openings to preserve.
+            for shape in explicit_solids:
+                bore_records.extend(source_bore_records(shape))
         if explicit_solids or explicit_voids or source_cad is not None:
             stage("Preserving original non-design geometry")
             from .preserved_mesh import refined_preserved_masks
@@ -247,12 +258,66 @@ def _recover_voxel_shape(
             density_cutoff=eff_cutoff,
         )
 
+        def constrain_field(field):
+            # Gaussian filtering is part of mesh extraction. Reapply prescribed
+            # geometry afterwards so it cannot blur material back into voids.
+            field = np.asarray(field, dtype=float).copy()
+            if solid_field is not None:
+                field[solid_field] = 1.0
+            if source_field is not None:
+                field[~source_field] = 0.0
+            if void_field is not None:
+                field[void_field] = 0.0
+            if passive_shapes_present:
+                field = _apply_passive_density_regions(
+                    field, solid_boxes=solid_boxes, void_boxes=void_boxes,
+                    solid_cylinders=solid_cylinders, void_cylinders=void_cylinders,
+                    joint_pin_cylinders=joint_pin_cylinders,
+                    bounds=bounds, cell=analysis_cell, spacing=spacing,
+                )
+            if cad_domain is not None:
+                field[~cad_domain] = 0.0
+            if void_field is not None:
+                field[void_field] = 0.0
+            if bore_records:
+                origin, _ = _voxel_origin_cell(tuple(field.shape), bounds)
+                coordinates = [
+                    (origin[index] + (np.arange(size) + 0.5) * spacing[index]).reshape(
+                        tuple(size if axis == index else 1 for axis in range(3))
+                    )
+                    for index, size in enumerate(field.shape)
+                ]
+                for axis, center, radius, start, end in bore_records:
+                    relative = [coordinates[index] - center[index] for index in range(3)]
+                    axial = sum(relative[index] * axis[index] for index in range(3))
+                    radial = np.sqrt(np.maximum(
+                        sum(value * value for value in relative) - axial * axial, 0.0
+                    ))
+                    axial += float(np.dot(center, axis))
+                    distance = np.maximum.reduce([
+                        radial - radius,
+                        np.broadcast_to(start - axial, field.shape),
+                        np.broadcast_to(axial - end, field.shape),
+                    ])
+                    # Zero distance must contour at the requested level, not
+                    # at 0.5: recovery can use an inverse-projected cutoff.
+                    field = np.minimum(field, np.clip(
+                        eff_cutoff + distance / float(np.min(spacing)), 0.0, 1.0
+                    ))
+            return field
+
+        has_constraints = bool(
+            source_field is not None or solid_field is not None or void_field is not None
+            or passive_shapes_present or bore_records
+        )
+
         stage("Meshing the lattice surface" if is_lattice else "Meshing the solid surface")
         verts, faces, recovery_report = generate_topopt_triangular_mesh(
             grid,
             cutoff=eff_cutoff,
             bounds=bounds,
             config=cfg,
+            field_constraint=constrain_field if has_constraints else None,
         )
 
         if len(verts) == 0 or len(faces) == 0:
@@ -308,6 +373,31 @@ def _recover_voxel_shape(
         stage("Reducing mesh triangles")
         verts, faces, reduction_report = compact_mesh(
             verts, faces, tolerance=float(np.min(spacing))*0.2)
+        from .bore_constraints import enforce_bore_clearance
+        verts, bore_report = enforce_bore_clearance(verts, faces, bore_records, spacing)
+        recovery_report["bore_clearance"] = bore_report
+        if hardware_cylinders:
+            from .cad_features import _payload_region_cylinders, _region_cylinder_to_solid
+            hardware_bounds = bounds
+            if hardware_bounds is None:
+                lower, pitch = _voxel_origin_cell(tuple(grid.shape), None)
+                hardware_bounds = (lower, lower + np.asarray(grid.shape) * pitch)
+            pins = _payload_region_cylinders(
+                {"passive_regions": {"joint_pin_cylinders": list(hardware_cylinders)}},
+                "joint_pin_cylinders",
+            )
+            bodies = [trimesh.Trimesh(verts, faces, process=False)]
+            for pin in pins:
+                shape = _region_cylinder_to_solid(pin, hardware_bounds)
+                if shape is None:
+                    continue
+                points, triangles = shape.tessellate(float(np.min(spacing)) * 0.1, 0.2)
+                bodies.append(trimesh.Trimesh(
+                    [point.toTuple() for point in points], triangles, process=True,
+                ))
+            combined = trimesh.util.concatenate(bodies)
+            verts, faces = np.asarray(combined.vertices), np.asarray(combined.faces)
+            recovery_report["joint_hardware_body_count"] = len(bodies) - 1
         tm = trimesh.Trimesh(verts, faces, process=False)
         mesh_volume = abs(float(tm.volume)) if tm.is_watertight else None
         is_watertight = bool(tm.is_watertight)

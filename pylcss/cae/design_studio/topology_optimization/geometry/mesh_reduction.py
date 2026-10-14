@@ -10,6 +10,13 @@ from .cad_diagnostics import assess_sampled_mesh_deviation
 from .mesh_topology import mesh_topology_report, topology_error
 
 
+# Reduction is optional. Its whole-mesh topology, shell and proximity checks
+# allocate several edge/triangle indices and can take minutes on a resolved
+# TPMS mesh. Keep the exact mesh above this limit instead of delaying every
+# preview/export; mandatory recovery validation still runs on that boundary.
+MAX_COMPACTION_TRIANGLES = 1_000_000
+
+
 def compact_mesh(vertices, faces, *, tolerance, target_reduction=0.7, samples=512):
     """Try two quadric reductions, accepting only measured geometry fidelity.
 
@@ -17,12 +24,19 @@ def compact_mesh(vertices, faces, *, tolerance, target_reduction=0.7, samples=51
     not a certified Hausdorff bound. A rejected simplification retains the
     input mesh, including every enclosed cavity and disconnected body.
     """
-    source = trimesh.Trimesh(vertices, faces, process=False)
     report = {'method': 'Quadric edge collapse with topology and sampled error checks',
               'input_triangles': len(faces), 'output_triangles': len(faces),
               'tolerance': float(tolerance), 'reduced': False, 'rejected_attempts': []}
     if len(faces) < 256 or tolerance <= 0 or target_reduction <= 0:
         return np.asarray(vertices), np.asarray(faces), report
+    if len(faces) > MAX_COMPACTION_TRIANGLES:
+        report.update(
+            reason='Optional compaction skipped for a large manufacturing mesh; exact boundary retained',
+            skipped_for_size=True,
+            maximum_compaction_triangles=MAX_COMPACTION_TRIANGLES,
+        )
+        return np.asarray(vertices), np.asarray(faces), report
+    source = trimesh.Trimesh(vertices, faces, process=False)
     original = mesh_topology_report(vertices, faces)
     if not original['is_closed'] or source.volume <= 0:
         report['reason'] = 'Reduction requires a closed, oriented material boundary'

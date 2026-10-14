@@ -199,7 +199,7 @@ def repair_surface_orientation(
         knots = [surface.knotvector_u, surface.knotvector_v]
         if min(degrees) < 1 or max(degrees) > 3:
             return reject("only_polynomial_degrees_1_to_3_supported", "skipped")
-        training_axes, constraint_axes = [], []
+        training_axes = []
         for axis in range(2):
             unique = np.unique(knots[axis])
             spans = np.concatenate(
@@ -217,21 +217,8 @@ def repair_surface_orientation(
                     ]
                 )
             )
-            constraint_axes.append(
-                np.unique(
-                    np.concatenate(
-                        [
-                            _axis_sites(np.asarray(knots[axis]), degrees[axis], n, f)[0]
-                            for n in (9, 29, 49)
-                            for f in (1e-6, 1e-4, 0.01)
-                        ]
-                    )
-                )
-            )
         if len(training_axes[0]) * len(training_axes[1]) > maximum_training_sites:
             return reject("training_site_limit", "resource_limit")
-        if len(constraint_axes[0]) * len(constraint_axes[1]) > maximum_constraint_sites:
-            return reject("constraint_site_limit", "resource_limit")
         for fraction in (1e-6, 1e-4, 0.005, 0.01, 0.02):
             count = np.prod(
                 [
@@ -252,6 +239,26 @@ def repair_surface_orientation(
         )
         if time.monotonic() > deadline:
             return reject("time_limit", "resource_limit")
+        # Start with a small signed-area system and every reported baseline
+        # failure. Full independent knot/uniform verification below remains
+        # unchanged and adds newly found inversions before the next solve.
+        # Constraining the complete dense verification grid up front can use
+        # the entire repair budget before a single candidate is checked.
+        seed = np.linspace(0., 1., 9)
+        uu, vv = np.meshgrid(seed, seed, indexing="ij")
+        failed_uv = np.asarray([site["uv"] for site in report["baseline_orientation"]["failed_sites"]],
+                               dtype=float).reshape(-1, 2)
+        query = np.unique(np.vstack([np.column_stack((uu.ravel(), vv.ravel())), failed_uv]), axis=0)
+        query = query[
+            ~(
+                ((query[:, 0] == 0) | (query[:, 0] == 1))
+                & ((query[:, 1] == 0) | (query[:, 1] == 1))
+            )
+        ]
+        if len(query) > maximum_constraint_sites:
+            return reject("constraint_site_limit", "resource_limit")
+        report["constraint_strategy"] = "9x9 seed and reported failures; full independent verification adds constraints"
+        report["initial_constraint_site_count"] = len(query)
         uu, vv = np.meshgrid(*training_axes, indexing="ij")
         training = np.column_stack((uu.ravel(), vv.ravel()))
         matrix = sparse.kron(
@@ -266,14 +273,6 @@ def repair_surface_orientation(
         matrix = matrix[:, interior]
         normal, target = (matrix.T @ matrix).tocsc(), matrix.T @ rhs
         x = spsolve(normal + sparse.eye(normal.shape[0], format="csc") * 1e-12, target)
-        uu, vv = np.meshgrid(*constraint_axes, indexing="ij")
-        query = np.column_stack((uu.ravel(), vv.ravel()))
-        query = query[
-            ~(
-                ((query[:, 0] == 0) | (query[:, 0] == 1))
-                & ((query[:, 1] == 0) | (query[:, 1] == 1))
-            )
-        ]
         report["training_site_count"] = len(training)
         for outer in range(maximum_iterations):
             if time.monotonic() > deadline:

@@ -645,6 +645,7 @@ def sample_parameter_grid(layout: QuadLayout, grid_u: np.ndarray, grid_v: np.nda
     param_points = layout.parameter_coords
     sampled = np.zeros((len(grid_u), len(grid_v), 3), dtype=float)
     assigned = np.zeros((len(grid_u), len(grid_v)), dtype=bool)
+    best_violation = np.full(assigned.shape, np.inf)
     tolerance = 1e-5
     for triangle in layout.triangles:
         a, b, c = param_points[triangle]
@@ -664,10 +665,19 @@ def sample_parameter_grid(layout: QuadLayout, grid_u: np.ndarray, grid_v: np.nda
         inside = (alpha >= -tolerance) & (beta >= -tolerance) & (gamma >= -tolerance)
         i, j = np.nonzero(inside)
         i_global, j_global = u_indices[i], v_indices[j]
-        barycentric = np.maximum(np.column_stack((alpha[i, j], beta[i, j], gamma[i, j])), 0)
+        barycentric = np.column_stack((alpha[i, j], beta[i, j], gamma[i, j]))
+        violation = np.maximum(-barycentric, 0).sum(axis=1)
+        # Expanded barycentric tolerances let a broad triangle overlap an
+        # adjacent narrow UV strip. Prefer the actual containing triangle;
+        # otherwise a later outside candidate can overwrite its exact source
+        # point, creating a target discontinuity that no spline can fit.
+        improve = violation < best_violation[i_global, j_global]
+        i_global, j_global = i_global[improve], j_global[improve]
+        barycentric = np.maximum(barycentric[improve], 0)
         barycentric /= barycentric.sum(axis=1, keepdims=True)
         sampled[i_global, j_global] = barycentric @ layout.vertices[triangle]
         assigned[i_global, j_global] = True
+        best_violation[i_global, j_global] = violation[improve]
     if not assigned.all():
         unassigned_i, unassigned_j = np.nonzero(~assigned)
         unassigned_uv = np.column_stack((grid_u[unassigned_i], grid_v[unassigned_j]))

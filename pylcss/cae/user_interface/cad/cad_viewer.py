@@ -23,6 +23,8 @@ from .vtk_widget import VTKRenderWidget
 
 __all__ = ["CQ3DViewer", "NavCubeWidget"]
 
+_MAX_CAPPED_LATTICE_SECTION_FACES = 250_000
+
 
 class CQ3DViewer(
     CrashPlaybackMixin,
@@ -258,6 +260,8 @@ class CQ3DViewer(
         # so the section prefers the volume whenever one is available.
         self._section_volume_actor = None
         self._section_volume_source = None
+        self._section_surface_actor = None
+        self._section_surface_source = None
         self._last_simulation_mesh = None
         self._last_result_data = None
         self._active_result_mode = None
@@ -928,6 +932,16 @@ class CQ3DViewer(
         self._section_volume_actor = actor
         self._section_volume_source = dataset
 
+    def register_section_surface(self, actor, dataset):
+        """Keep the oriented, welded boundary before display-normal splitting.
+
+        A recovered lattice can include inward shells bounding pores. Section
+        capping needs their original winding and connectivity; display normals
+        may duplicate vertices along sharp edges for lighting.
+        """
+        self._section_surface_actor = actor
+        self._section_surface_source = dataset
+
     def forget_section_state(self):
         """Drop cached section datasets when the actor they belong to goes.
 
@@ -942,14 +956,21 @@ class CQ3DViewer(
         self._section_bounds = None
         self._section_volume_actor = None
         self._section_volume_source = None
+        self._section_surface_actor = None
+        self._section_surface_source = None
 
     def _section_input_for(self, actor):
-        """Return the volume registered for this actor, or None.
+        """Return the original boundary or volume registered for this actor.
 
         Cutting a skin can only expose the far side of a shell, whereas
         cutting the volume regenerates the elements the plane passes through
         and carries the result field onto the cut face.
         """
+        if (
+            self._section_surface_actor is actor
+            and self._section_surface_source is not None
+        ):
+            return self._section_surface_source
         if (
             self._section_volume_actor is not actor
             or self._section_volume_source is None
@@ -994,19 +1015,43 @@ class CQ3DViewer(
             clipper.SetInputData(dataset)
             clipper.SetClipFunction(self._section_plane)
             return clipper
-        # A closed surface has no interior to reveal, so cap the opening.
-        # vtkPolyDataPlaneClipper only caps convex single-loop cross-sections
-        # and emits loose line segments otherwise, which is why a cut through
-        # a bracket with a hole used to read as hollow; vtkClipClosedSurface
-        # triangulates multi-loop cross-sections into a real cap.
-        planes = vtk.vtkPlaneCollection()
-        planes.AddItem(self._section_plane)
-        clipper = vtk.vtkClipClosedSurface()
-        clipper.SetInputData(dataset)
-        clipper.SetClippingPlanes(planes)
-        clipper.GenerateFacesOn()
-        clipper.GenerateOutlineOff()
-        clipper.SetScalarModeToNone()
+        large_lattice = (
+            dataset is self._section_surface_source
+            and getattr(self, "_section_show_interior", False)
+            and dataset.GetNumberOfPolys() > _MAX_CAPPED_LATTICE_SECTION_FACES
+        )
+        if large_lattice:
+            # A lattice already contains the complete pore boundary. Opening
+            # the camera-facing skin exposes it without constructing a cap
+            # through thousands of pore loops, which can stall the viewer for
+            # minutes. Only this display section is open: the original closed
+            # manufacturing mesh and the exported STL remain unchanged.
+            clipper = vtk.vtkClipPolyData()
+            clipper.SetInputData(dataset)
+            clipper.SetClipFunction(self._section_plane)
+        else:
+            # Cap smaller closed surfaces, including multi-loop sections.
+            # vtkPolyDataPlaneClipper only caps convex single-loop sections;
+            # vtkClipClosedSurface also retains holes through a CAD bracket.
+            planes = vtk.vtkPlaneCollection()
+            planes.AddItem(self._section_plane)
+            clipper = vtk.vtkClipClosedSurface()
+            clipper.SetInputData(dataset)
+            clipper.SetClippingPlanes(planes)
+            clipper.GenerateFacesOn()
+            clipper.GenerateOutlineOff()
+            clipper.SetScalarModeToNone()
+        if dataset is self._section_surface_source:
+            # Compute lighting only after cutting the welded boundary. Auto
+            # orientation treats every cavity shell as an outward solid and
+            # fills its opening instead of preserving a pore in the cut face.
+            normals = vtk.vtkPolyDataNormals()
+            normals.SetInputConnection(clipper.GetOutputPort())
+            normals.ConsistencyOn()
+            normals.AutoOrientNormalsOff()
+            normals.SplittingOn()
+            normals.SetFeatureAngle(50.0)
+            return normals
         return clipper
 
     def _arm_section_clip(self, actor):
