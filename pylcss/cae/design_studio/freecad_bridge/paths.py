@@ -1,31 +1,17 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""Locate the FreeCAD executable + companion tools.
-
-PyLCSS treats FreeCAD the same way it treats CalculiX and OpenCourant:
-``scripts/install_solvers.py --only freecad`` downloads the GitHub
-release archive, unpacks it under ``external_solvers/freecad/unpacked``,
-and writes the resolved paths into ``external_solvers/solver_paths.json``.
-
-These helpers re-use the solver_backends path-resolution machinery so the
-same lookup order (explicit > solver_paths.json > env var > PATH) applies.
-"""
+"""Locate FreeCAD through explicit paths, solver config, environment, and PATH."""
 
 from __future__ import annotations
 
-import logging
 import platform
 from pathlib import Path
 from typing import Optional
 
 from pylcss.cae.solver_backends.execution import resolve_executable
 
-logger = logging.getLogger(__name__)
-
-
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
-_INSTALL_ROOT = _REPO_ROOT / "external_solvers" / "freecad" / "unpacked"
 _USER_DATA_ROOT = _REPO_ROOT / "data_freecad"
 
 
@@ -76,46 +62,35 @@ def find_freecad_executable(explicit: Optional[str] = None) -> Optional[str]:
 
 
 def find_freecad_cmd(explicit: Optional[str] = None) -> Optional[str]:
-    """Path to the ``FreeCADCmd`` console runner used for headless macro
-    execution (e.g. exporting BREP from a saved .FCStd).  Falls back to
-    the main GUI executable with ``--console`` when no separate cmd binary
-    is present (the AppImage / macOS app).
-    """
-    cmd = resolve_executable(
+    """Find the console executable, including beside a configured GUI executable."""
+    gui = find_freecad_executable()
+    companion_names = (
+        ["FreeCADCmd.exe"]
+        if platform.system() == "Windows"
+        else ["FreeCADCmd", "freecadcmd"]
+    )
+    companions = (
+        [str(Path(gui).parent / name) for name in companion_names] if gui else []
+    )
+    return resolve_executable(
         explicit=explicit,
         env_vars=("PYLCSS_FREECAD_CMD",),
         candidates=[
+            *companions,
             r"C:\Program Files\FreeCAD 1.1\bin\FreeCADCmd.exe",
             r"C:\Program Files\FreeCAD 1.0\bin\FreeCADCmd.exe",
-            "freecadcmd", "FreeCADCmd",
+            *companion_names,
         ],
     )
+
+
+def freecad_console_command() -> Optional[list[str]]:
+    """Return a console invocation, adding the GUI's console flag when needed."""
+    cmd = find_freecad_cmd()
     if cmd:
-        return cmd
-    # No dedicated console runner -- caller can pass --console to the GUI exe.
-    return find_freecad_executable(explicit=None)
-
-
-def find_freecad_python(explicit: Optional[str] = None) -> Optional[str]:
-    """Path to FreeCAD's bundled Python 3.11 interpreter.
-
-    Critical for headless ``.FCStd`` parsing: FreeCAD's Python modules
-    (``FreeCAD``, ``Part``, ``Sketcher``) can only be imported from that
-    bundled interpreter without conda gymnastics.
-    """
-    return resolve_executable(
-        explicit=explicit,
-        env_vars=("PYLCSS_FREECAD_PYTHON",),
-        candidates=[
-            r"C:\Program Files\FreeCAD 1.1\bin\python.exe",
-            r"C:\Program Files\FreeCAD 1.0\bin\python.exe",
-        ],
-    )
-
-
-def is_freecad_installed() -> bool:
-    """Cheap probe: returns True iff the GUI exe resolves to something on disk."""
-    return find_freecad_executable() is not None
+        return [cmd]
+    gui = find_freecad_executable()
+    return [gui, "--console"] if gui else None
 
 
 def freecad_data_dir(create: bool = True) -> Path:

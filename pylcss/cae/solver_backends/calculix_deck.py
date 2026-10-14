@@ -79,10 +79,11 @@ def _build_sets_and_step(
     constraints: list[dict],
     loads: list[dict],
     warnings: list[str],
+    analysis_type: str = "Linear",
 ) -> tuple[list[str], list[str]]:
     """Build CalculiX node sets, surface sets, and step records."""
     model_lines: list[str] = []
-    step_lines: list[str] = ["*STEP", "*STATIC"]
+    step_lines: list[str] = _step_header(analysis_type)
 
     boundary_lines: list[str] = []
     for idx, constraint in enumerate(constraints, start=1):
@@ -243,10 +244,8 @@ def _build_sets_and_step(
                     cell = cells[elem_id - 1]
                     f_idx = face_id - 1
                     tri = cell[list(local_faces[f_idx])]
-                    popp = pts[:, cell[opp_nodes[f_idx]]]
-                    p0 = pts[:, tri[0]]
-                    p1 = pts[:, tri[1]]
-                    p2 = pts[:, tri[2]]
+                    popp = pts[cell[opp_nodes[f_idx]]]
+                    p0, p1, p2 = pts[tri]
                     c_face = (p0 + p1 + p2) / 3.0
                     n_cross = np.cross(p1 - p0, p2 - p0)
                     area = 0.5 * float(np.linalg.norm(n_cross))
@@ -262,7 +261,9 @@ def _build_sets_and_step(
                         w_face = area * cos_theta
                         share = w_face / 3.0
                         for nid in tri:
-                            node_weights[int(nid)] = node_weights.get(int(nid), 0.0) + share
+                            node_weights[int(nid)] = (
+                                node_weights.get(int(nid), 0.0) + share
+                            )
 
             # Fallback if no faces had cos_theta > 0
             if not node_weights or sum(node_weights.values()) <= 1e-16:
@@ -425,27 +426,12 @@ def _material_block(
                 f"{sigma_anchor:.12g}, {eps_anchor:.6g}",
             ]
         )
-    lines.append(
-        f"*SOLID SECTION, ELSET={element_set}, MATERIAL={material_name}"
-    )
+    lines.append(f"*SOLID SECTION, ELSET={element_set}, MATERIAL={material_name}")
     lines.append("")
     return lines
 
 
-# Equation solver written onto every *STATIC card.
-#
-# Without an explicit ``SOLVER=``, CalculiX 2.23 falls back to its iterative
-# Cholesky solver.  That path is single-threaded for the factorisation, needs
-# hundreds of iterations on ill-conditioned solid-elasticity systems, and
-# degrades superlinearly with model size.  SPOOLES is a direct multi-frontal
-# solver, is threaded across all available cores, and returns the same answer
-# to machine precision.  Measured on the bundled cantilever benchmark
-# (4482-node C3D10): 12.36 s iterative → 3.56 s SPOOLES, with max|u| and peak
-# Von Mises identical to 9 significant figures.
-#
-# PARDISO would be faster still but is not linked into the CalculiX build that
-# `install_solvers` fetches, so requesting it aborts the run.  SPOOLES is
-# always compiled in and is therefore the safe default.
+# The bundled CalculiX build supports the SPOOLES direct equation solver.
 _EQUATION_SOLVER = "SPOOLES"
 
 
@@ -496,13 +482,9 @@ def _build_input_deck(
     else:
         points, tets = mesh_to_tet4(mesh, warnings)
         elem_type = "C3D4"
-    step_header = _step_header(analysis_type)
-    # Note: _build_sets_and_step prepends a hard-coded ``*STEP``/``*STATIC``;
-    # we override it below by replacing the leading two entries with the
-    # analysis-specific header.
-    model_lines, step_lines = _build_sets_and_step(mesh, constraints, loads, warnings)
-    if step_lines[:2] == ["*STEP", "*STATIC"]:
-        step_lines = step_header + step_lines[2:]
+    model_lines, step_lines = _build_sets_and_step(
+        mesh, constraints, loads, warnings, analysis_type=analysis_type
+    )
 
     lines: list[str] = [
         "*HEADING",

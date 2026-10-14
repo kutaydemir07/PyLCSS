@@ -15,7 +15,8 @@ def sample_boundary(boundary: BoundaryMesh, resolution: np.ndarray) -> tuple[np.
     These points lie on the selected geometry. Rounding to analysis nodes
     approximates that geometry at mesh resolution, without filling its bounds.
     """
-    vertices = np.asarray(boundary.vertices, dtype=float)
+    boundary.validate()
+    vertices = boundary.vertices
     points_out, forces_out = [], []
     sample_count = 0
     for index, cell in enumerate(np.asarray(boundary.cells, dtype=int)):

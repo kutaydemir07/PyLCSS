@@ -270,6 +270,9 @@ class ResultsPanel(QtWidgets.QWidget):
         data = self._last_data or {}
         modes = self._get_available_3d_modes(data)
         current = str(data.get("visualization_mode") or modes[0])
+        if data.get("type") == "topopt_voxel":
+            from .result_fields import topopt_view_mode
+            current = topopt_view_mode(data, current)
         if current not in modes:
             current = modes[0]
         self._btn_3d_mode.setText(f"3D View: {current}")
@@ -313,7 +316,7 @@ class ResultsPanel(QtWidgets.QWidget):
 
         act_extrema = menu.addAction("Min / Max Extrema Markers")
         act_extrema.setCheckable(True)
-        act_extrema.setEnabled(modes != ["Default View"] and current not in {"CAD", "Manufactured Mesh", "Deformed Animation"})
+        act_extrema.setEnabled(modes != ["Default View"] and current not in {"CAD", "STL Shape", "Lattice", "Manufactured Mesh", "Deformed Animation"})
         act_extrema.setChecked(self._extrema_checked)
         act_extrema.toggled.connect(self._on_extrema_toggled)
 

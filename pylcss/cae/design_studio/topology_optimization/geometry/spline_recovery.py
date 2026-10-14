@@ -312,8 +312,10 @@ def _regular_patches(poles, normals, projector):
     return np.all(regular, axis=(1, 2))
 
 
-def fit_patches(source, vertices, quads, config: CadReconstructionConfig, *, crease_edges=None, progress_callback=None):
+def fit_patches(source, vertices, quads, config: CadReconstructionConfig, *, progress_callback=None, **legacy_options):
     """Fit shared cubic edges once, then solve four interior poles per patch."""
+    from ._compat import warn_retired_options
+    warn_retired_options(legacy_options, operation='Compact spline fitting')
     origin = source.bounds.mean(axis=0)
     scale = float(np.linalg.norm(source.extents))
     local_source = trimesh.Trimesh((source.vertices-origin)/scale, source.faces, process=False)

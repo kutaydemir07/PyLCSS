@@ -89,9 +89,7 @@ NODE_CLASS_MAPPING = {
     'com.cad.topopt.support':       TopologySupportNode,
     'com.cad.topopt.load':          TopologyLoadNode,
 
-    # Crash / Impact Simulation. Impact material is part of the shared
-    # Material node; `crash_material` maps onto it so saved studies still load.
-    'com.cad.sim.crash_material': MaterialNode,
+    # Crash / Impact Simulation.
     'com.cad.sim.impact':         ImpactConditionNode,
     'com.cad.sim.crash_solver':   CrashSolverNode,
 

@@ -5,42 +5,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
-from typing import Any
 import warnings
+from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike
 
+from ...numerics import solve_with_nevergrad
 from ..evaluator import ModelEvaluator
 from ..models import FloatArray, OptimizationResult
 from ..parsing import parse_boolean
-from .backends import solve_with_nevergrad
-from .base import BaseSolver, StepCallback
+from .base import BaseSolver, Candidate, StepCallback, build_constraints
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class _Candidate:
-    objective: float
-    solver_x: FloatArray
-    outputs: dict[str, Any]
-    violation: float
-    feasibility_tolerance: float
-
-    @property
-    def feasible(self) -> bool:
-        return self.violation <= self.feasibility_tolerance
-
-    @property
-    def rank(self) -> tuple[int, float, float]:
-        return (
-            0 if self.feasible else 1,
-            0.0 if self.feasible else self.violation,
-            self.objective,
-        )
 
 
 class GlobalSolver(BaseSolver):
@@ -57,11 +35,11 @@ class GlobalSolver(BaseSolver):
         max_iterations = int(self.settings.get("maxiter", 1000))
         initial_physical = np.asarray(x0, dtype=float)
         lower = np.asarray(
-            [variable.min_val for variable in evaluator.vars],
+            [variable.min_val for variable in evaluator.variables],
             dtype=float,
         )
         upper = np.asarray(
-            [variable.max_val for variable in evaluator.vars],
+            [variable.max_val for variable in evaluator.variables],
             dtype=float,
         )
         if not (np.all(np.isfinite(lower)) and np.all(np.isfinite(upper))):
@@ -73,21 +51,20 @@ class GlobalSolver(BaseSolver):
 
         original_scaling = evaluator.scaling
         use_scaling = parse_boolean(
-            self.settings.get("scaling", False),
+            self.settings.get("scaling", evaluator.scaling),
             "Variable scaling",
         )
         evaluator.scaling = use_scaling
         try:
             bounds = (
                 [
-                    (0.0, 0.0)
-                    if abs(variable.max_val - variable.min_val) <= 1e-15
-                    else (0.0, 1.0)
-                    for variable in evaluator.vars
+                    (0.0, 0.0) if variable.min_val == variable.max_val else (0.0, 1.0)
+                    for variable in evaluator.variables
                 ]
                 if use_scaling
                 else [
-                    (variable.min_val, variable.max_val) for variable in evaluator.vars
+                    (variable.min_val, variable.max_val)
+                    for variable in evaluator.variables
                 ]
             )
             initial_solver = (
@@ -119,17 +96,17 @@ class GlobalSolver(BaseSolver):
         max_iterations: int,
         callback: StepCallback | None,
     ) -> OptimizationResult:
-        constraints = _build_constraints(evaluator)
-        best_feasible: _Candidate | None = None
-        best_any: _Candidate | None = None
+        constraints = build_constraints(evaluator)
+        best_feasible: Candidate | None = None
+        best_any: Candidate | None = None
         best_displayed = float("inf")
 
-        def remember(x: ArrayLike) -> _Candidate | None:
+        def remember(x: ArrayLike) -> Candidate | None:
             nonlocal best_any, best_feasible
             _, raw_results, violation = evaluator.evaluate(x)
             if not evaluator.is_valid_result(raw_results):
                 return None
-            candidate = _Candidate(
+            candidate = Candidate(
                 objective=evaluator.normalized_objective(raw_results),
                 solver_x=np.asarray(x, dtype=float).copy(),
                 outputs=dict(raw_results),
@@ -205,14 +182,13 @@ class GlobalSolver(BaseSolver):
                     constraints=constraints,
                     callback=callback_wrapper,
                     optimizer_name=self.settings.get("optimizer_name", "NGOpt"),
-                    num_workers=int(self.settings.get("num_workers", 1)),
                     seed=self.settings.get("seed"),
                 )
         except Exception as exc:
             backend_error = exc
             logger.exception("%s backend failed.", method)
 
-        final_candidate: _Candidate | None = None
+        final_candidate: Candidate | None = None
         backend_x = getattr(backend_result, "x", None)
         if backend_x is not None:
             final_candidate = remember(backend_x)
@@ -254,11 +230,12 @@ class GlobalSolver(BaseSolver):
             x=evaluator.to_physical(chosen.solver_x),
             cost=evaluator.displayed_objective(outputs),
             objectives={
-                objective.name: outputs[objective.name] for objective in evaluator.objs
+                objective.name: outputs[objective.name]
+                for objective in evaluator.objectives
             },
             constraints={
                 constraint.name: outputs[constraint.name]
-                for constraint in evaluator.cons
+                for constraint in evaluator.constraints
             },
             max_violation=chosen.violation,
             message=backend_message,
@@ -266,48 +243,6 @@ class GlobalSolver(BaseSolver):
             feasibility_tolerance=evaluator.feasibility_tolerance,
             converged=backend_converged,
         )
-
-
-
-
-def _build_constraints(
-    evaluator: ModelEvaluator,
-) -> list[dict[str, Any]]:
-    constraints: list[dict[str, Any]] = []
-    for index, constraint in enumerate(evaluator.cons):
-        lower, upper = evaluator.constraint_solve_bounds(index)
-
-        def value(
-            x: ArrayLike,
-            output_name: str = constraint.name,
-        ) -> float:
-            _, raw_results, _ = evaluator.evaluate(x)
-            if not evaluator.is_valid_result(raw_results):
-                return -1e15
-            return float(raw_results[output_name])
-
-        scale = evaluator.constraint_solver_scale(index)
-        if np.isfinite(lower):
-            constraints.append(
-                {
-                    "type": "ineq",
-                    "fun": (
-                        lambda x, fun=value, bound=lower, divisor=scale:
-                        (fun(x) - bound) / divisor
-                    ),
-                }
-            )
-        if np.isfinite(upper):
-            constraints.append(
-                {
-                    "type": "ineq",
-                    "fun": (
-                        lambda x, fun=value, bound=upper, divisor=scale:
-                        (bound - fun(x)) / divisor
-                    ),
-                }
-            )
-    return constraints
 
 
 def _failed_result(

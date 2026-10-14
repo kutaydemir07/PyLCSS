@@ -271,7 +271,7 @@ class ExportStlNode(CadQueryNode):
         """
         import numpy as np
         from types import SimpleNamespace
-        from pylcss.cae.design_studio.nodes.selection import _mesh_boundary_face_data
+        from pylcss.cae.design_studio.nodes.mesh_selection import _mesh_boundary_face_data
         
         # mesh.p is (3, N_vertices), mesh.t is (4, N_tets)
         pts = mesh.p  # (3, N)

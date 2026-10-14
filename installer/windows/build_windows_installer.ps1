@@ -7,7 +7,7 @@ param(
     [string]$PythonArchiveSha256 = "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3",
     [string]$PipZipAppSha256 = "91D5FD9F6F25549FD839C60536C6F1B945316CE3588D34A605635B6071C91526",
     [string]$InnoCompiler = "",
-    [string]$OutputBaseFilename = "PyLCSS-2.2.0.2-Setup-x64",
+    [string]$OutputBaseFilename = "PyLCSS-3.0.0-Setup-x64",
     [string]$SigningCertificateThumbprint = $env:PYLCSS_SIGNING_CERT_SHA1,
     [string]$TimestampServer = "http://timestamp.digicert.com",
     [switch]$RequireSignature

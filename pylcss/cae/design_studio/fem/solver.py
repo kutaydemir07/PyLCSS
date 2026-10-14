@@ -1,17 +1,13 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-"""FEA solver node — runs the validated PyLCSS CalculiX static-solid subset.
-
-The previous in-house scikit-fem implementation was removed: it was not
-validated against an industry reference and produced silent correctness
-risks (volumetric locking, stress under-smoothing, sign mistakes in
-boundary-condition assembly).  CalculiX is the single supported backend.
-"""
+"""Static solid FEA node using the CalculiX backend."""
 import logging
-import math
-from pathlib import Path
 
 from pylcss.cae.design_studio.core.base_node import CadQueryNode
+from pylcss.cae.design_studio.fem._solver_config import (
+    add_external_solver_properties,
+    external_run_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +47,7 @@ class SolverNode(CadQueryNode):
         self.add_input('loads',       color=(255, 255,   0), multi_input=True)
         self.add_output('results',    color=(  0, 255, 255))
 
-        self.create_property('external_solver_path', '',  widget_type='text')
-        self.create_property('external_work_dir',    '',  widget_type='text')
-        # Write the .inp deck without launching ccx (for inspection).
-        self.create_property('deck_only',            False, widget_type='checkbox')
-        self.create_property('external_timeout_s',   3600.0, widget_type='float')
+        add_external_solver_properties(self)
         self.create_property('visualization', 'Von Mises Stress', widget_type='combo',
                              items=['Von Mises Stress', 'Displacement', 'Safety Factor'])
         self.create_property('deformation_scale', 'Auto', widget_type='combo',
@@ -82,13 +74,13 @@ class SolverNode(CadQueryNode):
     def run(self, cancel_callback=None):
         logger.debug("FEA Solver: routing to CalculiX backend.")
         from pylcss.cae.solver_backends import (
-            ExternalRunConfig,
             SolverBackendError,
             run_calculix_assembly,
             run_calculix_static,
         )
-        from pylcss.input_values import as_bool, flatten_inputs
+        from pylcss.input_values import flatten_inputs
 
+        self.clear_error()
         mesh_list = [m for m in flatten_inputs(self.get_input_list('mesh')) if m is not None]
         mesh = mesh_list[0] if len(mesh_list) == 1 else None
         material = self.get_input_value('material', None)
@@ -166,30 +158,9 @@ class SolverNode(CadQueryNode):
             self.set_error(msg)
             return None
 
-        # Selecting the solver implicitly means "run it"; `deck_only` is the
-        # explicit opt-out for users who only want the input deck.
-        deck_only = as_bool(self.get_property('deck_only'))
-        run_flag = not deck_only
-        logger.debug("FEA Solver: deck_only=%s, run_solver=%s", deck_only, run_flag)
-
         try:
-            timeout_s = float(self.get_property('external_timeout_s') or 0.0)
-            if not math.isfinite(timeout_s) or timeout_s <= 0.0:
-                self.set_error("CalculiX timeout must be finite and greater than zero.")
-                return None
-            solver_path = str(self.get_property('external_solver_path') or '').strip() or None
-            work_dir = str(self.get_property('external_work_dir') or '').strip() or None
-            project_dir = getattr(self, '_project_dir', None)
-            if project_dir:
-                if solver_path and not Path(solver_path).is_absolute():
-                    solver_path = str(Path(project_dir) / solver_path)
-                if work_dir and not Path(work_dir).is_absolute():
-                    work_dir = str(Path(project_dir) / work_dir)
-            config = ExternalRunConfig(
-                executable=solver_path,
-                work_dir=work_dir,
-                run_solver=run_flag,
-                timeout_s=timeout_s,
+            config = external_run_config(
+                self,
                 job_name='pylcss_calculix',
                 cancel_callback=cancel_callback,
             )

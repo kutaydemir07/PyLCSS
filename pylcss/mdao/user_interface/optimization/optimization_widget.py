@@ -4,18 +4,19 @@
 
 from __future__ import annotations
 
-import importlib.util
 import logging
 import os
-import tempfile
 
 import numpy as np
 from PySide6 import QtCore, QtWidgets
 
-from pylcss.config import TEMP_MODELS_DIR
+from pylcss.mdao.optimization.configuration import (
+    parse_feasibility_tolerance,
+    validate_algorithm_settings,
+)
 from pylcss.mdao.optimization.evaluator import default_initial_value
-from pylcss.mdao.optimization.workers import OptimizationWorker
-from pylcss.mdao.system_modeling.problem import DesignProblem
+from pylcss.mdao.problem import DesignProblem
+from pylcss.mdao.system_modeling.model import load_source_function
 from pylcss.user_interface.common.empty_state import EmptyStateOverlay
 from pylcss.user_interface.common.ui_kit import CollapsibleSection
 
@@ -24,6 +25,7 @@ from .components import (
     OptimizationPlotsWidget,
     SolverSettingsWidget,
 )
+from .workers import OptimizationWorker
 
 logger = logging.getLogger(__name__)
 
@@ -282,7 +284,7 @@ class OptimizationWidget(QtWidgets.QWidget):
         try:
             # Reusing original parsing logic
             self.system_code = code
-            system_function = self._execute_code_safely(code)
+            system_function = load_source_function(code)
 
             self.problem = DesignProblem("Optimization_Model", sample_size=3000)
             self.problem.set_system_model(system_function)
@@ -413,12 +415,14 @@ class OptimizationWidget(QtWidgets.QWidget):
             )
             return
 
-        solver_settings = self.settings_widget.get_config()
-        if solver_settings.get("method") == "NSGA-II" and len(self.objectives) < 2:
+        try:
+            solver_settings = self.settings_widget.get_config()
+            validate_algorithm_settings(
+                solver_settings, objective_count=len(self.objectives)
+            )
+        except (ValueError, TypeError, OverflowError) as exc:
             QtWidgets.QMessageBox.warning(
-                self,
-                "NSGA-II Needs Multiple Objectives",
-                "Select at least two objectives or choose a scalar solver.",
+                self, "Invalid Optimization Settings", str(exc)
             )
             return
 
@@ -448,13 +452,12 @@ class OptimizationWidget(QtWidgets.QWidget):
 
         use_current = self.combo_start.currentData() == "current"
 
-        scaling_enabled = bool(solver_settings.get("scaling", True))
-        scaling_mode = str(solver_settings.get("scaling_mode", "auto"))
-        self.feasibility_tolerance = float(
-            solver_settings.get(
-                "feasibility_tol", solver_settings.get("tol", FEASIBILITY_TOL)
-            )
+        scaling_enabled = (
+            bool(solver_settings.get("scaling", True))
+            or solver_settings.get("method") == "NSGA-II"
         )
+        scaling_mode = str(solver_settings.get("scaling_mode", "auto"))
+        self.feasibility_tolerance = parse_feasibility_tolerance(solver_settings)
 
         for dv in self.problem.design_variables:
             mn, mx = float(dv["min"]), float(dv["max"])
@@ -571,31 +574,6 @@ class OptimizationWidget(QtWidgets.QWidget):
             except ValueError:
                 pass
         return 0.0
-
-    def _execute_code_safely(self, code):
-        # 1. Ensure the directory exists
-        os.makedirs(TEMP_MODELS_DIR, exist_ok=True)
-
-        # 2. Pass the 'dir' argument to NamedTemporaryFile
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".py", delete=False, dir=TEMP_MODELS_DIR
-        ) as f:
-            f.write(code)
-            temp_file = f.name
-        spec = importlib.util.spec_from_file_location("temp_module", temp_file)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        # Find the system_function
-        system_function = None
-        for attr_name in dir(module):
-            if attr_name.startswith("system_function") and callable(
-                getattr(module, attr_name)
-            ):
-                system_function = getattr(module, attr_name)
-                break
-        if system_function is None:
-            raise AttributeError("system_function not found in generated code")
-        return system_function
 
     def save_to_folder(self, folder_path: str):
         """

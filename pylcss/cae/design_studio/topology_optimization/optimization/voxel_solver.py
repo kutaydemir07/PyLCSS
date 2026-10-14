@@ -6,17 +6,11 @@
 from __future__ import annotations
 
 import logging
-import io
-from contextlib import redirect_stdout
 from typing import Any, Callable, Optional
 
 import numpy as np
 
 from .assembly import _SolverAssemblyMixin
-from .lattice_material import (
-    cubic_basis_element_matrices,
-    make_cell_material_module,
-)
 from .problem import (
     INDUSTRIAL_PENAL_BUDGET_FRACTION,
     MMA_FAMILY,
@@ -25,11 +19,7 @@ from .problem import (
 from .pymoto_modules import (
     _make_concat_module,
     _make_heaviside_module,
-    _make_linear_grid_projection_module,
-    _make_max_member_module,
     _make_passive_clamp_module,
-    _make_pattern_repeat_module,
-    _make_pull_out_module,
     _make_simp_module,
     _make_sparse_to_csc_module,
     _make_volume_constraint_module,
@@ -45,89 +35,19 @@ from .update_algorithms import (
 
 logger = logging.getLogger(__name__)
 
-# Private aliases preserve the established extension and test API.
-_oc_update = optimality_criteria_update
-_restore_active_volume = restore_active_volume
-_volume_budget_from_masks = volume_budget_from_masks
-
-
-# Sparse LU fill-in becomes expensive surprisingly early for a 3-D elasticity
-# grid. Benchmarks on the bundled pyMOTO backend show geometric-multigrid CG is
-# already 3.2x faster at 16x10x4 and 10.8x faster at 32x20x8, with objective
-# agreement better than 4e-9 relative. Keep direct LU only for tiny grids where
-# solver startup dominates, and use the scalable path for normal studies.
+# Sparse direct factorization is economical for tiny systems. Larger compatible
+# grids use geometric-multigrid CG to reduce factorization memory and runtime.
 DIRECT_SOLVE_VOXEL_LIMIT = 256
-
-# Relative residual for the iterative path. Compliance sensitivities are
-# formed from the solution vector, so this has to stay well below the
-# optimizer's own convergence tolerance to avoid polluting the gradients.
-#
-# 1e-6 is three orders below the tightest topology tolerance a study can ask
-# for and leaves the answer unchanged. Measured on a 48x24x24 cantilever,
-# 12 MMA iterations, mean CG iterations per solve and final compliance:
-#
-#     tol 1e-8   42 CG its   4.074 s/iteration   C = 4.726294e+00
-#     tol 1e-6   30 CG its   3.034 s/iteration   C = 4.726294e+00
-#     tol 1e-5   24 CG its   2.892 s/iteration   C = 4.726297e+00
-#
-# So 1e-8 buys no digits of compliance and costs 34% more time per iteration.
-# 1e-5 starts to show in the seventh significant figure, which is close enough
-# to the gradient noise floor that it is not worth the remaining 5%.
+# Keep linear residuals below topology convergence tolerances so solution error
+# does not dominate compliance sensitivities.
 ITERATIVE_SOLVE_TOLERANCE = 1e-6
 ITERATIVE_SOLVE_MAX_ITER = 5_000
 JOINT_SOLVE_TOLERANCE = 1e-6
 JOINT_SOLVE_MAX_ITER = 2_000
-
-# Depth of the geometric-multigrid hierarchy and the damped-Jacobi smoothing
-# steps per level. Recursing the V-cycle shrinks the coarse factorization, but
-# it also replaces an exact coarse solve with an increasingly poor one, and
-# pyMOTO's damped-Jacobi smoother plus trilinear interpolation does not hold up
-# against the 1e9 stiffness contrast SIMP produces. Every extra level roughly
-# doubles the CG count, and past two levels the cheaper coarse solve stops
-# paying for it.
-#
-# Mean CG iterations per solve and s per design iteration, with the final
-# compliance agreeing to 7 significant figures across every variant:
-#
-#                    112x36x8 (MBB)     48x24x24        64x32x32
-#     levels     CG its   s/it     CG its  s/it     CG its   s/it
-#       1           7.7   1.515       5.7  1.163       5.3   2.686
-#       2          19.9   1.517      14.8  1.108      13.2   2.522
-#       3          19.9   1.544      29.0  1.126      26.5   2.767
-#       5          19.9   1.567      29.0  1.126      56.7   2.906
-#
-# So two levels is the optimum on every shape measured, and the previous cap of
-# 5 cost 15% on the 64x32x32 grid. One level converges in a third of the CG
-# iterations but pays for it in the larger coarse factorization.
-#
-# At that cap, two smoothing steps beat three -- the extra sweep buys fewer CG
-# iterations than its matvecs cost (s/it, three smooth vs two):
-#
-#     112x36x8   1.585 -> 1.449     48x24x24  1.127 -> 1.102
-#     64x32x32   2.545 -> 2.378
-#
-# Rebuilding the Galerkin coarse operator less often was also tried and is a
-# clear loss: refreshing it every 2nd design iteration doubled the CG count on
-# the MBB grid (20.1 -> 41.4) and every 5th quintupled it (94.4). The SIMP
-# operator changes too much per step for a stale coarse correction.
+# Limit depth because high SIMP stiffness contrast weakens coarse corrections.
 MULTIGRID_MAX_LEVELS = 2
 MULTIGRID_SMOOTH_STEPS = 2
-# Coarsening stops while a level still has this many elements per axis, so the
-# interpolation stencil stays meaningful.
 MULTIGRID_MIN_COARSE_ELEMENTS = 2
-
-# Test/benchmark override: a callable taking the VoxelDomain and returning a
-# pyMOTO LinearSolver (or None for pyMOTO's automatic choice).
-_LINEAR_SOLVER_FACTORY: Optional[Callable[[Any], Any]] = None
-
-_OVERHANG_DIRECTIONS = {
-    "+x": (1.0, 0.0, 0.0),
-    "-x": (-1.0, 0.0, 0.0),
-    "+y": (0.0, 1.0, 0.0),
-    "-y": (0.0, -1.0, 0.0),
-    "+z": (0.0, 0.0, 1.0),
-    "-z": (0.0, 0.0, -1.0),
-}
 
 
 def _smooth_heaviside_values(
@@ -156,36 +76,12 @@ def _projection_matched_level(
     beta: float,
     eta: float,
 ) -> float:
-    """Invert the density projection: the filtered level matching ``cutoff``.
+    """Invert the projection to match a physical cutoff on the filtered field.
 
-    Surface recovery runs on the filtered field, not the projected one, because
-    only the filtered field varies smoothly enough across an interface to place
-    an isosurface at sub-voxel accuracy. That choice is sound, but it needs the
-    *corresponding* level, and the correspondence is exact rather than
-    something to be searched for: the projection is a strictly increasing map
-    ``rho_bar = H(rho_tilde; beta, eta)``, so the ``rho_bar = cutoff`` boundary
-    is precisely the ``rho_tilde = H^-1(cutoff)`` boundary. This is the closed
-    form of that inverse.
-
-    It replaces a bisection that matched ``count(filtered >= level)`` against
-    ``sum(projected)`` -- a voxel count against a mass integral, two different
-    quantities that agree only for a perfectly binary design. That search also
-    ignored ``beta`` and ``eta`` entirely, so it returned essentially 0.5
-    whatever the projection was doing, and was therefore worst exactly when the
-    volume-preserving threshold had moved furthest from 0.5. Measured on a
-    filtered field at volfrac 0.4, recovered against analyzed material:
-
-        beta   1 (eta 0.833)   +83.1%      beta   8 (eta 0.510)   +8.1%
-        beta   2 (eta 0.593)   +57.6%      beta  16 (eta 0.503)   +1.7%
-        beta   4 (eta 0.531)   +26.2%
-
-    This inverse reproduces the projected design cell for cell -- zero voxels
-    differ at every beta tested -- because it is the same level set, not an
-    approximation of it.
-
-    With no projection in the network (``beta`` at zero) the filtered field is
-    the physical field and the cutoff passes through unchanged.
-    """
+    Surface recovery uses the smoother filtered field. Its matching level is
+    eta + atanh(cutoff * denominator - tanh(beta * eta)) / beta.
+    With no projection, the cutoff passes through. Endpoints are clipped to
+    avoid degenerate isosurfaces."""
     level = float(cutoff)
     beta_value = float(beta)
     if not np.isfinite(beta_value) or beta_value < 1e-6:
@@ -260,17 +156,10 @@ def _volume_preserving_projection_eta(
 
 
 def _multigrid_hierarchy(pym: Any, domain: Any, level: int = 1) -> Any:
-    """Build a recursive geometric-multigrid V-cycle rooted at ``domain``.
+    """Build a geometric-multigrid V-cycle rooted at ``domain``.
 
-    Each level halves every axis, and pyMOTO asserts that any domain a
-    ``GeometricMultigrid`` is built on is itself divisible by two. Recursion
-    therefore continues only while the *next* grid is still even and above the
-    minimum coarse size -- testing the current grid instead builds a level on
-    an odd coarse domain, which pyMOTO rejects, and the caller's ``except``
-    then silently drops the whole study back to the direct solver. The
-    innermost level keeps pyMOTO's automatic direct solver, which is what a
-    proper V-cycle wants at its coarsest point.
-    """
+    Recurse only when the next grid is even and has enough elements. The
+    coarsest level uses pyMOTO's direct solver."""
     sub_dims = (
         int(domain.nelx) // 2,
         int(domain.nely) // 2,
@@ -297,23 +186,10 @@ def _multigrid_hierarchy(pym: Any, domain: Any, level: int = 1) -> Any:
 
 
 def _linear_solver_for_domain(pym: Any, domain: Any) -> Any:
-    """Choose the linear solver for one SIMP system.
+    """Choose direct factorization for tiny or incompatible grids, otherwise CG.
 
-    Returning ``None`` leaves pyMOTO's automatic direct solver in place. Above
-    the tiny-grid cutoff where sparse-factorization fill-in starts to dominate, a
-    geometric-multigrid preconditioned CG is used instead: its memory is
-    linear in the number of voxels, which is what allows a grid fine enough to
-    resolve a lattice cell or a recovered surface.
-
-    Multigrid requires even grid dimensions. When they are odd the direct
-    solver is kept rather than degrading to a Jacobi preconditioner —
-    measured on a 48x24x24 cantilever, Jacobi-CG was 2.1x *slower* than the
-    direct solve because the 1e9 SIMP stiffness contrast leaves the system
-    badly conditioned.
-    """
-    if _LINEAR_SOLVER_FACTORY is not None:
-        return _LINEAR_SOLVER_FACTORY(domain)
-
+    Geometric multigrid requires even dimensions and avoids the fine-grid
+    factorization cost of larger 3-D elasticity systems."""
     n_voxels = int(domain.nelx) * int(domain.nely) * int(domain.nelz)
     if n_voxels <= DIRECT_SOLVE_VOXEL_LIMIT:
         return None
@@ -346,17 +222,10 @@ def _linear_solver_for_case(
     domain: Any,
     joint_stiffness: Any,
 ) -> Any:
-    """Relax the iterative target appropriately for joint-coupled cases.
+    """Set iterative limits for cases containing joint couplings.
 
-    The geometric multigrid hierarchy represents only the regular voxel
-    operator. Long-range pin/connector springs are present in the assembled
-    matrix but absent from that preconditioner. Chasing the plain-voxel
-    residual target can therefore exhaust thousands of iterations, while
-    sparse direct factorization has excessive fill-in for the 3-D system.
-    A 1e-6 relative residual remains far below the topology convergence
-    tolerance and is the practical engineering target for this connector
-    surrogate.
-    """
+    Long-range connector springs are absent from the regular-grid multigrid
+    preconditioner, so cap their iterative work separately."""
     solver = _linear_solver_for_domain(pym, domain)
     if joint_stiffness is not None:
         try:
@@ -371,7 +240,7 @@ def _linear_solver_for_case(
 
 
 class TopologyOptVoxelSolver(_SolverAssemblyMixin):
-    """3-D density/SIMP and reaction-diffusion level-set optimizer."""
+    """Optimize a 3-D solid density field with SIMP and optional robust projection."""
 
     def __init__(self, problem: TopologyOptVoxelProblem) -> None:
         self.problem = problem
@@ -402,29 +271,6 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
 
         p = self.problem
 
-        # ── two-scale cell law ────────────────────────────────────────────
-        # When the study builds a lattice from a family whose periodic cell has
-        # been homogenized, the macro operator uses that cell's anisotropic
-        # tensor instead of an isotropic power law. Resolved before the network
-        # is built because it decides which assembly path the network takes.
-        cell_law = p.homogenized_cell_law()
-        if cell_law is not None:
-            logger.info(
-                "Two-scale lattice study: %s cell law, %d homogenized samples, "
-                "Zener %.2f at rho=0.3.",
-                cell_law.cell_type,
-                cell_law.relative_density.size,
-                float(cell_law.zener_ratio(np.asarray(0.3))),
-            )
-        elif p.lattice_cell_type and p.stress_constraint_enabled:
-            logger.warning(
-                "Lattice study %r runs on the isotropic continuum surrogate "
-                "because a stress constraint is active; the homogenized cell "
-                "law cannot be paired with isotropic stress recovery.",
-                p.lattice_cell_type,
-            )
-        self.cell_law = cell_law
-
         # ── domain ────────────────────────────────────────────────────────
         domain = pym.VoxelDomain(
             p.nelx,
@@ -452,8 +298,8 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
         active_mask, passive_density = self._assemble_passive_masks(domain, p.bc)
         if not np.any(active_mask):
             raise ValueError(
-                "Topology study has no designable voxels after source, passive, "
-                "and joint-attachment regions are applied."
+                "Topology study has no designable voxels after source-domain "
+                "and passive regions are applied."
             )
 
         source_mask_flat = np.ones(domain.nel, dtype=bool)
@@ -466,7 +312,7 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
             except Exception:
                 source_mask_flat[:] = True
 
-        volume_budget = _volume_budget_from_masks(
+        volume_budget = volume_budget_from_masks(
             p.volfrac,
             active_mask,
             passive_density,
@@ -505,65 +351,20 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
             # Interpolation across resolution levels is not exactly volume
             # preserving. Restore the active-material budget before the first
             # response so the refined stage starts feasible.
-            x0 = _restore_active_volume(
+            x0 = restore_active_volume(
                 x0,
                 active_mask,
                 active_volfrac,
                 passive_density,
             )
 
-        if not load_cases:
-            logger.warning(
-                "TopologyOptVoxelNode: no load cases produced a non-zero force "
-                "vector — returning a trivial (uniform) result."
-            )
-            density_3d = _density_grid_from_state(x0, domain)
-            result = TopologyOptVoxelResult(
-                density=density_3d.copy(),
-                design_density=density_3d.copy(),
-                compliance_history=[0.0],
-                change_history=[0.0],
-                n_iter=0,
-                converged=True,
-                active_target_volfrac=active_volfrac,
-                min_source_volfrac=float(volume_budget["min_source_volfrac"]),
-                passive_source_volfrac=(
-                    float(volume_budget["passive_source_sum"])
-                    / max(float(volume_budget["source_count"]), 1.0)
-                ),
-                message=(
-                    "No non-zero load cases; returned the initial uniform "
-                    "density field."
-                ),
-                formulation_used="Density (SIMP)",
-            )
-            if callback is not None:
-                callback(0, 0.0, 0.0, density_3d.copy())
-            return result
-
         sx = pym.Signal("x", state=x0)
-        mc = p.mc
-        max_member_radius_voxels = float(mc.max_member_size_voxels or 0.0)
-        if float(mc.max_member_size_physical or 0.0) > 0.0:
-            max_member_radius_voxels = (
-                0.5
-                * float(mc.max_member_size_physical)
-                / max(float(p.unitx), float(p.unity), float(p.unitz))
-            )
-        has_manufacturing_mappings = (
-            (mc.symmetry or "none").lower() != "none"
-            or (mc.extrusion or "none").lower() != "none"
-            or (mc.overhang_build_axis or "none").lower() != "none"
-            or (mc.pull_out_axis or "none").lower() != "none"
-            or max_member_radius_voxels > 0.0
-            or int(mc.pattern_repeat or 1) > 1
-        )
         minimum_mass_objective = str(p.objective_mode).lower() == "minimum_mass"
         optimizer_choice = p.optimizer.upper()
         if optimizer_choice == "AUTO":
             if minimum_mass_objective or p.stress_constraint_enabled:
                 optimizer_choice = "GCMMA"
-            elif p.heaviside_enabled or has_manufacturing_mappings:
+            elif p.heaviside_enabled:
                 optimizer_choice = "MMA"
             else:
                 optimizer_choice = "OC"
@@ -571,11 +372,10 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
             minimum_mass_objective
             or p.stress_constraint_enabled
             or p.robust_length_scale
-            or has_manufacturing_mappings
         ) and optimizer_choice not in MMA_FAMILY:
             logger.info(
-                "The selected objective/constraints require full mapped-volume "
-                "sensitivities; forcing an MMA-family optimizer (was '%s').",
+                "The selected objective/constraints require an MMA-family "
+                "optimizer (was '%s').",
                 optimizer_choice,
             )
             optimizer_choice = (
@@ -591,13 +391,7 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                 optimizer_choice,
             )
         use_robust = bool(p.robust_length_scale and use_heaviside)
-        if p.robust_length_scale and not use_robust:
-            logger.info(
-                "The robust length-scale formulation needs the projection, "
-                "which is unavailable here; the requested minimum member size "
-                "is not enforced in this run."
-            )
-        elif use_robust:
+        if use_robust:
             logger.info(
                 "Robust length scale: eta_dilated %.3f / blueprint %.3f / "
                 "eta_eroded %.3f at filter radius %.4g -> minimum member "
@@ -610,23 +404,14 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                 float(p.minimum_void_size),
             )
 
-        # ── SIMP penalization continuation ────────────────────────────────
-        # The exponent enters at `penal_init` — 1 by default, where compliance
-        # minimization is convex and the solution is unique — and is raised to
-        # the study penalization in `penal_step` increments. Starting at the
-        # target exponent instead lets the first few descent directions commit
-        # the topology to whichever local minimum they happen to fall into,
-        # which is precisely what continuation exists to avoid.
-        #
-        # Disabled for a two-scale study: a homogenized cell law interpolates a
-        # measured stiffness tensor rather than a power of the density, so
-        # there is no exponent to continue.
-        penal_init = float(p.penal_init)
+        # Start softly, then raise the SIMP exponent toward the study's target.
+        penal_init = (
+            float(p.penal_init) if p.penal_continuation_enabled else float(p.penal)
+        )
         penal_target = float(p.penal)
         widest_penal_range = penal_target - penal_init
         use_penal_continuation = bool(
             p.penal_continuation_enabled
-            and cell_law is None
             and widest_penal_range > 1e-9
         )
         penal_steps = (
@@ -646,8 +431,7 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
             return _density_grid_from_state(physical, domain)
 
         # ── pyMOTO network ────────────────────────────────────────────────
-        # Density formulation: raw density -> exact-adjoint manufacturing maps
-        # -> physical cone filter -> passive clamp -> optional projection -> SIMP.
+        # Raw density -> physical cone filter -> passive clamp -> projection -> SIMP.
         heaviside_module_ref: Any = None
         # SIMP interpolations paired with their target exponents.
         simp_modules: list[tuple[Any, float]] = []
@@ -658,25 +442,6 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
         volume_constraint_module_ref: Any = None
         with pym.Network() as net:
             PassiveClamp = _make_passive_clamp_module()
-            smapped = sx
-            if (
-                (mc.symmetry or "none").lower() != "none"
-                or (mc.extrusion or "none").lower() != "none"
-            ):
-                LinearMap = _make_linear_grid_projection_module(
-                    domain,
-                    symmetry=str(mc.symmetry or "none"),
-                    extrusion=str(mc.extrusion or "none"),
-                )
-                smapped = LinearMap()(smapped)
-            if int(mc.pattern_repeat or 1) > 1:
-                PatternMap = _make_pattern_repeat_module(
-                    domain,
-                    int(mc.pattern_repeat),
-                    str(mc.pattern_axis or "y"),
-                )
-                smapped = PatternMap()(smapped)
-
             # pyMOTO measures an element-count radius with unit cells on every
             # axis, so a non-cubic voxel makes the cone anisotropic in model
             # units: on a 1x4x1 mm grid a two-element radius regularizes over
@@ -698,69 +463,13 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                     float(p.rmin),
                     filter_radius,
                 )
-            # Boundary treatment is deliberately pyMOTO's default zero-flux
-            # (mirror) padding on all six faces, for both the physical and the
-            # element-count radius.
-            #
-            # Padding with void instead treats everything outside the design box
-            # as empty, and because the cone kernel is normalized to sum 1 that
-            # caps the physical density a boundary voxel can ever reach: with
-            # the program-controlled rmin of 1.5 voxels a fully solid domain
-            # filters down to 0.85 on a face and 0.59 at a corner, i.e. E/E0 of
-            # 0.61 and 0.20 under SIMP p=3. The optimizer cannot buy that back,
-            # because the raw design variable is already at its upper bound, so
-            # the study is biased against putting material on the outer surface
-            # of the part -- exactly where a bending load path wants it -- and
-            # the corners drop below the recovery cutoff and get chamfered off.
-            # Mirror padding is the zero-flux condition: a design that is
-            # uniform across a domain face stays uniform through the filter.
+            # Mirror padding preserves solid density on domain faces and corners.
             sxfilt_raw = pym.FilterConv(
                 domain=domain,
                 radius=filter_radius,
                 relative_units=not radius_is_physical,
-            )(smapped)
-            if (mc.extrusion or "none").lower() != "none":
-                # Zero-flux padding already preserves an exactly invariant
-                # field along the extrusion axis, so this is a guard rather
-                # than a correction: it pins the density used by FEA,
-                # projection, recovery and CAD to the requested constant
-                # cross-section whatever the upstream mappings did. Void
-                # padding *was* a correction here, and that it was needed at
-                # all is what exposed the boundary erosion described above.
-                # This module carries its exact transpose in the sensitivity
-                # path, so it is free of gradient error either way.
-                PhysicalExtrusionMap = _make_linear_grid_projection_module(
-                    domain,
-                    symmetry="none",
-                    extrusion=str(mc.extrusion),
-                )
-                sxfilt_raw = PhysicalExtrusionMap()(sxfilt_raw)
+            )(sx)
             sxfilt = PassiveClamp(active_mask, passive_density)(sxfilt_raw)
-            build_key = str(mc.overhang_build_axis or "none").lower()
-            if build_key in _OVERHANG_DIRECTIONS:
-                # pyMOTO 2.0.1 prints its sampled cone offsets during module
-                # construction. Suppress that dependency debug output while
-                # retaining the differentiable Langelaar filter itself.
-                with redirect_stdout(io.StringIO()):
-                    overhang_module = pym.OverhangFilter(
-                        domain=domain,
-                        direction=_OVERHANG_DIRECTIONS[build_key],
-                        overhang_angle=float(mc.overhang_angle_deg),
-                    )
-                sxfilt = overhang_module(sxfilt)
-                sxfilt = PassiveClamp(active_mask, passive_density)(sxfilt)
-            if str(mc.pull_out_axis or "none").lower() != "none":
-                PullOutMap = _make_pull_out_module(domain, mc.pull_out_axis)
-                sxfilt = PullOutMap()(sxfilt)
-                sxfilt = PassiveClamp(active_mask, passive_density)(sxfilt)
-            if max_member_radius_voxels > 0.0:
-                MaxMemberMap = _make_max_member_module(
-                    domain,
-                    max_member_radius_voxels,
-                    float(mc.max_member_threshold),
-                )
-                sxfilt = MaxMemberMap()(sxfilt)
-                sxfilt = PassiveClamp(active_mask, passive_density)(sxfilt)
             if use_heaviside:
                 HeavisideCls = _make_heaviside_module()
                 heaviside_module_ref = HeavisideCls(
@@ -815,17 +524,6 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                 sx_volume = sxfilt
             SparseToCSC = _make_sparse_to_csc_module()
             SimpCls = _make_simp_module()
-            CellMaterialCls = (
-                make_cell_material_module() if cell_law is not None else None
-            )
-            # Integrated once and shared by every load case; the geometry of an
-            # element does not change during a run.
-            cubic_basis = (
-                cubic_basis_element_matrices(domain)
-                if cell_law is not None
-                else ()
-            )
-
             def _compliance_branch(
                 density_signal: Any,
                 label: str,
@@ -836,27 +534,13 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                 displacement signals and the unweighted per-case compliances.
                 Costs one linear solve per load case.
                 """
-                if cell_law is not None:
-                    # Two-scale path: density selects a homogenized cell, whose
-                    # three cubic constants scale three constant basis element
-                    # matrices. The assembled operator is genuinely anisotropic
-                    # — an isotropic power law cannot express the octet cell's
-                    # Zener ratio of ~1.5, i.e. half again the shear stiffness
-                    # its bulk response would imply.
-                    material = CellMaterialCls(
-                        cell_law,
-                        young=p.E0,
-                        minimum_young=p.Emin,
-                        poisson=p.nu,
-                    )(density_signal)
-                else:
-                    simp = SimpCls(
-                        minimum=float(p.Emin),
-                        full=float(p.E0),
-                        penal=_continued_penal(penal_target),
-                    )
-                    simp_modules.append((simp, penal_target))
-                    material = (simp(density_signal),)
+                simp = SimpCls(
+                    minimum=float(p.Emin),
+                    full=float(p.E0),
+                    penal=_continued_penal(penal_target),
+                )
+                simp_modules.append((simp, penal_target))
+                material = simp(density_signal)
 
                 # Per-load-case compliance, then weighted sum → objective.
                 # pym.Scaling normalises (NOT multiplies) so we use MathExpression
@@ -865,20 +549,12 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                 branch_weighted: list[Any] = []
                 branch_raw: list[Any] = []
                 for case in load_cases:
-                    if cell_law is not None:
-                        sK_raw = pym.AssembleGeneral(
-                            domain,
-                            list(cubic_basis),
-                            bc=case.boundary_dofs,
-                            add_constant=case.joint_stiffness,
-                        )(*material)
-                    else:
-                        sK_raw = pym.AssembleStiffness(
-                            domain=domain,
-                            bc=case.boundary_dofs,
-                            poisson_ratio=p.nu,
-                            add_constant=case.joint_stiffness,
-                        )(*material)
+                    sK_raw = pym.AssembleStiffness(
+                        domain=domain,
+                        bc=case.boundary_dofs,
+                        poisson_ratio=p.nu,
+                        add_constant=case.joint_stiffness,
+                    )(material)
                     case_solver = _linear_solver_for_case(
                         pym,
                         domain,
@@ -908,7 +584,7 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
 
                 if len(branch_weighted) == 1:
                     aggregate = branch_weighted[0]
-                elif len(branch_weighted) > 1:
+                else:
                     if p.load_aggregation == "worst_case":
                         ConcatCls = _make_concat_module()
                         combined = ConcatCls()(*branch_weighted)
@@ -920,12 +596,6 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                         aggregate = pym.MathExpression(expression=expr)(
                             *branch_weighted
                         )
-                else:
-                    # No loads — fabricate a zero compliance signal so the graph
-                    # builds.
-                    aggregate = pym.MathExpression(expression="0*inp0")(
-                        density_signal
-                    )
                 return aggregate, branch_us, branch_raw
 
             sg0, sus, raw_scomps = _compliance_branch(sxphys, "")
@@ -958,17 +628,11 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                 sobjective_raw, sobjective_scaled = structural_objective, sg0_scaled
             sobjective_scaled.tag = "objective"
 
-            # ── Phase 3: stress constraint (P-norm aggregated von Mises) ───
-            # Aggregate vm² over ALL load cases into a single PNorm so a
-            # hot-spot under any LC is penalised. Previously only LC[0] was
-            # used — blind to peak stresses under secondary loadings.
+            # Aggregate relaxed stress across every element and load case.
             sg_stress = None
             s_pn_stress = None
             if p.stress_constraint_enabled and sus:
                 yield_sq = float(p.yield_stress) ** 2
-                if yield_sq <= 0.0:
-                    yield_sq = 1.0
-
                 VonMisesCls = _make_vm_module()
                 vm_sq_signals: list[Any] = []
                 for lc_idx, su_i in enumerate(sus):
@@ -1031,7 +695,7 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
 
         # ── iteration loop ────────────────────────────────────────────────
         # `sx_blueprint` is the design that gets delivered: the nominal
-        # projection at eta = 0.5, which is the shape recovery, the report and
+        # projection at the blueprint threshold, which is the shape recovery, the report and
         # the CAD all describe. Without the robust formulation it is the same
         # signal the FEA runs on; with it the FEA runs on the eroded field
         # (`sxphys`) and the blueprint is the nominal member of that family.
@@ -1056,22 +720,6 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
         beta_hist: list[float] = []
         eta_hist: list[float] = []
         penal_hist: list[float] = []
-        # Optimizer compatibility was resolved before the network was built.
-        if minimum_mass_objective and optimizer_choice not in MMA_FAMILY:
-            logger.info(
-                "Minimum-mass objective requires the MMA family; forcing "
-                "GCMMA (was '%s').",
-                optimizer_choice,
-            )
-            optimizer_choice = "GCMMA"
-
-        if sg_stress is not None and optimizer_choice not in MMA_FAMILY:
-            logger.info(
-                "Stress constraint enabled — forcing optimizer to GCMMA (was '%s').",
-                optimizer_choice,
-            )
-            optimizer_choice = "GCMMA"
-
         if optimizer_choice in MMA_FAMILY:
             # Passive variables are clamped by a differentiable network module
             # and re-applied after every step. Giving MMA nearly collapsed
@@ -1079,10 +727,7 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
             # conditioned; ordinary bounds plus zero sensitivities are both
             # exact for the physical problem and much faster numerically.
             xmin = np.full(domain.nel, 1e-3)
-            # A lattice study's variable is the cell relative density, so its
-            # ceiling is a bound on the design space, not a display preference.
-            # See `TopologyOptVoxelProblem.lattice_maximum_density`.
-            xmax = np.full(domain.nel, float(p.lattice_maximum_density))
+            xmax = np.ones(domain.nel)
             # Target Volume is an upper material budget for both objectives.
             # A stress-limited study must satisfy it together with the stress
             # bound; an incompatible pair is an infeasible design request.
@@ -1119,26 +764,8 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
         prev_objective = None
         latest_obj_change: float | None = None
 
-        # β-continuation schedule for the Heaviside projection. β doubles
-        # until it reaches β_max, which is what drives the density field to
-        # 0/1 and yields a crisp, manufacturable topology.
-        #
-        # The interval is derived from the iteration budget rather than taken
-        # as a fixed count. With the fixed 30-iteration step, every shipped
-        # study (35-60 iterations) stopped at β = 2 of 16 — one single step —
-        # so the projection never engaged and the design stayed grey, which
-        # in turn produced blobby recovered surfaces. Scheduling all the
-        # doublings inside ~80% of the budget lets the continuation finish
-        # whatever budget the user chose, while leaving a tail of iterations
-        # to converge at full β.
-        # p-continuation schedule. Scheduled ahead of the projection rather
-        # than alongside it: raising the exponent decides *where* the load path
-        # goes, sharpening the projection decides how crisp its edges are, and
-        # committing the second before the first has settled sharpens a
-        # topology that is still moving. All p steps therefore land inside the
-        # first `INDUSTRIAL_PENAL_BUDGET_FRACTION` of the budget, which for the
-        # 120-iteration guided budget is a step every 12 iterations for the
-        # default 1 -> 3.
+        # Schedule exponent increases within the first 40% of the budget and
+        # projection sharpening within 80%, leaving iterations to settle.
         penal_step_interval = 0
         if use_penal_continuation:
             penal_step_interval = max(
@@ -1164,8 +791,13 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
         hv_beta = (
             float(p.heaviside_beta_init) if heaviside_module_ref is not None else 0.0
         )
-        hv_beta_max = float(p.heaviside_beta_max)
-        hv_step = max(1, int(p.heaviside_beta_step_iters))
+        hv_beta_max = (
+            float(p.heaviside_beta_max) if heaviside_module_ref is not None else 0.0
+        )
+        hv_step = (
+            max(1, int(p.heaviside_beta_step_iters))
+            if heaviside_module_ref is not None else 1
+        )
         last_beta_step = 0
         if heaviside_module_ref is not None and hv_beta > 0.0:
             doublings = max(
@@ -1206,19 +838,18 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                 sobjective_scaled.sensitivity = 1.0
                 net.sensitivity()
                 dc = sx.sensitivity.copy()
-                sx.state = _oc_update(
+                sx.state = optimality_criteria_update(
                     sx.state,
                     dc,
                     active_volfrac,
                     active_mask=active_mask,
                     passive_density=passive_density,
-                    maximum_density=p.lattice_maximum_density,
                 )
             else:
                 x_new, _, _ = mma.step(x=sx.state)
                 x_new = np.asarray(x_new, dtype=float)
-                # MMA already respects xmin=xmax for passive, but re-clamp to
-                # guarantee bit-exact passive density and avoid drift.
+                # Passive variables have ordinary MMA bounds and zero physical
+                # sensitivities. Restore their prescribed values after the step.
                 x_new[~active_mask] = passive_density[~active_mask]
                 sx.state = x_new
                 mma.iter += 1
@@ -1384,16 +1015,8 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                     and stress_hist[-1]
                     <= float(p.yield_stress) * (1.0 + max(obj_tol, 0.005))
                 )
-                # The projection is still being sharpened until beta reaches
-                # its maximum, and the objective plateaus between beta steps.
-                # Declaring convergence during that plateau ends the run on a
-                # half-projected, grey design: measured on the shipped
-                # cantilever, stopping mid-continuation left 11.6% grey where
-                # a completed continuation reached 6.4%.
-                # The same argument applies to the SIMP exponent, and more
-                # sharply: p=1 is a convex problem whose optimum is a fully
-                # grey compliant design. Stopping on its plateau would deliver
-                # a study that never met the penalization the user asked for.
+                # A plateau at an intermediate beta or SIMP exponent does not
+                # establish convergence for the final optimization problem.
                 continuation_complete = (
                     heaviside_module_ref is None
                     or hv_beta >= hv_beta_max - 1e-9

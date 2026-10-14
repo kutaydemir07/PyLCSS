@@ -18,12 +18,12 @@ from pylcss.cae.solver_backends.mesh import (
     mesh_to_tet4,
 )
 from pylcss.cae.solver_backends.validation import finite_float
-from pylcss.cae.design_studio.crash.provenance import (
+from pylcss.cae.crash.provenance import (
     build_crash_provenance,
     write_crash_manifest,
 )
-from pylcss.cae.design_studio.crash.quality import evaluate_crash_quality
-from pylcss.cae.design_studio.crash.signals import build_crash_measurements
+from pylcss.cae.crash.quality import crash_quality_warnings, evaluate_crash_quality
+from pylcss.cae.crash.signals import build_crash_measurements
 
 
 Frame: TypeAlias = dict[str, Any]
@@ -146,9 +146,11 @@ def align_animation_frames(mesh: Any, frames: list[Frame]) -> list[Frame]:
 
     aligned: list[Frame] = []
     for frame in frames:
-        node_ids = np.asarray(frame.get("node_ids", []), dtype=int).reshape(-1)
+        node_ids = np.asarray(
+            [] if frame.get("node_ids") is None else frame["node_ids"], dtype=int
+        ).reshape(-1)
         element_ids = np.asarray(
-            frame.get("element_ids", []),
+            [] if frame.get("element_ids") is None else frame["element_ids"],
             dtype=int,
         ).reshape(-1)
 
@@ -160,17 +162,14 @@ def align_animation_frames(mesh: Any, frames: list[Frame]) -> list[Frame]:
                 frame.get("displacement", []), dtype=float
             ).reshape((-1, 3))
             raw_velocity = np.asarray(frame.get("velocity", []), dtype=float)
-            raw_acceleration = np.asarray(
-                frame.get("acceleration", []), dtype=float
-            )
+            raw_acceleration = np.asarray(frame.get("acceleration", []), dtype=float)
             if wall_index < raw_displacement.shape[0]:
                 rigid_wall_reference = {
                     "node_id": int(node_ids[wall_index]),
                     "displacement": raw_displacement[wall_index].tolist(),
                     "velocity": (
                         raw_velocity[wall_index].tolist()
-                        if raw_velocity.ndim == 2
-                        and wall_index < raw_velocity.shape[0]
+                        if raw_velocity.ndim == 2 and wall_index < raw_velocity.shape[0]
                         else [0.0, 0.0, 0.0]
                     ),
                     "acceleration": (
@@ -599,8 +598,8 @@ def _energy_balance_summary(
     *,
     end_time: float,
     engine_output: Path,
-    warnings: list[str],
 ) -> tuple[dict[str, Any], float | None, float | None, float | None]:
+    """Collect energy and mass diagnostics without applying quality policy."""
     reconstructed = compute_time_history(mesh, material, frames, end_time)
     engine_history = read_engine_energy_history(engine_output)
     if engine_history:
@@ -637,31 +636,90 @@ def _energy_balance_summary(
     maximum_mass_error = (
         float(np.max(np.abs(mass_errors))) / 100.0 if mass_errors.size else None
     )
-    if energy_errors.size:
-        final_energy_percent = float(energy_errors[-1])
-        if final_energy_percent > 2.0:
-            warnings.append(
-                "OpenCourant reports positive final energy creation of "
-                f"{final_energy_percent:.2f}%; investigate contacts, kinematic "
-                "conditions, and element stability before using the result."
-            )
-        elif final_energy_percent < -15.0:
-            warnings.append(
-                "OpenCourant reports final energy loss of "
-                f"{final_energy_percent:.2f}%, beyond the usual preliminary "
-                "15% check; inspect hourglass/contact energy and mesh quality."
-            )
-    if mass_errors.size and float(np.max(np.abs(mass_errors))) > 1.0:
-        warnings.append(
-            "OpenCourant reports more than 1% mass change. Reduce or disable "
-            "constant-time-step mass scaling and inspect local added mass."
-        )
     return (
         history,
         maximum_energy_error,
         final_energy_error,
         maximum_mass_error,
     )
+
+
+def _generated_result_details(
+    *,
+    mesh: Any,
+    material: dict[str, Any],
+    frames: list[Frame],
+    status: str,
+    end_time: float,
+    work_dir: Path,
+    job_name: str,
+    deck_path: Path,
+    engine_deck_path: Path,
+    starter_executable: str | None,
+    engine_executable: str | None,
+    solver_history: dict[str, Any],
+    measurement: dict[str, Any],
+    impact: dict[str, Any],
+    constraints: list[dict[str, Any]],
+    solver_settings: dict[str, Any],
+    acceleration_cfc: int,
+    force_cfc: int,
+    warnings: list[str],
+) -> dict[str, Any]:
+    """Finalize measurements, quality, and provenance for any generated run."""
+    measurement = dict(measurement)
+    measurement["source_point_count"] = int(np.asarray(mesh.p).shape[1])
+    measurement["material_validation"] = dict(material.get("validation") or {})
+    measurement["structural_mass_kg"] = compute_structural_mass_kg(mesh, material)
+    measurements = build_crash_measurements(
+        solver_history=solver_history,
+        frames=frames,
+        measurement=measurement,
+        acceleration_cfc=acceleration_cfc,
+        force_cfc=force_cfc,
+    )
+    quality = evaluate_crash_quality(
+        measurements=measurements,
+        external_status=status,
+        end_time_ms=end_time,
+    )
+    warnings.extend(crash_quality_warnings(quality))
+    metrics = dict(measurements.get("metrics") or {})
+    provenance = build_crash_provenance(
+        mesh=mesh,
+        material=material,
+        impact=impact,
+        constraints=constraints,
+        solver_settings=solver_settings,
+        deck_path=deck_path,
+        engine_path=engine_deck_path,
+        starter_executable=starter_executable,
+        engine_executable=engine_executable,
+        time_history_converter=solver_history.get("converter"),
+        result_artifacts={
+            "starter_output": work_dir / f"{job_name}_0000.out",
+            "engine_output": work_dir / f"{job_name}_0001.out",
+            "time_history_binary": solver_history.get("source_file"),
+            "time_history_csv": solver_history.get("source_csv"),
+        },
+    )
+    manifest_path = write_crash_manifest(
+        work_dir,
+        provenance=provenance,
+        quality=quality,
+        metrics=metrics,
+    )
+    return {
+        "histories": measurements,
+        "crash_metrics": metrics,
+        "quality": quality,
+        "quality_status": quality.get("status"),
+        "numerical_status": quality.get("numerical_status"),
+        "physical_validation_status": quality.get("physical_validation_status"),
+        "ml_eligible": bool(quality.get("ml_eligible")),
+        "provenance": provenance,
+        "manifest_file": str(manifest_path),
+    }
 
 
 def build_generated_crash_result(
@@ -722,7 +780,6 @@ def build_generated_crash_result(
         frames,
         end_time=end_time,
         engine_output=work_dir / f"{job_name}_0001.out",
-        warnings=warnings,
     )
     failed_elements = last.get("failed_cell")
     raw_internal_energy = time_history.get("ie_kj")
@@ -733,64 +790,31 @@ def build_generated_crash_result(
     absorbed_energy_kj = (
         float(internal_energy_kj[-1]) if internal_energy_kj.size else 0.0
     )
-    measurement = dict(measurement)
-    measurement["source_point_count"] = point_count
-    measurement["material_validation"] = dict(material.get("validation") or {})
-    measurement["structural_mass_kg"] = compute_structural_mass_kg(mesh, material)
-    measurements = build_crash_measurements(
-        solver_history=solver_history,
-        frames=frames,
-        measurement=measurement,
-        acceleration_cfc=acceleration_cfc,
-        force_cfc=force_cfc,
-    )
-    quality = evaluate_crash_quality(
-        measurements=measurements,
-        external_status=status,
-        end_time_ms=end_time,
-    )
-    prescribed_wall = (
-        str(measurement.get("scenario") or "") == "prescribed_moving_wall"
-    )
-    if prescribed_wall:
-        # The OpenCourant global-energy history does not include work supplied
-        # by a massless prescribed wall.  Its raw final-energy percentage is
-        # therefore not an applicable conservation check for a controlled
-        # platen test.  Keep it below as a traceable solver diagnostic, but do
-        # not present its generic preliminary warning as a model-quality issue.
-        warnings[:] = [
-            warning
-            for warning in warnings
-            if not warning.startswith("OpenCourant reports final energy loss")
-        ]
-    qualified_energy_error = quality.get("energy_balance_max_error")
-    if qualified_energy_error is None:
-        qualified_energy_error = maximum_energy_error
-    metrics = dict(measurements.get("metrics") or {})
-    provenance = build_crash_provenance(
+    details = _generated_result_details(
         mesh=mesh,
         material=material,
+        frames=frames,
+        status=status,
+        end_time=end_time,
+        work_dir=work_dir,
+        job_name=job_name,
+        deck_path=deck_path,
+        engine_deck_path=engine_deck_path,
+        starter_executable=starter_executable,
+        engine_executable=engine_executable,
+        solver_history=solver_history,
+        measurement=measurement,
         impact=impact,
         constraints=constraints,
         solver_settings=solver_settings,
-        deck_path=deck_path,
-        engine_path=engine_deck_path,
-        starter_executable=starter_executable,
-        engine_executable=engine_executable,
-        time_history_converter=solver_history.get("converter"),
-        result_artifacts={
-            "starter_output": work_dir / f"{job_name}_0000.out",
-            "engine_output": work_dir / f"{job_name}_0001.out",
-            "time_history_binary": solver_history.get("source_file"),
-            "time_history_csv": solver_history.get("source_csv"),
-        },
+        acceleration_cfc=acceleration_cfc,
+        force_cfc=force_cfc,
+        warnings=warnings,
     )
-    manifest_path = write_crash_manifest(
-        work_dir,
-        provenance=provenance,
-        quality=quality,
-        metrics=metrics,
-    )
+    quality = details["quality"]
+    prescribed_wall = str(measurement.get("scenario") or "") == "prescribed_moving_wall"
+    qualified_energy_error = quality.get("energy_balance_max_error")
+    metrics = details["crash_metrics"]
     return {
         "type": "crash",
         "backend": "OpenCourant",
@@ -821,9 +845,7 @@ def build_generated_crash_result(
         "absorbed_energy_kj": absorbed_energy_kj,
         "peak_force": float(metrics.get("peak_crushing_force_kN") or 0.0),
         "mean_force": float(metrics.get("mean_crushing_force_kN") or 0.0),
-        "crush_force_efficiency": float(
-            metrics.get("crush_force_efficiency") or 0.0
-        ),
+        "crush_force_efficiency": float(metrics.get("crush_force_efficiency") or 0.0),
         "specific_energy_absorption": float(
             metrics.get("specific_energy_absorption_kJ_kg") or 0.0
         ),
@@ -841,15 +863,7 @@ def build_generated_crash_result(
         "wall": wall,
         "end_time": end_time,
         "time_history": solver_history or time_history,
-        "histories": measurements,
-        "crash_metrics": metrics,
-        "quality": quality,
-        "quality_status": quality.get("status"),
-        "numerical_status": quality.get("numerical_status"),
-        "physical_validation_status": quality.get("physical_validation_status"),
-        "ml_eligible": bool(quality.get("ml_eligible")),
-        "provenance": provenance,
-        "manifest_file": str(manifest_path),
+        **details,
         "input_file": str(deck_path),
         "engine_file": str(engine_deck_path),
         "work_dir": str(work_dir),
@@ -887,46 +901,26 @@ def build_generated_fallback_result(
     force_cfc: int,
 ) -> dict[str, Any]:
     """Build the deck-only or no-animation result for a generated model."""
-    measurement = dict(measurement)
-    measurement["source_point_count"] = int(np.asarray(mesh.p).shape[1])
-    measurement["material_validation"] = dict(material.get("validation") or {})
-    measurement["structural_mass_kg"] = compute_structural_mass_kg(mesh, material)
-    measurements = build_crash_measurements(
-        solver_history=solver_history,
-        frames=[],
-        measurement=measurement,
-        acceleration_cfc=acceleration_cfc,
-        force_cfc=force_cfc,
-    )
-    quality = evaluate_crash_quality(
-        measurements=measurements,
-        external_status=status,
-        end_time_ms=end_time,
-    )
-    metrics = dict(measurements.get("metrics") or {})
-    provenance = build_crash_provenance(
+    details = _generated_result_details(
         mesh=mesh,
         material=material,
+        frames=[],
+        status=status,
+        end_time=end_time,
+        work_dir=work_dir,
+        job_name=job_name,
+        deck_path=deck_path,
+        engine_deck_path=engine_deck_path,
+        starter_executable=starter_executable,
+        engine_executable=engine_executable,
+        solver_history=solver_history,
+        measurement=measurement,
         impact=impact,
         constraints=constraints,
         solver_settings=solver_settings,
-        deck_path=deck_path,
-        engine_path=engine_deck_path,
-        starter_executable=starter_executable,
-        engine_executable=engine_executable,
-        time_history_converter=solver_history.get("converter"),
-        result_artifacts={
-            "starter_output": work_dir / f"{job_name}_0000.out",
-            "engine_output": work_dir / f"{job_name}_0001.out",
-            "time_history_binary": solver_history.get("source_file"),
-            "time_history_csv": solver_history.get("source_csv"),
-        },
-    )
-    manifest_path = write_crash_manifest(
-        work_dir,
-        provenance=provenance,
-        quality=quality,
-        metrics=metrics,
+        acceleration_cfc=acceleration_cfc,
+        force_cfc=force_cfc,
+        warnings=warnings,
     )
     return {
         "type": "external_solver",
@@ -938,15 +932,7 @@ def build_generated_fallback_result(
         "wall": wall,
         "end_time": end_time,
         "time_history": solver_history,
-        "histories": measurements,
-        "crash_metrics": metrics,
-        "quality": quality,
-        "quality_status": quality.get("status"),
-        "numerical_status": quality.get("numerical_status"),
-        "physical_validation_status": quality.get("physical_validation_status"),
-        "ml_eligible": bool(quality.get("ml_eligible")),
-        "provenance": provenance,
-        "manifest_file": str(manifest_path),
+        **details,
         "input_file": str(deck_path),
         "engine_file": str(engine_deck_path),
         "work_dir": str(work_dir),

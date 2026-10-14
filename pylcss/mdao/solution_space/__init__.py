@@ -13,15 +13,14 @@ from .box_optimization import (
     BoxOptimizationResult,
     optimize_box,
 )
+from .modal_optimization import optimize_modal_boxes
 from .models import (
     BoxSolutionSpace,
     DecoupledMultiModalForm,
     MMSSParameters,
     MultiModalResult,
-    SharedIntervalFamily,
 )
 from .multimodal import MultiModalSolutionSpaceSolver
-from .modal_optimization import optimize_modal_boxes
 from .resampling import (
     resample_multimodal_solution_spaces,
     resample_solution_space,
@@ -29,19 +28,13 @@ from .resampling import (
 from .sampling import (
     classify_good_bad,
     draw_samples,
-    monte_carlo,
     sample_and_classify,
-    sample_box,
+    sample_box_batch,
 )
 from .solver import SolutionSpaceSolver
-from .step_a import modification_step_a, step_a_vectorized, trim_box
-from .step_b import expand_box, modification_step_b
+from .step_a import trim_box
+from .step_b import expand_box
 from .validation import minimum_all_success_sample_size
-
-# Source-compatible aliases for the pre-2.2 API.
-SolutionSpaceResult = BoxOptimizationResult
-compute_phase_solution_space = optimize_box
-run_multimodal = optimize_modal_boxes
 
 __all__ = [
     "BoxOptimizationResult",
@@ -50,26 +43,18 @@ __all__ = [
     "MMSSParameters",
     "MultiModalResult",
     "MultiModalSolutionSpaceSolver",
-    "SharedIntervalFamily",
-    "SolutionSpaceResult",
     "SolutionSpaceSolver",
     "classify_good_bad",
-    "compute_phase_solution_space",
     "compute_solution_space",
     "draw_samples",
     "expand_box",
     "good_fraction_lower_bound",
     "minimum_all_success_sample_size",
-    "modification_step_a",
-    "modification_step_b",
-    "monte_carlo",
     "optimize_box",
     "optimize_modal_boxes",
     "resample_multimodal_solution_spaces",
     "resample_solution_space",
-    "run_multimodal",
     "sample_and_classify",
-    "sample_box",
-    "step_a_vectorized",
+    "sample_box_batch",
     "trim_box",
 ]

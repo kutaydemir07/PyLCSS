@@ -14,7 +14,9 @@ FEA_MESH_DEFAULTS = {
     "fea_mesh_grading": 0.3,
     "fea_element_order": "C3D10",
     "fea_max_elements": 500_000,
+    "fea_convergence_tolerance": 0.05,
 }
+FEA_QUALITY_OPTIONS = ("Standard", "Mesh Convergence")
 FEA_ELEMENT_ORDERS = {
     "Quadratic tetrahedra (C3D10)": "C3D10",
     "Linear tetrahedra (C3D4)": "C3D4",
@@ -22,7 +24,7 @@ FEA_ELEMENT_ORDERS = {
 
 
 def fea_mesh_options_from_node(node):
-    """Read persisted FEA controls, including defaults for older projects."""
+    """Read FEA controls and strip their node-property prefix."""
     options = {}
     for property_name, default in FEA_MESH_DEFAULTS.items():
         value = node.get_property(property_name)
@@ -38,7 +40,9 @@ def is_topopt_fea_setting(node, name):
         node, "__identifier__", ""
     ) == "com.cad.sim.topopt_voxel" and name in {
         *FEA_MESH_DEFAULTS,
-        "validation_quality",
+        "fea_quality",
+        "validation_yield_safety_factor",
+        "validation_displacement_limit_mm",
     }
 
 
@@ -49,9 +53,10 @@ class CadFeaMeshOptions:
     mesh_grading: float = 0.3
     element_order: str = "C3D10"
     max_elements: int = 500_000
+    convergence_tolerance: float = 0.05
 
     def __post_init__(self):
-        for name in ("element_size_mm", "min_element_size_mm", "mesh_grading"):
+        for name in ("element_size_mm", "min_element_size_mm", "mesh_grading", "convergence_tolerance"):
             try:
                 value = float(getattr(self, name))
             except (TypeError, ValueError) as exc:

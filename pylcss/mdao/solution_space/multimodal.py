@@ -17,21 +17,24 @@ from .contracts import (
     ProgressCallback,
     StopCallback,
 )
+from .coordinates import VariableLayout
 from .decoupling import DecouplingResolutionMixin
 from .discovery import (
     DeflationOptimizationMixin,
     LHSInitializationMixin,
     SeedClusteringMixin,
 )
+from .geometry import relative_union_volume
+from .modal_optimization import optimize_modal_boxes
 from .models import (
     BoxSolutionSpace,
     DecoupledMultiModalForm,
     MMSSParameters,
     MultiModalResult,
 )
-from .modal_optimization import optimize_modal_boxes
 from .phase1 import make_point_box
 from .redundancy import RedundancyResolutionMixin
+from .samples import merge_samples
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +51,8 @@ class MultiModalSolutionSpaceSolver(
     The implementation follows the paper's five stages at method level:
     (1) deflated searches from Latin-hypercube starts, (2) HDBSCAN clustering
     with singleton noise finds, (3) one Phase-I/Phase-II box-shaped solution
-    space per mode, (4) largest-space retention for each all-variable overlap
-    set, and (5) extended-problem decoupling into common and separating
+    space per mode, (4) largest-box retention per connected overlap group,
+    and (5) extended-problem decoupling into common and separating
     variables.
     """
 
@@ -76,40 +79,15 @@ class MultiModalSolutionSpaceSolver(
         self.original_dim = self.dsl.size
         self.dv_norm = self.dsu - self.dsl
 
-        if self.parameters is None or np.asarray(self.parameters).size == 0:
-            self.parameters = np.full((2, self.original_dim), np.nan)
-        else:
-            self.parameters = np.asarray(self.parameters, dtype=float).copy()
-            if self.parameters.shape != (2, self.original_dim):
-                raise ValueError(
-                    "parameters must have shape "
-                    f"(2, {self.original_dim}), got {self.parameters.shape}"
-                )
-            partial_nan = np.isnan(self.parameters[0]) != np.isnan(self.parameters[1])
-            if np.any(partial_nan):
-                raise ValueError(
-                    "each variable must have either two parameter bounds or two NaN values"
-                )
-            parameter_mask = ~np.isnan(self.parameters[0])
-            if np.any(~np.isfinite(self.parameters[:, parameter_mask])):
-                raise ValueError("parameter bounds must be finite")
-            if np.any(
-                self.parameters[0, parameter_mask] > self.parameters[1, parameter_mask]
-            ):
-                raise ValueError("parameter bounds contain an inverted interval")
-
-        # Fixed design coordinates behave like parameters during discovery.
-        self.fixed_mask = np.isclose(self.dv_norm, 0.0)
-        self.parameters[:, self.fixed_mask] = np.vstack(
-            (self.dsl[self.fixed_mask], self.dsu[self.fixed_mask])
-        )
-        self.ind_parameters = np.where(~np.isnan(self.parameters[0]))[0]
-        self.active_mask = np.isnan(self.parameters[0])
+        self.layout = VariableLayout.from_bounds(self.dsl, self.dsu, self.parameters)
+        self.parameters = self.layout.parameters
+        self.ind_parameters = self.layout.parameter_indices
+        self.active_mask = self.layout.active_mask
+        self.dv_norm[~self.active_mask] = 0.0
 
         self.active_dsl = self.dsl[self.active_mask]
         self.active_dsu = self.dsu[self.active_mask]
         self.active_dv_norm = self.dv_norm[self.active_mask].copy()
-        self.active_dv_norm[self.active_dv_norm == 0] = 1.0
         self.dim = len(self.active_dsl)
         if self.dim == 0:
             raise ValueError(
@@ -165,19 +143,10 @@ class MultiModalSolutionSpaceSolver(
     # ---- Discovery dispatch ------------------------------------------------
 
     def _expand_active_cluster(self, cluster_active: np.ndarray) -> np.ndarray:
-        """Expand a (active_dim, N) cluster back to (original_dim, N).
-
-        Discovery works in the active (non-fixed) sub-space; downstream code
-        expects full-dimension physical vectors.
-        """
+        """Restore full physical coordinates for a cluster of active designs."""
         if cluster_active is None or cluster_active.size == 0:
             return np.empty((self.original_dim, 0))
-        n_cols = cluster_active.shape[1]
-        full = np.zeros((self.original_dim, n_cols), dtype=float)
-        inactive = ~self.active_mask
-        full[inactive, :] = self.parameters[0, inactive][:, np.newaxis]
-        full[self.active_mask, :] = cluster_active
-        return full
+        return self.layout.expand_points(cluster_active)
 
     def _run_discovery(
         self,
@@ -186,14 +155,12 @@ class MultiModalSolutionSpaceSolver(
     ) -> list[FloatArray]:
         """Run the configured discovery method and return clusters in
         original-dim physical space."""
-        requested_restarts = int(getattr(self.params, "lhs_restart_count", 0))
+        requested_restarts = self.params.lhs_restart_count
         if requested_restarts <= 0:
             # The paper requires the LHS budget to scale with design-space
             # size. Search is performed on [0,1]^n, so active dimension and
             # requested mode capacity are the unit-invariant size measures.
-            requested_capacity = int(getattr(self.params, "max_modes", 0))
-            if requested_capacity <= 0:
-                requested_capacity = int(getattr(self.params, "max_clusters", 0))
+            requested_capacity = self.params.max_modes
             n_starts = max(25, 10 * self.dim, 5 * max(requested_capacity, 5))
         else:
             n_starts = requested_restarts
@@ -230,10 +197,9 @@ class MultiModalSolutionSpaceSolver(
             if c is not None and c.size > 0
         ]
 
-        max_k = int(getattr(self.params, "max_modes", 0))
-        if max_k <= 0:
-            max_k = int(getattr(self.params, "max_clusters", 0))
+        max_k = self.params.max_modes
         if max_k > 0 and len(clusters_full) > max_k:
+            clusters_full.sort(key=lambda cluster: cluster.shape[1], reverse=True)
             clusters_full = clusters_full[:max_k]
         return clusters_full or []
 
@@ -320,8 +286,7 @@ class MultiModalSolutionSpaceSolver(
             result.computation_time = time.time() - start_time
             return result
 
-        # Stage 4: all-variable overlap defines redundant sets; retain only
-        # the largest solution space from each connected set.
+        # Stage 4: retain one representative per connected overlap group.
         n_before = len(boxes)
         if callback:
             callback(
@@ -345,7 +310,7 @@ class MultiModalSolutionSpaceSolver(
             box.label = box.label or f"Mode {i + 1}"
             box.compute_volume(self.dv_norm)
             widths = box.bounds[:, 1] - box.bounds[:, 0]
-            active = self.dv_norm > 1e-20
+            active = self.active_mask
             n_zero = int((widths[active] <= 0.0).sum())
             logger.debug(
                 "Mode %d: a_l=%.4f min_width=%.4e n_zero_active_dims=%d",
@@ -359,20 +324,14 @@ class MultiModalSolutionSpaceSolver(
 
         result.boxes = valid_boxes
         result.n_boxes_valid = len(valid_boxes)
-        result.total_volume = sum(b.volume for b in valid_boxes)
+        result.total_volume = relative_union_volume(
+            [box.bounds for box in valid_boxes], self.dv_norm
+        )
         result.decoupled_form = DecoupledMultiModalForm(mode_boxes=valid_boxes)
-
-        decoupling_enabled = bool(getattr(self.params, "decoupling_enabled", True))
-        legacy_enabled = getattr(self.params, "phase3_decoupling_enabled", None)
-        legacy_commonality = getattr(self.params, "phase3_find_commonality", None)
-        if legacy_enabled is not None:
-            decoupling_enabled = bool(legacy_enabled)
-        elif legacy_commonality is not None:
-            decoupling_enabled = bool(legacy_commonality)
 
         # Stage 5: duplicate separating variables and QoIs per mode, merge
         # common variables, then re-run the box-shaped solution-space method.
-        if decoupling_enabled and len(valid_boxes) >= 2:
+        if self.params.decoupling_enabled and len(valid_boxes) >= 2:
             if callback:
                 callback(
                     None,
@@ -386,27 +345,9 @@ class MultiModalSolutionSpaceSolver(
                 stop_callback=should_stop,
             )
 
-        # Aggregate per-mode samples for downstream UI consumers.
-        all_points, all_good, all_bad, all_viol, all_qoi = [], [], [], [], []
-        for box in valid_boxes:
-            if box.samples:
-                all_points.append(box.samples["points"])
-                all_good.append(box.samples["is_good"])
-                all_bad.append(box.samples["is_bad"])
-                all_viol.append(
-                    box.samples.get("violation_idx", np.zeros(0, dtype=int))
-                )
-                all_qoi.append(
-                    box.samples.get("qoi_values", np.zeros((self.reqU.shape[0], 0)))
-                )
-        if all_points:
-            result.samples_all = {
-                "points": np.hstack(all_points),
-                "is_good": np.concatenate(all_good),
-                "is_bad": np.concatenate(all_bad),
-                "violation_idx": np.concatenate(all_viol),
-                "qoi_values": np.hstack(all_qoi),
-            }
+        batches = [box.samples for box in valid_boxes if box.samples is not None]
+        if batches:
+            result.samples_all = merge_samples(batches)
 
         result.computation_time = time.time() - start_time
         return result

@@ -13,9 +13,8 @@ import numpy as np
 from ..configuration.length_scale import (
     MAX_THRESHOLD_OFFSET,
     coarsest_active_edge,
-    extrusion_inactive_axes,
 )
-from ..models.study import ManufacturingConstraints, VoxelBC
+from ..models.study import VoxelBC
 from ..configuration.voxel_meshing import DEFAULT_MAX_VOXEL_ELEMENTS
 
 INDUSTRIAL_STRESS_RELAXATION_Q = 0.5
@@ -26,12 +25,8 @@ INDUSTRIAL_HEAVISIDE_BETA_INIT = 1.0
 INDUSTRIAL_HEAVISIDE_BETA_MAX = 16.0
 INDUSTRIAL_HEAVISIDE_BETA_STEP_ITERS = 30
 INDUSTRIAL_HEAVISIDE_ETA = 0.5
-# SIMP penalization continuation. At p=1 the compliance problem is convex, so
-# the early iterations settle a load path on the unique solution of a problem
-# that has no local minima to fall into; p is then raised toward the study's
-# penalization to squeeze out the intermediate densities. Standard practice,
-# and the reason continuation runs generally find better designs than starting
-# at p=3.
+# Increase the SIMP exponent gradually so the load path can develop before
+# intermediate densities receive the full stiffness penalty.
 INDUSTRIAL_PENAL_CONTINUATION = True
 INDUSTRIAL_PENAL_INIT = 1.0
 INDUSTRIAL_PENAL_STEP = 0.5
@@ -72,7 +67,6 @@ class TopologyOptVoxelProblem:
     # change stays below `tol` for `patience` consecutive iterations.
     patience: int = 5
     bc: VoxelBC = field(default_factory=VoxelBC)
-    mc: ManufacturingConstraints = field(default_factory=ManufacturingConstraints)
     # Optional raw design-density field used to warm-start a refined grid.
     # This is an internal continuation state, not a user-facing parameter.
     initial_density: Optional[np.ndarray] = None
@@ -83,29 +77,8 @@ class TopologyOptVoxelProblem:
     # Solid wins over the source-domain mask; void is applied last.
     passive_solid_mask: Optional[np.ndarray] = None
     passive_void_mask: Optional[np.ndarray] = None
-    # Lattice cell family this study is optimizing for, when the study builds
-    # one. A family with a homogenized law (gyroid, diamond, cubic, octet)
-    # switches the macro operator from the isotropic SIMP power law to that
-    # cell's anisotropic tensor, which is what makes the study two-scale
-    # rather than a solid optimization that later gets a pattern cut into it.
-    # Empty, or a family without a law, keeps the power law.
-    lattice_cell_type: str = ""
-    # Largest relative density a lattice cell may reach. On a lattice study the
-    # design variable is the cell's relative density rather than a 0/1 material
-    # indicator, so this is a real bound on the design space and not a
-    # post-processing preference: above it the family has no cell left to build
-    # and the tabulated tensor is an extrapolation. 1.0 leaves a solid study
-    # unbounded, which is the correct behaviour there.
-    lattice_maximum_density: float = 1.0
-    # Whether this problem will be handed to the solver.
-    #
-    # Lattice infill builds one to *describe* its grid, units and cell family
-    # to the shared output stage, and then never solves it: there is no
-    # objective, no load case and no iteration. The voxel cap in
-    # ``__post_init__`` bounds the assembled system and its sensitivities, so
-    # applying it to a description forces the infill's rasterization grid down
-    # to a solver's size and with it the cell pitch it can build. Set False
-    # only when nothing will call the solver on this instance.
+    # Infill recovery also uses this grid description, without a structural
+    # solve. Solver-only resource and filter checks do not apply in that case.
     solve_enabled: bool = True
     # Compliance minimization at a material budget, or true mass/volume
     # minimization subject to both the stress constraint and material budget.
@@ -115,7 +88,7 @@ class TopologyOptVoxelProblem:
     # Load envelopes can minimize a weighted sum or a smooth worst case.
     load_aggregation: str = "weighted_sum"
     load_pnorm_p: float = 8.0
-    # Phase 3 — stress constraint (P-norm aggregated von Mises ≤ yield).
+    # Stress constraint (P-norm aggregated von Mises <= yield).
     # When enabled the optimiser is forced to GCMMA unless an MMA-family
     # method is already selected (OC cannot handle a second constraint beyond
     # the volume budget). All load cases are aggregated into a single PNorm.
@@ -166,7 +139,6 @@ class TopologyOptVoxelProblem:
     # disables the cap; the solver must not impose a second hidden limit.
     max_voxel_elements: int = DEFAULT_MAX_VOXEL_ELEMENTS
 
-
     def __post_init__(self) -> None:
         """Reject physically invalid or memory-dangerous studies up front."""
         self.nelx, self.nely, self.nelz = int(self.nelx), int(self.nely), int(self.nelz)
@@ -177,7 +149,11 @@ class TopologyOptVoxelProblem:
         if not np.isfinite(limit) or limit < 0 or not limit.is_integer():
             raise ValueError("Maximum voxel elements must be a non-negative integer.")
         self.max_voxel_elements = int(limit)
-        if self.solve_enabled and self.max_voxel_elements and n_voxels > self.max_voxel_elements:
+        if (
+            self.solve_enabled
+            and self.max_voxel_elements
+            and n_voxels > self.max_voxel_elements
+        ):
             raise ValueError(
                 f"Topology grid has {n_voxels:,} voxels; the configured maximum is "
                 f"{self.max_voxel_elements:,}. Increase Maximum Elements or choose a coarser mesh."
@@ -194,19 +170,28 @@ class TopologyOptVoxelProblem:
             "unity": self.unity,
             "unitz": self.unitz,
             "tol": self.tol,
-            "yield_stress": self.yield_stress,
-            "stress_penalty": self.stress_penalty,
-            "stress_pnorm_p": self.stress_pnorm_p,
-            "stress_scaling_damping": self.stress_scaling_damping,
-            "heaviside_beta_init": self.heaviside_beta_init,
-            "heaviside_beta_max": self.heaviside_beta_max,
-            "heaviside_eta": self.heaviside_eta,
-            "load_pnorm_p": self.load_pnorm_p,
             "minimum_solid_size": self.minimum_solid_size,
             "minimum_void_size": self.minimum_void_size,
-            "penal_init": self.penal_init,
-            "penal_step": self.penal_step,
         }
+        if self.stress_constraint_enabled:
+            finite_fields.update(
+                yield_stress=self.yield_stress,
+                stress_penalty=self.stress_penalty,
+                stress_pnorm_p=self.stress_pnorm_p,
+                stress_scaling_damping=self.stress_scaling_damping,
+            )
+        if self.heaviside_enabled:
+            finite_fields.update(
+                heaviside_beta_init=self.heaviside_beta_init,
+                heaviside_beta_max=self.heaviside_beta_max,
+                heaviside_eta=self.heaviside_eta,
+            )
+        if self.penal_continuation_enabled:
+            finite_fields.update(penal_init=self.penal_init, penal_step=self.penal_step)
+        if self.robust_length_scale:
+            finite_fields.update(
+                eta_eroded=self.eta_eroded, eta_dilated=self.eta_dilated
+            )
         for name, raw in finite_fields.items():
             value = float(raw)
             if not np.isfinite(value):
@@ -227,31 +212,17 @@ class TopologyOptVoxelProblem:
                 "Filter radius and voxel dimensions must be greater than zero."
             )
         self.filter_radius_is_physical = bool(self.filter_radius_is_physical)
-        # A cone filter narrower than one element averages each element with
-        # itself, which is no regularization at all: the mesh dependence and
-        # the checkerboard the filter exists to remove both come straight back,
-        # and the recovered surface then reports a length scale the design
-        # never had. Reject it rather than solving a study whose result cannot
-        # mean what it claims.
-        #
-        # Measured on the axes the filter actually acts on. An extruded study
-        # holds the density constant along the extrusion axis, so the layer
-        # count there is a discretization choice, not a regularization one, and
-        # counting it would reject studies the length-scale policy had already
-        # resolved against the in-plane cell.
-        coarsest_edge = coarsest_active_edge(
-            (self.unitx, self.unity, self.unitz),
-            extrusion_inactive_axes(getattr(self.mc, "extrusion", None)),
-        )
+        # A cone narrower than the grid spacing cannot regularize that axis.
+        coarsest_edge = coarsest_active_edge((self.unitx, self.unity, self.unitz))
         radius_in_elements = (
             self.rmin / coarsest_edge if self.filter_radius_is_physical else self.rmin
         )
-        if radius_in_elements < 1.0:
+        if self.solve_enabled and radius_in_elements < 1.0:
             raise ValueError(
                 f"Filter radius spans only {radius_in_elements:.3g} elements on "
                 "the coarsest voxel axis; at least 1 is required for the "
                 "density filter to regularize the design. Increase the filter "
-                "radius or the minimum member size, or coarsen the grid."
+                "radius or the minimum member size, or refine the grid."
             )
         self.max_iter = int(self.max_iter)
         self.patience = int(self.patience)
@@ -259,7 +230,7 @@ class TopologyOptVoxelProblem:
             raise ValueError(
                 "Iterations, convergence patience, and tolerance must be positive."
             )
-        self.optimizer = str(self.optimizer).upper()
+        self.optimizer = str(self.optimizer).strip().upper()
         if self.optimizer not in {"AUTO", "OC", "MMA", "GCMMA"}:
             raise ValueError("Topology optimizer must be Auto, OC, MMA, or GCMMA.")
         self.formulation = (
@@ -272,30 +243,9 @@ class TopologyOptVoxelProblem:
         self.objective_mode = str(self.objective_mode).strip().lower()
         if self.objective_mode not in {"compliance", "minimum_mass"}:
             raise ValueError("Topology objective must be compliance or minimum_mass.")
-        # Left as the caller's free-form structure mode; the solver resolves it
-        # through the cell-law registry, which is the single place that knows
-        # which families are homogenized.
-        self.lattice_cell_type = str(self.lattice_cell_type or "").strip()
-        self.lattice_maximum_density = float(
-            np.clip(float(self.lattice_maximum_density or 1.0), 0.02, 1.0)
-        )
-        if not self.lattice_cell_type:
-            self.lattice_maximum_density = 1.0
-        elif self.volfrac > self.lattice_maximum_density:
-            raise ValueError(
-                "A lattice study cannot ask for a volume fraction of "
-                f"{self.volfrac:.3f} from a cell whose maximum relative "
-                f"density is {self.lattice_maximum_density:.3f}: the target is "
-                "unreachable and the solve would saturate every element. "
-                "Lower the volume fraction, or raise the maximum relative "
-                "density of the cell."
-            )
-
         self.physics_mode = str(self.physics_mode).strip().lower().replace("-", "_")
         if self.physics_mode != "structural":
-            raise ValueError(
-                "Topology optimization supports structural physics only."
-            )
+            raise ValueError("Topology optimization supports structural physics only.")
         self.load_aggregation = (
             str(self.load_aggregation)
             .strip()
@@ -309,64 +259,65 @@ class TopologyOptVoxelProblem:
             raise ValueError(
                 "Minimum-mass topology optimization requires the stress constraint."
             )
-        if self.load_pnorm_p <= 1.0:
-            raise ValueError("Worst-case load P-norm exponent must be greater than 1.")
-        if self.stress_constraint_enabled and self.yield_stress <= 0.0:
-            raise ValueError(
-                "Stress-constrained TopOpt needs a positive allowable stress."
-            )
-        if not (0.0 <= self.stress_penalty <= 1.0):
-            raise ValueError("Topology stress relaxation must be between 0 and 1.")
-        if self.stress_pnorm_p <= 2.0:
-            raise ValueError("Topology stress P-norm exponent must be greater than 2.")
-        if not 0.0 <= self.stress_scaling_damping < 1.0:
-            raise ValueError(
-                "Topology stress aggregation damping must be in [0, 1)."
-            )
-        self.heaviside_beta_step_iters = int(self.heaviside_beta_step_iters)
-        if (
-            self.heaviside_beta_init <= 0.0
-            or self.heaviside_beta_max < self.heaviside_beta_init
-            or self.heaviside_beta_step_iters < 1
-            or not 0.0 < self.heaviside_eta < 1.0
-        ):
-            raise ValueError(
-                "Heaviside projection requires positive beta, beta_max >= beta_init, "
-                "a positive continuation interval, and eta in (0, 1)."
-            )
+        if self.load_aggregation == "worst_case":
+            self.load_pnorm_p = float(self.load_pnorm_p)
+            if not np.isfinite(self.load_pnorm_p) or self.load_pnorm_p <= 1.0:
+                raise ValueError(
+                    "Worst-case load P-norm exponent must be finite and greater than 1."
+                )
+        if self.stress_constraint_enabled:
+            if self.yield_stress <= 0.0:
+                raise ValueError(
+                    "Stress-constrained TopOpt needs a positive allowable stress."
+                )
+            if not 0.0 <= self.stress_penalty <= 1.0:
+                raise ValueError("Topology stress relaxation must be between 0 and 1.")
+            if self.stress_pnorm_p <= 2.0:
+                raise ValueError(
+                    "Topology stress P-norm exponent must be greater than 2."
+                )
+            if not 0.0 <= self.stress_scaling_damping < 1.0:
+                raise ValueError(
+                    "Topology stress aggregation damping must be in [0, 1)."
+                )
+        if self.heaviside_enabled:
+            self.heaviside_beta_step_iters = int(self.heaviside_beta_step_iters)
+            if (
+                self.heaviside_beta_init <= 0.0
+                or self.heaviside_beta_max < self.heaviside_beta_init
+                or self.heaviside_beta_step_iters < 1
+                or not 0.0 < self.heaviside_eta < 1.0
+            ):
+                raise ValueError(
+                    "Heaviside projection requires positive beta, beta_max >= beta_init, "
+                    "a positive continuation interval, and eta in (0, 1)."
+                )
         self.penal_continuation_enabled = bool(self.penal_continuation_enabled)
-        if self.penal_init < 1.0 or self.penal_init > self.penal:
-            raise ValueError(
-                "SIMP continuation must start at an exponent between 1 and the "
-                "study penalization."
-            )
-        if self.penal_step <= 0.0:
-            raise ValueError("SIMP continuation step must be positive.")
+        if self.penal_continuation_enabled:
+            if self.penal_init < 1.0 or self.penal_init > self.penal:
+                raise ValueError(
+                    "SIMP continuation must start at an exponent between 1 and the "
+                    "study penalization."
+                )
+            if self.penal_step <= 0.0:
+                raise ValueError("SIMP continuation step must be positive.")
         if self.minimum_solid_size < 0.0 or self.minimum_void_size < 0.0:
             raise ValueError("Minimum solid and void sizes cannot be negative.")
         self.robust_length_scale = bool(self.robust_length_scale)
-        self.eta_eroded = float(self.eta_eroded)
-        self.eta_dilated = float(self.eta_dilated)
-        self.dilated_volume_update_iters = int(self.dilated_volume_update_iters)
-        if not (
-            self.eta_dilated < self.heaviside_eta < self.eta_eroded
-            and 0.0 < self.eta_dilated
-            and self.eta_eroded < 1.0
-        ):
-            raise ValueError(
-                "Robust projection thresholds must satisfy "
-                "0 < eta_dilated < eta_blueprint < eta_eroded < 1."
-            )
-        if self.dilated_volume_update_iters < 1:
-            raise ValueError(
-                "The dilated volume budget must be rescaled at least every "
-                "iteration."
-            )
-        if self.robust_length_scale and not self.heaviside_enabled:
-            raise ValueError(
-                "The robust length-scale formulation requires the projection; "
-                "it is defined by the eroded and dilated projected fields."
-            )
+        if self.robust_length_scale:
+            if not self.heaviside_enabled:
+                raise ValueError(
+                    "The robust length-scale formulation requires the projection; "
+                    "it is defined by the eroded and dilated projected fields."
+                )
+            if not 0.0 < self.eta_dilated < self.heaviside_eta < self.eta_eroded < 1.0:
+                raise ValueError(
+                    "Robust projection thresholds must satisfy "
+                    "0 < eta_dilated < eta_blueprint < eta_eroded < 1."
+                )
+            self.dilated_volume_update_iters = int(self.dilated_volume_update_iters)
+            if self.dilated_volume_update_iters < 1:
+                raise ValueError("The dilated volume update interval must be positive.")
         if self.design_domain is not None:
             domain = np.asarray(self.design_domain, dtype=bool)
             expected = (self.nelx, self.nely, self.nelz)
@@ -380,31 +331,6 @@ class TopologyOptVoxelProblem:
             expected = (self.nelx, self.nely, self.nelz)
             if initial.shape != expected or not np.all(np.isfinite(initial)):
                 raise ValueError(
-                    "Initial topology density must be finite with shape "
-                    f"{expected}."
+                    f"Initial topology density must be finite with shape {expected}."
                 )
             self.initial_density = np.clip(initial, 1e-3, 1.0)
-
-    def homogenized_cell_law(self, *, allow_build: bool = True) -> object | None:
-        """Return the cell law this study optimizes against, or ``None``.
-
-        The single place that decides whether a study is two-scale. Both the
-        solver and the result report ask this, so a report can never claim a
-        homogenized solve that the solver did not run.
-
-        A stress constraint disqualifies the two-scale path. pyMOTO recovers
-        stress from one constant isotropic constitutive matrix, so pairing it
-        with an anisotropic, per-element cell tensor would report a von Mises
-        value that does not belong to the material the displacements came from.
-        Such a study falls back to the isotropic surrogate, which is at least
-        self-consistent, and says so in its report. Strut stress in a lattice
-        is the member-sizing stage's job in any case: a macroscopic cell stress
-        is not the stress in a strut.
-        """
-        if not self.lattice_cell_type or self.stress_constraint_enabled:
-            return None
-        from ..manufacturing.cell_material import cell_material_law
-
-        return cell_material_law(
-            self.lattice_cell_type, poisson=self.nu, allow_build=allow_build
-        )

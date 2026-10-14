@@ -390,7 +390,8 @@ def apply_multiresolution_strategy(surface: Any, *, curvature: float | None = No
                                   maximum_error: float | None = None,
                                   validation_samples: int = 17,
                                   maximum_knot_removal_attempts: int = 256,
-                                  knot_removal_acceptance_predicate: Callable[[Any, Any], bool] | None = None) -> MultiresolutionResult:
+                                  knot_removal_acceptance_predicate: Callable[[Any, Any], bool] | None = None,
+                                  curvature_reference_length: float = 1.0) -> MultiresolutionResult:
     """Apply Algorithm 3; return an uncommitted candidate and explicit evidence.
 
     ``maximum_error`` is a model-unit geometric budget, an additional acceptance
@@ -400,7 +401,10 @@ def apply_multiresolution_strategy(surface: Any, *, curvature: float | None = No
     before applying it. Boundary restoration is deliberately left to the caller.
     """
     measured = principal_curvature(surface) if curvature is None else float(curvature)
-    classification = classify_patch_curvature(measured, curvature_ck, curvature_cp)
+    if not math.isfinite(curvature_reference_length) or curvature_reference_length <= 0:
+        raise ValueError('Curvature reference length must be finite and positive')
+    normalized = measured * curvature_reference_length
+    classification = classify_patch_curvature(normalized, curvature_ck, curvature_cp)
     if maximum_error is not None and (not math.isfinite(maximum_error) or maximum_error < 0):
         raise ValueError("The geometric error budget must be finite and nonnegative")
     if classification == "preserve":
@@ -421,7 +425,8 @@ def apply_multiresolution_strategy(surface: Any, *, curvature: float | None = No
             result.report["accepted"] = result.report["geometry_validation"]["maximum_distance"] <= maximum_error
         result.report["maximum_error"] = maximum_error
     result.report.update(classification=classification, principal_curvature=measured,
+        normalized_principal_curvature=normalized, curvature_reference_length=curvature_reference_length,
         principal_curvature_supplied=curvature is not None,
-        curvature_policy="Maximum absolute principal curvature at uniform and all knot-span quarter tensor sites",
+        curvature_policy="Maximum absolute principal curvature times reference length at uniform and knot-span sites",
         curvature_ck=curvature_ck, curvature_cp=curvature_cp)
     return result

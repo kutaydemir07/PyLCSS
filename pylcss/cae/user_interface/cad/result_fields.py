@@ -31,15 +31,25 @@ def available_result_fields(data):
                 "Stress XX", "Stress YY", "Stress ZZ", "Stress XY", "Stress YZ", "Stress ZX",
             ])
     elif kind == "topopt_voxel":
-        if any(data.get(key) is not None for key in ("cad_shape", "shape", "recovered_shape")):
-            fields.append("CAD")
-        if has_field(data, "density"):
+        source = data.get("topology_source") or data
+        generated = bool(data.get("generated_lattice"))
+        if has_field(source, "density"):
             fields.append("Density")
-        validation = data.get("validation")
-        if isinstance(validation, dict):
-            if validation.get("type") in {"fea", "external_solver"}:
-                fields.extend("FEA " + field for field in available_result_fields(validation)
+        recovered = source.get("recovered_shape")
+        if isinstance(recovered, dict) and has_field(recovered, "faces"):
+            fields.append("STL Shape")
+        if any(body.get(key) is not None for body in (source, data) for key in ("cad_shape", "shape")):
+            fields.append("CAD")
+        analyses = [("FEA ", data)]
+        if generated:
+            analyses = [("FEA Solid ", source), ("FEA Lattice ", data)]
+        for prefix, body in analyses:
+            validation = body.get("validation")
+            if isinstance(validation, dict) and validation.get("type") in {"fea", "external_solver"}:
+                fields.extend(prefix + field for field in available_result_fields(validation)
                               if field != "Default View")
+        if (generated or data.get("study_kind") == "lattice_infill") and isinstance(data.get("recovered_shape"), dict) and has_field(data["recovered_shape"], "faces"):
+            fields.append("Lattice")
     elif kind == "modal":
         shapes = data.get("mode_displacements_flat") or {}
         for mode in data.get("modes") or []:
@@ -54,6 +64,32 @@ def available_result_fields(data):
                 if any(has_field(frame, key) for frame in frames):
                     fields.append(label)
     return fields or ["Default View"]
+
+
+def topopt_view_mode(data, mode):
+    """Map saved view names onto available, already computed results."""
+    mesh_mode = "Lattice" if data.get("generated_lattice") or data.get("study_kind") == "lattice_infill" else "STL Shape"
+    mode = {
+        "Surface": mesh_mode, "Recovered Shape": mesh_mode,
+        "Recovered Surface (Mesh)": mesh_mode, "Manufactured Mesh": mesh_mode,
+        "Reconstructed CAD (B-rep)": "CAD", "Voxel Density": "Density",
+    }.get(str(mode), str(mode))
+    if mode == "CAD" and "CAD" not in available_result_fields(data):
+        return mesh_mode
+    if data.get("generated_lattice") and mode.startswith("FEA ") and not mode.startswith(("FEA Solid ", "FEA Lattice ")):
+        prefix = "FEA Lattice " if data.get("validation") else "FEA Solid "
+        return prefix + mode[len("FEA "):]
+    return mode
+
+
+def topopt_view_result(data, mode):
+    """Keep the original solve viewable after generating a lattice."""
+    source = data.get("topology_source") or data
+    if mode in {"Density", "STL Shape"} or str(mode).startswith("FEA Solid "):
+        return source
+    if mode == "CAD" and data.get("cad_shape") is None and data.get("shape") is None:
+        return source
+    return data
 
 
 def activate_modal_mode(data, field):

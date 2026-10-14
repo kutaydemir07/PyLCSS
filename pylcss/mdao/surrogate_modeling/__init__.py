@@ -1,75 +1,70 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""Surrogate data generation, regression, validation, and geometry operators."""
+"""Surrogate data, Auto Mode, custom architectures, and validation."""
 
-from .models import (
-    ConfigurableNet,
-    PyTorchWrapper,
-    RegressionMLP,
-    TorchRegressor,
-    UncertaintyRegressor,
-)
-from .training import SurrogateTrainer
 from .active_learning import (
     ACTIVE_LEARNING_STRATEGIES,
     ActiveLearningConfig,
     ActiveLearningError,
     ActiveLearningSelector,
 )
-from .data_importer import DataImporter
 from .auto_surrogate import AutoSurrogateModel, AutoSurrogateStrategy
-from .custom_architecture import (
-    CustomArchitectureModel,
-    CustomArchitectureStrategy,
-    CustomNeuralNet,
-    ResidualBlock,
-    FourierFeatureEmbedding,
-)
+from .data_importer import DataImporter
 from .mdao_algorithms import (
     MdaoEnsembleOfSurrogates,
     MdaoKPLSRegressor,
     MdaoKrigingRegressor,
+    MdaoPolynomialRegressor,
     MdaoRBFRegressor,
     MdaoSVRRegressor,
-    MdaoSparsePCERegressor,
     compute_mdao_metrics,
 )
+from .torch_utils import TORCH_AVAILABLE
+from .training import SurrogateTrainer
 from .validation import (
-    CrossValidator,
     CVResult,
+    CrossValidator,
     FeatureImportanceAnalyzer,
     ModelComparator,
 )
 
 __all__ = [
-    "CVResult",
-    "ConfigurableNet",
-    "CrossValidator",
-    "DataImporter",
-    "AutoSurrogateModel",
-    "AutoSurrogateStrategy",
-    "CustomArchitectureModel",
-    "CustomArchitectureStrategy",
-    "CustomNeuralNet",
-    "ResidualBlock",
-    "FourierFeatureEmbedding",
-    "MdaoEnsembleOfSurrogates",
-    "MdaoKPLSRegressor",
-    "MdaoKrigingRegressor",
-    "MdaoRBFRegressor",
-    "MdaoSVRRegressor",
-    "MdaoSparsePCERegressor",
-    "compute_mdao_metrics",
-    "FeatureImportanceAnalyzer",
-    "ModelComparator",
-    "PyTorchWrapper",
-    "RegressionMLP",
-    "SurrogateTrainer",
     "ACTIVE_LEARNING_STRATEGIES",
     "ActiveLearningConfig",
     "ActiveLearningError",
     "ActiveLearningSelector",
-    "TorchRegressor",
-    "UncertaintyRegressor",
+    "AutoSurrogateModel",
+    "AutoSurrogateStrategy",
+    "CVResult",
+    "CrossValidator",
+    "DataImporter",
+    "FeatureImportanceAnalyzer",
+    "MdaoEnsembleOfSurrogates",
+    "MdaoKPLSRegressor",
+    "MdaoKrigingRegressor",
+    "MdaoPolynomialRegressor",
+    "MdaoRBFRegressor",
+    "MdaoSVRRegressor",
+    "ModelComparator",
+    "SurrogateTrainer",
+    "TORCH_AVAILABLE",
+    "compute_mdao_metrics",
 ]
+
+if TORCH_AVAILABLE:
+    from .custom_architecture import (
+        CustomArchitectureModel,
+        CustomArchitectureStrategy,
+        CustomNeuralNet,
+        FourierFeatureEmbedding,
+        ResidualBlock,
+    )
+
+    __all__ += [
+        "CustomArchitectureModel",
+        "CustomArchitectureStrategy",
+        "CustomNeuralNet",
+        "FourierFeatureEmbedding",
+        "ResidualBlock",
+    ]

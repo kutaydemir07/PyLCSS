@@ -55,7 +55,7 @@ INSTALL_ROOT = REPO_ROOT / "external_solvers"
 ENV_FILE = INSTALL_ROOT / "env.txt"
 # PyLCSS's solver backends read this JSON file on startup, so the user does
 # not have to source env.txt manually.  Keep the path in sync with
-# pylcss.solver_backends.common._load_solver_paths_config.
+# pylcss.cae.solver_backends.execution._load_solver_paths_config.
 CONFIG_FILE = INSTALL_ROOT / "solver_paths.json"
 
 

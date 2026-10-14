@@ -83,10 +83,6 @@ def _value_for_connected_output(
         logger.debug("Could not read a connected output name", exc_info=True)
         output_name = ""
 
-    # Selection nodes expose a port named "workplane", but downstream
-    # engineering nodes need the full payload to retain entity metadata.
-    if output_name == "workplane" and "faces" in result:
-        return result
     if output_name and output_name in result:
         return result[output_name]
     return result
@@ -193,6 +189,36 @@ class CadQueryNode(BaseNode):
     __identifier__ = "com.cad"
     NODE_NAME = "Base CAD"
     NODE_SCHEMA_VERSION = 1
+
+    NON_EXECUTION_PROPERTIES = frozenset(
+        {
+            "visualization",
+            "deformation_scale",
+            "disp_scale",
+            "advanced_settings_visible",
+            "advanced_overrides",
+            "cad_export_filename",
+            "cad_export_format",
+            "description",
+            "tags",
+            "notes",
+            "schema_version",
+            "error_state",
+            "error_message",
+        }
+    )
+
+    def is_execution_property(self, name: str) -> bool:
+        """Let nodes declare whether a property changes their computed output."""
+        return name not in self.NON_EXECUTION_PROPERTIES
+
+    def execution_properties(self) -> dict[str, object]:
+        """Return the properties the graph engine should include in its cache."""
+        return {
+            name: value
+            for name, value in self.properties().get("custom", {}).items()
+            if self.is_execution_property(name)
+        }
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         """Initialize shared error state after NodeGraphQt construction."""

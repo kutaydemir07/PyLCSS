@@ -51,39 +51,6 @@ class GraphExecutionCancelled(RuntimeError):
         self.results = dict(results or {})
 
 
-_NON_EXECUTION_PROPERTIES = {
-    # Viewer settings update cached results without changing the solve.
-    "visualization",
-    "deformation_scale",
-    "disp_scale",
-    "advanced_settings_visible",
-    "advanced_overrides",
-    "cad_export_filename",
-    "cad_export_format",
-    "cad_reconstruction_method",
-    "description",
-    "tags",
-    "notes",
-    # Compatibility-only properties retained for old project files.
-    "solver_backend",
-    "moment_x",
-    "moment_y",
-    "moment_z",
-    "damping_alpha",
-    "damping_beta",
-    "enable_corotation",
-    "enable_contact",
-    "contact_stiffness",
-    "contact_thickness",
-    "contact_update_interval",
-    "mass_scaling_threshold",
-    "bc_preset",
-    # Internal UI/error bookkeeping.
-    "error_state",
-    "error_message",
-}
-
-
 def _hash_value(value: object) -> str:
     """Create a compact, process-local digest for change detection."""
     try:
@@ -94,7 +61,15 @@ def _hash_value(value: object) -> str:
 
 
 def _execution_properties(node: NodeLike) -> dict[str, object]:
-    """Return custom properties that can affect ``node.run()``."""
+    """Use node-owned execution policy, falling back to all custom properties."""
+    execution_properties = getattr(node, "execution_properties", None)
+    if callable(execution_properties):
+        try:
+            result = execution_properties()
+        except Exception:
+            logger.debug("Could not read node execution properties", exc_info=True)
+            return {}
+        return dict(result) if isinstance(result, Mapping) else {}
     properties = getattr(node, "properties", None)
     if not callable(properties):
         return {}
@@ -108,18 +83,7 @@ def _execution_properties(node: NodeLike) -> dict[str, object]:
     custom = raw_properties.get("custom", {})
     if not isinstance(custom, Mapping):
         return {}
-    from pylcss.cae.design_studio.topology_optimization.configuration.fea_meshing import (
-        is_topopt_fea_setting,
-    )
-    return {
-        str(key): value
-        for key, value in custom.items()
-        if key not in _NON_EXECUTION_PROPERTIES
-        and not (
-            is_topopt_fea_setting(node, key)
-            and not custom.get("validate_after_optimize", False)
-        )
-    }
+    return {str(key): value for key, value in custom.items()}
 
 
 def _set_execution_state(
@@ -281,10 +245,14 @@ def _has_connected_input(node: NodeLike) -> bool:
     return False
 
 
-def _input_signature(node: NodeLike) -> list[tuple[int, str, int]]:
-    """Describe upstream result revisions for cache invalidation."""
-    signature: list[tuple[int, str, int]] = []
-    for input_port in _input_ports(node):
+def _input_signature(node: NodeLike) -> list[tuple[str, int, str, int]]:
+    """Describe input bindings and upstream revisions for cache invalidation."""
+    signature: list[tuple[str, int, str, int]] = []
+    for index, input_port in enumerate(_input_ports(node)):
+        name = getattr(input_port, "name", None)
+        input_name = str(
+            name() if callable(name) else name if name is not None else index
+        )
         connected_ports = getattr(input_port, "connected_ports", None)
         if not callable(connected_ports):
             continue
@@ -292,12 +260,13 @@ def _input_signature(node: NodeLike) -> list[tuple[int, str, int]]:
             upstream = output_port.node()
             signature.append(
                 (
+                    input_name,
                     id(upstream),
                     str(output_port.name()),
                     int(getattr(upstream, "_result_revision", 0)),
                 )
             )
-    signature.sort(key=lambda value: (value[0], value[1]))
+    signature.sort()
     return signature
 
 

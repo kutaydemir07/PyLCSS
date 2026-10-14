@@ -19,8 +19,11 @@ from .contracts import (
     ProgressCallback,
     StopCallback,
 )
+from .geometry import relative_union_volume
+from .modal_optimization import validate_modal_boxes
 from .models import BoxSolutionSpace, DecoupledMultiModalForm, MMSSParameters
 from .sampling import classify_good_bad
+from .validation import minimum_all_success_sample_size
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +66,15 @@ class DecouplingResolutionMixin:
         params = self.params
         n_dims_orig = boxes[0].bounds.shape[0]
         sample_size = max(50, int(params.optimization_sample_size))
-        growth_rate = float(getattr(params, "phase1_growth_rate", 0.05))
+        growth_rate = params.phase1_growth_rate
         target_a = float(params.target_good_fraction)
         confidence = float(params.good_fraction_confidence)
         phase1_max = int(params.max_iterations)
-        phase2_max = int(getattr(params, "phase2_max_iterations", 0) or phase1_max)
-        phase1_tol = float(getattr(params, "phase1_convergence_tol", 1e-4))
+        phase2_max = params.phase2_max_iterations or phase1_max
+        phase1_tol = params.phase1_convergence_tol
+        sample_size = max(
+            sample_size, minimum_all_success_sample_size(target_a, confidence)
+        )
 
         spec = self._select_decoupling_spec(boxes)
         if spec is None:
@@ -101,6 +107,7 @@ class DecouplingResolutionMixin:
             mode_count,
             n_dims_orig,
             shared_groups,
+            active_variable_indices=np.flatnonzero(np.isnan(self.parameters[0])),
         )
         if layout.is_trivial():
             return self._make_decoupling_family(
@@ -144,7 +151,7 @@ class DecouplingResolutionMixin:
             callback=callback,
             stop_callback=stop_callback,
         )
-        if result is None:
+        if result is None or not result.target_reached or result.cancelled:
             if callback:
                 callback(
                     None,
@@ -160,6 +167,20 @@ class DecouplingResolutionMixin:
             )
 
         projected = project_extended_to_modes(result.bounds, layout, selected_boxes)
+        if not validate_modal_boxes(
+            self.problem,
+            projected,
+            self.parameters,
+            self.reqL,
+            self.reqU,
+            sample_size,
+            target_a,
+            confidence,
+            stop_callback,
+        ):
+            return self._make_decoupling_family(
+                selected_boxes, tuple(range(len(selected_boxes))), spec
+            )
         for k, box in enumerate(projected):
             box.compute_volume(self.dv_norm)
             box.label = box.label or f"Mode {k + 1} (decoupled)"
@@ -283,22 +304,19 @@ class DecouplingResolutionMixin:
         separated_dims: list[int] = []
         rows: IntervalRows = []
         minimum_ratio = self.params.min_common_width_ratio
-        legacy_ratio = self.params.phase3_min_common_width_ratio
-        if legacy_ratio is not None:
-            minimum_ratio = legacy_ratio
 
         for j in range(n_dims):
+            if not np.isnan(self.parameters[0, j]):
+                rows.append([tuple(self.parameters[:, j])])
+                continue
             lows = [float(boxes[i].bounds[j, 0]) for i in indices]
             highs = [float(boxes[i].bounds[j, 1]) for i in indices]
             inter_lo = max(lows)
             inter_hi = min(highs)
 
             design_width = max(float(self.dv_norm[j]), 0.0)
-            minimum_common_width = max(
-                1e-12,
-                float(minimum_ratio) * design_width,
-            )
-            if inter_hi - inter_lo >= minimum_common_width:
+            minimum_common_width = float(minimum_ratio) * design_width
+            if inter_hi > inter_lo and inter_hi - inter_lo >= minimum_common_width:
                 common_dims.append(j)
                 rows.append([(inter_lo, inter_hi)])
                 continue
@@ -327,7 +345,7 @@ class DecouplingResolutionMixin:
             hi = float(hi)
             if hi <= lo:
                 continue
-            if merged and lo <= merged[-1][1] + 1e-12:
+            if merged and lo <= merged[-1][1]:
                 merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
             else:
                 merged.append((lo, hi))
@@ -343,7 +361,7 @@ class DecouplingResolutionMixin:
         """Score candidates within the same separated-dimension count."""
         if len(separated_dims) == 1:
             return self._interval_rows_volume(rows)
-        return float(sum(max(0.0, boxes[i].volume) for i in indices))
+        return relative_union_volume([boxes[i].bounds for i in indices], self.dv_norm)
 
     def _shared_groups_from_decoupling_spec(
         self,
@@ -391,7 +409,9 @@ class DecouplingResolutionMixin:
                 f"{len(separated_dims)} separating dimension(s)"
             )
             interval_unions = []
-            volume = float(sum(max(0.0, box.volume) for box in selected_boxes))
+            volume = relative_union_volume(
+                [box.bounds for box in selected_boxes], self.dv_norm
+            )
 
         return DecoupledMultiModalForm(
             common_variable_indices=common_dims,
@@ -404,21 +424,18 @@ class DecouplingResolutionMixin:
             interval_unions=interval_unions,
         )
 
-    # Compatibility for the initial port, which treated decoupling as a third
-    # phase instead of Stage 5 of the paper's MMSS algorithm.
-
     def _interval_rows_volume(self, interval_rows: IntervalRows) -> float:
         """Relative volume of a Cartesian product of per-dimension interval rows."""
         if not interval_rows:
             return 0.0
 
-        active = np.asarray(self.dv_norm, dtype=float) > 1e-20
+        active = np.asarray(self.dv_norm, dtype=float) > 0.0
         rel_widths: list[float] = []
         for j, intervals in enumerate(interval_rows):
             if j >= active.size or not active[j]:
                 continue
             width = sum(max(0.0, hi - lo) for lo, hi in intervals)
-            rel_widths.append(width / max(float(self.dv_norm[j]), 1e-20))
+            rel_widths.append(width / float(self.dv_norm[j]))
         if not rel_widths:
             return 0.0
         return float(np.prod(np.maximum(rel_widths, 0.0)))
@@ -438,6 +455,8 @@ class DecouplingResolutionMixin:
                 (float(lo), float(hi)) for lo, hi in intervals if float(hi) > float(lo)
             ]
             if not clean:
+                if intervals:
+                    samples[j, :] = intervals[0][0]
                 continue
             widths = np.array([hi - lo for lo, hi in clean], dtype=float)
             probs = widths / widths.sum()

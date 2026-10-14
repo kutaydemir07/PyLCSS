@@ -22,8 +22,13 @@ from typing import Optional
 
 # Get the directory where config.py resides (the pylcss folder)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# Define a local folder for generated models
-TEMP_MODELS_DIR = os.path.join(BASE_DIR, "generated_models")
+# Generated source is runtime data and must remain writable after installation.
+_CACHE_ROOT = (
+    os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+    if os.name == "nt"
+    else os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+)
+MODEL_CACHE_DIR = os.path.join(_CACHE_ROOT, "PyLCSS", "models")
 
 # ============================================================================
 # LOGGING CONFIGURATION

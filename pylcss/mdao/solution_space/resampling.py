@@ -11,10 +11,10 @@ import numpy as np
 
 from .contracts import EvaluatableProblem, FloatArray, SampleBatch
 from .models import BoxSolutionSpace
-from .sampling import sample_box
+from .samples import merge_samples
+from .sampling import sample_box_batch
 
 PlotAxes = tuple[int, ...]
-PlotPair = PlotAxes  # kept for callers that still pass (x, y) pairs
 
 
 def resample_solution_space(
@@ -26,7 +26,7 @@ def resample_solution_space(
     requirement_lower: FloatArray,
     parameters: Optional[FloatArray],
     sample_size: int = 1000,
-    active_plots: Optional[Iterable[PlotPair]] = None,
+    active_plots: Optional[Iterable[PlotAxes]] = None,
     center_slice: bool = False,
 ) -> list[SampleBatch]:
     """Sample one solution box independently for each requested plot."""
@@ -86,7 +86,7 @@ def resample_solution_space(
         elif center_slice and design_axes:
             _fix_other_dimensions_at_center(sample_bounds, excluded=set(design_axes))
 
-        good, _count, bad, points, violations, qoi = sample_box(
+        _, sampled = sample_box_batch(
             problem,
             sample_bounds,
             parameter_bounds,
@@ -96,18 +96,8 @@ def resample_solution_space(
             offset,
             parameter_indices,
             sample_size,
-            dimension_count,
         )
-        assert qoi is not None
-        samples_by_plot.append(
-            {
-                "points": points,
-                "is_good": good,
-                "is_bad": bad,
-                "violation_idx": violations,
-                "qoi_values": qoi,
-            }
-        )
+        samples_by_plot.append(sampled)
 
     return samples_by_plot
 
@@ -121,7 +111,7 @@ def resample_multimodal_solution_spaces(
     requirement_lower: FloatArray,
     parameters: Optional[FloatArray],
     sample_size: int = 1000,
-    active_plots: Optional[Iterable[PlotPair]] = None,
+    active_plots: Optional[Iterable[PlotAxes]] = None,
     center_slice: bool = False,
 ) -> list[SampleBatch]:
     """Resample several modes and merge their samples plot by plot."""
@@ -152,7 +142,7 @@ def resample_multimodal_solution_spaces(
         for plot_index, samples in enumerate(sampled):
             samples_by_plot[plot_index].append(samples)
 
-    return [_merge_plot_samples(group) for group in samples_by_plot]
+    return [merge_samples(group, bad_first=True) for group in samples_by_plot]
 
 
 def _fix_other_dimensions_at_center(
@@ -164,20 +154,6 @@ def _fix_other_dimensions_at_center(
         if dimension not in excluded:
             center = float(np.mean(bounds[dimension]))
             bounds[dimension] = center
-
-
-def _merge_plot_samples(samples: Sequence[SampleBatch]) -> SampleBatch:
-    is_good = np.concatenate([batch["is_good"] for batch in samples])
-    order = np.argsort(is_good.astype(np.int8), kind="stable")
-    return {
-        "points": np.hstack([batch["points"] for batch in samples])[:, order],
-        "is_good": is_good[order],
-        "is_bad": np.concatenate([batch["is_bad"] for batch in samples])[order],
-        "violation_idx": np.concatenate([batch["violation_idx"] for batch in samples])[
-            order
-        ],
-        "qoi_values": np.hstack([batch["qoi_values"] for batch in samples])[:, order],
-    }
 
 
 __all__ = ["resample_multimodal_solution_spaces", "resample_solution_space"]

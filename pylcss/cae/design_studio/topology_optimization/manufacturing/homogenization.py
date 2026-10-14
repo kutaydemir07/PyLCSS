@@ -21,16 +21,14 @@ The cells themselves come from :mod:`.structures`, so the properties describe
 exactly the geometry PyLCSS goes on to generate rather than an idealized
 textbook cell.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import logging
 
 import numpy as np
 import scipy.sparse as sps
 import scipy.sparse.linalg as spla
-
-logger = logging.getLogger(__name__)
 
 __all__ = [
     "CubicElasticity",
@@ -83,9 +81,7 @@ class CubicElasticity:
     poisson_isotropic: float
     # The full tensor before the cubic reduction. Kept so callers can measure
     # how far a cell actually is from cubic symmetry instead of assuming it.
-    tensor: np.ndarray = field(
-        default_factory=lambda: np.zeros((6, 6), dtype=float)
-    )
+    tensor: np.ndarray = field(default_factory=lambda: np.zeros((6, 6), dtype=float))
 
     @property
     def zener_ratio(self) -> float:
@@ -178,9 +174,7 @@ def hex8_stiffness_matrix(
             for zeta in _GAUSS_POINTS:
                 derivatives = _shape_derivatives(xi, eta, zeta) / jacobian
                 b_matrix = _strain_displacement(derivatives)
-                stiffness += (
-                    b_matrix.T @ constitutive @ b_matrix
-                ) * det_jacobian
+                stiffness += (b_matrix.T @ constitutive @ b_matrix) * det_jacobian
     return stiffness
 
 
@@ -191,9 +185,7 @@ def _periodic_node_ids(shape: tuple[int, int, int]) -> np.ndarray:
     imposes periodicity directly instead of through constraint equations.
     """
     nx, ny, nz = shape
-    i, j, k = np.meshgrid(
-        np.arange(nx), np.arange(ny), np.arange(nz), indexing="ij"
-    )
+    i, j, k = np.meshgrid(np.arange(nx), np.arange(ny), np.arange(nz), indexing="ij")
     # Element fields elsewhere in the homogenizer use Fortran ordering
     # (x-index fastest), matching the node-number formula below. Keeping the
     # coordinate enumeration in that same order is essential for asymmetric
@@ -206,9 +198,7 @@ def _periodic_node_ids(shape: tuple[int, int, int]) -> np.ndarray:
     connectivity = np.empty((i.size, 8), dtype=np.int64)
     for corner, (di, dj, dk) in enumerate(_HEX_CORNERS):
         connectivity[:, corner] = (
-            ((i + di) % nx)
-            + ((j + dj) % ny) * nx
-            + ((k + dk) % nz) * nx * ny
+            ((i + di) % nx) + ((j + dj) % ny) * nx + ((k + dk) % nz) * nx * ny
         )
     return connectivity
 
@@ -225,9 +215,7 @@ def _macroscopic_displacements(
     give the unambiguous local coordinates.
     """
     nx, ny, nz = shape
-    i, j, k = np.meshgrid(
-        np.arange(nx), np.arange(ny), np.arange(nz), indexing="ij"
-    )
+    i, j, k = np.meshgrid(np.arange(nx), np.arange(ny), np.arange(nz), indexing="ij")
     base = np.column_stack(
         [
             i.ravel(order="F"),
@@ -238,9 +226,9 @@ def _macroscopic_displacements(
     n_elements = base.shape[0]
 
     # Absolute corner coordinates, ignoring the wrap (local element frame).
-    corner_coords = (
-        base[:, None, :] + _HEX_CORNERS[None, :, :].astype(float)
-    ) * float(size)
+    corner_coords = (base[:, None, :] + _HEX_CORNERS[None, :, :].astype(float)) * float(
+        size
+    )
 
     strains = np.zeros((6, 3, 3), dtype=float)
     strains[0, 0, 0] = 1.0
@@ -294,9 +282,7 @@ def homogenize_cell(
     # Assemble sum_e scale_e * k_e into one sparse operator.
     rows = np.repeat(dofs, 24, axis=1).ravel()
     cols = np.tile(dofs, (1, 24)).ravel()
-    values = (
-        scale[:, None] * element_stiffness.ravel()[None, :]
-    ).ravel()
+    values = (scale[:, None] * element_stiffness.ravel()[None, :]).ravel()
 
     # Periodicity leaves a rigid-translation nullspace. A soft diagonal pin on
     # one node removes it without any sparse fancy-indexing, which dominated
@@ -306,27 +292,20 @@ def homogenize_cell(
     rows = np.concatenate([rows, np.arange(3)])
     cols = np.concatenate([cols, np.arange(3)])
     values = np.concatenate([values, np.full(3, penalty)])
-    stiffness = sps.coo_matrix(
-        (values, (rows, cols)), shape=(n_dofs, n_dofs)
-    ).tocsc()
+    stiffness = sps.coo_matrix((values, (rows, cols)), shape=(n_dofs, n_dofs)).tocsc()
 
     macro = _macroscopic_displacements(shape, connectivity, size)
 
     forces = np.zeros((n_dofs, 6), dtype=float)
     flat_dofs = dofs.ravel()
     for case in range(6):
-        element_forces = (
-            scale[:, None] * (macro[case] @ element_stiffness.T)
-        )
+        element_forces = scale[:, None] * (macro[case] @ element_stiffness.T)
         # bincount scatter-adds an order of magnitude faster than np.add.at.
         forces[:, case] = np.bincount(
             flat_dofs, weights=element_forces.ravel(), minlength=n_dofs
         )
 
-    # Jacobi-preconditioned CG, not a factorization. Periodic wrap-around
-    # connects opposite faces, which leaves the sparsity graph without a good
-    # separator and makes LU fill-in pathological — measured at 20^3 it was
-    # 145 s for LU against 3.8 s for CG, agreeing to 3e-13.
+    # Jacobi-preconditioned CG avoids fill-in from periodic sparse LU.
     inverse_diagonal = 1.0 / stiffness.diagonal()
     preconditioner = spla.LinearOperator(
         (n_dofs, n_dofs),

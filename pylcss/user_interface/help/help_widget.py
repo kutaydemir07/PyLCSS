@@ -280,7 +280,7 @@ pip install -e ".[mdao,cae]"</pre>
 <li><b>Validation:</b> Sampled geometric error, orientation, material volume, cavity preservation, and STEP reimport.</li>
 </ol>
 <p>CAD conversion checks material volume, cavities, sampled surface deviation, and STEP reimport. If conversion cannot preserve the shape, the recovered surface remains available for STL export. Conversion progress shows preparation stages.</p>
-<p>The result views are <b>Density</b> and <b>CAD</b>. After solving TopOpt, use <b>Generate Lattice</b> in its inspector to choose a cell family and create graded cells within the optimized envelope. Preserved interfaces remain solid. <b>Lattice Infill</b> fills an existing body with uniform cells.</p>
+<p><b>Density</b> shows the solved voxels and <b>STL Shape</b> shows the recovered solid surface mesh. <b>CAD</b> appears after a CAD body has been built, and <b>FEA</b> fields appear after independent analysis. After solving TopOpt, <b>Generate Lattice</b> creates graded cells within the optimized envelope and adds the <b>Lattice</b> view. Preserved interfaces remain solid. <b>Lattice Infill</b> fills an existing body with uniform cells.</p>
 <p>Use <b>Volume Remesh</b> to create a solid tetrahedral mesh for downstream CalculiX validation.</p>
 """, "CAE — CAD and Simulation"),
 
@@ -295,8 +295,8 @@ pip install -e ".[mdao,cae]"</pre>
 <li><b>Schwarz Primitive:</b> Sheet cells with straight channels.</li>
 <li><b>Honeycomb:</b> Directional prismatic cells.</li>
 </ul>
-<p>No cell is best for all loads and manufacturing processes. Density mapping creates a candidate lattice; the original solid solve does not verify its stiffness, stress, buckling or fatigue. Remesh the generated geometry and validate it under the original loads. Existing solid validation is cleared on generation.</p>
-<p>Export the complete generated surface as <b>STL</b>. Supported strut-only representations may also export STEP or 3MF. A skin is retained in mesh export. <b>Lattice Infill</b> remains available for uniform geometric filling of other solids.</p>
+<p>No cell is best for all loads and manufacturing processes. Density mapping creates a candidate lattice; the original solid solve does not verify its stiffness, stress, buckling or fatigue. Remesh the generated geometry and validate it under the original loads. The original Density, STL Shape, completed CAD and solid FEA views remain accessible; solid FEA is labelled separately from lattice FEA.</p>
+<p>Generation displays the complete lattice mesh and defaults to <b>STL</b>, without building CAD. Original non-design bodies are retained and sampled on the finer manufacturing grid, including their voids. Supported strut representations may also export STEP or 3MF; exports that would omit a skin or protected solid are excluded. <b>Lattice Infill</b> remains available for uniform geometric filling of other solids.</p>
 """, "CAE — CAD and Simulation"),
 
     "Units and Solvers": _page("""
@@ -460,7 +460,7 @@ python scripts/install_solvers.py --only freecad</pre>
 
     "About": _page("""
 <h1>About PyLCSS</h1>
-<p><b>PyLCSS 2.2.0.2</b> is an integrated engineering desktop software platform for parametric CAD, structural FEA, modal vibration, crash simulation, topology optimization, surrogate modeling, solution spaces, and multidisciplinary design optimization.</p>
+<p><b>PyLCSS 3.0.0</b> is an integrated engineering desktop software platform for parametric CAD, structural FEA, modal vibration, crash simulation, topology optimization, surrogate modeling, solution spaces, and multidisciplinary design optimization.</p>
 <p>Copyright &copy; 2026 Kutay Demir.</p>
 <p>Licensed under the <b>PolyForm Shield License 1.0.0</b>. See LICENSE and NOTICE files.</p>
 """, "Support"),

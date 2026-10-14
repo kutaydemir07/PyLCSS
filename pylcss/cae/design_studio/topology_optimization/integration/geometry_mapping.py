@@ -9,8 +9,6 @@ from typing import Any, Optional
 
 import numpy as np
 
-from ..models.study import JointDefinition
-
 
 def _flatten(values: Any) -> list[Any]:
     if values is None:
@@ -24,7 +22,9 @@ def _flatten(values: Any) -> list[Any]:
 
 
 def _surface_mesh_arrays(
-    mesh: Any, *, allow_tessellation: bool = True,
+    mesh: Any,
+    *,
+    allow_tessellation: bool = True,
 ) -> Optional[tuple[np.ndarray, np.ndarray]]:
     """Return row-major vertices/triangles from imported or CAD geometry."""
     if mesh is None:
@@ -33,7 +33,9 @@ def _surface_mesh_arrays(
         for key in ("mesh", "recovered_shape", "shape", "cad"):
             nested = mesh.get(key)
             if nested is not None and nested is not mesh:
-                arrays = _surface_mesh_arrays(nested, allow_tessellation=allow_tessellation)
+                arrays = _surface_mesh_arrays(
+                    nested, allow_tessellation=allow_tessellation
+                )
                 if arrays is not None:
                     return arrays
         vertices = mesh.get("vertices")
@@ -103,7 +105,9 @@ def _surface_mesh_arrays(
 
 
 def _mesh_bounds(
-    mesh: Any, *, allow_tessellation: bool = True,
+    mesh: Any,
+    *,
+    allow_tessellation: bool = True,
 ) -> Optional[tuple[np.ndarray, np.ndarray]]:
     """Bounds for meshes or CAD, optionally avoiding geometry tessellation."""
     if mesh is None:
@@ -240,64 +244,3 @@ def _fraction_box(
         _fraction(bbox[5], mins[2], maxs[2]),
     ]
     return tuple(vals)  # type: ignore[return-value]
-
-
-def _geometry_bbox(
-    geometry: Any,
-) -> Optional[tuple[float, float, float, float, float, float]]:
-    try:
-        return _bbox_tuple(geometry.BoundingBox())
-    except Exception:
-        if isinstance(geometry, dict):
-            return _bbox_tuple(geometry.get("bbox"))
-        return None
-
-
-def _anchor_fraction(
-    geometries: Any,
-    bounds: tuple[np.ndarray, np.ndarray],
-) -> tuple[float, float, float]:
-    candidates = _flatten(geometries)
-    bboxes = [
-        bbox
-        for bbox in (_geometry_bbox(geometry) for geometry in candidates)
-        if bbox is not None
-    ]
-    if not bboxes:
-        raise ValueError(
-            "Joint anchors must come from selected CAD faces, edges, or vertices."
-        )
-    centers = np.asarray(
-        [
-            [
-                0.5 * (bbox[0] + bbox[1]),
-                0.5 * (bbox[2] + bbox[3]),
-                0.5 * (bbox[4] + bbox[5]),
-            ]
-            for bbox in bboxes
-        ],
-        dtype=float,
-    )
-    center = np.mean(centers, axis=0)
-    mins, maxs = bounds
-    return tuple(
-        _fraction(center[index], mins[index], maxs[index]) for index in range(3)
-    )  # type: ignore[return-value]
-
-
-def _joint_from_graph_payload(
-    payload: Any,
-    bounds: tuple[np.ndarray, np.ndarray],
-) -> JointDefinition:
-    if not isinstance(payload, dict) or str(payload.get("type")) != "topology_joint":
-        raise ValueError("The joints input accepts TopOpt Joint nodes only.")
-    return JointDefinition(
-        name=str(payload.get("name") or "Joint"),
-        kind=str(payload.get("joint_type") or "spherical"),
-        anchor_a=_anchor_fraction(payload.get("anchor_a_geometries"), bounds),
-        anchor_b=_anchor_fraction(payload.get("anchor_b_geometries"), bounds),
-        axis=str(payload.get("axis") or "x"),
-        relative_stiffness=float(payload.get("relative_stiffness") or 100.0),
-    )
-
-

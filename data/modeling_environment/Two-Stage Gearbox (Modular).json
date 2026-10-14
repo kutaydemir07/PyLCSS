@@ -404,7 +404,7 @@
                         ],
                         "custom": {
                             "var_name": "beta_1",
-                            "unit": "grad",
+                            "unit": "deg",
                             "min": "0",
                             "max": "30"
                         }
@@ -453,7 +453,7 @@
                         ],
                         "custom": {
                             "var_name": "beta_2",
-                            "unit": "grad",
+                            "unit": "deg",
                             "min": "0",
                             "max": "30"
                         }
@@ -502,7 +502,7 @@
                         ],
                         "custom": {
                             "var_name": "theta_1",
-                            "unit": "grad",
+                            "unit": "deg",
                             "min": "-100",
                             "max": "100"
                         }
@@ -551,7 +551,7 @@
                         ],
                         "custom": {
                             "var_name": "theta_2",
-                            "unit": "grad",
+                            "unit": "deg",
                             "min": "-100",
                             "max": "100"
                         }
@@ -1190,7 +1190,7 @@
                         ],
                         "custom": {
                             "var_name": "beta_1",
-                            "unit": "grad",
+                            "unit": "deg",
                             "min": "0",
                             "max": "30"
                         }
@@ -1239,7 +1239,7 @@
                         ],
                         "custom": {
                             "var_name": "beta_2",
-                            "unit": "grad",
+                            "unit": "deg",
                             "min": "0",
                             "max": "30"
                         }
@@ -1288,7 +1288,7 @@
                         ],
                         "custom": {
                             "var_name": "theta_1",
-                            "unit": "grad",
+                            "unit": "deg",
                             "min": "-100",
                             "max": "100"
                         }
@@ -1337,7 +1337,7 @@
                         ],
                         "custom": {
                             "var_name": "theta_2",
-                            "unit": "grad",
+                            "unit": "deg",
                             "min": "-100",
                             "max": "100"
                         }
@@ -2664,7 +2664,7 @@
                         ],
                         "custom": {
                             "var_name": "beta_1",
-                            "unit": "grad",
+                            "unit": "deg",
                             "min": "0",
                             "max": "30"
                         }
@@ -2713,7 +2713,7 @@
                         ],
                         "custom": {
                             "var_name": "beta_2",
-                            "unit": "grad",
+                            "unit": "deg",
                             "min": "0",
                             "max": "30"
                         }
@@ -4002,7 +4002,7 @@
                         ],
                         "custom": {
                             "var_name": "beta_1",
-                            "unit": "grad",
+                            "unit": "deg",
                             "min": "0",
                             "max": "30"
                         }
@@ -4051,7 +4051,7 @@
                         ],
                         "custom": {
                             "var_name": "beta_2",
-                            "unit": "grad",
+                            "unit": "deg",
                             "min": "0",
                             "max": "30"
                         }

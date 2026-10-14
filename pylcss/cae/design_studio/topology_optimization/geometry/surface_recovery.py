@@ -55,7 +55,6 @@ def _recover_voxel_shape(
     source_mask: Optional[np.ndarray] = None,
     passive_solid_mask: Optional[np.ndarray] = None,
     passive_void_mask: Optional[np.ndarray] = None,
-    blend_radius: float = 0.0,
     structure_options: Optional[ManufacturingStructureOptions] = None,
     member_plan: Optional[OptimizedMemberPlan] = None,
     **kwargs: Any,
@@ -65,6 +64,14 @@ def _recover_voxel_shape(
     Marching Cubes uses physical voxel spacing. Feature-constrained smoothing
     retains domain boundaries and per-shell signed volume, including cavities.
     """
+    if 'blend_radius' in kwargs:
+        from ._compat import warn_retired_options
+        warn_retired_options({'blend_radius': kwargs.pop('blend_radius')}, operation='Surface recovery')
+    def stage(label):
+        callback = kwargs.get("progress_stage_callback")
+        if callable(callback):
+            callback(label)
+
     try:
         LAST_LATTICE_SIZING.clear()
         grid = np.asarray(density, dtype=float)
@@ -136,6 +143,27 @@ def _recover_voxel_shape(
         source_field = _resample_source_mask(source_mask, tuple(grid.shape))
         solid_field = _resample_source_mask(passive_solid_mask, tuple(grid.shape))
         void_field = _resample_source_mask(passive_void_mask, tuple(grid.shape))
+        cad_domain = None
+        preservation_report = {}
+        explicit_solids = kwargs.get("explicit_solid_shapes") or ()
+        explicit_voids = kwargs.get("explicit_void_shapes") or ()
+        source_cad = kwargs.get("source_cad_shape")
+        if explicit_solids or explicit_voids or source_cad is not None:
+            stage("Preserving original non-design geometry")
+            from .preserved_mesh import refined_preserved_masks
+            solid_field, void_field, cad_domain, coarse_solids, preservation_report = refined_preserved_masks(
+                bounds, tuple(analysis_shape.astype(int)), tuple(grid.shape), solid_field, void_field,
+                solid_shapes=explicit_solids, void_shapes=explicit_voids, source_shape=source_cad,
+            )
+            # Interpolation must not leave the old coarse layer as solid material
+            # outside the newly sampled original face layer.
+            if is_lattice:
+                grid = np.where(coarse_solids & ~solid_field,
+                                np.minimum(grid, structure_options.maximum_relative_density), grid)
+            if source_field is not None:
+                source_field |= solid_field
+            if cad_domain is not None:
+                source_field = cad_domain if source_field is None else source_field & cad_domain
         if source_field is not None:
             grid = np.where(source_field, grid, 0.0)
         if solid_field is not None:
@@ -155,6 +183,7 @@ def _recover_voxel_shape(
 
         # Handle lattice manufacturing structures if requested
         if is_lattice:
+            stage("Generating lattice cells")
             if structure_options.target_relative_density > 0.0:
                 build_options, reached = resolve_target_relative_density(
                     grid, eff_cutoff, structure_options, resolution_scale=resolution_scale,
@@ -208,6 +237,8 @@ def _recover_voxel_shape(
                 grid, solid_cylinders=joint_pin_cylinders,
                 bounds=bounds, cell=analysis_cell, spacing=spacing,
             )
+        if cad_domain is not None:
+            grid = np.where(cad_domain, grid, 0.0)
 
         manufacturing_count = int(np.count_nonzero(grid >= eff_cutoff))
         manufacturing_reference_volume = float(manufacturing_count * np.prod(spacing))
@@ -216,6 +247,7 @@ def _recover_voxel_shape(
             density_cutoff=eff_cutoff,
         )
 
+        stage("Meshing the lattice surface" if is_lattice else "Meshing the solid surface")
         verts, faces, recovery_report = generate_topopt_triangular_mesh(
             grid,
             cutoff=eff_cutoff,
@@ -273,6 +305,7 @@ def _recover_voxel_shape(
                 tm = trimesh.util.concatenate(kept)
                 verts, faces = np.asarray(tm.vertices), np.asarray(tm.faces)
         from .mesh_reduction import compact_mesh
+        stage("Reducing mesh triangles")
         verts, faces, reduction_report = compact_mesh(
             verts, faces, tolerance=float(np.min(spacing))*0.2)
         tm = trimesh.Trimesh(verts, faces, process=False)
@@ -284,6 +317,7 @@ def _recover_voxel_shape(
             lattice_sizing["mesh_relative_density"] = mesh_volume / analyzed_reference_volume
             LAST_LATTICE_SIZING.update(lattice_sizing)
 
+        stage("Checking mesh intersections")
         recovered_shape = {
             "vertices": np.asarray(verts, dtype=float),
             "faces": np.asarray(faces, dtype=np.int64),
@@ -314,10 +348,10 @@ def _recover_voxel_shape(
             "lattice_connectivity": dict(lattice_connectivity),
             "resolved_structure_options": asdict(build_options) if is_lattice else None,
             "effective_recovery_cutoff": float(eff_cutoff),
-            "protected_profile_points": np.empty((0, 3), dtype=float),
             "structure_resolution_scale": resolution_scale,
             "recovery_grid_shape": [int(value) for value in grid.shape],
             "surface_recovery_report": recovery_report,
+            "preserved_geometry": preservation_report,
             "mesh_reduction": reduction_report,
             "is_watertight": is_watertight,
         }
@@ -328,6 +362,8 @@ def _recover_voxel_shape(
         return recovered_shape
     except Exception:
         logger.exception("Voxel boundary recovery failed")
+        if kwargs.get("raise_errors"):
+            raise
         return None
 
 

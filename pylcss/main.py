@@ -10,7 +10,6 @@ applies necessary patches, and launches the main application window.
 
 import os
 import sys
-import shutil
 import logging
 import faulthandler
 import numpy as np
@@ -63,7 +62,7 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 from PySide6 import QtCore, QtWidgets
 
 # Initialize logging FIRST
-from pylcss.config import setup_logging, TEMP_MODELS_DIR
+from pylcss.config import setup_logging
 setup_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -110,18 +109,6 @@ from pylcss.user_interface.common import apply_professional_theme  # noqa: E402
 
 
 
-def cleanup_temp_models():
-    """
-    Removes the temp_models directory and its contents.
-    """
-    temp_dir = TEMP_MODELS_DIR
-    
-    if os.path.exists(temp_dir):
-        try:
-            shutil.rmtree(temp_dir)
-            logger.info(f"Cleaned up temporary models in {temp_dir}")
-        except Exception as e:
-            logger.warning(f"Failed to clean up temporary models: {e}")
 
 
 def main() -> NoReturn:
@@ -174,7 +161,6 @@ def main() -> NoReturn:
     
     exit_code = app.exec()
     finish_background_shutdown(exit_code)
-    cleanup_temp_models()
     sys.exit(exit_code)
 
 

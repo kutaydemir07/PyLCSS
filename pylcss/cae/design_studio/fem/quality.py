@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-"""Small, dependency-free finite-element mesh quality checks.
+"""Triangle and tetrahedron mesh quality checks using NumPy.
 
 The reported ``mean_ratio`` is dimensionless and equals one for an ideal
 equilateral triangle/tetrahedron and approaches zero for a collapsed element.
@@ -101,8 +101,9 @@ def assess_mesh_quality(mesh: MeshLike) -> MeshQualityReport:
         where=min_edge > 0.0,
     )
 
-    span = np.ptp(points[:3], axis=1)
-    length_scale = max(float(np.linalg.norm(span)), 1.0)
+    # Degeneracy is local to an element. Distant bodies or unused points must
+    # not change whether a small, otherwise identical element is valid.
+    length_scale = max_edge
     if kind == "tetrahedron":
         triple = np.einsum(
             "ei,ei->e",

@@ -99,7 +99,9 @@ class DataImporter:
         # Fallback attempts: comma, semicolon, tab, whitespace
         for sep in [",", ";", "\t", r"\s+"]:
             try:
-                df = pd.read_csv(path, sep=sep, engine="python" if sep == r"\s+" else "c")
+                df = pd.read_csv(
+                    path, sep=sep, engine="python" if sep == r"\s+" else "c"
+                )
                 if len(df.columns) > 1:
                     return df
             except Exception:
@@ -171,7 +173,16 @@ class DataImporter:
                     return [c]
 
         # Common target names
-        candidates = ["target", "output", "y", "response", "label", "loss", "stress", "obj"]
+        candidates = [
+            "target",
+            "output",
+            "y",
+            "response",
+            "label",
+            "loss",
+            "stress",
+            "obj",
+        ]
         for cand in candidates:
             for c in cols:
                 if c.lower() == cand or cand in c.lower():
@@ -195,34 +206,29 @@ class DataImporter:
         test_size: float = 0.2,
         random_state: int = 42,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
-        """Convert selected columns to numeric, clean missing values, and split."""
+        """Drop missing labels and fit feature imputation on training rows only."""
         if not input_cols:
             raise ValueError("At least one input feature column must be selected.")
         if not output_cols:
             raise ValueError("At least one target output column must be selected.")
 
-        # Subset dataframe
-        selected_cols = list(input_cols) + list(output_cols)
+        selected_cols = list(dict.fromkeys(list(input_cols) + list(output_cols)))
         working_df = df[selected_cols].copy()
 
         # Coerce all selected columns to numeric
         for col in selected_cols:
             working_df[col] = pd.to_numeric(working_df[col], errors="coerce")
 
+        working_df = working_df.replace([np.inf, -np.inf], np.nan)
         total_rows = len(working_df)
-        nan_mask = working_df.isna().any(axis=1) | working_df.isin([np.inf, -np.inf]).any(axis=1)
-        dropped_rows = int(nan_mask.sum())
-
+        # Labels are measured responses; do not fabricate missing responses.
+        clean_df = working_df.dropna(subset=output_cols)
+        modes = {"drop", "mean", "impute_mean", "median", "impute_median"}
+        if handle_missing not in modes:
+            raise ValueError(f"Unknown missing-value mode {handle_missing!r}.")
         if handle_missing == "drop":
-            clean_df = working_df[~nan_mask]
-        elif handle_missing in ("impute_mean", "mean"):
-            clean_df = working_df.fillna(working_df.mean())
-            dropped_rows = 0
-        elif handle_missing in ("impute_median", "median"):
-            clean_df = working_df.fillna(working_df.median())
-            dropped_rows = 0
-        else:
-            clean_df = working_df[~nan_mask]
+            clean_df = clean_df.dropna(subset=input_cols)
+        dropped_rows = total_rows - len(clean_df)
 
         if len(clean_df) < 2:
             raise ValueError(
@@ -236,13 +242,34 @@ class DataImporter:
         if len(output_cols) == 1:
             y = y.ravel()
 
-        if 0.0 < test_size < 1.0:
+        if not np.isfinite(test_size) or not 0 <= test_size < 1:
+            raise ValueError("test_size must be finite and in [0, 1).")
+        if test_size > 0:
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=test_size, random_state=random_state
             )
         else:
             X_train, y_train = X, y
             X_test, y_test = np.empty((0, X.shape[1])), np.empty((0, *y.shape[1:]))
+
+        if handle_missing != "drop":
+            training_frame = pd.DataFrame(X_train, columns=input_cols)
+            fill = (
+                training_frame.mean()
+                if handle_missing in {"mean", "impute_mean"}
+                else training_frame.median()
+            )
+            if fill.isna().any():
+                missing = ", ".join(str(name) for name in fill.index[fill.isna()])
+                raise ValueError(
+                    f"Training inputs have no observed values for: {missing}."
+                )
+            X_train = training_frame.fillna(fill).to_numpy(dtype=np.float64)
+            X_test = (
+                pd.DataFrame(X_test, columns=input_cols)
+                .fillna(fill)
+                .to_numpy(dtype=np.float64)
+            )
 
         stats = {
             "total_raw_rows": total_rows,

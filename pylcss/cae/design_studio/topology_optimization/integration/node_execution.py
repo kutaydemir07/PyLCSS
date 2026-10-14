@@ -112,8 +112,8 @@ def _emit_recovery_preview(
     try:
         surface_preview = dict(output_context.payload)
         surface_preview["_preview"] = True
-        surface_preview["stage"] = "Lattice surface ready" if study.problem.lattice_cell_type else "Surface ready"
-        surface_preview["visualization_mode"] = "Manufactured Mesh" if study.problem.lattice_cell_type else "Surface"
+        surface_preview["stage"] = "Surface ready"
+        surface_preview["visualization_mode"] = "Surface"
         progress_callback(surface_preview, None, 1, 1)
     except Exception:
         logger.debug(
@@ -165,12 +165,14 @@ def _solve_study(
             # ceiling. Never freeze the coarse material boundary as a mask.
             relative_change = (
                 abs(compliance - previous_objective) / max(abs(compliance), 1e-12)
-                if previous_objective is not None else float("inf")
+                if previous_objective is not None
+                else float("inf")
             )
-            stable_steps = stable_steps + 1 if (
-                relative_change < REFINEMENT_STABILITY_TOLERANCE
-                and change < 0.05
-            ) else 0
+            stable_steps = (
+                stable_steps + 1
+                if (relative_change < REFINEMENT_STABILITY_TOLERANCE and change < 0.05)
+                else 0
+            )
             previous_objective = compliance
             if iteration >= REFINEMENT_MIN_ITERATIONS and stable_steps >= 2:
                 refinement_ready = True
@@ -218,9 +220,16 @@ def _use_progressive_resolution(
     study: PreparedTopologyStudy,
 ) -> bool:
     """Use coarse-to-fine continuation only when explicitly enabled."""
-    return as_bool(node.get_property("automatic_mesh_refinement")) and len(
-        progressive_voxel_shapes((study.nelx, study.nely, study.nelz), isotropic=study.voxel_pitch is not None)
-    ) > 1
+    return (
+        as_bool(node.get_property("automatic_mesh_refinement"))
+        and len(
+            progressive_voxel_shapes(
+                (study.nelx, study.nely, study.nelz),
+                isotropic=study.voxel_pitch is not None,
+            )
+        )
+        > 1
+    )
 
 
 def _solve_progressive_study(
@@ -232,7 +241,9 @@ def _solve_progressive_study(
     """Run bounded coarse passes, then solve the exact final grid fully."""
     target_problem = study.problem
     target_shape = (study.nelx, study.nely, study.nelz)
-    shapes = progressive_voxel_shapes(target_shape, isotropic=study.voxel_pitch is not None)
+    shapes = progressive_voxel_shapes(
+        target_shape, isotropic=study.voxel_pitch is not None
+    )
     warm_iterations = min(REFINEMENT_MAX_ITERATIONS, target_problem.max_iter)
     progressive_total = warm_iterations * (len(shapes) - 1) + target_problem.max_iter
     records = []
@@ -244,15 +255,25 @@ def _solve_progressive_study(
         final_level = index == len(shapes) - 1
         # Always rebuild from the original geometry and physical settings,
         # never from a coarse mask or its enlarged regularization radius.
-        level = study if final_level else refine_prepared_study(
-            study, 1.0, max_voxels=int(np.prod(target_shape)), target_shape=shape,
+        level = (
+            study
+            if final_level
+            else refine_prepared_study(
+                study,
+                1.0,
+                max_voxels=int(np.prod(target_shape)),
+                target_shape=shape,
+            )
         )
-        initial_density = resample_density_field(seed, shape) if seed is not None else None
+        initial_density = (
+            resample_density_field(seed, shape) if seed is not None else None
+        )
         problem = replace(level.problem, initial_density=initial_density)
         if not final_level:
             beta_max = min(float(problem.heaviside_beta_max), 2.0)
             problem = replace(
-                problem, max_iter=warm_iterations,
+                problem,
+                max_iter=warm_iterations,
                 tol=max(float(problem.tol), REFINEMENT_STABILITY_TOLERANCE),
                 patience=min(int(problem.patience), 3),
                 heaviside_beta_init=min(float(problem.heaviside_beta_init), beta_max),
@@ -261,30 +282,72 @@ def _solve_progressive_study(
         level = replace(level, problem=problem)
         started = time.perf_counter()
         result = _solve_study(
-            node, level, progress_callback, cancel_callback,
-            progress_offset=offset, progress_total=progressive_total,
-            preview_stage=f"Voxel refinement {index + 1}/{len(shapes)} · " + " × ".join(map(str, shape)),
+            node,
+            level,
+            progress_callback,
+            cancel_callback,
+            progress_offset=offset,
+            progress_total=progressive_total,
+            preview_stage=f"Voxel refinement {index + 1}/{len(shapes)} · "
+            + " × ".join(map(str, shape)),
             refinement_stage=not final_level,
         )
-        if result is None or result.message == "Stopped by user" or (
-            cancel_callback is not None and cancel_callback()
+        if (
+            result is None
+            or result.message == "Stopped by user"
+            or (cancel_callback is not None and cancel_callback())
         ):
             return None
-        records.append({
-            "grid": list(shape), "voxels": int(np.prod(shape)),
-            "iterations": int(result.n_iter), "time_s": time.perf_counter() - started,
-            "final_target": final_level,
-            "transition": "final solve" if final_level else "stabilized" if result.n_iter < warm_iterations else "iteration limit",
-        })
-        seed = result.design_density if result.design_density is not None else result.density
+        records.append(
+            {
+                "grid": list(shape),
+                "voxels": int(np.prod(shape)),
+                "iterations": int(result.n_iter),
+                "time_s": time.perf_counter() - started,
+                "final_target": final_level,
+                "transition": "final solve"
+                if final_level
+                else "stabilized"
+                if result.n_iter < warm_iterations
+                else "iteration limit",
+            }
+        )
+        seed = (
+            result.design_density
+            if result.design_density is not None
+            else result.density
+        )
         offset += problem.max_iter
     result.progressive_resolution = {
         "method": "optional global coarse-to-fine voxel continuation",
         "reference": "https://arxiv.org/abs/1009.4975",
+        "reference_scope": "Update timing only; global continuation has no local AMR or derefinement.",
         "target_grid": list(target_shape),
         "levels": records,
     }
     return result
+
+
+def _convergence_settings(node):
+    if not as_bool(node.get_property("topology_convergence_enabled")):
+        return None
+    raw = node.get_property("topology_convergence_levels")
+    levels = float(3 if raw is None else raw)
+    if not np.isfinite(levels) or not levels.is_integer() or levels < 2:
+        raise ValueError(
+            "Topology convergence requires an integer count of at least two resolutions."
+        )
+    raw_objective = node.get_property("topology_objective_tolerance")
+    raw_overlap = node.get_property("topology_overlap_tolerance")
+    objective = float(0.05 if raw_objective is None else raw_objective)
+    overlap = float(0.90 if raw_overlap is None else raw_overlap)
+    if not np.isfinite([objective, overlap]).all() or not (
+        0 <= objective <= 1 and 0 <= overlap <= 1
+    ):
+        raise ValueError(
+            "Topology comparison tolerances must be finite fractions between 0 and 1."
+        )
+    return int(levels), objective, overlap
 
 
 class _TopologyExecutionMixin:
@@ -298,6 +361,11 @@ class _TopologyExecutionMixin:
         self.clear_error()
         study = prepare_topology_study(self)
         if study is None:
+            return None
+        try:
+            comparison = _convergence_settings(self)
+        except (TypeError, ValueError) as exc:
+            self.set_error(str(exc))
             return None
 
         solve_started = time.perf_counter()
@@ -322,7 +390,7 @@ class _TopologyExecutionMixin:
 
         # Publish the useful engineering result before geometry recovery. The
         # worker remains in the background and replaces this density preview
-        # with either the explicit lattice or the completed blue CAD solid.
+        # with the recovered surface.
         if progress_callback is not None:
             try:
                 density_preview = _preview_payload(
@@ -331,9 +399,7 @@ class _TopologyExecutionMixin:
                     np.asarray(result.density, dtype=float),
                 )
                 density_preview["stage"] = (
-                    "Density solved — building lattice in background"
-                    if study.problem.lattice_cell_type
-                    else "Density solved — recovering CAD in background"
+                    "Density solved — recovering surface in background"
                 )
                 progress_callback(
                     density_preview,
@@ -348,18 +414,37 @@ class _TopologyExecutionMixin:
                 )
 
         convergence_report: dict[str, object] | None = None
-        if bool(self.get_property("topology_convergence_enabled")):
-            levels = int(self.get_property("topology_convergence_levels") or 3)
-            levels = max(2, min(levels, 3))
+        if comparison is not None:
+            levels, objective_tolerance, overlap_tolerance = comparison
             studies = [study]
             results = [result]
-            for factor in ((1.5, 2.0)[: levels - 1]):
+            for level in range(1, levels):
+                factor = 1.0 + 0.5 * level
                 if cancel_callback is not None and cancel_callback():
                     return None
                 try:
                     refined_study = refine_prepared_study(
-                        study, factor, max_voxels=study.max_voxel_elements or None,
+                        study,
+                        factor,
+                        max_voxels=study.max_voxel_elements or None,
                     )
+                    new_shape = (
+                        refined_study.nelx,
+                        refined_study.nely,
+                        refined_study.nelz,
+                    )
+                    previous_shape = (
+                        studies[-1].nelx,
+                        studies[-1].nely,
+                        studies[-1].nelz,
+                    )
+                    if (
+                        not all(a >= b for a, b in zip(new_shape, previous_shape))
+                        or new_shape == previous_shape
+                    ):
+                        raise ValueError(
+                            "The element limit prevents another finer comparison grid."
+                        )
                 except ValueError as exc:
                     self.set_error(
                         f"Topology convergence mesh could not be prepared: {exc} "
@@ -375,12 +460,15 @@ class _TopologyExecutionMixin:
                 )
                 if refined_result is None:
                     return None
-                refined_result.solve_time_s = (
-                    time.perf_counter() - level_started
-                )
+                refined_result.solve_time_s = time.perf_counter() - level_started
                 studies.append(refined_study)
                 results.append(refined_result)
-            convergence_report = topology_convergence_report(studies, results)
+            convergence_report = topology_convergence_report(
+                studies,
+                results,
+                maximum_relative_objective_change=objective_tolerance,
+                minimum_topology_jaccard=overlap_tolerance,
+            )
             study = studies[-1]
             result = results[-1]
             result.solve_time_s = float(
@@ -396,9 +484,7 @@ class _TopologyExecutionMixin:
         recovery_time_s = time.perf_counter() - recovery_started
         _emit_recovery_preview(study, output_context, progress_callback)
         finalization_started = time.perf_counter()
-        output = finalize_topology_output(
-            self, output_context, cancel_callback, progress_callback=progress_callback
-        )
+        output = finalize_topology_output(self, output_context)
         if convergence_report is not None:
             output["topology_convergence"] = convergence_report
         if progressive_report is not None:
@@ -410,13 +496,13 @@ class _TopologyExecutionMixin:
             elements=int(np.prod(result.density.shape)),
             voxel_size=study.voxel_pitch,
             estimated_memory_bytes=estimated_voxel_memory_bytes(result.density.shape),
-            voxel_edges=((study.bounds[1] - study.bounds[0]) / np.asarray(result.density.shape)).tolist(),
+            voxel_edges=(
+                (study.bounds[1] - study.bounds[0]) / np.asarray(result.density.shape)
+            ).tolist(),
         )
         output["timing"] = {
             "optimization_s": float(result.solve_time_s),
             "recovery_s": float(recovery_time_s),
-            "validation_and_cad_s": float(
-                time.perf_counter() - finalization_started
-            ),
+            "validation_and_cad_s": float(time.perf_counter() - finalization_started),
         }
         return output

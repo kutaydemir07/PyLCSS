@@ -1,30 +1,12 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 #
-# PyLCSS auto-export macro for FreeCAD 1.x.
-#
-# How FreeCAD picks this up
-# -------------------------
-# PyLCSS installs this file through Mod/PyLCSS/Init.py and InitGui.py so it is
-# active in both FreeCAD GUI saves and headless FreeCADCmd parameter updates.
-#
-# What the macro does
-# -------------------
-# Registers a Gui::Application observer that fires on document-save events.
-# After each save we walk every visible Part / PartDesign body in the document
-# and:
-#   1. Export the consolidated shape to ``<doc>.brep`` via OCCT.
-#   2. Write ``<doc>.fcmeta.json`` describing
-#       - the doc's parameter set (Spreadsheet cells, if any)
-#       - per-shape face / edge counts so the PyLCSS BREP reader can index
-#         consistently
-#       - any FEM Analysis container's constraints / loads (writer port for
-#         a follow-up commit; the JSON has empty slots for now).
-#
-# PyLCSS's :class:`FCStdWatcher` picks both sidecar files up and refreshes
-# the in-app viewer + the surrogate / FEM graph.
+# Loaded through Mod/PyLCSS/Init.py and InitGui.py in FreeCAD GUI and console
+# processes. Exports final geometry, spreadsheet aliases, and FEM metadata
+# after each document save, using the modern FreeCAD APIs.
 
 import json
+import math
 import os
 import traceback
 from typing import Any, Dict, List
@@ -37,80 +19,56 @@ import Part
 # Helpers
 # ---------------------------------------------------------------------------
 def _candidate_shapes(doc) -> List[Any]:
-    """Return a sensible set of objects whose Shape we should export.
+    """Export geometry roots, excluding inputs already represented by a parent.
 
-    We prefer the document's Tip (the PartDesign body root that the user
-    iterated on) over arbitrary intermediate features. If no body exists
-    we fall back to every top-level object that has a Shape property
-    (Part primitives, fused booleans, imported STEP, ...).
+    Bodies represent their final features. Group containers are traversed
+    through their members instead of exporting their aggregate shapes, which
+    can include Boolean operands. Metadata references and visibility do not
+    control export.
     """
-    shapes = []
+    geometry = [
+        obj
+        for obj in doc.Objects
+        if (obj.isDerivedFrom("Part::Feature") or obj.isDerivedFrom("App::Link"))
+        and getattr(obj, "Shape", None) is not None
+    ]
+    consumed = {child.Name for obj in geometry for child in obj.OutList}
+    return [
+        obj for obj in geometry if obj.Name not in consumed and not obj.Shape.isNull()
+    ]
 
-    # PartDesign body Tip lookup -- the user's "final" feature in the body.
-    bodies = [obj for obj in doc.Objects if obj.TypeId == "PartDesign::Body"]
-    if bodies:
-        for body in bodies:
-            tip = getattr(body, "Tip", None)
-            if tip is not None and getattr(tip, "Shape", None) is not None:
-                shapes.append(tip)
-            elif getattr(body, "Shape", None) is not None:
-                shapes.append(body)
-        if shapes:
-            return shapes
 
-    # Otherwise pick up any top-level object with a Shape (skip those that
-    # are merely inputs to another feature).
-    consumed = set()
-    for obj in doc.Objects:
-        for prop_name in obj.PropertiesList:
-            try:
-                prop = getattr(obj, prop_name)
-            except Exception:
-                continue
-            if isinstance(prop, FreeCAD.DocumentObject):
-                consumed.add(prop.Name)
-            elif isinstance(prop, (list, tuple)):
-                for v in prop:
-                    if isinstance(v, FreeCAD.DocumentObject):
-                        consumed.add(v.Name)
-    for obj in doc.Objects:
-        if obj.Name in consumed:
-            continue
-        if getattr(obj, "Shape", None) is not None and not obj.Shape.isNull():
-            shapes.append(obj)
-    return shapes
+def _world_shape(obj):
+    """Copy a feature's shape and apply placement inherited from its containers."""
+    shape = obj.Shape.copy()
+    parent_placement = obj.getGlobalPlacement().multiply(obj.Placement.inverse())
+    shape.Placement = parent_placement.multiply(shape.Placement)
+    return shape
 
 
 def _spreadsheet_parameters(doc) -> Dict[str, float]:
-    """Pull every named cell out of every Spreadsheet in the doc.
-
-    PyLCSS treats spreadsheet cells as the canonical parameter surface for
-    a FreeCAD-driven node -- the parameter tools edit those, not the geometry
-    directly.
-    """
-    params: Dict[str, float] = {}
+    """Read finite numeric aliases, qualifying names shared by multiple sheets."""
+    entries = []
+    counts = {}
     for obj in doc.Objects:
         if obj.TypeId != "Spreadsheet::Sheet":
             continue
-        # Walk visible aliases (cells with a name assigned via 'Alias' field).
-        try:
-            for prop_name in obj.PropertiesList:
-                if prop_name.startswith("set_") or prop_name in ("Label", "Name"):
-                    continue
-                try:
-                    value = getattr(obj, prop_name)
-                except Exception:
-                    continue
-                if isinstance(value, (int, float)):
-                    params[prop_name] = float(value)
-                elif hasattr(value, "Value"):
-                    try:
-                        params[prop_name] = float(value.Value)
-                    except Exception:
-                        pass
-        except Exception:
-            traceback.print_exc()
-    return params
+        for cell in obj.getNonEmptyCells():
+            alias = obj.getAlias(cell)
+            if not alias:
+                continue
+            counts[alias] = counts.get(alias, 0) + 1
+            value = getattr(obj, cell)
+            if hasattr(value, "Value"):
+                value = value.Value
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                value = float(value)
+                if math.isfinite(value):
+                    entries.append((obj.Name, alias, value))
+    return {
+        (sheet + "." + alias if counts[alias] > 1 else alias): value
+        for sheet, alias, value in entries
+    }
 
 
 def _fem_analysis_summary(doc) -> List[Dict[str, Any]]:
@@ -121,7 +79,9 @@ def _fem_analysis_summary(doc) -> List[Dict[str, Any]]:
     for obj in doc.Objects:
         if not obj.TypeId.startswith("Fem::"):
             continue
-        if not obj.TypeId.startswith("Fem::Constraint") and not obj.TypeId.endswith("Analysis"):
+        if not obj.TypeId.startswith("Fem::Constraint") and not obj.TypeId.endswith(
+            "Analysis"
+        ):
             continue
         entry: Dict[str, Any] = {
             "name": obj.Name,
@@ -141,7 +101,9 @@ def _fem_analysis_summary(doc) -> List[Dict[str, Any]]:
                     entry[prop_name] = float(val.Value)
                 except Exception:
                     pass
-            elif prop_name in ("References", "Support") and isinstance(val, (list, tuple)):
+            elif prop_name in ("References", "Support") and isinstance(
+                val, (list, tuple)
+            ):
                 references = []
                 for ref in val:
                     if not isinstance(ref, (list, tuple)) or not ref:
@@ -150,11 +112,13 @@ def _fem_analysis_summary(doc) -> List[Dict[str, Any]]:
                     subelements = ref[1] if len(ref) > 1 else []
                     if isinstance(subelements, str):
                         subelements = [subelements]
-                    references.append({
-                        "object": getattr(target, "Name", str(target)),
-                        "label": getattr(target, "Label", ""),
-                        "subelements": [str(name) for name in (subelements or [])],
-                    })
+                    references.append(
+                        {
+                            "object": getattr(target, "Name", str(target)),
+                            "label": getattr(target, "Label", ""),
+                            "subelements": [str(name) for name in (subelements or [])],
+                        }
+                    )
                 if references:
                     entry["references"] = references
         out.append(entry)
@@ -165,26 +129,9 @@ def _fem_analysis_summary(doc) -> List[Dict[str, Any]]:
 # Save observer
 # ---------------------------------------------------------------------------
 class _PyLcssExportObserver:
-    """FreeCAD app-level observer that exports a BREP + JSON sidecar on save.
-
-    FreeCAD's document-observer slot name for "save finished" changed across
-    versions:
-      - 0.18 / 0.19:  ``slotSavedDocument(doc)``
-      - 0.20+ / 1.x: ``slotFinishSaveDocument(doc, file)``
-    We implement BOTH so this macro works on the LTS users still run AND on
-    FreeCAD 1.x.  FreeCAD only calls whichever signature it advertises in
-    your release; the unused slot is dead code.
-    """
+    """FreeCAD document observer exporting geometry and metadata after saves."""
 
     def slotFinishSaveDocument(self, doc, file):  # noqa: N802 -- FreeCAD API name (1.x).
-        try:
-            self._export(doc)
-        except Exception:
-            FreeCAD.Console.PrintError(
-                "[PyLCSS auto-export] failed:\n" + traceback.format_exc() + "\n"
-            )
-
-    def slotSavedDocument(self, doc):  # noqa: N802 -- FreeCAD API name (0.x legacy).
         try:
             self._export(doc)
         except Exception:
@@ -214,7 +161,7 @@ class _PyLcssExportObserver:
             }
             with open(json_path, "w", encoding="utf-8") as fh:
                 json.dump(sidecar, fh, indent=2)
-            # Do not leave a previous solid's BREP beside an now-empty model.
+            # Do not leave a previous solid's BREP beside an empty model.
             try:
                 if os.path.isfile(brep_path):
                     os.remove(brep_path)
@@ -223,8 +170,8 @@ class _PyLcssExportObserver:
             return
 
         # Compound the shapes so a single .brep round-trips the whole assembly.
-        compound_shapes = [s.Shape for s in shapes if getattr(s, "Shape", None) is not None]
-        compound = Part.Compound(compound_shapes)
+        exported = [(obj, _world_shape(obj)) for obj in shapes]
+        compound = Part.Compound([shape for _, shape in exported])
         compound.exportBrep(brep_path)
 
         sidecar = {
@@ -235,17 +182,20 @@ class _PyLcssExportObserver:
                 {
                     "name": s.Name,
                     "label": s.Label,
-                    "n_faces": len(s.Shape.Faces) if hasattr(s.Shape, "Faces") else 0,
-                    "n_edges": len(s.Shape.Edges) if hasattr(s.Shape, "Edges") else 0,
-                    "n_vertexes": len(s.Shape.Vertexes) if hasattr(s.Shape, "Vertexes") else 0,
-                    "volume": float(s.Shape.Volume) if hasattr(s.Shape, "Volume") else 0.0,
+                    "n_faces": len(shape.Faces),
+                    "n_edges": len(shape.Edges),
+                    "n_vertexes": len(shape.Vertexes),
+                    "volume": float(shape.Volume),
                     "bbox": [
-                        float(s.Shape.BoundBox.XMin), float(s.Shape.BoundBox.YMin),
-                        float(s.Shape.BoundBox.ZMin), float(s.Shape.BoundBox.XMax),
-                        float(s.Shape.BoundBox.YMax), float(s.Shape.BoundBox.ZMax),
-                    ] if hasattr(s.Shape, "BoundBox") else None,
+                        float(shape.BoundBox.XMin),
+                        float(shape.BoundBox.YMin),
+                        float(shape.BoundBox.ZMin),
+                        float(shape.BoundBox.XMax),
+                        float(shape.BoundBox.YMax),
+                        float(shape.BoundBox.ZMax),
+                    ],
                 }
-                for s in shapes
+                for s, shape in exported
             ],
             "parameters": _spreadsheet_parameters(doc),
             "fem": _fem_analysis_summary(doc),
@@ -262,6 +212,8 @@ class _PyLcssExportObserver:
 # Registration -- run once at FreeCAD startup
 # ---------------------------------------------------------------------------
 def _install():
+    if getattr(FreeCAD, "_pylcss_observer", None) is not None:
+        return
     obs = _PyLcssExportObserver()
     FreeCAD.addDocumentObserver(obs)
     # Keep a strong reference so GC doesn't deregister us.
@@ -273,5 +225,7 @@ try:
     _install()
 except Exception:
     FreeCAD.Console.PrintError(
-        "[PyLCSS] failed to install auto-export observer:\n" + traceback.format_exc() + "\n"
+        "[PyLCSS] failed to install auto-export observer:\n"
+        + traceback.format_exc()
+        + "\n"
     )

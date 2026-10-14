@@ -9,6 +9,24 @@ from typing import Any, Optional
 
 import numpy as np
 
+
+def _extract_supplied_quad_mesh(payload):
+    """Read explicit quad/layout inputs for the paper's intermediate entry points."""
+    if payload.get('amrto_layouts_dir'):
+        from .amrto_layout_partition import quad_mesh_from_layout_folder
+        vertices, quads = quad_mesh_from_layout_folder(payload['amrto_layouts_dir'])
+    elif isinstance(payload.get('amrto_quad_mesh'), dict):
+        supplied = payload['amrto_quad_mesh']
+        vertices, quads = supplied['vertices'], supplied['quads']
+    else:
+        return None
+    vertices, quads = np.asarray(vertices, dtype=float), np.asarray(quads, dtype=np.int64)
+    if (vertices.ndim != 2 or vertices.shape[1] != 3 or not np.isfinite(vertices).all()
+            or quads.ndim != 2 or quads.shape[1] != 4 or quads.size == 0
+            or quads.min() < 0 or quads.max() >= len(vertices)):
+        raise ValueError('Invalid supplied quad mesh')
+    return vertices, quads
+
 def _extract_recovered_mesh(payload: Any) -> Optional[tuple[np.ndarray, np.ndarray]]:
     """Return ``(vertices, triangle_faces)`` from a topology result payload."""
     if not isinstance(payload, dict):

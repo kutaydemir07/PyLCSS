@@ -34,9 +34,8 @@ class WorkbenchRenderingMixin:
     def _on_viewer_result_field_changed(self, field_name):
         """Keep toolbar field changes attached to the live cached result.
 
-        The viewer intentionally renders a shallow payload copy. Without this
-        bridge, its CAD choice never reaches the TopOpt node, cannot start an
-        on-demand B-rep build, and leaves the result summary saying Density.
+        The viewer renders a shallow payload copy. Keep its selected field
+        attached to the node so the result summary and inspector agree.
         """
         node = getattr(self, "_last_rendered_node", None)
         result = getattr(node, "_last_result", None) if node is not None else None
@@ -61,20 +60,6 @@ class WorkbenchRenderingMixin:
                 "Could not refresh the result summary after a field change.",
                 exc_info=True,
             )
-
-        if (
-            field == "CAD"
-            and result.get("type") == "topopt_voxel"
-            and result.get("cad_shape") is None
-            and result.get("shape") is None
-            and isinstance(result.get("recovered_shape"), dict)
-        ):
-            # The saved surface stays visible while reconstruction runs. This
-            # is post-processing only and never executes the graph or solver.
-            try:
-                self.properties._preview_topopt_cad(node)
-            except Exception:
-                logger.exception("Could not start TopOpt CAD reconstruction.")
 
     def _on_results_view_mode_requested(self, field_name: str):
         """Handle 3-D view mode requested from ResultsPanel or popup dialog."""
@@ -182,15 +167,16 @@ class WorkbenchRenderingMixin:
             return
         self.viewer._section_show_interior = False
         if isinstance(obj, dict) and obj.get('type') == 'topopt_voxel':
-            options = obj.get('structure_options')
+            from .result_fields import topopt_view_mode, topopt_view_result
+            field = topopt_view_mode(obj, obj.get('visualization_mode') or 'STL Shape')
+            obj['visualization_mode'] = field
+            options = topopt_view_result(obj, field).get('structure_options')
             mode = options.get('mode', 'solid') if isinstance(options, dict) else getattr(options, 'mode', 'solid')
             self.viewer._section_show_interior = mode != 'solid'
         if self._is_simulation_render_result(obj):
             self.viewer.render_simulation(obj)
             if isinstance(obj, dict) and obj.get('type') == 'topopt_voxel':
-                options = obj.get('structure_options')
-                mode = options.get('mode', 'solid') if isinstance(options, dict) else getattr(options, 'mode', 'solid')
-                geometry_view = str(obj.get('visualization_mode') or 'CAD') != 'Density'
+                geometry_view = field in {'Lattice', 'STL Shape', 'CAD'}
                 if mode != 'solid' and geometry_view and getattr(self, '_last_rendered_geom', None) is not obj:
                     self.viewer._section_axis.setCurrentText('Z')
                     self.viewer._section_slider.setValue(50)
@@ -552,7 +538,7 @@ class WorkbenchRenderingMixin:
         Two cheap guards make this robust:
           * Skip everything when the node is already the current selection.
           * Skip the heavy viewer re-render when the geometry to be drawn
-            is the same object as what's already on screen — overlays and
+            is the same object as what's already on screen â€” overlays and
             highlights still update because they're cheap.
         """
         if not node:
@@ -590,7 +576,7 @@ class WorkbenchRenderingMixin:
 
             # Re-apply face highlights if it's the interactive picker
             if node.__class__.__name__ == "InteractiveSelectFaceNode":
-                raw = node.get_property("picked_face_indices") or ""
+                raw = node.get_property("picked_entity_indices") or ""
                 idx_list = [
                     int(x.strip()) for x in raw.split(",") if x.strip().isdigit()
                 ]

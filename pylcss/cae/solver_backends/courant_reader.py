@@ -421,10 +421,8 @@ def _cell_scalar_to_points(
     return out
 
 
-# Override the legacy solid-first implementation above. OpenCourant writes
-# parallel 2D/3D arrays with zeros in the irrelevant field; combining both is
-# required for shell and mixed-element decks.
 def _cell_vm_to_point_vm(mesh: Any) -> np.ndarray | None:
+    """Combine shell and solid fields before projecting stress onto points."""
     vm_cell = _extract_cell_scalar(
         mesh,
         lambda name: "von" in name or "vonmis" in name,
@@ -563,51 +561,12 @@ def _vtk_point_data(
 
 
 def _extract_cell_ener(mesh: Any) -> np.ndarray | None:
-    """Return per-element internal-energy density (one scalar per solid cell).
-
-    OpenCourant tags 2D vs 3D fields in cell_data — for tet meshes the 3D
-    block is what we want.  Falls back to the first matching field if no
-    explicit 3D tag is present.
-    """
-    combined = _extract_cell_scalar(
+    """Return internal energy values in meshio cell-block order."""
+    return _extract_cell_scalar(
         mesh,
         lambda name: "ener" in name or "internal" in name,
         reducer="max",
     )
-    if combined is not None:
-        return combined
-
-    cell_data = getattr(mesh, "cell_data_dict", {}) or {}
-    if not cell_data:
-        return None
-
-    def _sort_key(n: str) -> int:
-        nl = n.lower()
-        if "3delem" in nl and "ener" in nl:
-            return 0
-        if "ener" in nl or "internal" in nl:
-            return 1
-        return 2
-
-    for name, by_type in sorted(cell_data.items(), key=lambda kv: _sort_key(kv[0])):
-        nl = name.lower()
-        if "ener" not in nl and "internal" not in nl:
-            continue
-        # Concatenate all cell types preserving the meshio cell-block order
-        # so indices line up with mesh.cells.
-        out_blocks: list[np.ndarray] = []
-        for block in mesh.cells:
-            vals = by_type.get(block.type)
-            if vals is None:
-                out_blocks.append(np.zeros(block.data.shape[0], dtype=float))
-                continue
-            arr = np.asarray(vals, dtype=float)
-            if arr.ndim > 1:
-                arr = arr.reshape(arr.shape[0], -1)[:, 0]
-            out_blocks.append(arr)
-        if out_blocks:
-            return np.concatenate(out_blocks)
-    return None
 
 
 def read_animation_frames(

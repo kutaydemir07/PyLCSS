@@ -94,12 +94,18 @@ def evaluate_predictions(
     }
 
 
-def empty_metrics(*, debug_mode: bool = False) -> Metrics:
-    """Return the UI-compatible representation of an unevaluated model."""
-    return {
-        "RMSE": None,
-        "R2": None,
-        "y_test": [],
-        "y_pred": [],
-        "debug_mode": debug_mode,
-    }
+def prediction_features(X: ArrayLike) -> tuple[FloatArray, bool]:
+    """Accept one design or a batch while retaining the caller's convention."""
+    features = np.asarray(X, dtype=np.float64)
+    single = features.ndim == 1
+    if single:
+        features = features.reshape(1, -1)
+    return as_feature_matrix(features), single
+
+
+def format_prediction(values: ArrayLike, *, single: bool = False) -> FloatArray:
+    """Preserve batch rows, including a one-row single-output prediction."""
+    matrix = as_target_matrix(values, name="prediction")
+    if single:
+        return matrix[0]
+    return matrix[:, 0] if matrix.shape[1] == 1 else matrix

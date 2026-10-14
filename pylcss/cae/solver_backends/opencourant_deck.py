@@ -41,6 +41,7 @@ class _PlasticMaterial:
     strain_rate_p: float
     plastic_strain_curve: tuple[float, ...]
     flow_stress_curve: tuple[float, ...]
+    elastic: bool = False
 
 
 def _plastic_flow_curve(
@@ -80,14 +81,13 @@ def _plastic_flow_curve(
         raise SolverBackendError(
             "Material flow stresses must be positive and non-decreasing."
         )
-    return strains, tuple(
-        value * _MPA_TO_TONNE_MM_MS2 for value in stresses_mpa
-    )
+    return strains, tuple(value * _MPA_TO_TONNE_MM_MS2 for value in stresses_mpa)
 
 
 def _plastic_material(material: dict[str, Any]) -> _PlasticMaterial:
     """Validate and convert MPa fields to the tonne-mm-ms deck unit system."""
     validate_isotropic_material(material, validate_strain_rate=True)
+    elastic = str(material.get("material_model") or "").lower() == "elastic"
     youngs_modulus_mpa = positive_float(
         material.get("E", 210000.0),
         label="Material Young's modulus",
@@ -101,11 +101,11 @@ def _plastic_material(material: dict[str, Any]) -> _PlasticMaterial:
         label="Material density",
     )
     yield_strength_mpa = nonnegative_float(
-        material.get("yield_strength", 250.0),
+        material.get("yield_strength", 0.0 if elastic else 250.0),
         label="Material yield strength",
     )
     tangent_modulus_mpa = nonnegative_float(
-        material.get("tangent_modulus", 2000.0),
+        material.get("tangent_modulus", 0.0 if elastic else 2000.0),
         label="Material tangent modulus",
     )
     failure_strain = nonnegative_float(
@@ -126,6 +126,15 @@ def _plastic_material(material: dict[str, Any]) -> _PlasticMaterial:
         label="Material Cowper-Symonds P",
     )
     plastic_strain_curve, flow_stress_curve = _plastic_flow_curve(material)
+    if elastic and (
+        yield_strength_mpa > 0.0
+        or plastic_strain_curve
+        or strain_rate_c > 0.0
+        or failure_strain > 0.0
+    ):
+        raise SolverBackendError(
+            "An elastic impact material cannot enable plasticity, rate hardening, or fracture."
+        )
     return _PlasticMaterial(
         density=density,
         youngs_modulus=youngs_modulus_mpa * _MPA_TO_TONNE_MM_MS2,
@@ -137,6 +146,7 @@ def _plastic_material(material: dict[str, Any]) -> _PlasticMaterial:
         strain_rate_p=strain_rate_p,
         plastic_strain_curve=plastic_strain_curve,
         flow_stress_curve=flow_stress_curve,
+        elastic=elastic,
     )
 
 
@@ -212,6 +222,15 @@ def _append_solid_part(lines: list[str], tetrahedra: np.ndarray) -> None:
 
 
 def _append_material(lines: list[str], material: _PlasticMaterial) -> None:
+    if material.elastic:
+        lines.extend(
+            [
+                "*MAT_ELASTIC",
+                "$#     mid        ro         e        pr",
+                f"1, {material.density:.12g}, {material.youngs_modulus:.12g}, {material.poissons_ratio:.12g}",
+            ]
+        )
+        return
     if material.plastic_strain_curve:
         # MAT_024 maps to Courant LAW36 and prevents a bilinear tangent from
         # being extrapolated into implausible multi-GPa flow stresses during
@@ -228,13 +247,9 @@ def _append_material(lines: list[str], material: _PlasticMaterial) -> None:
                 "$#       c         p      lcss      lcsr        vp",
                 "0.0, 0.0, 0, 0, 0, 0, 0, 0",
                 "$#    eps1      eps2      eps3      eps4      eps5      eps6      eps7      eps8",
-                ", ".join(
-                    f"{value:.12g}" for value in material.plastic_strain_curve
-                ),
+                ", ".join(f"{value:.12g}" for value in material.plastic_strain_curve),
                 "$#     es1       es2       es3       es4       es5       es6       es7       es8",
-                ", ".join(
-                    f"{value:.12g}" for value in material.flow_stress_curve
-                ),
+                ", ".join(f"{value:.12g}" for value in material.flow_stress_curve),
             ]
         )
         return

@@ -37,7 +37,6 @@ class CustomBlockNode(BaseNode):
         - num_inputs: Number of input ports (dynamically adjustable)
         - num_outputs: Number of output ports (dynamically adjustable)
         - code_content: Python code defining the function logic
-        - func_name: Generated function name for code compilation
     """
 
     __identifier__ = "com.pfd.custom_block"
@@ -55,8 +54,6 @@ class CustomBlockNode(BaseNode):
         # Start with default ports
         self.add_input("in_1")
         self.add_output("out_1")
-        if not self.has_property("func_name"):
-            self.create_property("func_name", "")
         # Create properties for number of inputs/outputs
         self.create_property("num_inputs", "1")
         self.create_property("num_outputs", "1")

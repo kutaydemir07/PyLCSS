@@ -15,16 +15,19 @@ import numpy as np
 import trimesh
 
 from .cad_config import CadReconstructionConfig, CAD_RECONSTRUCTION_REVISION
+from ._compat import warn_retired_options
 from .cad_diagnostics import (_export_stage_mesh, _export_cad_animation_mesh,
                               assess_sampled_mesh_deviation)
 from .cad_features import (_payload_bounds, _apply_passive_regions_to_step,
                            _attach_passive_regions_to_lattice)
-from .cad_mesh_repair import _extract_recovered_mesh, _effective_tolerance
+from .cad_mesh_repair import _extract_recovered_mesh, _extract_supplied_quad_mesh, _effective_tolerance
 from .spline_recovery import (SurfaceFitError, build_quad_cage, fit_patches, patch_mesh,
                          assemble_solid, _shell_signature)
 from .lattice_cad import (beam_lattice_from_member_plan, beam_lattice_from_structure,
                           beam_lattice_solid, lattice_cad_strategy, topopt_export_formats)
+from .mesh_topology import triangulate_quad_faces
 from .mesh_surface import preprocess_and_repair_mesh
+from .occ_shapes import _unify_same_domain_shape
 from .step_export import verify_step_roundtrip, assert_unchanged_surface_geometry, export_cad_model
 
 
@@ -105,7 +108,7 @@ def reconstruct_topopt_cad(
     sew_tolerance=1e-3, relative_sew_tolerance=1e-6,
     fit_tolerance=0., relative_fit_tolerance=5e-3, crease_angle_deg=None,
     maximum_volume_delta=0.05, maximum_relative_deviation=0.01,
-    max_faces=None, repair_mesh=True, validate_watertight=True, validate_brep=True,
+    max_faces=None, repair_mesh=True, merge_angle_deg=0.,
     void_axial_margin=0.02, void_radial_margin=0., return_report=False,
     structure_options=None, member_plan=None, export_steps_dir=None,
     reconstruction_config: CadReconstructionConfig | None = None,
@@ -121,25 +124,28 @@ def reconstruct_topopt_cad(
     """
     if not isinstance(payload, dict):
         raise TypeError('CAD reconstruction needs a topology result dictionary')
+    warn_retired_options(legacy_options, operation='CAD reconstruction')
+    if max_faces is not None and (int(max_faces) != max_faces or max_faces < 1):
+        raise ValueError('max_faces must be a positive integer')
     config = reconstruction_config or CadReconstructionConfig()
     if crease_angle_deg is not None:
         config = replace(config, crease_angle_deg=float(crease_angle_deg))
     for name, value in (('sew_tolerance', sew_tolerance), ('relative_sew_tolerance', relative_sew_tolerance),
                         ('fit_tolerance', fit_tolerance), ('relative_fit_tolerance', relative_fit_tolerance),
                         ('maximum_volume_delta', maximum_volume_delta),
+                        ('merge_angle_deg', merge_angle_deg),
                         ('maximum_relative_deviation', maximum_relative_deviation)):
         if not np.isfinite(value) or value < 0:
             raise ValueError(f'{name} must be finite and nonnegative')
     strategy = normalize_cad_strategy(reconstruction_strategy)
+    if max_faces is not None and strategy == 'spline':
+        config = replace(config, target_triangles=int(max_faces))
     options = _structure_options(payload, structure_options)
     kind = lattice_cad_strategy(options)
     if kind == 'beam' and ('STEP' not in topopt_export_formats(options)
                            or 'STEP' not in topopt_export_formats(payload)):
         raise ValueError('Analytic member STEP would omit skin or solid features; '
                          'export the complete body as STL.')
-    if kind == 'isosurface':
-        raise ValueError('This lattice is represented by its manufacturing mesh. Export it as STL; '
-                         'STEP reconstruction is not available for TPMS, sheet or honeycomb lattices.')
     plan = member_plan if member_plan is not None else payload.get('member_plan')
     folder = Path(export_steps_dir) if export_steps_dir else None
     if folder:
@@ -155,8 +161,6 @@ def reconstruct_topopt_cad(
               'configuration': asdict(config)}
     if strategy in {'beam', 'beam_fused'} and kind != 'beam':
         raise ValueError('Analytic beam export requires a strut lattice family')
-    if strategy == 'tpms':
-        raise ValueError('TPMS geometry stays as STL; no spline STEP conversion is provided')
 
     if kind == 'beam' and strategy in {'auto', 'beam', 'beam_fused'}:
         progress('Building analytic lattice members')
@@ -179,6 +183,11 @@ def reconstruct_topopt_cad(
     else:
         progress('Preparing recovered boundary')
         recovered = _extract_recovered_mesh(payload)
+        if recovered is None:
+            supplied = _extract_supplied_quad_mesh(payload)
+            if supplied is not None:
+                supplied_vertices, supplied_quads = supplied
+                recovered = (supplied_vertices, triangulate_quad_faces(supplied_vertices, supplied_quads))
         if recovered is None:
             from .surface_recovery import _recover_voxel_shape
             field = payload.get('recovery_density')
@@ -218,7 +227,8 @@ def reconstruct_topopt_cad(
             _export_stage_mesh(folder, 'recovered_boundary', [('source', vertices, faces)])
         failures = []
         shape = None
-        if strategy == 'auto' and quad_layout is None and payload.get('quad_layout') is None:
+        if (strategy == 'auto' and quad_layout is None and payload.get('quad_layout') is None
+                and not payload.get('amrto_layouts_dir') and 'amrto_quad_mesh' not in payload):
             from .analytic_recovery import recover_analytic_solid
             progress('Recovering analytic planes and curved primitives')
             analytic = recover_analytic_solid(source, fit_tolerance=fit_limit,
@@ -237,7 +247,7 @@ def reconstruct_topopt_cad(
         initial_target = max(config.target_triangles, int(48*genus), 32*len(signature))
         stages['surface_recovery'].update(boundary_shell_count=len(signature), total_genus=genus)
         quad_layout = quad_layout if quad_layout is not None else payload.get('quad_layout')
-        if shape is None and strategy in {'auto', 'amrto'} and quad_layout is None:
+        if shape is None and strategy in {'auto', 'amrto', 'tpms'} and quad_layout is None:
             from .amrto_reconstruction import reconstruct_topopt_cad as reconstruct_amrto
             amrto_payload = dict(payload)
             amrto_payload['recovered_shape'] = {'vertices': vertices, 'faces': faces}
@@ -253,9 +263,10 @@ def reconstruct_topopt_cad(
                 amrto_payload, reconstruction_strategy='amrto',
                 sew_tolerance=sew, relative_sew_tolerance=0.,
                 fit_tolerance=min(fit_limit, .25*deviation_limit) if deviation_limit else fit_limit,
-                relative_fit_tolerance=0., crease_angle_deg=0.,
+                relative_fit_tolerance=0., crease_angle_deg=None,
                 maximum_volume_delta=maximum_volume_delta,
                 maximum_relative_deviation=maximum_relative_deviation,
+                max_faces=max_faces, merge_angle_deg=merge_angle_deg,
                 repair_mesh=False, return_report=True, amrto_config=amrto_config,
                 export_steps_dir=folder, progress_callback=progress_callback)
             shape = workplane.val()
@@ -275,8 +286,7 @@ def reconstruct_topopt_cad(
                 cage_vertices, quads, cage_report = build_quad_cage(
                     source, target, config.crease_angle_deg,
                     quad_layout=quad_layout)
-                poles, fit_report = fit_patches(source, cage_vertices, quads, config,
-                                               crease_edges=cage_report['crease_edges'])
+                poles, fit_report = fit_patches(source, cage_vertices, quads, config)
                 sampled_vertices, sampled_faces = patch_mesh(poles)
                 deviation = assess_sampled_mesh_deviation(vertices, faces, sampled_vertices,
                                                          sampled_faces, samples=config.validation_samples)
@@ -325,17 +335,19 @@ def reconstruct_topopt_cad(
             detail = stages['attempts'][-1].get('reason', 'No valid solid was produced')
             raise SmoothCadUnavailable('CAD conversion could not preserve the recovered surface: '
                                        + detail + '. The recovered mesh remains available for STL export.')
-        if report.get('method') != 'AMRTO pipeline (Ren et al., 2025)':
+        if 'amrto' not in stages:
             shape = _apply_passive_regions_to_step(shape, payload,
                                                void_axial_margin=void_axial_margin,
                                                void_radial_margin=void_radial_margin)
         report['continuity_scope'] = 'Exact shared boundaries; tangent continuity is not imposed'
     progress('Checking the recovered CAD solid')
+    if merge_angle_deg and 'amrto' not in stages:
+        shape = _unify_same_domain_shape(shape, merge_angle_deg=merge_angle_deg)
     if not shape.isValid() or not shape.Solids():
         raise SmoothCadUnavailable('Reconstruction did not produce valid material solids')
     # STEP reimport is done when a file is exported. A CAD preview does not
     # need a temporary export/import of every lattice member.
-    transfer = {'status': 'Checked on STEP export'}
+    transfer = report.get('step_roundtrip', {'status': 'Checked on STEP export'})
     if folder is not None:
         shape, transfer = _verify_transfer(shape, folder)
     report.update(step_roundtrip=transfer, valid=bool(shape.isValid()),

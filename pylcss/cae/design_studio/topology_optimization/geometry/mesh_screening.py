@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import numpy as np
+from ._compat import warn_retired_options
 
 
 def _intersecting_triangles(first: np.ndarray, second: np.ndarray, tolerance: float) -> np.ndarray:
@@ -31,14 +32,15 @@ def _intersecting_triangles(first: np.ndarray, second: np.ndarray, tolerance: fl
     return ~np.any(separated, axis=1)
 
 
-def screen_mesh_intersections(vertices: np.ndarray, faces: np.ndarray, *,
-                              max_faces: int | None = None, max_pairs: int | None = None) -> dict:
+def screen_mesh_intersections(vertices: np.ndarray, faces: np.ndarray,
+                              **legacy_limits) -> dict:
     """Check all spatially overlapping, topologically non-adjacent faces.
 
     Shared-vertex neighbours are excluded; closure, winding and degenerate
     faces are checked separately. Candidate pairs are streamed in batches;
-    the legacy budget arguments are ignored and never skip a large mesh.
+    retired budget arguments warn and never skip a large mesh.
     """
+    warn_retired_options(legacy_limits, operation='Mesh intersection screening')
     report = {"self_intersecting_faces": None, "screening_scope": "not_run",
               "screening_method": "Non-adjacent triangle separating-axis test",
               "screened_candidate_pairs": 0}

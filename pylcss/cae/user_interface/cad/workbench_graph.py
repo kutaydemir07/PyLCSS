@@ -47,9 +47,7 @@ class WorkbenchGraphMixin:
         """Spawn FreeCAD on a FreeCadPartNode's .FCStd file and wire a
         per-node :class:`FCStdWatcher` so saves trigger a viewer refresh.
 
-        Idempotent: opening the same node twice re-focuses the existing
-        FreeCAD instance (the launcher's per-file registry guarantees this)
-        and reuses the watcher already attached to the node.
+        Opening the same node twice reuses the tracked process and watcher.
         """
         if node is None or node.__class__.__name__ != "FreeCadPartNode":
             logger.debug("Ignored Open in FreeCAD without a FreeCadPartNode.")
@@ -163,7 +161,17 @@ class WorkbenchGraphMixin:
         if is_topopt_fea_setting(node, prop_name):
             cached = getattr(node, "_last_result", None)
             if isinstance(cached, dict) and (cached.get("validation") or {}).get("source") == "topopt_cad_fea":
-                cached["fea_analysis_status"] = "settings_changed"
+                from pylcss.cae.design_studio.topology_optimization.verification.quality_gate import (
+                    VERIFICATION_DEFAULTS, update_verification_status,
+                )
+                if prop_name in VERIFICATION_DEFAULTS:
+                    update_verification_status(
+                        cached, safety_factor=node.get_property("validation_yield_safety_factor"),
+                        displacement_limit=node.get_property("validation_displacement_limit_mm"),
+                    )
+                else:
+                    cached["fea_analysis_status"] = "settings_changed"
+                    update_verification_status(cached)
             if self.properties.current_node is node and not self.properties._updating_property:
                 self.properties.display_node(node)
             return
@@ -172,8 +180,10 @@ class WorkbenchGraphMixin:
         # competing with the export that this property change is preparing.
         if prop_name in {"cad_export_filename", "cad_export_format", "advanced_settings_visible", "advanced_overrides"}:
             return
-        # Mark node as dirty so it re-executes
-        setattr(node, "_dirty", True)
+        # Nodes own the distinction between solve and post-processing settings.
+        execution_property = getattr(node, "is_execution_property", None)
+        if not callable(execution_property) or execution_property(prop_name):
+            setattr(node, "_dirty", True)
 
         if getattr(self, "_suppress_graph_property_changed", False):
             return False
@@ -416,6 +426,23 @@ class WorkbenchGraphMixin:
         except Exception:
             logger.debug("Optional UI operation failed.", exc_info=True)
 
+    def _refresh_completed_study_inspector(self, results, *, was_preview):
+        """Update result-dependent controls after an explicit study execution."""
+        if was_preview:
+            return
+        selected = next(iter(self.graph.selected_nodes()), None)
+        if selected is None or self.properties.current_node is not selected:
+            return
+        result = results.get(selected)
+        if not isinstance(result, dict) or result.get("type") != "topopt_voxel":
+            return
+        from pylcss.cae.design_studio.topology_optimization.integration.study_identity import (
+            is_density_study_node,
+        )
+
+        if is_density_study_node(selected):
+            self.properties.display_node(selected)
+
     def _on_execution_finished(self, results):
         """Called when the background thread completes."""
         was_preview = bool(getattr(self.worker, "skip_simulation", False))
@@ -543,18 +570,13 @@ class WorkbenchGraphMixin:
                         logger.debug("Optional UI operation failed.", exc_info=True)
                     if hasattr(self, "_update_results_panel_visibility"):
                         self._update_results_panel_visibility(target_node)
-                    if (not was_preview and target_node is not None
-                            and target_node.__class__.__name__ == 'TopologyOptVoxelNode'
-                            and isinstance(geom, dict) and geom.get('visualization_mode') == 'CAD'):
-                        # Present the recovered surface immediately, then
-                        # replace it with the automatically validated CAD body.
-                        QtCore.QTimer.singleShot(0, lambda n=target_node: self.properties._preview_topopt_cad(n))
                 else:
                     self.viewer.clear()
 
                 if selected is not None and selected.has_property("non_design_regions"):
                     self._preview_topopt_non_design(selected, cached_only=True)
 
+                self._refresh_completed_study_inspector(results, was_preview=was_preview)
                 refresh_estimate = getattr(self.properties, "_topopt_mesh_estimate_refresh", None)
                 if callable(refresh_estimate):
                     refresh_estimate()
@@ -627,6 +649,7 @@ class WorkbenchGraphMixin:
 
     def _on_execution_cancelled(self, results):
         """Restore the UI after a user-requested safe stop without an error dialog."""
+        was_preview = bool(getattr(self.worker, "skip_simulation", False))
         self.worker = None
         self._clear_solve_progress()
         self.graph.widget.setEnabled(True)
@@ -649,6 +672,7 @@ class WorkbenchGraphMixin:
                 if domain is not None:
                     self._last_rendered_node = topopt_node
                     self._render_result_in_viewer(domain)
+            self._refresh_completed_study_inspector(results, was_preview=was_preview)
         except Exception:
             logger.debug("Optional UI operation failed.", exc_info=True)
         QtCore.QTimer.singleShot(0, self._start_pending_execute)

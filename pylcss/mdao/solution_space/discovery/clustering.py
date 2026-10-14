@@ -43,20 +43,10 @@ class SeedClusteringMixin:
         ) / self.active_dv_norm.reshape(-1, 1)
         X = seeds_norm.T  # (n_seeds, dim) for sklearn
 
-        # Optional dimensionality reduction before HDBSCAN in high dimensions.
-        # if self.dim > 15 and n_seeds >= 15:
-        #    try:
-        #        import umap
-        #        logger.info(f"  Applying UMAP projection (dim={self.dim} > 15, seeds={n_seeds} >= 15)")
-        #        reducer = umap.UMAP(n_components=5, random_state=42)
-        #        X = reducer.fit_transform(X)
-        #    except ImportError:
-        #        logger.warning("umap-learn not available. Falling back to original space.")
-
         try:
             import hdbscan
 
-            min_cluster_size = int(getattr(self.params, "min_cluster_size", 0))
+            min_cluster_size = self.params.min_cluster_size
 
             clusterer = hdbscan.HDBSCAN(
                 min_cluster_size=min_cluster_size,
@@ -95,15 +85,6 @@ class SeedClusteringMixin:
                 single_seed = seeds_phys[:, idx : idx + 1]  # Keep (dim, 1) shape
                 clusters.append(single_seed)
                 logger.info(f"    Noise seed {idx}: individual basin")
-
-            # K is unknown and normally inferred by HDBSCAN. An explicit
-            # max_modes/max_clusters value is only a compatibility safety cap.
-            max_modes = int(getattr(self.params, "max_modes", 0))
-            if max_modes <= 0:
-                max_modes = int(getattr(self.params, "max_clusters", 0))
-            if max_modes > 0 and len(clusters) > max_modes:
-                clusters.sort(key=lambda c: c.shape[1], reverse=True)
-                clusters = clusters[:max_modes]
 
             return clusters
 

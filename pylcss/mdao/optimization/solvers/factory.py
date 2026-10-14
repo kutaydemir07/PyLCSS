@@ -4,17 +4,18 @@
 from collections.abc import Mapping
 from typing import Any
 
+from ..methods import GLOBAL_METHODS, SCIPY_METHODS, SUPPORTED_METHODS
 from .base import BaseSolver
 from .global_opt import GlobalSolver
 from .multi_start import MultiStartSolver
 from .pareto import ParetoSolver
 from .scipy_solver import ScipySolver
-from ..methods import GLOBAL_METHODS, SCIPY_METHODS, SUPPORTED_METHODS
 
 
 def get_solver(method: str, settings: Mapping[str, Any]) -> BaseSolver:
     """Create the solver registered for a user-facing method name."""
     solver_settings = dict(settings)
+    solver_settings["method"] = method
 
     if method in SCIPY_METHODS:
         return ScipySolver(solver_settings)
@@ -34,9 +35,4 @@ def get_solver(method: str, settings: Mapping[str, Any]) -> BaseSolver:
     )
 
 
-__all__ = [
-    "GLOBAL_METHODS",
-    "SCIPY_METHODS",
-    "SUPPORTED_METHODS",
-    "get_solver",
-]
+__all__ = ["get_solver"]

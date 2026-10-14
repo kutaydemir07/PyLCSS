@@ -73,8 +73,8 @@ def result_state_rows(data: dict[str, Any]) -> list[tuple[str, str]]:
         rows.append(("Geometry", "Invalid surface"))
     quality = _mapping(data.get("quality"))
     quality_status = str(quality.get("numerical_status") or data.get("quality_status") or quality.get("status") or "").lower()
-    if quality_status in {"pass", "warning", "fail"}:
-        rows.append(("Numerical checks", {"pass": "Passed", "warning": "Review", "fail": "Failed"}[quality_status]))
+    if quality_status in {"pass", "warning", "fail", "unverified", "not_evaluated"}:
+        rows.append(("Numerical checks", {"pass": "Passed", "warning": "Review", "fail": "Failed", "unverified": "Incomplete", "not_evaluated": "Not evaluated"}[quality_status]))
     validation = _mapping(data.get("validation_summary"))
     if validation.get("error"):
         rows.append(("Validation", "Failed"))

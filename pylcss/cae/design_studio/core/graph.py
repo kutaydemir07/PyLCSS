@@ -30,7 +30,6 @@ SIMULATION_NODE_IDENTIFIERS = {
     "com.cad.sim.topopt_voxel",
     "com.cad.sim.impact",
     "com.cad.sim.crash_solver",
-    # Standalone decks can launch Starter and Engine with no graph inputs.
 }
 
 # Meshing is cheap enough to keep in an interactive preview, where the mesh is
@@ -105,8 +104,9 @@ def filter_for_preview(
 ) -> list[NodeLike]:
     """Remove heavy simulation nodes and their downstream consumers.
 
-    Mesh, remesh, and selection nodes are explicitly preview-safe so users can
-    inspect and select generated geometry without launching solver workflows.
+    Mesh and selection nodes can read cached simulation results in a preview.
+    Without an upstream result, they wait for an explicit run so resolving an
+    input cannot lazily launch a skipped solver.
     ``skip_meshing`` tightens that for the one preview the user did not ask
     for — the automatic refresh after a project is opened — where meshing an
     entire model from scratch is indistinguishable from a solve.
@@ -126,10 +126,14 @@ def filter_for_preview(
     while changed:
         changed = False
         for node in node_list:
-            if node in blocked or _is_preview_safe(node, preview_safe):
+            if node in blocked:
                 continue
             if any(
                 upstream in blocked
+                and (
+                    not _is_preview_safe(node, preview_safe)
+                    or getattr(upstream, "_last_result", None) is None
+                )
                 for upstream in connected_upstream_nodes(node)
             ):
                 blocked.add(node)
@@ -161,9 +165,25 @@ def source_nodes(
     return list(graph_or_nodes)
 
 
+def upstream_closure(node: NodeLike) -> list[NodeLike]:
+    """Collect a requested node and every dependency, without unrelated branches."""
+    pending = [node]
+    visited: set[NodeLike] = set()
+    nodes = []
+    while pending:
+        current = pending.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+        nodes.append(current)
+        pending.extend(reversed(tuple(connected_upstream_nodes(current))))
+    return nodes
+
+
 def build_execution_plan(nodes: Iterable[NodeLike]) -> ExecutionPlan:
     """Build a deterministic Kahn topological order."""
     node_list = list(nodes)
+    positions = {node: index for index, node in enumerate(node_list)}
     dependencies = {node: set() for node in node_list}
     reverse_dependencies = {node: set() for node in node_list}
 
@@ -183,7 +203,9 @@ def build_execution_plan(nodes: Iterable[NodeLike]) -> ExecutionPlan:
     while ready:
         node = ready.popleft()
         order.append(node)
-        for downstream in reverse_dependencies[node]:
+        for downstream in sorted(
+            reverse_dependencies[node], key=positions.__getitem__
+        ):
             remaining[downstream].discard(node)
             if not remaining[downstream]:
                 ready.append(downstream)

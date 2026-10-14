@@ -664,6 +664,10 @@ class SimulationRenderingMixin:
 
     def _render_topopt_beam_lattice(self, data):
         """Render a strut lattice from its members. True if it was handled."""
+        if data.get("generated_lattice"):
+            # A centreline preview omits non-design solids, skins and fitted
+            # solid features. Show the delivered mesh or the built CAD body.
+            return False
         from pylcss.cae.design_studio.topology_optimization.geometry.lattice_cad import topopt_export_formats
         if "STEP" not in topopt_export_formats(data):
             return False
@@ -874,6 +878,16 @@ class SimulationRenderingMixin:
         if not preserve_field_selector and not is_sub_render:
             self._configure_result_fields(data)
 
+        if isinstance(data, dict) and data.get("type") == "topopt_voxel":
+            from .result_fields import topopt_view_mode, topopt_view_result
+            mode = topopt_view_mode(data, data.get("visualization_mode") or "STL Shape")
+            data = dict(topopt_view_result(data, mode))
+            data["visualization_mode"] = mode
+            for prefix in ("FEA Solid ", "FEA Lattice "):
+                if mode.startswith(prefix):
+                    data["visualization_mode"] = "FEA " + mode[len(prefix):]
+                    break
+
         # Auto-start crash animation playback when solver result with frames arrives
         if (
             isinstance(data, dict)
@@ -921,7 +935,7 @@ class SimulationRenderingMixin:
                 requested_mode = "Manufactured Mesh"
                 data["visualization_mode"] = requested_mode
             if requested_mode == "Manufactured Mesh":
-                if self._render_topopt_beam_lattice(data):
+                if not data.get("generated_lattice") and self._render_topopt_beam_lattice(data):
                     return
                 data = dict(data)
                 data["visualization_mode"] = "Surface"
@@ -984,6 +998,8 @@ class SimulationRenderingMixin:
             and data.get("visualization_mode")
             in {
                 "CAD",
+                "STL Shape",
+                "Lattice",
                 "Surface",
                 "Manufactured Mesh",
                 "Recovered Shape",
@@ -1001,6 +1017,8 @@ class SimulationRenderingMixin:
                 cad_surface_preview = bool(
                     data.get("_cad_preview")
                     or data.get("visualization_mode") == "CAD"
+                    or data.get("visualization_mode") in {"STL Shape", "Lattice"}
+                    or data.get("generated_lattice")
                 )
                 from pylcss.cae.design_studio.topology_optimization.geometry.amrto_surface import cached_surface_layout
                 layout = cached_surface_layout(data)

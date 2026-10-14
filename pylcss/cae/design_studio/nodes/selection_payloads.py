@@ -53,15 +53,7 @@ def _selection_payload(
         "entity": entities[0] if entities else None,
         "entities": entities,
         "entity_type": entity_type,
-        # Compatibility aliases: every existing support/load backend consumes
-        # ``faces`` as a list of geometric regions.  Edges and vertices are
-        # valid distance-match geometries too, so retaining these aliases lets
-        # old downstream nodes accept the richer selection without migration.
-        "face": entities[0] if entities else None,
-        "faces": entities,
         "selector_type": selector_type,
         "entity_count": len(entities),
-        "face_count": len(entities),
         "entity_summaries": [_entity_summary(entity) for entity in entities[:12]],
-        "face_summaries": [_entity_summary(entity) for entity in entities[:12]],
     }

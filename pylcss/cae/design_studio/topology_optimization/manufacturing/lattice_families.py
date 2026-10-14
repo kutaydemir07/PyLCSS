@@ -1,53 +1,14 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-"""One registry for every periodic cell family PyLCSS can build.
+"""Shared periodic cell definitions for rasterization, calibration, and CAD.
 
-Before this module the cell geometry was written out three times — once to
-rasterize the part (:mod:`.structures`), once to homogenize a unit cell
-(:mod:`.cell_material`), and once to build a sizeable truss
-(:mod:`.member_sizing`). Three copies of a unit cell is three chances for the
-manufactured geometry to stop being the geometry the optimizer was driven by,
-which is the one error in a two-scale workflow that no downstream check can
-catch. Everything now reads the definitions here.
-
-Surface families
-----------------
-The TPMS surfaces are the standard nodal (short Fourier) approximations of the
-minimal surfaces. They are approximations of the exact surfaces, accurate to a
-few percent in position at the densities a lattice actually operates at, and
-they are what every implicit modelling tool in this space evaluates.
-
-Each surface supports two wall interpretations, and they are different
-materials, not a rendering choice:
-
-``sheet``
-    The solid is the shell around the surface, ``|f| <= t``. Two disjoint
-    open channels, no closed cells to trap powder, and the well-known
-    near-Hashin-Shtrikman stiffness at low density.
-``skeletal``
-    The solid is one side of the surface, ``f <= t`` — the "solid network" or
-    "ligament" form. One solid phase and one open channel. At equal relative
-    density it is markedly more compliant and collapses in a bending-dominated
-    mode rather than the sheet's stretch-dominated one, so it is chosen for
-    energy absorption and for flow/scaffold work rather than for stiffness.
-
-Strut families
---------------
-Given as an edge list over the unit cell ``[0, 1]^3``. ``maxwell`` records
-whether the untrimmed periodic network is stretch- or bending-dominated, which
-is the property that decides whether the part carries load through axial
-member force or through joint bending, and therefore whether the axial truss
-sizing in :mod:`.member_sizing` is a valid surrogate at all.
-
-Homogenization
---------------
-``homogenized`` marks the families whose periodic cell is a cube *and* whose
-effective tensor has cubic symmetry, so three constants describe it exactly and
-the part-scale operator stays a three-term sum. Those families drive the
-two-scale solve from their measured tensor. The rest keep the isotropic
-continuum surrogate and must say so in their report — the same position
-honeycomb has always had here.
+TPMS families use Fourier level-set approximations: sheets select |f| <= t,
+while skeletal networks select f <= t. Strut families use unit-cell edge
+lists. Registry entries record geometry type, deformation classification,
+material-law eligibility, and sampling guidance. The public catalogue is a
+subset of the full registry retained for saved-project compatibility.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -92,11 +53,7 @@ __all__ = [
 
 
 def _gyroid(x, y, z):
-    return (
-        np.sin(x) * np.cos(y)
-        + np.sin(y) * np.cos(z)
-        + np.sin(z) * np.cos(x)
-    )
+    return np.sin(x) * np.cos(y) + np.sin(y) * np.cos(z) + np.sin(z) * np.cos(x)
 
 
 def _diamond(x, y, z):
@@ -114,9 +71,7 @@ def _primitive(x, y, z):
 
 def _iwp(x, y, z):
     return 2.0 * (
-        np.cos(x) * np.cos(y)
-        + np.cos(y) * np.cos(z)
-        + np.cos(z) * np.cos(x)
+        np.cos(x) * np.cos(y) + np.cos(y) * np.cos(z) + np.cos(z) * np.cos(x)
     ) - (np.cos(2.0 * x) + np.cos(2.0 * y) + np.cos(2.0 * z))
 
 
@@ -186,12 +141,7 @@ _SURFACES: dict[str, Callable[..., np.ndarray]] = {
 
 
 def _cube_corners() -> list[tuple[float, float, float]]:
-    return [
-        (x, y, z)
-        for x in (0.0, 1.0)
-        for y in (0.0, 1.0)
-        for z in (0.0, 1.0)
-    ]
+    return [(x, y, z) for x in (0.0, 1.0) for y in (0.0, 1.0) for z in (0.0, 1.0)]
 
 
 def _cube_edges() -> list[tuple[tuple, tuple]]:
@@ -207,11 +157,7 @@ def _cube_edges() -> list[tuple[tuple, tuple]]:
 
 
 def _z_pillars() -> list[tuple[tuple, tuple]]:
-    return [
-        ((x, y, 0.0), (x, y, 1.0))
-        for x in (0.0, 1.0)
-        for y in (0.0, 1.0)
-    ]
+    return [((x, y, 0.0), (x, y, 1.0)) for x in (0.0, 1.0) for y in (0.0, 1.0)]
 
 
 def _bcc_edges() -> list[tuple[tuple, tuple]]:
@@ -220,28 +166,11 @@ def _bcc_edges() -> list[tuple[tuple, tuple]]:
 
 
 def _octet_edges() -> list[tuple[tuple, tuple]]:
-    """The FCC bond graph: every site to all twelve nearest neighbours.
+    """Construct the periodic FCC nearest-neighbour graph for the octet truss.
 
-    Tiled, this is the octet truss — an octahedron of face-centre-to-face-centre
-    struts interpenetrating tetrahedra of corner-to-face-centre struts. Its
-    defining property is that every node is *similarly situated* with nodal
-    connectivity 12, which is the lower limit for a stretch-dominated 3-D
-    lattice (Deshpande, Fleck & Ashby 2001) and the reason this family carries
-    the axial-truss member sizing at all.
-
-    Emitting only the corner-to-face-centre bonds is the failure worth naming,
-    because it looks right: it draws the tetrahedra, tiles periodically, and
-    rasterizes into something that photographs like an octet truss. But it
-    leaves every face centre with connectivity 4 instead of 12 — a mechanism by
-    Maxwell's count — so the cell is bending dominated, and the homogenized law
-    measured from it came out at ``E/E0 ~ rho^1.47`` where the octet truss is
-    linear in density (``E/Es = rho/9``). A macro solve driven by that tensor is
-    solving a different material than the one the part is built from.
-
-    Written over the four-site FCC basis rather than over all fourteen sites of
-    the cube: each basis site contributes its full twelve bonds, so every bond
-    in the periodic network appears at least once, and the tiling in
-    :func:`strut_network` and :func:`_tiled_edges` deduplicates the rest.
+    Use the four-site FCC basis and neighbouring cells to include both
+    corner-to-face-centre and face-centre-to-face-centre bonds. Deduplicate
+    undirected bonds; subsequent tiling merges coincident nodes and members.
     """
     basis = np.asarray(
         [(0.0, 0.0, 0.0), (0.0, 0.5, 0.5), (0.5, 0.0, 0.5), (0.5, 0.5, 0.0)],
@@ -428,7 +357,10 @@ def _strut(
 _FAMILY_LIST: tuple[LatticeFamily, ...] = (
     # ── sheet TPMS ────────────────────────────────────────────────────────────
     _tpms(
-        "gyroid", "Gyroid Lattice", "gyroid", "sheet",
+        "gyroid",
+        "Gyroid Lattice",
+        "gyroid",
+        "sheet",
         homogenized=True,
         maxwell="stretch",
         minimum_cell_voxels=8.0,
@@ -441,7 +373,10 @@ _FAMILY_LIST: tuple[LatticeFamily, ...] = (
         ),
     ),
     _tpms(
-        "diamond", "Diamond Lattice", "diamond", "sheet",
+        "diamond",
+        "Diamond Lattice",
+        "diamond",
+        "sheet",
         homogenized=True,
         maxwell="stretch",
         minimum_cell_voxels=20.0,
@@ -451,7 +386,10 @@ _FAMILY_LIST: tuple[LatticeFamily, ...] = (
         ),
     ),
     _tpms(
-        "primitive", "Schwarz Primitive Lattice", "primitive", "sheet",
+        "primitive",
+        "Schwarz Primitive Lattice",
+        "primitive",
+        "sheet",
         homogenized=True,
         maxwell="bending",
         minimum_cell_voxels=8.0,
@@ -463,7 +401,10 @@ _FAMILY_LIST: tuple[LatticeFamily, ...] = (
         ),
     ),
     _tpms(
-        "iwp", "Schoen I-WP Lattice", "iwp", "sheet",
+        "iwp",
+        "Schoen I-WP Lattice",
+        "iwp",
+        "sheet",
         homogenized=True,
         maxwell="stretch",
         minimum_cell_voxels=20.0,
@@ -474,7 +415,10 @@ _FAMILY_LIST: tuple[LatticeFamily, ...] = (
         ),
     ),
     _tpms(
-        "neovius", "Neovius Lattice", "neovius", "sheet",
+        "neovius",
+        "Neovius Lattice",
+        "neovius",
+        "sheet",
         homogenized=True,
         maxwell="stretch",
         minimum_cell_voxels=16.0,
@@ -485,7 +429,10 @@ _FAMILY_LIST: tuple[LatticeFamily, ...] = (
         ),
     ),
     _tpms(
-        "fischer_koch", "Fischer-Koch S Lattice", "fischer_koch", "sheet",
+        "fischer_koch",
+        "Fischer-Koch S Lattice",
+        "fischer_koch",
+        "sheet",
         homogenized=False,
         maxwell="stretch",
         minimum_cell_voxels=24.0,
@@ -496,7 +443,10 @@ _FAMILY_LIST: tuple[LatticeFamily, ...] = (
         ),
     ),
     _tpms(
-        "lidinoid", "Lidinoid Lattice", "lidinoid", "sheet",
+        "lidinoid",
+        "Lidinoid Lattice",
+        "lidinoid",
+        "sheet",
         homogenized=True,
         maxwell="stretch",
         minimum_cell_voxels=24.0,
@@ -507,7 +457,10 @@ _FAMILY_LIST: tuple[LatticeFamily, ...] = (
         ),
     ),
     _tpms(
-        "split_p", "Split-P Lattice", "split_p", "sheet",
+        "split_p",
+        "Split-P Lattice",
+        "split_p",
+        "sheet",
         homogenized=False,
         maxwell="stretch",
         minimum_cell_voxels=20.0,
@@ -528,7 +481,10 @@ _FAMILY_LIST: tuple[LatticeFamily, ...] = (
     # rather than one network. Shipping those as "skeletal" would hand the user
     # a pile of disconnected balls with a plausible relative density on it.
     _tpms(
-        "gyroid_skeletal", "Gyroid Network (Skeletal)", "gyroid", "skeletal",
+        "gyroid_skeletal",
+        "Gyroid Network (Skeletal)",
+        "gyroid",
+        "skeletal",
         homogenized=True,
         maxwell="bending",
         minimum_cell_voxels=8.0,
@@ -540,7 +496,10 @@ _FAMILY_LIST: tuple[LatticeFamily, ...] = (
         ),
     ),
     _tpms(
-        "diamond_skeletal", "Diamond Network (Skeletal)", "diamond", "skeletal",
+        "diamond_skeletal",
+        "Diamond Network (Skeletal)",
+        "diamond",
+        "skeletal",
         homogenized=True,
         maxwell="bending",
         minimum_cell_voxels=8.0,
@@ -550,7 +509,10 @@ _FAMILY_LIST: tuple[LatticeFamily, ...] = (
         ),
     ),
     _tpms(
-        "iwp_skeletal", "I-WP Network (Skeletal)", "iwp", "skeletal",
+        "iwp_skeletal",
+        "I-WP Network (Skeletal)",
+        "iwp",
+        "skeletal",
         homogenized=True,
         maxwell="bending",
         minimum_cell_voxels=8.0,
@@ -561,8 +523,10 @@ _FAMILY_LIST: tuple[LatticeFamily, ...] = (
     ),
     # ── strut lattices ────────────────────────────────────────────────────────
     _strut(
-        "cubic", "Cubic Lattice",
-        maxwell="bending", connectivity=6,
+        "cubic",
+        "Cubic Lattice",
+        maxwell="bending",
+        connectivity=6,
         minimum_cell_voxels=6,
         notes=(
             "Simple cubic. Stiff along the three axes and close to a mechanism "
@@ -570,8 +534,10 @@ _FAMILY_LIST: tuple[LatticeFamily, ...] = (
         ),
     ),
     _strut(
-        "bcc", "BCC Lattice",
-        maxwell="bending", connectivity=8,
+        "bcc",
+        "BCC Lattice",
+        maxwell="bending",
+        connectivity=8,
         minimum_cell_voxels=10,
         notes=(
             "Body-centred cubic: the most-printed metal AM strut cell. No "
@@ -582,8 +548,10 @@ _FAMILY_LIST: tuple[LatticeFamily, ...] = (
         ),
     ),
     _strut(
-        "bccz", "BCC-Z Lattice",
-        maxwell="mixed", connectivity=10,
+        "bccz",
+        "BCC-Z Lattice",
+        maxwell="mixed",
+        connectivity=10,
         minimum_cell_voxels=12,
         notes=(
             "BCC with vertical pillars added. The pillars carry the axial load "
@@ -592,8 +560,10 @@ _FAMILY_LIST: tuple[LatticeFamily, ...] = (
         ),
     ),
     _strut(
-        "octet", "Octet Truss Lattice",
-        maxwell="stretch", connectivity=12,
+        "octet",
+        "Octet Truss Lattice",
+        maxwell="stretch",
+        connectivity=12,
         minimum_cell_voxels=16,
         notes=(
             "An octahedron of face-centre struts interpenetrating corner "
@@ -606,17 +576,22 @@ _FAMILY_LIST: tuple[LatticeFamily, ...] = (
         ),
     ),
     _strut(
-        "fccz", "FCC-Z Lattice",
-        maxwell="stretch", connectivity=14,
+        "fccz",
+        "FCC-Z Lattice",
+        maxwell="stretch",
+        connectivity=14,
         minimum_cell_voxels=20,
         notes=(
             "Octet with vertical pillars. Higher axial stiffness than octet "
-            "along Z; the horizontal-free strut set keeps it printable."
+            "along Z. The edge list also contains horizontal members whose "
+            "overhangs depend on the selected build direction."
         ),
     ),
     _strut(
-        "diamond_truss", "Diamond Truss Lattice",
-        maxwell="bending", connectivity=4,
+        "diamond_truss",
+        "Diamond Truss Lattice",
+        maxwell="bending",
+        connectivity=4,
         minimum_cell_voxels=10,
         notes=(
             "The diamond-cubic bond graph. Only four struts per node, so it is "
@@ -811,25 +786,11 @@ _DEFAULT_SPECIFIC_AREA = 3.09
 
 
 def tpms_specific_surface_area(family_key: str) -> float:
-    """Area of one periodic cell's mid-surface, per unit cell volume.
+    """Estimate mid-surface area per unit-cell volume and cache the result.
 
-    This is the constant that converts a wall thickness into a relative
-    density: a sheet of thickness ``t`` wrapped around a surface of area ``A``
-    per unit cell occupies ``rho = A * t / a`` of that cell, in the thin-wall
-    limit where the two offset faces have not yet met at the necks.
-
-    It is measured from the same nodal field the part is rasterized from rather
-    than quoted from a table, for the reason the module header gives: a second
-    copy of the cell geometry is a second chance for the manufactured part to
-    stop matching the surface the optimizer was driven by. The measured values
-    do agree with the published ones — gyroid 3.09, Schwarz D 3.84, Schwarz P
-    2.35 — which is the check that the nodal approximations here are the
-    surfaces they claim to be.
-
-    Assuming one shared constant instead is what previously let a stated
-    printable wall mean different things per family: at ``t/a = 1/8`` the old
-    fixed factor of 2 claimed 25% relative density for every surface, where the
-    gyroid really reaches 39% and the Schwarz P 29%.
+    Extract the shared level-set field with marching cubes, using periodic
+    padding and retaining faces centred inside the cell. In the thin-wall
+    limit, relative occupancy is approximately area * thickness / pitch.
     """
     key = str(family_key)
     cached = _SPECIFIC_AREA_CACHE.get(key)
@@ -851,9 +812,7 @@ def tpms_specific_surface_area(family_key: str) -> float:
         centroids = vertices[faces].mean(axis=1)
         inside = np.all((centroids >= 1.0) & (centroids <= samples + 1.0), axis=1)
         if np.any(inside):
-            area = float(
-                mesh_surface_area(vertices, faces[inside])
-            ) / float(samples**2)
+            area = float(mesh_surface_area(vertices, faces[inside])) / float(samples**2)
     except Exception:  # pragma: no cover - measurement is best effort
         logger = __import__("logging").getLogger(__name__)
         logger.debug("Specific area measurement failed for %s", key, exc_info=True)
@@ -893,21 +852,11 @@ def _tiled_edges(
     family_key: str,
     margin: float = MAXIMUM_MEMBER_RADIUS,
 ) -> np.ndarray:
-    """Replicate the unit-cell edges over the neighbouring cells.
+    """Tile neighbouring edge lists and prune segments beyond the working margin.
 
-    A point just inside one face of the cell can have its nearest strut in the
-    neighbouring cell, and the periodic wrap does not bring that strut into the
-    cell's own edge list. The diamond truss is the clear case: no bond in the
-    base list touches the (1,1,1) corner at all, because in the diamond-cubic
-    graph that site's four bonds all leave the cell.
-
-    Replicating over the 27 neighbours, discarding duplicates, and dropping
-    segments that cannot come within ``margin`` of the cell leaves the smallest
-    set that still gives an exact distance field wherever the field can put
-    material. ``margin`` is the largest radius plus raster allowance the caller
-    will threshold at: beyond it the distance is allowed to be an overestimate,
-    because no voxel there is solid either way. Passing the real working margin
-    rather than the 0.5 ceiling is worth roughly a factor of three in segments.
+    Include members outside the base cell that can still occupy its voxels.
+    Deduplicate segments and cache an upward-rounded margin bucket. Distances
+    outside that margin may be overestimated because they cannot be occupied.
     """
     margin = float(np.clip(margin, 0.02, MAXIMUM_MEMBER_RADIUS))
     # Bucket the margin so a continuously varying request still hits the cache,
@@ -937,8 +886,7 @@ def _tiled_edges(
         # An undirected segment: order the ends so the two directions of the
         # same strut are recognized as one.
         ends = sorted(
-            tuple(int(round(float(v) * 1_000_000)) for v in point)
-            for point in segment
+            tuple(int(round(float(v) * 1_000_000)) for v in point) for point in segment
         )
         key = tuple(ends[0]) + tuple(ends[1])
         if key in seen:
@@ -1018,9 +966,7 @@ def strut_distance_field(
         length_sq = float(np.dot(segment, segment))
         if length_sq <= 1e-18:
             continue
-        target = best[
-            0 if int(np.count_nonzero(np.abs(segment) > 1e-12)) == 1 else 1
-        ]
+        target = best[0 if int(np.count_nonzero(np.abs(segment) > 1e-12)) == 1 else 1]
         # Broadcast the projection out of the three 1-D axes rather than
         # materializing a (*shape, 3) coordinate array; on a recovery grid that
         # array is the single largest allocation in the whole build.
@@ -1041,9 +987,7 @@ def strut_distance_field(
 def strut_unit_cell_distance(family_key: str, samples: int) -> np.ndarray:
     """Distance stack over exactly one periodic cell, on ``samples^3`` voxels."""
     count = max(2, int(samples))
-    return strut_distance_field(
-        (count, count, count), family_key, float(count)
-    )
+    return strut_distance_field((count, count, count), family_key, float(count))
 
 
 def strut_occupancy(
@@ -1051,29 +995,15 @@ def strut_occupancy(
     radius: np.ndarray | float,
     voxels_per_cell: float,
 ) -> np.ndarray:
-    """Threshold a strut distance stack into a solid mask.
+    """Threshold axial and diagonal distances into a solid mask.
 
-    ``radius`` is in units of the cell pitch and may be an array, which is how
-    a de-homogenized lattice varies its member thickness with the optimizer's
-    local density.
-
-    The raster allowance is a *floor* on the thresholding radius, not a term
-    added to it. Both forms keep a sub-voxel member alive, which is what the
-    allowance is for — a centreline lying between voxel centres otherwise
-    misses every sample and the member disappears. Only the floor form stops
-    there: adding the allowance instead thickens every member by the same
-    ~0.5-0.7 voxels whether it needed it or not, and that is not a rounding
-    detail at the radii a lattice actually uses. On a 16-voxel cell a 10%
-    relative-density strut has a radius near 0.8 voxels, so a 0.7 voxel
-    addition nearly doubles it: measured across the strut families, a
-    requested 10% cell was built at 15-22%. The floor form leaves a
-    well-resolved member exactly where the density asked for it.
+    Radii are fractions of cell pitch and may vary spatially. Use separate
+    sub-voxel radius floors for axial and diagonal members; the floors keep
+    unresolved members alive without thickening already resolved members.
     """
     pitch = max(float(voxels_per_cell), 1e-9)
     axial = distance[0] <= np.maximum(radius, RASTER_ALLOWANCE_AXIAL / pitch)
-    diagonal = distance[1] <= np.maximum(
-        radius, RASTER_ALLOWANCE_DIAGONAL / pitch
-    )
+    diagonal = distance[1] <= np.maximum(radius, RASTER_ALLOWANCE_DIAGONAL / pitch)
     return axial | diagonal
 
 

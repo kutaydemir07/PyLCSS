@@ -10,7 +10,6 @@ import numpy as np
 from numpy.typing import NDArray
 
 FloatArray: TypeAlias = NDArray[np.float64]
-SensitivityMethod: TypeAlias = Literal["Sobol", "Morris", "FAST", "Delta"]
 
 
 class ProblemDefinition(TypedDict):
@@ -38,45 +37,8 @@ class SobolResult(TypedDict):
     confidence_first: FloatArray
     confidence_total: FloatArray
     confidence_second: FloatArray | None
-    s2_matrix: FloatArray | None
     calc_second_order: bool
     method: Literal["Sobol"]
-
-
-class MorrisResult(TypedDict):
-    """Morris elementary-effects estimates and ranking."""
-
-    variable_names: list[str]
-    mu: list[float]
-    mu_star: list[float]
-    sigma: list[float]
-    mu_star_conf: list[float]
-    important_variables: list[str]
-    ranked_variables: list[str]
-    selection_threshold: float | None
-    method: Literal["Morris"]
-
-
-class FastResult(TypedDict):
-    """Extended FAST estimates and bootstrap confidence intervals."""
-
-    variable_names: list[str]
-    first_order: FloatArray
-    total_order: FloatArray
-    confidence_first: FloatArray
-    confidence_total: FloatArray
-    method: Literal["FAST"]
-
-
-class DeltaResult(TypedDict):
-    """Delta moment-independent and first-order estimates."""
-
-    variable_names: list[str]
-    delta: FloatArray
-    delta_conf: FloatArray
-    S1: FloatArray
-    S1_conf: FloatArray
-    method: Literal["Delta"]
 
 
 class ConvergenceResult(TypedDict):
@@ -91,41 +53,23 @@ class ConvergenceResult(TypedDict):
     method: Literal["Sobol"]
 
 
-class PlotData(TypedDict):
-    """Method-neutral values consumed by chart adapters."""
-
-    variables: list[str]
-    first_order: object
-    total_order: object
-    confidence: object
-    output_name: str
-    method: object
-
-
 class AnalysisError(TypedDict):
     """Per-output failure returned by non-strict batch analysis."""
 
     error: str
     error_type: str
-    method: SensitivityMethod
+    method: Literal["Sobol"]
 
 
-SensitivityResult: TypeAlias = SobolResult | MorrisResult | FastResult | DeltaResult
-BatchResult: TypeAlias = dict[str, SensitivityResult | AnalysisError]
+BatchResult: TypeAlias = dict[str, SobolResult | AnalysisError]
 
 
 __all__ = [
     "AnalysisError",
     "BatchResult",
     "ConvergenceResult",
-    "DeltaResult",
-    "FastResult",
     "FloatArray",
-    "MorrisResult",
-    "PlotData",
     "ProblemDefinition",
     "SalibProblem",
-    "SensitivityMethod",
-    "SensitivityResult",
     "SobolResult",
 ]

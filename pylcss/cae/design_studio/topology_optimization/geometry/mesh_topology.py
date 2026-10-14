@@ -5,6 +5,24 @@
 from typing import Optional
 import numpy as np
 
+
+def triangulate_quad_faces(vertices, quads):
+    """Appendix D2 diagonals, avoiding tiny triangles in nearly triangular quads.
+
+    Output order is the first triangle of every quad followed by the second,
+    so a quad's group ID can be tiled twice for display/measurement.
+    """
+    quads = np.asarray(quads, dtype=np.int64)
+    if quads.ndim != 2 or quads.shape[1] != 4:
+        raise ValueError('Quadrilateral faces must have shape (N, 4)')
+    points = np.asarray(vertices)[quads]
+    def area(a, b, c):
+        return np.linalg.norm(np.cross(points[:, b] - points[:, a], points[:, c] - points[:, a]), axis=1)
+    first_diagonal = np.abs(area(0, 1, 2) - area(0, 2, 3)) < np.abs(area(0, 1, 3) - area(1, 2, 3))
+    first = np.where(first_diagonal[:, None], quads[:, [0, 1, 2]], quads[:, [0, 1, 3]])
+    second = np.where(first_diagonal[:, None], quads[:, [0, 2, 3]], quads[:, [1, 2, 3]])
+    return np.concatenate((first, second))
+
 def mesh_topology_report(vertices: np.ndarray, faces: np.ndarray) -> dict:
     """Combinatorial closure, connected components, orientation and degeneracy."""
     from scipy.sparse import coo_matrix

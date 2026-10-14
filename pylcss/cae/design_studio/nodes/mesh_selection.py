@@ -25,7 +25,6 @@ _MESH_FEATURE_ANGLE_DEG = 35.0
 def _mesh_points(mesh_like: Any) -> np.ndarray | None:
     """Return mesh node coordinates as a (3, n) array for mesh-backed selection."""
     try:
-        import numpy as np
 
         if isinstance(mesh_like, dict):
             if mesh_like.get("mesh") is not None:
@@ -53,7 +52,6 @@ def _mesh_selection_payload(
     entity_type: str = "Face",
 ) -> dict[str, Any] | None:
     """Build a SelectFace-compatible payload for selected mesh nodes."""
-    import numpy as np
 
     p = _mesh_points(mesh_like)
     if p is None:
@@ -193,7 +191,6 @@ def _mesh_selection_payload(
 
 
 def _mesh_axis_tolerance(p: np.ndarray) -> float:
-    import numpy as np
 
     spans = np.max(p, axis=1) - np.min(p, axis=1)
     positive = spans[spans > 1e-9]
@@ -204,7 +201,6 @@ def _mesh_axis_tolerance(p: np.ndarray) -> float:
 def _mesh_tetrahedra(mesh_like: Any) -> np.ndarray | None:
     """Return tetra connectivity as a (4, n) array when available."""
     try:
-        import numpy as np
 
         if isinstance(mesh_like, dict):
             if mesh_like.get("mesh") is not None:
@@ -236,7 +232,6 @@ def _mesh_tetrahedra(mesh_like: Any) -> np.ndarray | None:
 def _mesh_surface_triangles(mesh_like: Any) -> np.ndarray | None:
     """Return explicit shell/surface connectivity as an ``(n, 3)`` array."""
     try:
-        import numpy as np
 
         if isinstance(mesh_like, dict):
             if mesh_like.get("mesh") is not None:
@@ -270,7 +265,6 @@ def _mesh_surface_triangles(mesh_like: Any) -> np.ndarray | None:
 def _mesh_boundary_face_data(mesh_like: Any) -> dict[str, Any] | None:
     """Extract exterior triangle faces, centers, normals and an edge scale."""
     try:
-        import numpy as np
 
         p = _mesh_points(mesh_like)
         t = _mesh_tetrahedra(mesh_like)
@@ -356,7 +350,6 @@ def _mesh_direction_selection(
     selector: str,
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """Select exterior nodes and surface triangles for a directional mesh face."""
-    import numpy as np
 
     p = _mesh_points(mesh_like)
     if p is None:
@@ -454,7 +447,6 @@ def _split_surface_face_components(
     surface_faces: object,
 ) -> list[np.ndarray]:
     """Split selected exterior triangles into connected surface patches."""
-    import numpy as np
 
     face_arr = np.asarray(surface_faces, dtype=int)
     if face_arr.ndim != 2 or face_arr.shape[1] < 3 or face_arr.size == 0:
@@ -498,7 +490,6 @@ def _surface_component_metrics(
     mesh_like: Any,
     surface_faces: object,
 ) -> tuple[float, np.ndarray]:
-    import numpy as np
 
     p = _mesh_points(mesh_like)
     face_arr = np.asarray(surface_faces, dtype=int)
@@ -625,7 +616,6 @@ def _mesh_direction_components(
     selector: str,
 ) -> list[np.ndarray]:
     """Return connected patch components for one virtual mesh direction."""
-    import numpy as np
 
     _ids, surface_faces = _mesh_direction_selection(mesh_like, selector)
     if surface_faces is None or len(surface_faces) == 0:
@@ -654,7 +644,6 @@ def _mesh_component_selection(
     stored_index: int,
 ) -> tuple[str | None, np.ndarray, np.ndarray | None]:
     """Resolve a stored connected-patch index to nodes and exterior triangles."""
-    import numpy as np
 
     stored_index = int(stored_index)
     if stored_index >= _MESH_LAYOUT_INDEX_BASE:

@@ -1574,7 +1574,7 @@ class SceneRenderingMixin:
             # projects. New clicks resolve to geometric feature regions, so a
             # cylindrical side, cone, fillet, or freeform smooth face can be
             # selected as one surface instead of only ±X/±Y/±Z end patches.
-            from pylcss.cae.design_studio.nodes.selection import (
+            from pylcss.cae.design_studio.nodes.mesh_selection import (
                 _feature_surface_component_indices,
             )
 

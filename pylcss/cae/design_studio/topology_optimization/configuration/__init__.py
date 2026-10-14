@@ -4,14 +4,12 @@
 
 from .presets import (
     INDUSTRIAL_DESIGN_GOALS,
-    INDUSTRIAL_MANUFACTURING_PROCESSES,
-    INDUSTRIAL_WORKFLOW_MODES,
     industrial_topopt_defaults,
+    normalize_design_goal,
 )
 
 __all__ = [
     "INDUSTRIAL_DESIGN_GOALS",
-    "INDUSTRIAL_MANUFACTURING_PROCESSES",
-    "INDUSTRIAL_WORKFLOW_MODES",
     "industrial_topopt_defaults",
+    "normalize_design_goal",
 ]

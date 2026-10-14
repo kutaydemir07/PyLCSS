@@ -21,6 +21,7 @@ from .contracts import (
     SampleBatch,
     StopCallback,
 )
+from .coordinates import VariableLayout
 from .phase1 import make_box_state, make_point_box, run_phase_one
 from .phase2 import run_phase_two
 from .validation import (
@@ -43,16 +44,6 @@ class BoxOptimizationResult:
     phase2_iters: int
     target_reached: bool
     cancelled: bool
-
-    @property
-    def m(self) -> int:
-        """Compatibility alias for the number of successful samples."""
-        return self.successes
-
-    @property
-    def N(self) -> int:
-        """Compatibility alias for the total number of samples."""
-        return self.sample_count
 
 
 def optimize_box(
@@ -77,7 +68,7 @@ def optimize_box(
     label: str = "",
     stop_callback: Optional[StopCallback] = None,
 ) -> BoxOptimizationResult:
-    """Compute a robust solution box from one feasible anchor point."""
+    """Optimize active variables and restore fixed/uncertain coordinates in the result."""
     dsl = np.asarray(dsl, dtype=float)
     dsu = np.asarray(dsu, dtype=float)
     reqL = np.asarray(reqL, dtype=float)
@@ -97,41 +88,61 @@ def optimize_box(
         phase2_max_iterations=phase2_max_iterations,
         phase1_convergence_tol=phase1_convergence_tol,
     )
-
-    dimension_count = dsl.size
-    design_widths = np.where(dsu > dsl, dsu - dsl, 1.0)
-    if init_bounds is None:
-        physical_bounds = make_point_box(x0, dsl, dsu)
+    input_count = dsl.size
+    if parameters is None or np.asarray(parameters).size == 0:
+        layout = VariableLayout.from_bounds(dsl, dsu, None)
+        input_indices = np.arange(input_count)
+        if np.asarray(ind_parameters).size:
+            raise ValueError("parameter indices require parameter bounds")
     else:
-        physical_bounds = np.asarray(init_bounds, dtype=float).copy()
-    normalized_bounds = (physical_bounds - dsl[:, None]) / design_widths[:, None]
-
-    if weight is None:
-        weight_array = np.ones(dimension_count)
-    else:
-        weight_array = np.asarray(weight, dtype=float)
-        if weight_array.shape != (dimension_count,):
-            raise ValueError(f"weight must contain {dimension_count} values")
-        if not np.all(np.isfinite(weight_array)) or np.any(weight_array < 0.0):
-            raise ValueError("weight values must be finite and non-negative")
-
-    state = make_box_state(
-        bounds=normalized_bounds,
-        n_dims=dimension_count,
-        n_qoi=reqU.size,
+        layout = VariableLayout.from_parameters(parameters)
+        declared = np.asarray(ind_parameters, dtype=int)
+        if not np.array_equal(np.sort(declared), layout.parameter_indices):
+            raise ValueError(
+                "ind_parameters must identify every parameter exactly once"
+            )
+        if layout.parameters.shape[1] == input_count:
+            input_indices = np.arange(input_count)
+        elif layout.active_indices.size == input_count:
+            input_indices = layout.active_indices.copy()
+        else:
+            raise ValueError(
+                "design bounds must match either active or all model variables"
+            )
+        fixed = dsl == dsu
+        layout.parameters[:, input_indices[fixed]] = np.vstack((dsl[fixed], dsu[fixed]))
+    active = layout.active_mask[input_indices]
+    lower = dsl[active]
+    widths = dsu[active] - lower
+    physical = (
+        make_point_box(x0, dsl, dsu)
+        if init_bounds is None
+        else np.asarray(init_bounds, dtype=float).copy()
     )
+    normalized = (physical[active] - lower[:, None]) / widths[:, None]
+    if weight is None:
+        weights = np.ones(lower.size)
+    else:
+        weights = np.asarray(weight, dtype=float)
+        if weights.shape == (input_count,):
+            weights = weights[active]
+        elif weights.shape != (lower.size,):
+            raise ValueError("weight must match active or supplied design variables")
+        if not np.all(np.isfinite(weights)) or np.any(weights < 0.0):
+            raise ValueError("weight values must be finite and non-negative")
+    state = make_box_state(normalized, layout.parameters.shape[1], reqU.size)
     run_phase_one(
         state,
         problem,
-        design_widths,
-        dsl,
+        widths,
+        lower,
         reqL,
         reqU,
-        parameters,
-        ind_parameters,
+        layout.parameters,
+        layout.parameter_indices,
         sample_size,
         growth_rate,
-        weight_array,
+        weights,
         phase1_convergence_tol,
         confidence=confidence,
         phase1_max_iterations=phase1_max_iterations,
@@ -139,32 +150,31 @@ def optimize_box(
         callback=callback,
         label=label,
     )
-
-    phase2_sample_size = max(
-        sample_size,
-        minimum_all_success_sample_size(target_good_fraction, confidence),
+    validation_size = max(
+        sample_size, minimum_all_success_sample_size(target_good_fraction, confidence)
     )
     run_phase_two(
         state,
         problem,
-        design_widths,
-        dsl,
+        widths,
+        lower,
         reqL,
         reqU,
-        parameters,
-        ind_parameters,
-        phase2_sample_size,
+        layout.parameters,
+        layout.parameter_indices,
+        validation_size,
         target_good_fraction,
         confidence,
-        weight_array,
+        weights,
         phase2_max_iterations=phase2_max_iterations,
         stop_callback=stop_callback,
         callback=callback,
         label=label,
     )
-
+    active_bounds = state.bounds * widths[:, None] + lower[:, None]
+    full_bounds = layout.expand_bounds(active_bounds)
     return BoxOptimizationResult(
-        bounds=state.bounds * design_widths[:, None] + dsl[:, None],
+        bounds=full_bounds[input_indices],
         good_fraction=state.good_fraction,
         good_fraction_lower_bound=state.good_fraction_lower_bound,
         successes=state.m,

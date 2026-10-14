@@ -106,7 +106,10 @@ _LAZY_EXPORTS = {
     ),
     "SolverNode": (_FEM, "SolverNode"),
     "SurfaceAreaNode": (_ADVANCED, "SurfaceAreaNode"),
-    "TopologyOptVoxelNode": (_FEM, "TopologyOptVoxelNode"),
+    "TopologyOptVoxelNode": (
+        "pylcss.cae.design_studio.topology_optimization",
+        "TopologyOptVoxelNode",
+    ),
     "TransformNode": (_PARAMETRIC, "TransformNode"),
     "VariableNode": ("pylcss.cae.design_studio.nodes.values", "VariableNode"),
     "is_numeric": (_BASE, "is_numeric"),

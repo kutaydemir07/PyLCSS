@@ -21,7 +21,6 @@ from .lattice_families import (
 )
 from .member_sizing import (
     OptimizedMemberPlan,
-    optimize_lattice_members,
     rasterize_member_plan,
 )
 from .structures import (
@@ -37,6 +36,7 @@ __all__ = [
     "HOMOGENIZED_CELL_FAMILIES",
     "PUBLIC_FAMILIES",
     "PUBLIC_FAMILY_KEYS",
+    "PUBLIC_LATTICE_FAMILY_NAMES",
     "STRUT_FAMILIES",
     "TPMS_FAMILIES",
     "CellMaterialLaw",
@@ -51,7 +51,6 @@ __all__ = [
     "family_for",
     "homogenize_cell",
     "normalize_family_key",
-    "optimize_lattice_members",
     "passive_region_masks",
     "rasterize_member_plan",
 ]

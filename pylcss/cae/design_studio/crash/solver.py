@@ -1,12 +1,7 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-"""Crash solver node — runs an external OpenCourant explicit transient analysis.
+"""Design Studio adapter for OpenCourant explicit impact analysis."""
 
-The previous in-house CPU/GPU explicit solvers (central-difference, J2
-plasticity, penalty contact, Taichi kernels) were removed: they were not
-validated against an industry reference for crash physics.  OpenCourant
-is the single supported backend.
-"""
 import logging
 import math
 from pathlib import Path
@@ -21,76 +16,74 @@ INDUSTRIAL_HOURGLASS_COEFFICIENT = 0.10
 
 class CrashSolverNode(CadQueryNode):
     """Explicit transient crash solver — dispatches to OpenCourant."""
-    __identifier__ = 'com.cad.sim.crash_solver'
+
+    __identifier__ = "com.cad.sim.crash_solver"
     NODE_NAME = "Impact Solver"
 
     def __init__(self):
         super().__init__()
-        self.add_input('mesh',           color=(200, 100, 200))
-        self.add_input('material', color=(200, 200, 200))
-        legacy_impact_material = self.add_input(
-            'impact_material', display_name=False, color=(255, 150, 50)
-        )
-        legacy_impact_material.view.setVisible(False)
-        legacy_material = self.add_input(
-            'crash_material', display_name=False, color=(255, 150, 50)
-        )
-        legacy_material.view.setVisible(False)
-        self.add_input('constraints',    color=(255, 100, 100), multi_input=True)
-        self.add_input('impact',         color=(255, 200,   0))
-        self.add_output('results', color=(0, 220, 255))
-        legacy_results = self.add_output(
-            'crash_results', display_name=False, color=(0, 220, 255)
-        )
-        legacy_results.view.setVisible(False)
+        self.add_input("mesh", color=(200, 100, 200))
+        self.add_input("material", color=(200, 200, 200))
+        self.add_input("constraints", color=(255, 100, 100), multi_input=True)
+        self.add_input("impact", color=(255, 200, 0))
+        self.add_output("results", color=(0, 220, 255))
 
-        self.create_property('opencourant_starter_path', '', widget_type='text')
-        self.create_property('opencourant_engine_path',  '', widget_type='text')
-        self.create_property('external_work_dir',        '', widget_type='text')
+        self.create_property("opencourant_starter_path", "", widget_type="text")
+        self.create_property("opencourant_engine_path", "", widget_type="text")
+        self.create_property("external_work_dir", "", widget_type="text")
         # Write the OpenCourant deck without launching the starter/engine.
-        self.create_property('deck_only', False, widget_type='checkbox')
-        self.create_property('external_timeout_s', 1800.0, widget_type='float')
+        self.create_property("deck_only", False, widget_type="checkbox")
+        self.create_property("external_timeout_s", 1800.0, widget_type="float")
 
         # Simulation duration (ms) and result-frame count.  Keep new nodes in
         # preview territory; users can raise both for final verification runs.
-        self.create_property('end_time',   0.5, widget_type='float')
-        self.create_property('n_frames',   30,  widget_type='int')
+        self.create_property("end_time", 0.5, widget_type="float")
+        self.create_property("n_frames", 30, widget_type="int")
         # Time histories must resolve force and acceleration peaks more finely
         # than viewer animation. 1001 samples gives a useful screening
         # default while keeping T-file size modest.
-        self.create_property('history_samples', 1001, widget_type='int')
+        self.create_property("history_samples", 1001, widget_type="int")
         self.create_property(
-            'acceleration_cfc', '60', widget_type='combo',
-            items=['60', '180', '600', '1000'],
+            "acceleration_cfc",
+            "60",
+            widget_type="combo",
+            items=["60", "180", "600", "1000"],
         )
         self.create_property(
-            'force_cfc', '600', widget_type='combo',
-            items=['60', '180', '600', '1000'],
+            "force_cfc",
+            "600",
+            widget_type="combo",
+            items=["60", "180", "600", "1000"],
         )
 
         # Viewer-only — picks which field colours the deformed mesh.
         self.create_property(
-            'visualization', 'Von Mises Stress',
-            widget_type='combo',
-            items=['Von Mises Stress', 'Displacement', 'Plastic Strain', 'Failed Elements'],
+            "visualization",
+            "Von Mises Stress",
+            widget_type="combo",
+            items=[
+                "Von Mises Stress",
+                "Displacement",
+                "Plastic Strain",
+                "Failed Elements",
+            ],
         )
         # Multiplies displayed displacement; does not affect physics.
-        self.create_property('disp_scale', 3.0, widget_type='float')
+        self.create_property("disp_scale", 3.0, widget_type="float")
 
         # OpenCourant mass-scaling target.  When enable_mass_scaling is true,
         # the engine deck requests /DT/NODA/CST.  A positive physical target
         # takes precedence; zero retains the legacy end_time / time_steps input.
-        self.create_property('time_steps', 500, widget_type='int')
-        self.create_property('enable_mass_scaling', False, widget_type='checkbox')
-        self.create_property(
-            'mass_scaling_target_dt', 0.0, widget_type='float'
-        )
+        self.create_property("time_steps", 500, widget_type="int")
+        self.create_property("enable_mass_scaling", False, widget_type="checkbox")
+        self.create_property("mass_scaling_target_dt", 0.0, widget_type="float")
         # Courant safety factor for the mass-neutral /DT/NODA/STOP policy.
         # 0.9 is the OpenCourant default; lower values support controlled
         # temporal-discretisation studies without changing model mass.
-        self.create_property('time_step_scale', 0.9, widget_type='float')
+        self.create_property("time_step_scale", 0.9, widget_type="float")
 
     def run(self, cancel_callback=None):
+        self.clear_error()
         logger.info("Crash Solver: routing to OpenCourant backend")
         from pylcss.cae.solver_backends import (
             ExternalRunConfig,
@@ -99,14 +92,10 @@ class CrashSolverNode(CadQueryNode):
         )
         from pylcss.input_values import as_bool, flatten_inputs
 
-        mesh = self.get_input_value('mesh', None)
-        material = self.get_input_value('material', None)
-        if material is None:
-            material = self.get_input_value('impact_material', None)
-        if material is None:
-            material = self.get_input_value('crash_material', None)
-        impact = self.get_input_value('impact', None)
-        constraints = flatten_inputs(self.get_input_list('constraints'))
+        mesh = self.get_input_value("mesh", None)
+        material = self.get_input_value("material", None)
+        impact = self.get_input_value("impact", None)
+        constraints = flatten_inputs(self.get_input_list("constraints"))
         logger.debug(
             f"Crash Solver: mesh={mesh is not None}, "
             f"material={material is not None}, impact={impact is not None}, "
@@ -115,11 +104,11 @@ class CrashSolverNode(CadQueryNode):
 
         missing = []
         if mesh is None:
-            missing.append('mesh')
+            missing.append("mesh")
         if material is None:
-            missing.append('material')
+            missing.append("material")
         if impact is None:
-            missing.append('impact')
+            missing.append("impact")
         if missing:
             msg = "OpenCourant backend requires " + ", ".join(missing) + "."
             self.set_error(msg)
@@ -132,37 +121,35 @@ class CrashSolverNode(CadQueryNode):
             self.set_error(msg)
             return None
 
-        scope = str(impact.get('application_scope') or '').strip().lower().replace('_', ' ')
-        if not scope.startswith('moving body'):
-            if not (impact.get('face_list') or []):
+        scope = (
+            str(impact.get("application_scope") or "").strip().lower().replace("_", " ")
+        )
+        if not scope.startswith("moving body"):
+            if not (impact.get("face_list") or []):
                 msg = "Fixed-specimen crash requires a selected impact face."
                 self.set_error(msg)
                 return None
-            if not constraints and not scope.startswith('prescribed'):
+            if not constraints and not scope.startswith("prescribed"):
                 msg = "Fixed-specimen moving-impactor crash requires a rear support constraint."
                 self.set_error(msg)
                 return None
 
         try:
-            n_frames = int(self.get_property('n_frames') or 0)
-            history_samples = int(self.get_property('history_samples') or 0)
-            end_time = float(self.get_property('end_time') or 0.0)
-            timeout_s = float(self.get_property('external_timeout_s') or 0.0)
-            impactor_mass = float(
-                impact.get('impactor_mass_kg') or 0.0
-            )
-            disp_scale = float(self.get_property('disp_scale') or 0.0)
+            n_frames = int(self.get_property("n_frames") or 0)
+            history_samples = int(self.get_property("history_samples") or 0)
+            end_time = float(self.get_property("end_time") or 0.0)
+            timeout_s = float(self.get_property("external_timeout_s") or 0.0)
+            impactor_mass = float(impact.get("impactor_mass_kg") or 0.0)
         except (TypeError, ValueError):
-            self.set_error("Crash duration, frames, timeout, mass, and display scale must be numeric.")
+            self.set_error("Crash duration, frames, timeout, and mass must be numeric.")
             return None
         if n_frames < 1 or not math.isfinite(end_time) or end_time <= 0.0:
-            self.set_error("Crash end time must be positive and result frames must be at least 1.")
-            return None
-        if history_samples < 50:
             self.set_error(
-                "Crash time history must contain at least 50 samples; "
-                "1001 or more is recommended for qualification."
+                "Crash end time must be positive and result frames must be at least 1."
             )
+            return None
+        if history_samples < 2:
+            self.set_error("Crash time history must contain at least two samples.")
             return None
         if not math.isfinite(timeout_s) or timeout_s <= 0.0:
             self.set_error("OpenCourant timeout must be finite and greater than zero.")
@@ -170,31 +157,34 @@ class CrashSolverNode(CadQueryNode):
         if not math.isfinite(impactor_mass) or impactor_mass < 0.0:
             self.set_error("Impactor mass must be finite and non-negative.")
             return None
-        if not math.isfinite(disp_scale) or disp_scale <= 0.0:
-            self.set_error("Crash display scale must be finite and greater than zero.")
-            return None
+        setup_warnings = []
+        if history_samples < 50:
+            setup_warnings.append(
+                "Low time-history resolution; peaks and qualification checks may be unresolved."
+            )
+        disp_scale = self.get_property("disp_scale")
         output_dt = end_time / n_frames
         history_dt = end_time / max(history_samples - 1, 1)
         try:
-            acceleration_cfc = int(self.get_property('acceleration_cfc') or 60)
-            force_cfc = int(self.get_property('force_cfc') or 600)
+            acceleration_cfc = int(self.get_property("acceleration_cfc") or 60)
+            force_cfc = int(self.get_property("force_cfc") or 600)
         except (TypeError, ValueError):
             self.set_error("Crash CFC filter classes must be numeric.")
             return None
 
-        deck_only = as_bool(self.get_property('deck_only'))
+        deck_only = as_bool(self.get_property("deck_only"))
         run_flag = not deck_only
         logger.info("Crash Solver: deck_only=%s, run_solver=%s", deck_only, run_flag)
 
         try:
-            starter_path = str(
-                self.get_property('opencourant_starter_path') or ''
-            ).strip() or None
-            engine_path = str(
-                self.get_property('opencourant_engine_path') or ''
-            ).strip() or None
-            work_dir = str(self.get_property('external_work_dir') or '').strip() or None
-            project_dir = getattr(self, '_project_dir', None)
+            starter_path = (
+                str(self.get_property("opencourant_starter_path") or "").strip() or None
+            )
+            engine_path = (
+                str(self.get_property("opencourant_engine_path") or "").strip() or None
+            )
+            work_dir = str(self.get_property("external_work_dir") or "").strip() or None
+            project_dir = getattr(self, "_project_dir", None)
             if project_dir:
                 if starter_path and not Path(starter_path).is_absolute():
                     starter_path = str(Path(project_dir) / starter_path)
@@ -208,7 +198,7 @@ class CrashSolverNode(CadQueryNode):
                 work_dir=work_dir,
                 run_solver=run_flag,
                 timeout_s=timeout_s,
-                job_name='pylcss_opencourant',
+                job_name="pylcss_opencourant",
                 cancel_callback=cancel_callback,
             )
             # Mass scaling (/DT/NODA/CST): add nodal mass when element dt drops
@@ -217,11 +207,11 @@ class CrashSolverNode(CadQueryNode):
             # Safe with *ELEMENT_MASS impactor masses: those rear nodes have
             # enormous effective dt (~100 ms) so /DT/NODA/CST never touches them;
             # only distorting crush-zone elements (dt → μs) get mass added.
-            ms_enabled = as_bool(self.get_property('enable_mass_scaling'))
+            ms_enabled = as_bool(self.get_property("enable_mass_scaling"))
             ms_dt_target = 0.0
             if ms_enabled:
                 explicit_ms_target = float(
-                    self.get_property('mass_scaling_target_dt') or 0.0
+                    self.get_property("mass_scaling_target_dt") or 0.0
                 )
                 if not math.isfinite(explicit_ms_target) or explicit_ms_target < 0.0:
                     self.set_error(
@@ -232,13 +222,11 @@ class CrashSolverNode(CadQueryNode):
                     ms_dt_target = explicit_ms_target
                 else:
                     steps_req = max(
-                        int(self.get_property('time_steps') or 500),
+                        int(self.get_property("time_steps") or 500),
                         1,
                     )
                     ms_dt_target = float(end_time) / steps_req
-            time_step_scale = float(
-                self.get_property('time_step_scale') or 0.9
-            )
+            time_step_scale = float(self.get_property("time_step_scale") or 0.9)
 
             # Hourglass control is solver policy, not a study knob.
             hg_ihq = INDUSTRIAL_HOURGLASS_IHQ
@@ -253,7 +241,7 @@ class CrashSolverNode(CadQueryNode):
                 end_time=end_time,
                 output_dt=output_dt,
                 history_dt=history_dt,
-                visualization_mode=self.get_property('visualization'),
+                visualization_mode=self.get_property("visualization"),
                 disp_scale=disp_scale,
                 mass_scaling_dt=ms_dt_target,
                 mass_scaling_scale=0.67,
@@ -264,12 +252,15 @@ class CrashSolverNode(CadQueryNode):
                 acceleration_cfc=acceleration_cfc,
                 force_cfc=force_cfc,
             )
-            warnings = result.get('warnings') or []
+            result.setdefault("warnings", []).extend(setup_warnings)
+            warnings = result.get("warnings") or []
             if warnings:
                 logger.warning("OpenCourant backend warnings: %s", "; ".join(warnings))
             logger.info(
                 "Crash Solver: status=%s, type=%s, work_dir=%s",
-                result.get('external_status'), result.get('type'), result.get('work_dir'),
+                result.get("external_status"),
+                result.get("type"),
+                result.get("work_dir"),
             )
             return result
         except SolverBackendError as exc:

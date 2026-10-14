@@ -24,6 +24,7 @@ from typing import Callable, Optional, Tuple
 import numpy as np
 from pylcss.process_utils import headless_subprocess_kwargs
 
+from .mesh_topology import mesh_topology_report, triangulate_quad_faces
 from .amrto_common import get_instant_meshes_executable
 
 logger = logging.getLogger(__name__)
@@ -189,40 +190,6 @@ def fallback_quadrangulate_mesh(
 
 
 
-def mesh_topology_report(vertices: np.ndarray, faces: np.ndarray) -> dict:
-    """Combinatorial closure, connected components, orientation and degeneracy."""
-    from scipy.sparse import coo_matrix
-    from scipy.sparse.csgraph import connected_components
-
-    vertices, faces = np.asarray(vertices), np.asarray(faces, dtype=np.int64)
-    edges = np.stack((faces, np.roll(faces, -1, axis=1)), axis=2).reshape(-1, 2)
-    unique, inverse, counts = np.unique(np.sort(edges, axis=1), axis=0, return_inverse=True, return_counts=True)
-    signs = np.where(edges[:, 0] < edges[:, 1], 1, -1)
-    orientation = np.bincount(inverse, weights=signs, minlength=len(unique))
-    used = np.unique(faces)
-    local_edges = np.searchsorted(used, unique)
-    graph = coo_matrix((np.ones(len(local_edges)), (local_edges[:, 0], local_edges[:, 1])),
-                       shape=(len(used), len(used)))
-    components, labels = connected_components(graph, directed=False, return_labels=True)
-    component_vertices = np.bincount(labels, minlength=components)
-    component_edges = np.bincount(labels[local_edges[:, 0]], minlength=components)
-    face_components = labels[np.searchsorted(used, faces[:, 0])]
-    component_faces = np.bincount(face_components, minlength=components)
-    component_euler = np.sort(component_vertices - component_edges + component_faces)
-    points = vertices[faces]
-    normals = np.cross(points[:, 1] - points[:, 0], points[:, 2] - points[:, 0])
-    if faces.shape[1] == 4:
-        normals += np.cross(points[:, 2] - points[:, 0], points[:, 3] - points[:, 0])
-    threshold = np.finfo(float).eps * max(float(np.max(np.ptp(vertices, axis=0))) ** 2, np.finfo(float).tiny)
-    degenerate = int(np.count_nonzero(np.linalg.norm(normals, axis=1) <= threshold))
-    boundary = int(np.count_nonzero(counts == 1))
-    nonmanifold = int(np.count_nonzero(counts > 2))
-    winding = int(np.count_nonzero((counts == 2) & (orientation != 0)))
-    return {"boundary_edge_count": boundary, "nonmanifold_edge_count": nonmanifold,
-            "winding_conflict_count": winding, "degenerate_face_count": degenerate,
-            "connected_components": int(components), "euler_characteristic": int(len(used) - len(unique) + len(faces)),
-            "component_euler_characteristics": [int(value) for value in component_euler],
-            "is_closed": boundary == 0 and nonmanifold == 0 and degenerate == 0 and winding == 0}
 
 
 def _quad_topology_error(source: dict, output: dict) -> Optional[str]:
@@ -265,6 +232,7 @@ def _topology_preserving_decimation(vertices: np.ndarray, faces: np.ndarray,
 def _bounded_fallback_triangles(vertices: np.ndarray, faces: np.ndarray, source_topology: dict,
                                quad_budget: int, maximum_quad_budget: int = 60000,
                                triangle_surface_validator: Optional[Callable[[np.ndarray, np.ndarray], dict]] = None,
+                               maximum_volume_delta: Optional[float] = 0.03,
                                ) -> Tuple[np.ndarray, np.ndarray, dict]:
     """Bound the CAD workload without accepting a changed closed-surface topology."""
     initial_budget = min(360000, max(3, int(quad_budget)))
@@ -318,8 +286,9 @@ def _bounded_fallback_triangles(vertices: np.ndarray, faces: np.ndarray, source_
                 delta = abs(volume - source_volume) / source_volume if source_volume > 0 else None
                 if len(reduced.faces) * 3 > budget:
                     errors.append("Simplification did not reach the bounded quad budget")
-                if source_topology["is_closed"] and (delta is None or delta > 0.03):
-                    errors.append("Simplification changed closed-mesh volume by more than 3%")
+                if (source_topology["is_closed"] and maximum_volume_delta is not None
+                        and (delta is None or delta > maximum_volume_delta)):
+                    errors.append(f"Simplification exceeded the {maximum_volume_delta:.1%} volume limit")
                 deviation, validation_error = _validate_triangle_surface(
                     triangle_surface_validator, reduced.vertices, reduced.faces)
                 if validation_error:
@@ -361,11 +330,14 @@ def quadrangulate_mesh(
     im_executable: Optional[Path] = None,
     triangle_surface_validator: Optional[Callable[[np.ndarray, np.ndarray], dict]] = None,
     require_native: bool = False,
+    maximum_volume_delta: Optional[float] = 0.03,
 ) -> Tuple[np.ndarray, np.ndarray, dict]:
     """Step 2 entry point: Execute quadrangulation via Instant-Meshes."""
     vertices = np.asarray(vertices, dtype=float)
     faces = np.asarray(faces, dtype=np.int64)
     source_topology = mesh_topology_report(vertices, faces)
+    if maximum_volume_delta is not None and (not np.isfinite(maximum_volume_delta) or maximum_volume_delta < 0):
+        raise ValueError('Volume limit must be finite and nonnegative, or None')
     im_exe = im_executable or get_instant_meshes_executable()
     fallback_reason = "Instant-Meshes executable is unavailable"
     attempts = []
@@ -406,7 +378,7 @@ def quadrangulate_mesh(
                     topology = mesh_topology_report(q_verts, q_faces)
                     attempt["topology"] = topology
                     error = _quad_topology_error(source_topology, topology)
-                    output_triangles = np.vstack((q_faces[:, [0, 1, 2]], q_faces[:, [0, 2, 3]]))
+                    output_triangles = triangulate_quad_faces(q_verts, q_faces)
                     if source_topology["is_closed"]:
                         import trimesh
                         source_signed_volume = float(trimesh.Trimesh(vertices, faces, process=False).volume)
@@ -417,14 +389,15 @@ def quadrangulate_mesh(
                             # closed surface. Restore its source orientation
                             # before parameterization; the geometry is unchanged.
                             q_faces = q_faces[:, ::-1].copy()
-                            output_triangles = np.vstack((q_faces[:, [0,1,2]], q_faces[:, [0,2,3]]))
+                            output_triangles = triangulate_quad_faces(q_verts, q_faces)
                             attempt['global_winding_corrected'] = True
                         source_volume = abs(source_signed_volume)
                         output_volume = abs(output_signed_volume)
                         delta = abs(output_volume - source_volume) / source_volume if source_volume > 0 else None
                         attempt["relative_volume_delta"] = delta
-                        if error is None and (delta is None or delta > 0.03):
-                            error = "Instant-Meshes changed closed-mesh volume by more than 3%"
+                        if (error is None and maximum_volume_delta is not None
+                                and (delta is None or delta > maximum_volume_delta)):
+                            error = f"Instant-Meshes exceeded the {maximum_volume_delta:.1%} volume limit"
                     deviation, validation_error = _validate_triangle_surface(
                         triangle_surface_validator, q_verts, output_triangles)
                     if deviation is not None:
@@ -460,7 +433,7 @@ def quadrangulate_mesh(
 
     quad_budget = min(60000, max(12000, 3 * int(target_faces)))
     # A lattice with hundreds of handles cannot be represented by the same
-    # bounded polygon count as a beam. Retain the strict topology/3% volume
+    # bounded polygon count as a beam. Retain topology and requested volume
     # checks while allowing an explicitly reported larger CAD workload.
     handle_count = max(0, (2 * source_topology["connected_components"] -
                           source_topology["euler_characteristic"]) // 2)
@@ -479,7 +452,8 @@ def quadrangulate_mesh(
             quad_budget = min(maximum_quad_budget, 60000 * int(np.ceil(minimum_subdivision_quads / 60000)))
     try:
         fallback_vertices, fallback_faces, simplification = _bounded_fallback_triangles(
-            vertices, faces, source_topology, quad_budget, maximum_quad_budget, triangle_surface_validator)
+            vertices, faces, source_topology, quad_budget, maximum_quad_budget, triangle_surface_validator,
+            maximum_volume_delta=maximum_volume_delta)
     except QuadrangulationValidationError as exc:
         exc.report = {"step": 2, "source_topology": source_topology, "attempts": attempts,
                       "fallback_reason": fallback_reason, "fallback_simplification": exc.report}

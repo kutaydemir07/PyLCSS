@@ -227,17 +227,23 @@ class Nsga2OperatorsMixin:
             return np.full(candidate_count, float("inf"))
 
         distances: np.ndarray = np.zeros(candidate_count, dtype=float)
+        finite_indices = np.flatnonzero(np.all(np.isfinite(objectives), axis=1))
+        if len(finite_indices) <= 2:
+            distances[finite_indices] = float("inf")
+            return distances
         for objective_index in range(objectives.shape[1]):
-            order = np.argsort(objectives[:, objective_index])
+            order = finite_indices[
+                np.argsort(objectives[finite_indices, objective_index])
+            ]
             distances[order[0]] = float("inf")
             distances[order[-1]] = float("inf")
             objective_range = (
                 objectives[order[-1], objective_index]
                 - objectives[order[0], objective_index]
             )
-            if objective_range < 1e-15:
+            if objective_range == 0.0:
                 continue
-            for rank in range(1, candidate_count - 1):
+            for rank in range(1, len(order) - 1):
                 distances[order[rank]] += (
                     objectives[order[rank + 1], objective_index]
                     - objectives[order[rank - 1], objective_index]

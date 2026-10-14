@@ -12,6 +12,7 @@ from numpy.typing import ArrayLike
 from scipy.stats.qmc import LatinHypercube
 
 from ..evaluator import ModelEvaluator
+from ..methods import SCIPY_METHODS
 from ..models import OptimizationResult
 from .base import BaseSolver, StepCallback
 
@@ -37,7 +38,7 @@ class MultiStartSolver(BaseSolver):
         callback: StepCallback | None = None,
     ) -> OptimizationResult:
         # Local import avoids a factory -> multi-start -> factory import cycle.
-        from .factory import SCIPY_METHODS, get_solver
+        from .factory import get_solver
 
         self._prepare_evaluator(evaluator)
         n_starts = int(self.settings.get("ms_n_starts", 10))
@@ -53,14 +54,14 @@ class MultiStartSolver(BaseSolver):
             )
 
         initial = np.asarray(x0, dtype=float)
-        n_variables = len(evaluator.vars)
+        n_variables = len(evaluator.variables)
         if initial.shape != (n_variables,):
             raise ValueError(
                 f"Initial design must contain {n_variables} scalar values."
             )
 
-        lower = np.asarray([item.min_val for item in evaluator.vars], dtype=float)
-        upper = np.asarray([item.max_val for item in evaluator.vars], dtype=float)
+        lower = np.asarray([item.min_val for item in evaluator.variables], dtype=float)
+        upper = np.asarray([item.max_val for item in evaluator.variables], dtype=float)
         finite_box = np.isfinite(lower) & np.isfinite(upper)
         starts = [initial.copy()]
         if n_starts > 1:
@@ -99,9 +100,9 @@ class MultiStartSolver(BaseSolver):
                     self._active_solver = get_solver(local_method, local_settings)
                     result = self._active_solver.solve(evaluator, start, callback)
                     completed_starts += 1
-                    if best_result is None or _result_rank(result) < _result_rank(
-                        best_result
-                    ):
+                    if best_result is None or _result_rank(
+                        result, evaluator
+                    ) < _result_rank(best_result, evaluator):
                         best_result = result
                 except Exception:
                     logger.exception("Multi-start run %d failed.", index + 1)
@@ -126,22 +127,24 @@ class MultiStartSolver(BaseSolver):
 
         state = "stopped" if self.stop_requested else "completed"
         best_result.success = bool(best_result.success and not self.stop_requested)
-        best_result.converged = bool(
-            best_result.converged and not self.stop_requested
-        )
+        best_result.converged = bool(best_result.converged and not self.stop_requested)
         best_result.message += (
             f" (best of {completed_starts} completed starts; {state})"
         )
         return best_result
 
 
-def _result_rank(result: OptimizationResult) -> tuple[int, float, float]:
-    """Rank feasible results first, then violation and displayed objective."""
+def _result_rank(
+    result: OptimizationResult, evaluator: ModelEvaluator
+) -> tuple[int, float, float]:
+    """Rank feasible results first, then violation and the optimized objective."""
     feasible = result.max_violation <= result.feasibility_tolerance
     return (
         0 if feasible else 1,
         0.0 if feasible else result.max_violation,
-        result.cost,
+        evaluator.normalized_objective(result.objectives)
+        if result.objectives
+        else float("inf"),
     )
 
 

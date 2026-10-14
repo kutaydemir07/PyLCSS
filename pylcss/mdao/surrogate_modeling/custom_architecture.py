@@ -8,6 +8,7 @@ and arbitrary user-defined PyTorch architectures."""
 from __future__ import annotations
 
 import copy
+import inspect
 import logging
 import math
 import time
@@ -18,9 +19,10 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 
 from .contracts import LossCallback, Metrics, ProgressCallback, StopFlag
-from .metrics import evaluate_predictions, validate_training_data
-from .models import TORCH_AVAILABLE
+from .dataset import prepare_training_data
+from .metrics import evaluate_predictions, format_prediction, prediction_features
 from .strategies import SurrogateModelStrategy
+from .torch_utils import TORCH_AVAILABLE, prediction_mode, select_torch_device
 
 logger = logging.getLogger(__name__)
 
@@ -30,17 +32,10 @@ if TORCH_AVAILABLE:
     import torch.optim as optim
     from torch.utils.data import DataLoader, TensorDataset
 
-    def select_torch_device() -> torch.device:
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        return torch.device("cpu")
 else:
     torch = None  # type: ignore[assignment]
     nn = None  # type: ignore[assignment]
     optim = None  # type: ignore[assignment]
-
-    def select_torch_device() -> Any:
-        return None
 
 __all__ = [
     "CustomArchitectureModel",
@@ -57,7 +52,9 @@ if TORCH_AVAILABLE:
     class FourierFeatureEmbedding(nn.Module):
         """Random Fourier Feature projection for high-frequency physics responses."""
 
-        def __init__(self, in_features: int, num_features: int = 32, scale: float = 1.0) -> None:
+        def __init__(
+            self, in_features: int, num_features: int = 32, scale: float = 1.0
+        ) -> None:
             super().__init__()
             self.in_features = in_features
             self.num_features = num_features
@@ -118,8 +115,9 @@ if TORCH_AVAILABLE:
             return nn.Sigmoid()
         elif name_lower in ("identity", "none", "linear"):
             return nn.Identity()
-        else:
+        elif name_lower == "relu":
             return nn.ReLU()
+        raise ValueError(f"Unknown activation {name!r}.")
 
     class CustomNeuralNet(nn.Module):
         """Dynamically configured neural network built from layer specifications."""
@@ -131,6 +129,8 @@ if TORCH_AVAILABLE:
             spec: dict[str, Any],
         ) -> None:
             super().__init__()
+            if in_features < 1 or out_features < 1:
+                raise ValueError("Input and output widths must be positive.")
             self.in_features = in_features
             self.out_features = out_features
 
@@ -154,6 +154,15 @@ if TORCH_AVAILABLE:
                     units = int(l_spec.get("units", 64))
                     layers.append(nn.Linear(curr_dim, units))
                     curr_dim = units
+                    # Visual-builder linear rows carry their own activation
+                    # and dropout. Older explicit layer stacks omit these
+                    # keys and retain their separate activation/dropout rows.
+                    act_name = str(l_spec.get("activation", "none"))
+                    if act_name.lower() not in {"none", "identity", "linear"}:
+                        layers.append(_get_activation(act_name))
+                    dropout = float(l_spec.get("dropout", 0.0))
+                    if dropout:
+                        layers.append(nn.Dropout(dropout))
 
                 elif l_type == "activation":
                     act_name = str(l_spec.get("activation", "relu"))
@@ -166,7 +175,11 @@ if TORCH_AVAILABLE:
                         curr_dim = units
                     dropout = float(l_spec.get("dropout", 0.0))
                     act_name = str(l_spec.get("activation", "gelu"))
-                    layers.append(ResidualBlock(curr_dim, curr_dim, activation=act_name, dropout=dropout))
+                    layers.append(
+                        ResidualBlock(
+                            curr_dim, curr_dim, activation=act_name, dropout=dropout
+                        )
+                    )
 
                 elif l_type == "layernorm":
                     layers.append(nn.LayerNorm(curr_dim))
@@ -175,11 +188,16 @@ if TORCH_AVAILABLE:
                     layers.append(nn.BatchNorm1d(curr_dim))
 
                 elif l_type == "dropout":
-                    rate = float(l_spec.get("rate", 0.1))
+                    rate = float(l_spec.get("rate", l_spec.get("dropout", 0.1)))
                     layers.append(nn.Dropout(rate))
+                else:
+                    raise ValueError(f"Unknown layer type {l_type!r}.")
 
             # Final projection to target output dimension if not already matching
-            if curr_dim != out_features:
+            trainable = any(
+                p.requires_grad for layer in layers for p in layer.parameters()
+            )
+            if curr_dim != out_features or not trainable:
                 layers.append(nn.Linear(curr_dim, out_features))
 
             self.net = nn.Sequential(*layers)
@@ -187,9 +205,12 @@ if TORCH_AVAILABLE:
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             return self.net(x)
 
-    def compile_custom_code(code_string: str, in_features: int, out_features: int) -> nn.Module:
-        """Safely compile custom Python code defining a PyTorch nn.Module."""
+    def compile_custom_code(
+        code_string: str, in_features: int, out_features: int
+    ) -> nn.Module:
+        """Execute trusted custom code and validate its regression interface."""
         local_scope: dict[str, Any] = {
+            "__name__": "_pylcss_custom_architecture",
             "torch": torch,
             "nn": nn,
             "math": math,
@@ -201,10 +222,16 @@ if TORCH_AVAILABLE:
         # Find user-defined nn.Module subclass
         target_cls = None
         for val in local_scope.values():
-            if isinstance(val, type) and issubclass(val, nn.Module) and val not in (
-                nn.Module,
-                FourierFeatureEmbedding,
-                ResidualBlock,
+            if (
+                isinstance(val, type)
+                and val.__module__ == local_scope["__name__"]
+                and issubclass(val, nn.Module)
+                and val
+                not in (
+                    nn.Module,
+                    FourierFeatureEmbedding,
+                    ResidualBlock,
+                )
             ):
                 target_cls = val
                 break
@@ -215,17 +242,27 @@ if TORCH_AVAILABLE:
             )
 
         # Instantiate with (in_features, out_features)
+        signature = inspect.signature(target_cls)
         try:
-            model = target_cls(in_features, out_features)
+            signature.bind(in_features, out_features)
         except TypeError:
-            # Fallback for no-arg constructor
+            signature.bind()
             model = target_cls()
+        else:
+            model = target_cls(in_features, out_features)
 
         # Sanity check forward pass
         test_in = torch.randn(2, in_features)
-        out = model(test_in)
-        if out.shape[0] != 2:
-            raise ValueError(f"Model forward pass produced unexpected batch shape: {out.shape}")
+        with prediction_mode(model):
+            out = model(test_in)
+        if not isinstance(out, torch.Tensor) or out.shape != (2, out_features):
+            raise ValueError(
+                f"Model must return shape (2, {out_features}); got {getattr(out, 'shape', None)}."
+            )
+        if not torch.isfinite(out).all():
+            raise ValueError("Model returned non-finite values during validation.")
+        if not any(p.requires_grad for p in model.parameters()):
+            raise ValueError("Custom architecture must contain trainable parameters.")
 
         return model
 
@@ -240,48 +277,47 @@ class CustomArchitectureModel:
         scaler_y: Any,
         n_mc_samples: int = 50,
         spec: dict[str, Any] | None = None,
+        custom_code: str | None = None,
     ) -> None:
         self.model = model
         self.scaler_x = scaler_x
         self.scaler_y = scaler_y
         self.n_mc_samples = int(n_mc_samples)
+        if self.n_mc_samples < 1:
+            raise ValueError("n_mc_samples must be positive.")
         self.spec = spec or {}
+        self.custom_code = custom_code
         if TORCH_AVAILABLE and isinstance(model, nn.Module):
             self.device = next(model.parameters()).device
         else:
             self.device = None
 
     def predict(self, X: np.ndarray, return_std: bool = False) -> Any:
-        features = np.asarray(X, dtype=np.float64)
-        single_sample = features.ndim == 1
-        if single_sample:
-            features = features.reshape(1, -1)
+        features, single_sample = prediction_features(X)
 
         scaled = self.scaler_x.transform(features)
         tensor = torch.as_tensor(scaled, dtype=torch.float32, device=self.device)
 
         if not return_std:
-            self.model.eval()
-            with torch.no_grad():
+            with prediction_mode(self.model):
                 out_scaled = self.model(tensor).detach().cpu().numpy()
-            pred = np.asarray(self.scaler_y.inverse_transform(out_scaled), dtype=np.float64)
-            return pred.squeeze() if single_sample else pred
+            pred = np.asarray(
+                self.scaler_y.inverse_transform(out_scaled), dtype=np.float64
+            )
+            return format_prediction(pred, single=single_sample)
 
         # Monte Carlo Dropout for uncertainty quantification
-        was_training = self.model.training
-        self.model.train()
-        try:
+        with prediction_mode(self.model, dropout=True):
             batch_size = tensor.shape[0]
             repeated = tensor.repeat(self.n_mc_samples, 1)
-            with torch.no_grad():
-                raw_out = self.model(repeated).detach().cpu().numpy()
+            raw_out = self.model(repeated).detach().cpu().numpy()
             samples = raw_out.reshape(self.n_mc_samples, batch_size, -1)
-        finally:
-            self.model.train(was_training)
 
         mean_scaled = samples.mean(axis=0)
         std_scaled = samples.std(axis=0)
-        mean = np.asarray(self.scaler_y.inverse_transform(mean_scaled), dtype=np.float64)
+        mean = np.asarray(
+            self.scaler_y.inverse_transform(mean_scaled), dtype=np.float64
+        )
 
         scale_val = getattr(self.scaler_y, "scale_", None)
         if scale_val is not None:
@@ -289,11 +325,42 @@ class CustomArchitectureModel:
         else:
             flattened = samples.reshape(self.n_mc_samples * batch_size, -1)
             unscaled = self.scaler_y.inverse_transform(flattened)
-            std = np.asarray(unscaled.reshape(self.n_mc_samples, batch_size, -1).std(axis=0), dtype=np.float64)
+            std = np.asarray(
+                unscaled.reshape(self.n_mc_samples, batch_size, -1).std(axis=0),
+                dtype=np.float64,
+            )
 
-        if single_sample:
-            return mean.squeeze(), std.squeeze()
-        return mean, std
+        return format_prediction(mean, single=single_sample), format_prediction(
+            std, single=single_sample
+        )
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        if self.custom_code:
+            state["_network_state"] = {
+                key: value.detach().cpu()
+                for key, value in self.model.state_dict().items()
+            }
+            state["model"] = None
+            state["device"] = torch.device("cpu")
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        weights = state.pop("_network_state", None)
+        self.__dict__.update(state)
+        self.custom_code = state.get("custom_code")
+        if weights is not None:
+            if not TORCH_AVAILABLE:
+                raise RuntimeError("PyTorch is required to load this custom model.")
+            self.model = compile_custom_code(
+                self.custom_code,
+                self.scaler_x.n_features_in_,
+                self.scaler_y.n_features_in_,
+            )
+            self.model.load_state_dict(weights)
+            self.model.eval()
+        if TORCH_AVAILABLE:
+            self.device = next(self.model.parameters()).device
 
     def to_cpu(self) -> CustomArchitectureModel:
         if TORCH_AVAILABLE and isinstance(self.model, nn.Module):
@@ -317,23 +384,20 @@ class CustomArchitectureStrategy(SurrogateModelStrategy):
         loss_callback: LossCallback | None = None,
     ) -> tuple[Any, Metrics]:
         if not TORCH_AVAILABLE:
-            raise RuntimeError("PyTorch is required for custom neural network architectures.")
-
-        features, targets = validate_training_data(X, y)
-        n_samples, n_features = features.shape
-        n_targets = targets.shape[1]
-
-        # Holdout split if not provided
-        if X_test is not None and y_test is not None and len(X_test) > 0 and len(y_test) > 0:
-            eval_X, eval_y = validate_training_data(X_test, y_test, minimum_samples=1)
-            train_X, train_y = features, targets
-        else:
-            from sklearn.model_selection import train_test_split
-
-            val_split = float(config.get("validation_split", 0.2))
-            train_X, eval_X, train_y, eval_y = train_test_split(
-                features, targets, test_size=val_split, random_state=42
+            raise RuntimeError(
+                "PyTorch is required for custom neural network architectures."
             )
+
+        data = prepare_training_data(X, y, config, X_test, y_test)
+        train_X, train_y, eval_X, eval_y = (
+            data.train_X,
+            data.train_y,
+            data.eval_X,
+            data.eval_y,
+        )
+        n_features, n_targets = train_X.shape[1], train_y.shape[1]
+        random_state = int(config.get("random_state", 42))
+        torch.manual_seed(random_state)
 
         scaler_x = StandardScaler()
         scaler_y = StandardScaler()
@@ -353,9 +417,11 @@ class CustomArchitectureStrategy(SurrogateModelStrategy):
         if mode == "code":
             code_str = str(config.get("custom_code", ""))
             network = compile_custom_code(code_str, n_features, n_targets).to(device)
-        else:
+        elif mode == "visual":
             spec = dict(config.get("custom_spec", {}))
             network = CustomNeuralNet(n_features, n_targets, spec).to(device)
+        else:
+            raise ValueError(f"Unknown architecture mode {mode!r}.")
 
         criterion = nn.MSELoss()
         lr = float(config.get("learning_rate", 0.001))
@@ -363,18 +429,38 @@ class CustomArchitectureStrategy(SurrogateModelStrategy):
         epochs = int(config.get("epochs", 1000))
         batch_size = int(config.get("batch_size", 32))
         patience = int(config.get("patience", 40))
+        if not np.isfinite(lr) or lr <= 0:
+            raise ValueError("learning_rate must be finite and positive.")
+        if not np.isfinite(weight_decay) or weight_decay < 0:
+            raise ValueError("weight_decay must be finite and non-negative.")
+        if min(epochs, batch_size, patience, int(config.get("n_mc_samples", 50))) < 1:
+            raise ValueError(
+                "epochs, batch_size, patience, and n_mc_samples must be positive."
+            )
 
         optimizer_name = str(config.get("optimizer", "AdamW"))
         if optimizer_name == "SGD":
-            optimizer = optim.SGD(network.parameters(), lr=lr, weight_decay=weight_decay, momentum=0.9)
+            optimizer = optim.SGD(
+                network.parameters(), lr=lr, weight_decay=weight_decay, momentum=0.9
+            )
         elif optimizer_name == "RMSprop":
-            optimizer = optim.RMSprop(network.parameters(), lr=lr, weight_decay=weight_decay)
+            optimizer = optim.RMSprop(
+                network.parameters(), lr=lr, weight_decay=weight_decay
+            )
         elif optimizer_name == "Adam":
-            optimizer = optim.Adam(network.parameters(), lr=lr, weight_decay=weight_decay)
+            optimizer = optim.Adam(
+                network.parameters(), lr=lr, weight_decay=weight_decay
+            )
+        elif optimizer_name == "AdamW":
+            optimizer = optim.AdamW(
+                network.parameters(), lr=lr, weight_decay=weight_decay
+            )
         else:
-            optimizer = optim.AdamW(network.parameters(), lr=lr, weight_decay=weight_decay)
+            raise ValueError(f"Unknown optimizer {optimizer_name!r}.")
 
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(10, epochs), eta_min=1e-6)
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(10, epochs), eta_min=1e-6
+        )
 
         dataset = TensorDataset(train_X_tensor, train_y_tensor)
         loader = DataLoader(
@@ -382,6 +468,7 @@ class CustomArchitectureStrategy(SurrogateModelStrategy):
             batch_size=min(batch_size, len(train_X_tensor)),
             shuffle=True,
             pin_memory=device.type == "cuda",
+            generator=torch.Generator().manual_seed(random_state),
         )
 
         best_loss = float("inf")
@@ -391,7 +478,9 @@ class CustomArchitectureStrategy(SurrogateModelStrategy):
 
         for epoch in range(epochs):
             if stop_flag and stop_flag():
-                logger.info("Custom architecture training stopped by user at epoch %d", epoch)
+                logger.info(
+                    "Custom architecture training stopped by user at epoch %d", epoch
+                )
                 break
 
             network.train()
@@ -400,6 +489,11 @@ class CustomArchitectureStrategy(SurrogateModelStrategy):
                 bx = bx.to(device, non_blocking=device.type == "cuda")
                 by = by.to(device, non_blocking=device.type == "cuda")
                 optimizer.zero_grad(set_to_none=True)
+                # BatchNorm cannot estimate variance from a singleton tabular
+                # batch; retain its running statistics without dropping a row.
+                for module in network.modules():
+                    if isinstance(module, nn.BatchNorm1d):
+                        module.train(len(bx) > 1)
                 out = network(bx)
                 loss = criterion(out, by)
                 if not torch.isfinite(loss):
@@ -413,7 +507,11 @@ class CustomArchitectureStrategy(SurrogateModelStrategy):
 
             network.eval()
             with torch.no_grad():
-                val_loss_epoch = float(criterion(network(eval_X_tensor), eval_y_tensor).item())
+                val_loss_epoch = float(
+                    criterion(network(eval_X_tensor), eval_y_tensor).item()
+                )
+            if not np.isfinite(val_loss_epoch):
+                raise RuntimeError(f"Non-finite validation loss at epoch {epoch}.")
 
             if val_loss_epoch < best_loss - 1e-12:
                 best_loss = val_loss_epoch
@@ -455,6 +553,7 @@ class CustomArchitectureStrategy(SurrogateModelStrategy):
         eval_y_orig = eval_y.ravel() if n_targets == 1 else eval_y
         preds_orig = preds.ravel() if n_targets == 1 else preds
         final_metrics = evaluate_predictions(eval_y_orig, preds_orig)
+        final_metrics["evaluation_source"] = data.evaluation_source
 
         model_wrapper = CustomArchitectureModel(
             network,
@@ -462,6 +561,7 @@ class CustomArchitectureStrategy(SurrogateModelStrategy):
             scaler_y,
             n_mc_samples=int(config.get("n_mc_samples", 50)),
             spec=dict(config.get("custom_spec", {})),
+            custom_code=str(config.get("custom_code", "")) if mode == "code" else None,
         )
         _, prediction_std = model_wrapper.predict(eval_X, return_std=True)
         final_metrics["y_std"] = np.asarray(prediction_std)[:100].tolist()

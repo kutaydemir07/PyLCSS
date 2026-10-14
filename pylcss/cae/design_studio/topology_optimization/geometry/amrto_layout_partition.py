@@ -27,7 +27,8 @@ from typing import List, Optional, Tuple
 import numpy as np
 from pylcss.process_utils import headless_subprocess_kwargs
 
-from .amrto_common import QuadLayout, _WORKSPACE_ROOT, get_gmcg_headless_executable
+from .mesh_topology import triangulate_quad_faces
+from .amrto_common import QuadLayout, get_gmcg_headless_executable
 from .amrto_disk_repairs import repair_quad_patch_to_disks, repair_same_side_boundary_triangles
 
 logger = logging.getLogger(__name__)
@@ -54,21 +55,8 @@ def triangulate_quads_clean(
     """
     verts = np.asarray(verts, dtype=float)
     quads_arr = np.asarray(quads_arr, dtype=np.int64)
-    tri_index = []
-    for q in quads_arr:
-        p0, p1, p2, p3 = verts[q[0]], verts[q[1]], verts[q[2]], verts[q[3]]
-        s_abc = triangle_area_3d(p0, p1, p2)
-        s_acd = triangle_area_3d(p0, p2, p3)
-        s_abd = triangle_area_3d(p0, p1, p3)
-        s_bcd = triangle_area_3d(p1, p2, p3)
-        if abs(s_abc - s_acd) < abs(s_abd - s_bcd):
-            tri_index.append([q[0], q[1], q[2]])
-            tri_index.append([q[0], q[2], q[3]])
-        else:
-            tri_index.append([q[0], q[1], q[3]])
-            tri_index.append([q[1], q[2], q[3]])
-
-    tri_arr = np.asarray(tri_index, dtype=np.int64)
+    tri_arr = triangulate_quad_faces(verts, quads_arr)
+    tri_arr = tri_arr.reshape(2, len(quads_arr), 3).transpose(1, 0, 2).reshape(-1, 3)
     used_v = np.unique(tri_arr)
     v_map = {old: new for new, old in enumerate(used_v)}
     local_tris = np.asarray([[v_map[int(v)] for v in t] for t in tri_arr], dtype=np.int64)
@@ -127,22 +115,7 @@ def load_layout_from_obj(obj_path: str | Path, layout_id: int = 0,
     quads_arr = np.asarray(quads, dtype=np.int64)
 
     # Convert quads into triangles using area-minimizing diagonal split (as in AMRTO PYTOCAD)
-    tri_index = []
-    for q in quads_arr:
-        p0, p1, p2, p3 = points_quad[q[0]], points_quad[q[1]], points_quad[q[2]], points_quad[q[3]]
-        s_abc = triangle_area_3d(p0, p1, p2)
-        s_acd = triangle_area_3d(p0, p2, p3)
-        s_abd = triangle_area_3d(p0, p1, p3)
-        s_bcd = triangle_area_3d(p1, p2, p3)
-
-        if (s_abc - s_acd) ** 2 - (s_abd - s_bcd) ** 2 < 0:
-            tri_index.append([q[0], q[1], q[2]])
-            tri_index.append([q[0], q[2], q[3]])
-        else:
-            tri_index.append([q[0], q[1], q[3]])
-            tri_index.append([q[1], q[2], q[3]])
-
-    tri_arr = np.asarray(tri_index, dtype=np.int64)
+    tri_arr = triangulate_quad_faces(points_quad, quads_arr)
 
     # Re-index unique vertices used by this patch
     used_v = np.unique(tri_arr)
@@ -411,6 +384,8 @@ def _inherit_layout_correspondence(piece: QuadLayout, parent: QuadLayout) -> Non
     parent_ids = np.asarray(getattr(parent, "source_vertex_indices", np.arange(len(parent.vertices))),
                             dtype=np.int64)
     piece.source_vertex_indices = _remap_source_ids(piece.source_vertex_indices, parent_ids)
+    if getattr(parent, "require_exact_boundaries", False):
+        piece.require_exact_boundaries = True
     if hasattr(parent, "source_face_indices") and hasattr(piece, "source_face_indices"):
         piece.source_face_indices = np.asarray(parent.source_face_indices)[piece.source_face_indices].tolist()
     if hasattr(parent, "protected_source_crease_edges"):
@@ -617,14 +592,6 @@ def load_sparse_quad_layouts(
     if layout_folder:
         search_dirs.append(Path(layout_folder))
 
-    # Standard AMRTO search locations
-    if not layout_folder:
-        search_dirs.extend([
-        Path("D:/Model_mesh/output_quad"),
-        _WORKSPACE_ROOT / "tests" / "AMRTO" / "CODE_AMRTO" / "data" / "output_quad",
-        _WORKSPACE_ROOT / "tests" / "AMRTO" / "CODE_AMRTO" / "data_2" / "output_quad",
-        _WORKSPACE_ROOT / "tests" / "AMRTO" / "CODE_AMRTO" / "github_variants" / "data_2" / "output_quad",
-        ])
 
     for d in search_dirs:
         if d.is_dir():
@@ -639,6 +606,43 @@ def load_sparse_quad_layouts(
                 if layouts:
                     return layouts
     return []
+
+
+def quad_mesh_from_layout_folder(folder):
+    """Reassemble supplied chart quads without remeshing their shared geometry."""
+    layouts = load_sparse_quad_layouts(folder)
+    if not layouts:
+        raise ValueError(f'No valid sparse quadrilateral layouts found in {folder}')
+    vertices, faces = [], []
+    offset = 0
+    for layout in layouts:
+        vertices.append(layout.vertices)
+        faces.append(layout.quads + offset)
+        offset += len(layout.vertices)
+    points = np.concatenate(vertices)
+    unique, inverse = np.unique(points, axis=0, return_inverse=True)
+    quads = inverse[np.concatenate(faces)]
+    if len({tuple(sorted(map(int, q))) for q in quads}) != len(quads):
+        raise ValueError('Supplied layouts contain duplicate source quads')
+    return unique, quads
+
+
+def _match_layout_to_source(layout, vertices):
+    """Restore global IDs/coordinates, retaining synthetic interior vertices."""
+    from scipy.spatial import cKDTree
+
+    ids = np.asarray(layout.source_vertex_indices, dtype=np.int64).copy()
+    original = ids >= 0
+    tolerance = max(1e-9, float(np.linalg.norm(np.ptp(vertices, axis=0))) * 1e-6)
+    points = layout.vertices[original]
+    if not (np.all(ids[original] < len(vertices))
+            and np.all(np.linalg.norm(vertices[ids[original]] - points, axis=1) <= tolerance)):
+        distances, mapped = cKDTree(vertices).query(points)
+        if np.any(distances > tolerance):
+            raise ValueError('Supplied layouts do not match the source quad vertices')
+        ids[original] = mapped
+    layout.source_vertex_indices = ids
+    layout.vertices[original] = vertices[ids[original]]
 
 
 def _self_seam_source_ids(layout: QuadLayout) -> list[int]:
@@ -875,11 +879,16 @@ def divide_sparse_quad_layouts(
     if layout_folder:
         existing = load_sparse_quad_layouts(layout_folder)
         if existing:
+            for layout in existing:
+                _match_layout_to_source(layout, np.asarray(vertices))
             existing, map_repairs = _repair_parameterizable_layouts(existing, target_patch_size)
+            covered = _validate_source_quad_coverage(existing, vertices, quads)
             report = {
                 "step": 3,
                 "source": f"pre-computed layouts from {layout_folder}",
                 "layout_count": len(existing),
+                "covered_quad_count": covered,
+                "coverage_validation": "Every source quad occurs exactly once",
                 "paper_stage_3": False,
                 "method_provenance": "Precomputed layout generation method has not been verified",
                 "parameterization_repairs": map_repairs,
@@ -1128,8 +1137,9 @@ def subdivide_fitting_layouts(layouts: List[QuadLayout], failed_ids: set[int]) -
         if len(pieces) <= 1:
             raise ValueError("Fitting refinement did not subdivide the failed patch")
         result.extend(pieces)
-        repairs.append({"patch": layout.layout_id, "reason": "Independent spline position or source orientation validation failed",
+        repairs.append({"patch": layout.layout_id, "reason": "Independent spline position, source orientation or B-rep self-intersection validation failed",
                         "position_passed": bool(getattr(layout, "fitting_report", {}).get("dense_map_residual_satisfied", True)),
+                        "self_intersection_passed": not getattr(layout, "fitting_report", {}).get("brep_self_intersection", False),
                         "orientation_passed": getattr(layout, "fitting_report", {}).get("surface_orientation", {}).get("accepted"),
                         "replacement_count": len(pieces), "map_repairs": map_repairs})
     before = Counter(tuple(sorted(tuple(vertex) for vertex in layout.vertices[face]))
@@ -1144,7 +1154,7 @@ def subdivide_fitting_layouts(layouts: List[QuadLayout], failed_ids: set[int]) -
 
 
 def _repair_parameterizable_layouts(layouts: List[QuadLayout], target_patch_size: int):
-    """Keep sparse disks, repairing collapsed or severely compressed maps."""
+    """Repair collapsed square maps; defer distortion to the selected stage-4 map."""
     from .amrto_parameterization import discrete_harmonic_mapping
 
     result, repairs = [], []
@@ -1159,7 +1169,7 @@ def _repair_parameterizable_layouts(layouts: List[QuadLayout], target_patch_size
             D4_failure = None
         source_ids = np.asarray(getattr(layout, "source_vertex_indices", np.arange(len(layout.vertices))), dtype=np.int64)
         try:
-            discrete_harmonic_mapping(layout)
+            discrete_harmonic_mapping(layout, validate_area_compression=False)
             result.append(layout)
             if layout is not original_layout:
                 repairs.append({"patch": layout.layout_id,
@@ -1173,7 +1183,7 @@ def _repair_parameterizable_layouts(layouts: List[QuadLayout], target_patch_size
         try:
             extract_layout_boundary_and_corners(layout)
             layout = _apply_D4(layout)
-            discrete_harmonic_mapping(layout)
+            discrete_harmonic_mapping(layout, validate_area_compression=False)
             result.append(layout)
             repairs.append({"patch": layout.layout_id, "reason": original_error,
                             "method": "Geometric square corners with Appendix D4 interior-vertex treatment",
@@ -1194,7 +1204,7 @@ def _repair_parameterizable_layouts(layouts: List[QuadLayout], target_patch_size
                     lay_d.source_vertex_indices = source_ids[u_d]
                     extract_layout_boundary_and_corners(lay_d)
                     lay_d = _apply_D4(lay_d)
-                    discrete_harmonic_mapping(lay_d)
+                    discrete_harmonic_mapping(lay_d, validate_area_compression=False)
                     validated.append(lay_d)
                 except Exception:
                     validated = []
@@ -1220,7 +1230,7 @@ def _repair_parameterizable_layouts(layouts: List[QuadLayout], target_patch_size
             for piece in pieces:
                 _inherit_layout_correspondence(piece, parent)
                 try:
-                    discrete_harmonic_mapping(piece)
+                    discrete_harmonic_mapping(piece, validate_area_compression=False)
                     validated.append(piece)
                     continue
                 except ValueError:

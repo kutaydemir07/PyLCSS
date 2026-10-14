@@ -110,10 +110,7 @@ class SensitivityWorker(QtCore.QThread):
         problem: SensitivityProblem,
         output_name: str,
         n_samples: int,
-        method: str = "Sobol",
         *,
-        n_trajectories: int = 20,
-        morris_levels: int = 4,
         calc_second_order: bool = False,
         random_seed: int = 42,
         batch: bool = False,
@@ -124,9 +121,6 @@ class SensitivityWorker(QtCore.QThread):
         self.problem = problem
         self.output_name = str(output_name)
         self.n_samples = int(n_samples)
-        self.method = "Sobol"
-        self.n_trajectories = int(n_trajectories)
-        self.morris_levels = int(morris_levels)
         self.calc_second_order = bool(calc_second_order)
         self.random_seed = int(random_seed)
         self.batch = bool(batch)
@@ -149,7 +143,7 @@ class SensitivityWorker(QtCore.QThread):
         output_names = self._declared_output_names()
 
         self.progress_sig.emit(0, "Setting up Sobol analysis...")
-        samples, _ = self._generate_samples(
+        samples = self._generate_samples(
             analyzer,
             problem_definition,
         )
@@ -169,7 +163,6 @@ class SensitivityWorker(QtCore.QThread):
                 samples,
                 output_values,
                 problem_definition,
-                "Sobol",
                 calc_second_order=self.calc_second_order,
                 seed=self.random_seed,
             )
@@ -262,7 +255,7 @@ class SensitivityWorker(QtCore.QThread):
         self,
         analyzer: SensitivityAnalyzer,
         problem_definition: dict[str, Any],
-    ) -> tuple[np.ndarray, dict[str, Any] | None]:
+    ) -> np.ndarray:
         self.progress_sig.emit(10, "Generating Sobol samples (Saltelli sequence)...")
         samples = analyzer.generate_sobol_samples(
             problem_definition,
@@ -270,7 +263,7 @@ class SensitivityWorker(QtCore.QThread):
             calc_second_order=self.calc_second_order,
             seed=self.random_seed,
         )
-        return np.asarray(samples, dtype=float), None
+        return samples
 
     def _evaluate_samples(
         self,
@@ -294,7 +287,7 @@ class SensitivityWorker(QtCore.QThread):
                     + (
                         detail
                         or "No value was imputed because that would invalidate "
-                        f"the {self.method} sampling design."
+                        "the Sobol sampling design."
                     )
                 )
             for name in output_names:

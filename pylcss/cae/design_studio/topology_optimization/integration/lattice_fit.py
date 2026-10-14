@@ -83,11 +83,7 @@ def fit_lattice_dimensions(
             max(feature / 16.0, 3.0 * budget_edge) if automatic else 0.5 * nominal_edge
         )
     )
-    minimum_pitch = max(
-        4.0 * member,
-        4.0 * requested_skin,
-        2.0 * float(family.minimum_cell_voxels) * budget_edge,
-    )
+    minimum_pitch = 2.0 * float(family.minimum_cell_voxels) * budget_edge
     skin_floor = float(requested_skin) if requested_skin > 0 else member
     target = max(0.0, (feature - 2.0 * skin_floor) / CELLS_ACROSS_FEATURE)
     if requested_skin <= 0:
@@ -98,7 +94,7 @@ def fit_lattice_dimensions(
         if requested_skin > 0
         else (0.0 if family.is_strut else max(member, cell / 40.0))
     )
-    floor = max(minimum_pitch, 4.0 * skin)
+    floor = minimum_pitch
     if automatic:
         cell = max(cell, floor)
     # A complete cell plus its surrounding skin needs this much local width.

@@ -11,30 +11,11 @@ from numpy.typing import ArrayLike
 from ..evaluator import ModelEvaluator
 from ..models import OptimizationResult
 from .base import BaseSolver, StepCallback
-from .multi_start import MultiStartSolver
 from .nsga2_operators import Nsga2OperatorsMixin
-from .weighted_sum import WeightedSumSolver
 
 
 class ParetoSolver(Nsga2OperatorsMixin, BaseSolver):
-    """
-    Multi-objective Pareto optimization using NSGA-II or weighted-sum scalarization.
-
-    Capabilities:
-        - NSGA-II for true multi-objective optimization
-        - Weighted-sum scalarization over explicit weight sets
-        - Pareto front extraction and crowding distance
-        - A normalized utopia-distance compromise for display
-    """
-
-    def __init__(self, settings: Mapping[str, Any]) -> None:
-        super().__init__(settings)
-        self._active_solver: BaseSolver | None = None
-
-    def stop(self) -> None:
-        super().stop()
-        if self._active_solver is not None:
-            self._active_solver.stop()
+    """Multi-objective NSGA-II search and normalized compromise selection."""
 
     def solve(
         self,
@@ -42,20 +23,11 @@ class ParetoSolver(Nsga2OperatorsMixin, BaseSolver):
         x0: ArrayLike,
         callback: StepCallback | None = None,
     ) -> OptimizationResult:
-        """
-        Run multi-objective optimization.
-
-        If evaluator has multiple objectives, uses NSGA-II.
-        Otherwise falls back to weighted-sum approach.
-        """
+        """Find a feasible Pareto front from a physical-coordinate start."""
         self._prepare_evaluator(evaluator)
-        method = self.settings.get("pareto_method", "nsga2")
-        n_objectives = len(evaluator.objs)
-
-        if n_objectives <= 1 or method == "weighted_sum":
-            return self._solve_weighted_sum(evaluator, x0, callback)
-        else:
-            return self._solve_nsga2(evaluator, x0, callback)
+        if len(evaluator.objectives) < 2:
+            raise ValueError("NSGA-II needs at least two objectives.")
+        return self._solve_nsga2(evaluator, x0, callback)
 
     def _solve_nsga2(
         self,
@@ -71,8 +43,8 @@ class ParetoSolver(Nsga2OperatorsMixin, BaseSolver):
         # SBX crossover, polynomial mutation and the LHS seeding all operate on a
         # normalized unit hypercube, so NSGA-II needs finite box bounds and must
         # run with scaling enabled regardless of the global scaling preference.
-        lowers = np.array([v.min_val for v in evaluator.vars], dtype=float)
-        uppers = np.array([v.max_val for v in evaluator.vars], dtype=float)
+        lowers = np.array([v.min_val for v in evaluator.variables], dtype=float)
+        uppers = np.array([v.max_val for v in evaluator.variables], dtype=float)
         if not (np.all(np.isfinite(lowers)) and np.all(np.isfinite(uppers))):
             return OptimizationResult(
                 x=np.asarray(x0, dtype=float),
@@ -105,8 +77,8 @@ class ParetoSolver(Nsga2OperatorsMixin, BaseSolver):
         crossover_prob = float(self.settings.get("nsga_crossover_prob", 0.9))
         eta_c = float(self.settings.get("nsga_eta_c", 20.0))
         eta_m = float(self.settings.get("nsga_eta_m", 20.0))
-        n_vars = len(evaluator.vars)
-        n_obj = len(evaluator.objs)
+        n_vars = len(evaluator.variables)
+        n_obj = len(evaluator.objectives)
         self._feasibility_tolerance = evaluator.feasibility_tolerance
 
         mutation_setting = self.settings.get("nsga_mutation_prob")
@@ -125,15 +97,15 @@ class ParetoSolver(Nsga2OperatorsMixin, BaseSolver):
             raise ValueError("NSGA-II distribution indices must be positive.")
 
         lowers = np.asarray(
-            [variable.min_val for variable in evaluator.vars],
+            [variable.min_val for variable in evaluator.variables],
             dtype=float,
         )
         uppers = np.asarray(
-            [variable.max_val for variable in evaluator.vars],
+            [variable.max_val for variable in evaluator.variables],
             dtype=float,
         )
         self._rng = np.random.default_rng(self.settings.get("seed", 42))
-        fixed_variables = np.abs(uppers - lowers) <= 1e-15
+        fixed_variables = lowers == uppers
 
         # Initialize population
         population = self._initialize_population(evaluator, x0, pop_size, n_vars)
@@ -231,9 +203,9 @@ class ParetoSolver(Nsga2OperatorsMixin, BaseSolver):
             # Callback. The worker's callback expects positional args
             # (x_normalized, cost, raw_results, violation), so mirror that.
             if callback and gen % 5 == 0:
-                feasible = np.where(
-                    pop_violations <= evaluator.feasibility_tolerance
-                )[0]
+                feasible = np.where(pop_violations <= evaluator.feasibility_tolerance)[
+                    0
+                ]
                 best_idx = (
                     int(feasible[np.argmin(pop_objectives[feasible, 0])])
                     if len(feasible)
@@ -244,7 +216,7 @@ class ParetoSolver(Nsga2OperatorsMixin, BaseSolver):
                 if evaluator.is_valid_result(braw):
                     callback(
                         bx,
-                        self._weighted_objective(braw, evaluator),
+                        evaluator.displayed_objective(braw),
                         braw,
                         bviol,
                     )
@@ -268,9 +240,7 @@ class ParetoSolver(Nsga2OperatorsMixin, BaseSolver):
             best_index = int(front_indices[compromise_local])
         else:
             compromise_distance = float("inf")
-            feasible = np.where(
-                pop_violations <= evaluator.feasibility_tolerance
-            )[0]
+            feasible = np.where(pop_violations <= evaluator.feasibility_tolerance)[0]
             if len(feasible):
                 best_index = int(feasible[np.argmin(pop_objectives[feasible, 0])])
             else:
@@ -286,10 +256,12 @@ class ParetoSolver(Nsga2OperatorsMixin, BaseSolver):
                 {
                     "x": evaluator.to_physical(population[index]).tolist(),
                     "objectives": {
-                        obj.name: float(front_raw[obj.name]) for obj in evaluator.objs
+                        obj.name: float(front_raw[obj.name])
+                        for obj in evaluator.objectives
                     },
                     "constraints": {
-                        con.name: float(front_raw[con.name]) for con in evaluator.cons
+                        con.name: float(front_raw[con.name])
+                        for con in evaluator.constraints
                     },
                     "max_violation": float(front_viol),
                 }
@@ -300,10 +272,14 @@ class ParetoSolver(Nsga2OperatorsMixin, BaseSolver):
 
         valid = evaluator.is_valid_result(results)
         objectives = (
-            {obj.name: results[obj.name] for obj in evaluator.objs} if valid else {}
+            {obj.name: results[obj.name] for obj in evaluator.objectives}
+            if valid
+            else {}
         )
         constraints = (
-            {con.name: results[con.name] for con in evaluator.cons} if valid else {}
+            {con.name: results[con.name] for con in evaluator.constraints}
+            if valid
+            else {}
         )
         state = "stopped" if self.stop_requested else "completed"
         message = (
@@ -353,25 +329,12 @@ class ParetoSolver(Nsga2OperatorsMixin, BaseSolver):
         samples = sampler.random(n=pop_size - 1)
         population[1:] = samples
         fixed = np.asarray(
-            [abs(v.max_val - v.min_val) <= 1e-15 for v in evaluator.vars],
+            [v.min_val == v.max_val for v in evaluator.variables],
             dtype=bool,
         )
         population[:, fixed] = 0.0
 
         return np.clip(population, 0, 1)
-
-    @staticmethod
-    def _weighted_objective(
-        raw: Mapping[str, Any],
-        evaluator: ModelEvaluator,
-    ) -> float:
-        """Signed, weighted sum of the raw objective values (display/cost scalar)."""
-        total = 0.0
-        for obj in evaluator.objs:
-            val = raw.get(obj.name, 0.0)
-            sign = 1.0 if obj.minimize else -1.0
-            total += sign * obj.weight * val
-        return total
 
     def _extract_objectives(
         self,
@@ -380,12 +343,10 @@ class ParetoSolver(Nsga2OperatorsMixin, BaseSolver):
     ) -> np.ndarray:
         """Extract objective values from evaluation results."""
         if not evaluator.is_valid_result(results):
-            return np.full(len(evaluator.objs), np.inf, dtype=float)
+            return np.full(len(evaluator.objectives), np.inf, dtype=float)
         obj_values = []
-        for obj in evaluator.objs:
+        for obj in evaluator.objectives:
             val = results[obj.name]
-            if isinstance(val, (list, np.ndarray)):
-                val = float(np.mean(val))
             if not obj.minimize:
                 val = -val  # Convert max to min
             # Positive weighting is a scalarization concept, not Pareto
@@ -397,21 +358,5 @@ class ParetoSolver(Nsga2OperatorsMixin, BaseSolver):
             obj_values.append(val)
         return np.array(obj_values)
 
-    def _solve_weighted_sum(
-        self,
-        evaluator: ModelEvaluator,
-        x0: ArrayLike,
-        callback: StepCallback | None = None,
-    ) -> OptimizationResult:
-        """Delegate weighted scalarization to its dedicated strategy."""
-        solver = WeightedSumSolver(self.settings)
-        self._active_solver = solver
-        if self.stop_requested:
-            solver.stop()
-        try:
-            return solver.solve(evaluator, x0, callback)
-        finally:
-            self._active_solver = None
 
-
-__all__ = ["MultiStartSolver", "ParetoSolver"]
+__all__ = ["ParetoSolver"]

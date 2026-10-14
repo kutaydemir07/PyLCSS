@@ -77,11 +77,7 @@ def _refined_shape(
     """Scale all axes together, keep them even, and respect the solver cap."""
     base = np.maximum(np.asarray(tuple(base_shape)[:3], dtype=float), 1.0)
     dims = np.maximum(np.rint(base * float(factor)).astype(int), 2)
-    for axis, value in enumerate(dims):
-        if value >= 4:
-            dims[axis] = max(4, int(round(float(value) / 4.0)) * 4)
-        elif value > 1:
-            dims[axis] = value + value % 2
+    dims += dims % 2
     total = int(np.prod(dims))
     if max_voxels is not None and total > int(max_voxels):
         shrink = (float(max_voxels) / float(total)) ** (1.0 / 3.0)
@@ -109,12 +105,22 @@ def refine_prepared_study(
         if target_shape is not None
         else _refined_shape(old_shape, factor, max_voxels=max_voxels)
     )
-    if len(new_shape) != 3 or min(new_shape) < 1 or (max_voxels is not None and prod(new_shape) > max_voxels):
-        raise ValueError("Refined voxel grid exceeds the positive-dimension/cell limits.")
+    if (
+        len(new_shape) != 3
+        or min(new_shape) < 1
+        or (max_voxels is not None and prod(new_shape) > max_voxels)
+    ):
+        raise ValueError(
+            "Refined voxel grid exceeds the positive-dimension/cell limits."
+        )
     span = np.maximum(study.bounds[1][:3] - study.bounds[0][:3], 1e-12)
     edges = span / np.asarray(new_shape)
-    if study.voxel_pitch is not None and not np.allclose(edges, edges[0], rtol=1e-10, atol=1e-12):
-        raise ValueError("Refinement of cubic voxels must scale all axes by the same factor.")
+    if study.voxel_pitch is not None and not np.allclose(
+        edges, edges[0], rtol=1e-10, atol=1e-12
+    ):
+        raise ValueError(
+            "Refinement of cubic voxels must scale all axes by the same factor."
+        )
 
     problem = study.problem
     if problem.filter_radius_is_physical:
@@ -210,10 +216,22 @@ def refine_prepared_study(
 def topology_convergence_report(
     studies: Sequence[PreparedTopologyStudy],
     results: Sequence[TopologyOptVoxelResult],
+    *,
+    maximum_relative_objective_change: float = 0.05,
+    minimum_topology_jaccard: float = 0.90,
 ) -> dict[str, object]:
     """Compare objectives, binary topology overlap, and connectivity by level."""
     if not studies or len(studies) != len(results):
         raise ValueError("Topology convergence needs matching study/result levels.")
+    if not np.isfinite(
+        [maximum_relative_objective_change, minimum_topology_jaccard]
+    ).all() or not (
+        0 <= maximum_relative_objective_change <= 1
+        and 0 <= minimum_topology_jaccard <= 1
+    ):
+        raise ValueError(
+            "Topology comparison tolerances must be finite fractions between 0 and 1."
+        )
     finest_shape = results[-1].density.shape
     records: list[dict[str, object]] = []
     previous_objective: float | None = None
@@ -268,17 +286,18 @@ def topology_convergence_report(
     last = records[-1]
     converged = len(records) > 1 and bool(
         last["relative_objective_change"] is not None
-        and float(last["relative_objective_change"]) <= 0.05
+        and float(last["relative_objective_change"])
+        <= maximum_relative_objective_change
         and last["topology_jaccard"] is not None
-        and float(last["topology_jaccard"]) >= 0.90
+        and float(last["topology_jaccard"]) >= minimum_topology_jaccard
         and bool(last["component_count_stable"])
     )
     return {
         "performed": True,
         "converged": converged,
         "criteria": {
-            "maximum_relative_objective_change": 0.05,
-            "minimum_topology_jaccard": 0.90,
+            "maximum_relative_objective_change": maximum_relative_objective_change,
+            "minimum_topology_jaccard": minimum_topology_jaccard,
             "require_stable_component_count": True,
         },
         "levels": records,

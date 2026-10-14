@@ -19,7 +19,7 @@ Integration scope
   canvas without turning the expected double-click workflow into an error.
 - `open_in_freecad()` launches the subprocess on the node-owned .FCStd.  UI
   code (cad_widget context menu / double-click) wires the user gesture to
-  this method; the node itself is GUI-toolkit-free for headless tests.
+  this method; export reading and parameter tests do not need to open FreeCAD.
 
 Parameters surface
 ------------------
@@ -32,35 +32,29 @@ pulled back without overwriting them with stale graph values.
 
 from __future__ import annotations
 
-import logging
+import math
 from pathlib import Path
 from typing import Any, Optional
 
 from pylcss.cae.design_studio.core.base_node import CadQueryNode, resolve_numeric_input
+from pylcss.cae.design_studio.core.parameter_ports import ParameterPortsMixin
 
-logger = logging.getLogger(__name__)
 
-
-class FreeCadPartNode(CadQueryNode):
+class FreeCadPartNode(ParameterPortsMixin, CadQueryNode):
     """CAD body authored interactively in FreeCAD."""
 
     __identifier__ = "com.cad.freecad_part"
     NODE_NAME = "FreeCAD Part"
 
     # Initial synthetic parameter ports exposed before FreeCAD aliases are discovered.
-    MAX_PARAMS = 8
+    INITIAL_PARAMS = 8
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
-        self.set_port_deletion_allowed(True)
-        self.create_property("param_count", self.MAX_PARAMS, widget_type="int")
+        self._initialize_parameter_ports([("", 0.0)] * self.INITIAL_PARAMS)
+        self.create_property("parameter_timeout_s", 60.0, widget_type="float")
 
-        # Synthetic parameter ports: optional inputs the optimizer can drive.
-        for idx in range(1, self.MAX_PARAMS + 1):
-            self.add_input(f"param_{idx}", color=(180, 180, 0))
-            self.create_property(f"param_{idx}_name", "", widget_type="text")
-            self.create_property(f"param_{idx}_value", 0.0, widget_type="float")
         self.add_output("shape", color=(100, 255, 100))
 
         # ``fcstd_filename`` is set lazily on first open: deriving it from the
@@ -76,71 +70,6 @@ class FreeCadPartNode(CadQueryNode):
             "then save the document."
         )
 
-    def get_param_count(self) -> int:
-        """Return the current number of active parameter ports."""
-        val = self.get_property("param_count")
-        if val is not None:
-            try:
-                return max(0, min(int(val), 32))
-            except (ValueError, TypeError):
-                pass
-        param_ports = [name for name in self.inputs().keys() if name.startswith("param_")]
-        return len(param_ports) if param_ports else self.MAX_PARAMS
-
-    def set_param_count(self, count: int) -> None:
-        """Dynamically scale the number of parameter ports (0 to 32)."""
-        count = max(0, min(int(count), 32))
-        current = self.get_param_count()
-        if count == current and len([k for k in self.inputs().keys() if k.startswith("param_")]) == count:
-            return
-        self.set_property("param_count", count)
-        self._sync_param_ports(count)
-
-    def _sync_param_ports(self, count: int) -> None:
-        """Synchronize node input sockets and property slots with *count*."""
-        self.set_port_deletion_allowed(True)
-        for idx in range(1, count + 1):
-            port_name = f"param_{idx}"
-            if port_name not in self.inputs():
-                self.add_input(port_name, color=(180, 180, 0))
-            if not self.has_property(f"param_{idx}_name"):
-                self.create_property(f"param_{idx}_name", "", widget_type="text")
-            if not self.has_property(f"param_{idx}_value"):
-                self.create_property(f"param_{idx}_value", 0.0, widget_type="float")
-
-        for idx in range(count + 1, 33):
-            port_name = f"param_{idx}"
-            port = self.get_input(port_name)
-            if port is not None:
-                try:
-                    port.clear_connections()
-                except Exception:
-                    pass
-                try:
-                    self.delete_input(port)
-                except Exception:
-                    pass
-
-        if hasattr(self, "view") and self.view and hasattr(self.view, "draw_node"):
-            try:
-                self.view.draw_node()
-            except Exception:
-                pass
-
-    def set_ports(self, port_data):
-        super().set_ports(port_data)
-        for port in self.input_ports():
-            if port.name().startswith("param_"):
-                try:
-                    port.color = (180, 180, 0, 255)
-                except Exception:
-                    pass
-        shape_port = self.get_output("shape")
-        if shape_port:
-            try:
-                shape_port.color = (100, 255, 100, 255)
-            except Exception:
-                pass
 
     # ------------------------------------------------------------------
     # Public API
@@ -162,7 +91,9 @@ class FreeCadPartNode(CadQueryNode):
         name = self.get_property("fcstd_filename") or ""
         if not name:
             display = str(self.name() or "FreeCAD_Part")
-            safe_display = "".join(c if c.isalnum() or c in "-_" else "_" for c in display)
+            safe_display = "".join(
+                c if c.isalnum() or c in "-_" else "_" for c in display
+            )
             safe_display = safe_display.strip("_") or "FreeCAD_Part"
             # Short tail of the NodeGraphQt id to make the filename unique
             # even when several nodes share a display name.  We strip the
@@ -221,7 +152,9 @@ class FreeCadPartNode(CadQueryNode):
         Returns ``None`` with an actionable pending state when the document is
         still empty.  Broken exports and parameter updates remain real errors.
         """
-        from pylcss.cae.design_studio.freecad_bridge.brep_reader import read_brep_from_fcstd
+        from pylcss.cae.design_studio.freecad_bridge.brep_reader import (
+            read_brep_from_fcstd,
+        )
         from pylcss.cae.design_studio.freecad_bridge.param_writer import (
             write_parameters_to_fcstd,
         )
@@ -270,15 +203,11 @@ class FreeCadPartNode(CadQueryNode):
             if disk and not forced and not has_connected_parameter:
                 self._sync_parameter_properties(disk)
                 try:
-                    current, has_connected_parameter = (
-                        self._collect_parameter_values()
-                    )
+                    current, has_connected_parameter = self._collect_parameter_values()
                 except ValueError as exc:
                     self.set_error(exc)
                     return None
-            last = dict(
-                disk if forced or has_connected_parameter else current
-            )
+            last = dict(disk if forced or has_connected_parameter else current)
 
         local_changed = current != last
         disk_changed = disk != last
@@ -290,7 +219,17 @@ class FreeCadPartNode(CadQueryNode):
             return None
 
         if current and (forced or local_changed):
-            if not write_parameters_to_fcstd(target, current):
+            try:
+                raw_timeout = self.get_property("parameter_timeout_s")
+                timeout_s = float(60.0 if raw_timeout is None else raw_timeout)
+                if not math.isfinite(timeout_s) or timeout_s <= 0:
+                    raise ValueError(
+                        "Parameter update timeout must be positive and finite."
+                    )
+            except (TypeError, ValueError) as exc:
+                self.set_error(exc)
+                return None
+            if not write_parameters_to_fcstd(target, current, timeout_s=timeout_s):
                 self.set_error(
                     "FreeCAD parameter update failed; stale geometry was not used. "
                     "Check FreeCADCmd and the spreadsheet aliases."
@@ -298,12 +237,16 @@ class FreeCadPartNode(CadQueryNode):
                 return None
             imported = read_brep_from_fcstd(target)
             if imported is None or imported.shape is None:
-                self.set_error("FreeCAD saved the parameters but did not export a readable BREP.")
+                self.set_error(
+                    "FreeCAD saved the parameters but did not export a readable BREP."
+                )
                 return None
             written = collect_param_values_from_mapping(imported.parameters)
             mismatched = [
-                key for key, value in current.items()
-                if key not in written or abs(written[key] - value) > 1e-9 * max(1.0, abs(value))
+                key
+                for key, value in current.items()
+                if key not in written
+                or abs(written[key] - value) > 1e-9 * max(1.0, abs(value))
             ]
             if mismatched:
                 self.set_error(
@@ -328,15 +271,11 @@ class FreeCadPartNode(CadQueryNode):
     # ------------------------------------------------------------------
     def _collect_parameter_values(self) -> tuple[dict[str, float], bool]:
         """Resolve named slots from connections, falling back to properties."""
-        import math
-
         values: dict[str, float] = {}
         has_connected_parameter = False
         count = self.get_param_count()
         for slot in range(1, count + 1):
-            name = str(
-                self.get_property(f"param_{slot}_name") or ""
-            ).strip()
+            name = str(self.get_property(f"param_{slot}_name") or "").strip()
             if not name:
                 continue
             if name in values:
@@ -357,9 +296,7 @@ class FreeCadPartNode(CadQueryNode):
                     f"FreeCAD parameter {name!r} must be numeric."
                 ) from exc
             if not math.isfinite(value):
-                raise ValueError(
-                    f"FreeCAD parameter {name!r} must be finite."
-                )
+                raise ValueError(f"FreeCAD parameter {name!r} must be finite.")
             values[name] = value
             has_connected_parameter = has_connected_parameter or connected
         return values, has_connected_parameter
@@ -372,32 +309,26 @@ class FreeCadPartNode(CadQueryNode):
         Existing slots are updated as well: this method is only called after
         conflict resolution has established that the FreeCAD save should win.
         """
-        # Automatically grow parameter sockets if FreeCAD has more aliases than current count
-        if len(fc_params) > self.get_param_count():
-            self.set_param_count(min(len(fc_params), 32))
-
-        for slot, (name, value) in enumerate(fc_params.items(), start=1):
-            if slot > self.get_param_count():
-                break
-            name_prop = f"param_{slot}_name"
-            val_prop = f"param_{slot}_value"
-            try:
-                if not self.has_property(name_prop):
-                    self.create_property(name_prop, name, widget_type="text")
-                elif not self.get_property(name_prop):
-                    self.set_property(name_prop, name)
-                if not self.has_property(val_prop):
-                    self.create_property(val_prop, float(value), widget_type="float")
-                else:
-                    self.set_property(val_prop, float(value))
-            except Exception:
-                logger.debug("Param slot %d sync failed", slot, exc_info=True)
+        # Keep existing aliases on their sockets even if spreadsheet order changes.
+        # Retire removed aliases, including cell-address slots from old exports.
+        remaining = dict(fc_params)
+        self.set_param_count(max(self.get_param_count(), len(remaining)))
+        empty_slots = []
+        for slot in range(1, self.get_param_count() + 1):
+            name = str(self.get_property(f"param_{slot}_name") or "").strip()
+            if name in remaining:
+                self.set_property(f"param_{slot}_value", float(remaining.pop(name)))
+            else:
+                self.set_property(f"param_{slot}_name", "")
+                self.set_property(f"param_{slot}_value", 0.0)
+                empty_slots.append(slot)
+        for slot, (name, value) in zip(empty_slots, remaining.items()):
+            self.set_property(f"param_{slot}_name", name)
+            self.set_property(f"param_{slot}_value", float(value))
 
 
 def collect_param_values_from_mapping(values: dict) -> dict[str, float]:
     """Normalize finite sidecar parameters for comparison and verification."""
-    import math
-
     result: dict[str, float] = {}
     for name, raw in dict(values or {}).items():
         try:

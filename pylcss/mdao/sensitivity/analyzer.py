@@ -12,28 +12,10 @@ from typing import Any
 import numpy as np
 from numpy.typing import ArrayLike
 
-from ._salib import (
-    DELTA_AVAILABLE,
-    FAST_AVAILABLE,
-    SALIB_AVAILABLE,
-    SalibBackend,
-)
-from ._validation import (
-    normalize_method,
-    normalize_problem,
-    positive_int,
-    validate_seed,
-)
-from .types import (
-    AnalysisError,
-    BatchResult,
-    ConvergenceResult,
-    FloatArray,
-    MorrisResult,
-    PlotData,
-    SalibProblem,
-    SobolResult,
-)
+from ._salib import SalibBackend
+from ._validation import normalize_problem, sobol_sample_size, validate_seed
+from .types import AnalysisError, BatchResult, ConvergenceResult, FloatArray
+
 
 logger = getLogger(__name__)
 
@@ -41,9 +23,8 @@ logger = getLogger(__name__)
 class SensitivityAnalyzer(SalibBackend):
     """Global sensitivity-analysis facade.
 
-    The inherited method-specific API generates and analyzes Sobol, Morris,
-    FAST, and Delta designs. This layer coordinates multi-output analysis,
-    convergence studies, result ranking, and compatibility with older callers.
+    The inherited API generates and analyzes Sobol designs. This layer
+    coordinates multi-output analysis, convergence studies, and result ranking.
     """
 
     def batch_analyze(
@@ -51,73 +32,46 @@ class SensitivityAnalyzer(SalibBackend):
         samples: ArrayLike,
         responses: Mapping[str, ArrayLike],
         problem_definition: Mapping[str, Any],
-        method: str = "Sobol",
         *,
         calc_second_order: bool = True,
+        confidence_level: float = 0.95,
+        resamples: int = 100,
         seed: int | None = None,
-        morris_num_levels: int = 4,
         strict: bool = False,
     ) -> BatchResult:
-        """Analyze several scalar outputs against one shared sample design.
+        """Analyze several scalar outputs against one shared Sobol design.
 
         By default, one bad output is isolated and represented by a structured
         error while other outputs continue. Set ``strict=True`` to fail fast.
+        The second-order setting must match the sampling design.
         """
-        canonical_method = normalize_method(method)
-        if canonical_method not in self.available_methods():
-            raise ImportError(
-                f"{canonical_method} is unavailable in the installed SALib version."
-            )
         if not isinstance(responses, Mapping):
             raise TypeError("Batch responses must map output names to arrays.")
 
         results: BatchResult = {}
         for output_name, response in responses.items():
-            if not isinstance(output_name, str) or not output_name:
+            if not isinstance(output_name, str) or not output_name.strip():
                 raise ValueError("Batch output names must be non-empty strings.")
             try:
-                if canonical_method == "Sobol":
-                    result = self.analyze_sobol(
-                        samples,
-                        response,
-                        problem_definition,
-                        calc_second_order=calc_second_order,
-                        seed=seed,
-                    )
-                elif canonical_method == "Morris":
-                    _, result = self.analyze_morris(
-                        samples,
-                        response,
-                        problem_definition,
-                        num_levels=morris_num_levels,
-                        seed=seed,
-                    )
-                elif canonical_method == "FAST":
-                    result = self.analyze_fast(
-                        samples,
-                        response,
-                        problem_definition,
-                        seed=seed,
-                    )
-                else:
-                    result = self.analyze_delta(
-                        samples,
-                        response,
-                        problem_definition,
-                        seed=seed,
-                    )
+                result = self.analyze_sobol(
+                    samples,
+                    response,
+                    problem_definition,
+                    calc_second_order=calc_second_order,
+                    confidence_level=confidence_level,
+                    resamples=resamples,
+                    seed=seed,
+                )
             except Exception as exc:
                 if strict:
                     raise
                 logger.exception(
-                    "%s sensitivity analysis failed for output %r",
-                    canonical_method,
-                    output_name,
+                    "Sobol sensitivity analysis failed for output %r", output_name
                 )
                 error: AnalysisError = {
                     "error": str(exc),
                     "error_type": type(exc).__name__,
-                    "method": canonical_method,
+                    "method": "Sobol",
                 }
                 results[output_name] = error
             else:
@@ -133,6 +87,7 @@ class SensitivityAnalyzer(SalibBackend):
         *,
         calc_second_order: bool = False,
         seed: int | None = None,
+        allow_non_power_of_two: bool = False,
     ) -> ConvergenceResult:
         """Run comparable Sobol analyses over increasing base sample sizes."""
         problem = normalize_problem(problem_definition)
@@ -147,7 +102,10 @@ class SensitivityAnalyzer(SalibBackend):
         if not requested_sizes:
             raise ValueError("Convergence analysis needs at least one sample size.")
         sizes = [
-            positive_int(value, "Sobol base sample size", minimum=2)
+            sobol_sample_size(
+                value,
+                allow_non_power_of_two=allow_non_power_of_two,
+            )
             for value in requested_sizes
         ]
         if len(set(sizes)) != len(sizes):
@@ -169,6 +127,7 @@ class SensitivityAnalyzer(SalibBackend):
                 base_size,
                 calc_second_order=calc_second_order,
                 seed=run_seed,
+                allow_non_power_of_two=allow_non_power_of_two,
             )
             response = np.empty(samples.shape[0], dtype=float)
             for sample_index, sample in enumerate(samples):
@@ -237,111 +196,5 @@ class SensitivityAnalyzer(SalibBackend):
             for rank, index in enumerate(order, start=1)
         ]
 
-    @staticmethod
-    def build_plot_data(
-        results: Mapping[str, Any],
-        output_name: str = "Output",
-    ) -> PlotData:
-        """Build the common data mapping consumed by chart adapters."""
-        if "variable_names" not in results:
-            raise ValueError("Sensitivity results have no 'variable_names'.")
-        return {
-            "variables": list(results["variable_names"]),
-            "first_order": results.get("first_order", []),
-            "total_order": results.get("total_order", []),
-            "confidence": results.get("confidence_total"),
-            "output_name": output_name,
-            "method": results.get("method", "Sobol"),
-        }
 
-    # Compatibility aliases for the pre-2.2 public API.
-    def run_screening(
-        self,
-        problem_definition: Mapping[str, Any],
-        n_trajectories: int = 20,
-        num_levels: int = 4,
-        seed: int | None = None,
-    ) -> tuple[FloatArray, SalibProblem]:
-        return self.generate_morris_samples(
-            problem_definition,
-            n_trajectories,
-            num_levels=num_levels,
-            seed=seed,
-        )
-
-    def analyze_screening(
-        self,
-        samples: ArrayLike,
-        response: ArrayLike,
-        problem: Mapping[str, Any],
-        threshold_pct: float | None = None,
-        num_levels: int = 4,
-        seed: int | None = None,
-    ) -> tuple[list[str], MorrisResult]:
-        return self.analyze_morris(
-            samples,
-            response,
-            problem,
-            threshold=threshold_pct,
-            num_levels=num_levels,
-            seed=seed,
-        )
-
-    def generate_samples(
-        self,
-        problem_definition: Mapping[str, Any],
-        n_samples: int = 1024,
-        calc_second_order: bool = True,
-        seed: int | None = None,
-    ) -> FloatArray:
-        return self.generate_sobol_samples(
-            problem_definition,
-            n_samples,
-            calc_second_order=calc_second_order,
-            seed=seed,
-        )
-
-    def analyze_sensitivity(
-        self,
-        samples: ArrayLike,
-        response: ArrayLike,
-        problem_definition: Mapping[str, Any],
-        calc_second_order: bool = True,
-        seed: int | None = None,
-    ) -> SobolResult:
-        return self.analyze_sobol(
-            samples,
-            response,
-            problem_definition,
-            calc_second_order=calc_second_order,
-            seed=seed,
-        )
-
-    def convergence_analysis(
-        self,
-        problem_definition: Mapping[str, Any],
-        evaluate_fn: Callable[[FloatArray], Mapping[str, Any]],
-        output_name: str,
-        sample_sizes: Sequence[int] | None = None,
-    ) -> ConvergenceResult:
-        return self.analyze_convergence(
-            problem_definition,
-            evaluate_fn,
-            output_name,
-            sample_sizes,
-        )
-
-    @staticmethod
-    def plot_sensitivity_indices(
-        results: Mapping[str, Any],
-        output_name: str = "Output",
-    ) -> PlotData:
-        return SensitivityAnalyzer.build_plot_data(results, output_name)
-
-
-__all__ = [
-    "DELTA_AVAILABLE",
-    "FAST_AVAILABLE",
-    "SALIB_AVAILABLE",
-    "SensitivityAnalyzer",
-]
+__all__ = ["SensitivityAnalyzer"]

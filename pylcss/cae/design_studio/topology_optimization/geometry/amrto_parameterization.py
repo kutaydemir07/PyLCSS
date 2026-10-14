@@ -189,7 +189,8 @@ def compute_floater_mean_value_weights(
     return weights
 
 
-def discrete_harmonic_mapping(layout: QuadLayout, *, validate_area_compression: bool = True) -> np.ndarray:
+def discrete_harmonic_mapping(layout: QuadLayout, *, validate_area_compression: bool = True,
+                              minimum_area_ratio: float = 1e-3) -> np.ndarray:
     """Solve the paper's mean-value equations directly on the unit square.
 
     This replaces Algorithm 1's iteration and therefore has no initialization
@@ -208,7 +209,8 @@ def discrete_harmonic_mapping(layout: QuadLayout, *, validate_area_compression: 
         param_coords[v_idx] = pt
 
     if not int_indices:
-        _validate_parameter_triangles(layout, param_coords, check_compression=validate_area_compression)
+        _validate_parameter_triangles(layout, param_coords, check_compression=validate_area_compression,
+                                      minimum_area_ratio=minimum_area_ratio)
         layout.parameter_coords = param_coords
         layout.parameterization_report = {
             "method": "Direct sparse mean-value harmonic solve", "residual": 0.0,
@@ -256,7 +258,8 @@ def discrete_harmonic_mapping(layout: QuadLayout, *, validate_area_compression: 
     if residual > 1e-8 or solution.min() < -1e-8 or solution.max() > 1 + 1e-8:
         raise ValueError(f"Layout {layout.layout_id} failed the harmonic mapping residual/bounds check")
     param_coords[int_indices] = np.clip(solution, 0, 1)
-    _validate_parameter_triangles(layout, param_coords, check_compression=validate_area_compression)
+    _validate_parameter_triangles(layout, param_coords, check_compression=validate_area_compression,
+                                  minimum_area_ratio=minimum_area_ratio)
     layout.parameter_coords = param_coords
     layout.parameterization_report = {
         "method": "Direct sparse mean-value harmonic solve", "residual": residual,
@@ -265,7 +268,13 @@ def discrete_harmonic_mapping(layout: QuadLayout, *, validate_area_compression: 
     return param_coords
 
 
-def _validate_parameter_triangles(layout: QuadLayout, coordinates: np.ndarray, *, check_compression: bool = True) -> None:
+def _validate_parameter_triangles(layout: QuadLayout, coordinates: np.ndarray, *, check_compression: bool = True,
+                                  minimum_area_ratio: float = 1e-3) -> None:
+    if not np.isfinite(minimum_area_ratio) or minimum_area_ratio < 0:
+        raise ValueError("Minimum parameter area ratio must be finite and nonnegative")
+    coordinates = np.asarray(coordinates, dtype=float)
+    if coordinates.shape != (len(layout.vertices), 2) or not np.isfinite(coordinates).all():
+        raise ValueError("Parameter coordinates must be finite and cover every source vertex")
     points = coordinates[layout.triangles]
     areas = ((points[:, 1, 0] - points[:, 0, 0]) * (points[:, 2, 1] - points[:, 0, 1])
              - (points[:, 1, 1] - points[:, 0, 1]) * (points[:, 2, 0] - points[:, 0, 0]))
@@ -275,12 +284,12 @@ def _validate_parameter_triangles(layout: QuadLayout, coordinates: np.ndarray, *
     physical = layout.vertices[layout.triangles]
     physical_areas = np.linalg.norm(np.cross(physical[:, 1] - physical[:, 0],
                                             physical[:, 2] - physical[:, 0]), axis=1)
+    if not np.isfinite(physical_areas).all() or np.any(physical_areas <= 0):
+        raise ValueError(f"Layout {layout.layout_id} has degenerate source triangles")
     relative_area = np.abs(areas) / (physical_areas / physical_areas.sum())
-    # A positive map can still compress a substantial physical feature into
-    # a tiny UV strip. Uniform sampling and localized knot refinement cannot
-    # reliably fit that strip. Repair the patch before fitting, preserving all
-    # source quads. This is a local partition alternative to ScaffoldMap.
-    if check_compression and relative_area.min() < 1e-3:
+    # This optional workload heuristic is not a paper validity criterion.
+    # Production fits independently check their full source correspondence.
+    if check_compression and relative_area.min() < minimum_area_ratio:
         raise ValueError(f"Layout {layout.layout_id} has excessive UV area compression "
                          f"({relative_area.min():.3g} of its physical area fraction)")
     layout.parameter_area_ratio_minimum = float(relative_area.min())
@@ -497,6 +506,7 @@ def hybrid_parameterization(
     harmonic_method: str = "iterative_geodesic", harmonic_max_iter: int = 1000,
     harmonic_energy_threshold: float = 1e-10, harmonic_residual_threshold: float = 1e-8,
     harmonic_edge_counts: bool = False, require_native: bool = False,
+    minimum_area_ratio: float = 1e-3,
 ) -> np.ndarray:
     """AMRTO Section 2.6.1: native rectangle, else unit-square harmonic map.
 
@@ -539,7 +549,7 @@ def hybrid_parameterization(
             coordinates = harmonic_mapper(layout)
             harmonic_report = dict(getattr(layout, "parameterization_report", {}))
         elif harmonic_method == "direct":
-            coordinates = discrete_harmonic_mapping(layout)
+            coordinates = discrete_harmonic_mapping(layout, minimum_area_ratio=minimum_area_ratio)
             harmonic_report = dict(layout.parameterization_report)
         else:
             from .amrto_harmonic import solve_iterative_harmonic_mapping
@@ -548,6 +558,7 @@ def hybrid_parameterization(
                 layout, initialization="geodesic" if harmonic_method == "iterative_geodesic" else "constant",
                 edge_counts=harmonic_edge_counts, max_iter=harmonic_max_iter,
                 energy_threshold=harmonic_energy_threshold, residual_threshold=harmonic_residual_threshold,
+                minimum_area_ratio=minimum_area_ratio,
             )
     except (ValueError, RuntimeError) as error:
         layout.parameter_coords = None

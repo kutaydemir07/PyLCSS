@@ -20,6 +20,7 @@ from pylcss.cae.solver_backends.calculix import (
     _collect_calculix_failure_context,
     resolve_calculix_executable,
 )
+from pylcss.cae.solver_backends.calculix_results import _resolve_deformation_scale
 from pylcss.cae.solver_backends.execution import make_work_dir, run_process, tail
 from pylcss.cae.solver_backends.frd_reader import _parse_data_record
 from pylcss.cae.solver_backends.mesh import (
@@ -85,9 +86,7 @@ def _build_modal_deck(
         material.get("E", material.get("youngs_modulus", 210000.0)),
         label="Young's modulus",
     )
-    poissons_ratio = float(
-        material.get("nu", material.get("poissons_ratio", 0.3))
-    )
+    poissons_ratio = float(material.get("nu", material.get("poissons_ratio", 0.3)))
     lines.extend(
         [
             "*MATERIAL, NAME=MAT1",
@@ -114,7 +113,9 @@ def _build_modal_deck(
                 + 1
             )
         else:
-            raise SolverBackendError(f"Constraint {idx} has no target geometry or condition.")
+            raise SolverBackendError(
+                f"Constraint {idx} has no target geometry or condition."
+            )
         if len(node_ids) == 0:
             raise SolverBackendError(f"Constraint {idx} matches no mesh nodes.")
 
@@ -250,7 +251,9 @@ def _parse_modal_frd(frd_path: Path, n_points: int) -> dict[int, np.ndarray]:
         if reading_disp:
             if stripped.startswith("-3"):
                 reading_disp = False
-                mode_idx = current_mode if current_mode is not None else (len(mode_shapes) + 1)
+                mode_idx = (
+                    current_mode if current_mode is not None else (len(mode_shapes) + 1)
+                )
                 # Scatter by 1-based node id into (n_points, 3) array
                 shape_arr = np.zeros((n_points, 3), dtype=float)
                 for nid, uvw in disp_dict.items():
@@ -341,10 +344,15 @@ def run_calculix_modal(
         n_points = int(np.asarray(mesh.p).shape[1])
         mode_shapes = _parse_modal_frd(frd_path, n_points)
         if not modes:
-            raise SolverBackendError("CalculiX returned no natural frequencies. Inspect the solver files in " + str(work_dir))
+            raise SolverBackendError(
+                "CalculiX returned no natural frequencies. Inspect the solver files in "
+                + str(work_dir)
+            )
         missing = [m["mode"] for m in modes if m["mode"] not in mode_shapes]
         if missing:
-            warnings.append(f"Mode shapes unavailable for modes {missing}; frequencies remain available.")
+            warnings.append(
+                f"Mode shapes unavailable for modes {missing}; frequencies remain available."
+            )
 
         # Build flat displacement arrays for each mode shape
         for m_idx, shape in mode_shapes.items():
@@ -360,7 +368,11 @@ def run_calculix_modal(
         active_m, np.zeros(3 * n_points, dtype=float)
     )
     active_shape = mode_shapes.get(active_m, np.zeros((n_points, 3), dtype=float))
-    peak_disp = float(np.max(np.linalg.norm(active_shape, axis=1))) if active_shape.size else 0.0
+    peak_disp = (
+        float(np.max(np.linalg.norm(active_shape, axis=1)))
+        if active_shape.size
+        else 0.0
+    )
 
     # Auto deformation scale
     bbox = np.ptp(np.asarray(mesh.p), axis=1)
@@ -369,16 +381,13 @@ def run_calculix_modal(
     # Eigenvectors are mass normalized; their amplitudes have arbitrary units.
     # Do not impose a physical-displacement lower bound on the visual scale.
 
-    resolved_scale = auto_scale
-    if isinstance(deformation_scale, (int, float)) and deformation_scale > 0:
-        resolved_scale = float(deformation_scale)
-    elif isinstance(deformation_scale, str) and deformation_scale.lower() != "auto":
-        try:
-            resolved_scale = float(deformation_scale.lower().rstrip("x"))
-        except ValueError:
-            resolved_scale = auto_scale
+    resolved_scale = _resolve_deformation_scale(deformation_scale, auto_scale, warnings)
 
-    freq_hz = modes[active_m - 1]["frequency_hz"] if (modes and active_m <= len(modes)) else 0.0
+    freq_hz = (
+        modes[active_m - 1]["frequency_hz"]
+        if (modes and active_m <= len(modes))
+        else 0.0
+    )
 
     return {
         "type": "modal",

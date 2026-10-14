@@ -10,14 +10,14 @@ fail with clear messages before a numerical backend is invoked.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
-from .evaluator import SCALING_MODES
-from .models import Constraint, FloatArray, Objective, Variable
+from .evaluator import FEASIBILITY_TOLERANCE, SCALING_MODES
 from .methods import GLOBAL_METHODS, SCIPY_METHODS, SUPPORTED_METHODS
+from .models import Constraint, FloatArray, Objective, Variable
 from .parsing import parse_boolean
 
 
@@ -46,19 +46,13 @@ def parse_optimization_setup(
         for item in _mapping_items(setup.get("variables"), "variables")
     )
     objectives = tuple(
-        _parse_objective(item)
+        _parse_objective(item, scalar=method != "NSGA-II")
         for item in _mapping_items(setup.get("objectives"), "objectives")
     )
     constraints = tuple(
         _parse_constraint(item)
         for item in _mapping_items(setup.get("constraints", ()), "constraints")
     )
-
-    if method == "NSGA-II":
-        # Weights and scalar reference scales have no role in Pareto dominance.
-        objectives = tuple(
-            replace(objective, weight=1.0, scale=None) for objective in objectives
-        )
 
     if not variables:
         raise ValueError("Optimization needs at least one design variable.")
@@ -108,20 +102,13 @@ def validate_solver_settings(
     setup: OptimizationSetup,
 ) -> None:
     """Validate common and method-specific numerical settings."""
+    validate_algorithm_settings(settings, objective_count=len(setup.objectives))
     method = str(settings.get("method") or "SLSQP")
-    if method not in SUPPORTED_METHODS:
-        raise ValueError(
-            f"Unknown optimization method {method!r}. Supported methods: "
-            + ", ".join(SUPPORTED_METHODS)
-            + "."
-        )
-
-    scaling = parse_boolean(settings.get("scaling", True), "Variable scaling")
+    scaling = (
+        parse_boolean(settings.get("scaling", True), "Variable scaling")
+        or method == "NSGA-II"
+    )
     scaling_mode = str(settings.get("scaling_mode", "auto")).strip().lower()
-    if scaling_mode not in SCALING_MODES:
-        raise ValueError(
-            "Scaling mode must be one of: " + ", ".join(SCALING_MODES) + "."
-        )
     finite_box = all(
         np.isfinite(variable.min_val) and np.isfinite(variable.max_val)
         for variable in setup.variables
@@ -146,12 +133,39 @@ def validate_solver_settings(
     if method in (*GLOBAL_METHODS, "NSGA-II") and not finite_box:
         raise ValueError(f"{method} requires finite variable bounds.")
 
-    objective_scale = _finite_float(
-        settings.get("objective_scale", 1.0),
-        "Objective scale",
-    )
-    if objective_scale <= 0.0:
-        raise ValueError("Objective scale must be greater than zero.")
+
+def validate_algorithm_settings(
+    settings: Mapping[str, Any], *, objective_count: int | None = None
+) -> None:
+    """Validate algorithm controls without needing an engineering problem."""
+    method = str(settings.get("method") or "SLSQP")
+    if method not in SUPPORTED_METHODS:
+        raise ValueError(
+            f"Unknown optimization method {method!r}. Supported methods: "
+            + ", ".join(SUPPORTED_METHODS)
+            + "."
+        )
+
+    parse_boolean(settings.get("scaling", True), "Variable scaling")
+    scaling_mode = str(settings.get("scaling_mode", "auto")).strip().lower()
+    if scaling_mode not in SCALING_MODES:
+        raise ValueError(
+            "Scaling mode must be one of: " + ", ".join(SCALING_MODES) + "."
+        )
+
+    if method != "NSGA-II":
+        objective_scale = _finite_float(
+            settings.get("objective_scale", 1.0), "Objective scale"
+        )
+        if objective_scale <= 0.0:
+            raise ValueError("Objective scale must be greater than zero.")
+        penalty_weight = _finite_float(
+            settings.get("penalty_weight", 1e6), "Penalty weight"
+        )
+        if penalty_weight <= 0.0:
+            raise ValueError("Penalty weight must be greater than zero.")
+        if int(settings.get("maxiter", 1000)) < 1:
+            raise ValueError("Iteration/evaluation budget must be at least 1.")
 
     constraint_margin = _finite_float(
         settings.get("constraint_margin", 0.0),
@@ -160,34 +174,14 @@ def validate_solver_settings(
     if not 0.0 <= constraint_margin < 1.0:
         raise ValueError("Constraint safety margin must be in [0, 1).")
 
-    penalty_weight = _finite_float(
-        settings.get("penalty_weight", 1e6),
-        "Penalty weight",
-    )
-    if penalty_weight <= 0.0:
-        raise ValueError("Penalty weight must be greater than zero.")
+    if method in (*SCIPY_METHODS, "Multi-Start"):
+        tolerance = _finite_float(settings.get("tol", 1e-6), "Optimization tolerance")
+        if tolerance <= 0.0:
+            raise ValueError("Optimization tolerance must be positive.")
+    parse_feasibility_tolerance(settings)
 
-    max_iterations = int(settings.get("maxiter", 1000))
-    if max_iterations < 1:
-        raise ValueError("Iteration/evaluation budget must be at least 1.")
-    tolerance = _finite_float(
-        settings.get("tol", 1e-6),
-        "Optimization tolerance",
-    )
-    if tolerance <= 0.0:
-        raise ValueError("Optimization tolerance must be positive.")
-    feasibility_tolerance = _finite_float(
-        settings.get("feasibility_tol", tolerance),
-        "Feasibility tolerance",
-    )
-    if feasibility_tolerance <= 0.0:
-        raise ValueError("Feasibility tolerance must be positive.")
-
-    if method == "Nevergrad":
-        if int(settings.get("num_workers", 1)) < 1:
-            raise ValueError("Nevergrad worker count must be at least 1.")
-    elif method == "NSGA-II":
-        _validate_nsga2(settings, len(setup.objectives))
+    if method == "NSGA-II":
+        _validate_nsga2(settings, objective_count)
     elif method == "Multi-Start":
         if int(settings.get("ms_n_starts", 10)) < 1:
             raise ValueError("Multi-start optimization needs at least one start.")
@@ -210,8 +204,26 @@ def _parse_variable(item: Mapping[str, Any]) -> Variable:
     )
 
 
-def _parse_objective(item: Mapping[str, Any]) -> Objective:
-    raw_scale = item.get("scale")
+def parse_feasibility_tolerance(
+    settings: Mapping[str, Any], *, default: float = FEASIBILITY_TOLERANCE
+) -> float:
+    """Use local termination tolerance as a default only for local strategies."""
+    method = str(settings.get("method") or "SLSQP")
+    default = (
+        settings.get("tol", default)
+        if method in (*SCIPY_METHODS, "Multi-Start")
+        else default
+    )
+    tolerance = _finite_float(
+        settings.get("feasibility_tol", default), "Feasibility tolerance"
+    )
+    if tolerance <= 0.0:
+        raise ValueError("Feasibility tolerance must be positive.")
+    return tolerance
+
+
+def _parse_objective(item: Mapping[str, Any], *, scalar: bool = True) -> Objective:
+    raw_scale = item.get("scale") if scalar else None
     scale = (
         None
         if raw_scale is None
@@ -220,7 +232,7 @@ def _parse_objective(item: Mapping[str, Any]) -> Objective:
     )
     return Objective(
         name=_required_name(item, "objective"),
-        weight=item.get("weight", 1.0),
+        weight=item.get("weight", 1.0) if scalar else 1.0,
         minimize=parse_boolean(item.get("minimize", True), "Objective direction"),
         scale=scale,
     )
@@ -242,11 +254,8 @@ def _parse_constraint(item: Mapping[str, Any]) -> Constraint:
     )
 
 
-
-
-
-def _validate_nsga2(settings: Mapping[str, Any], objective_count: int) -> None:
-    if objective_count < 2:
+def _validate_nsga2(settings: Mapping[str, Any], objective_count: int | None) -> None:
+    if objective_count is not None and objective_count < 2:
         raise ValueError("NSGA-II is a Pareto optimizer and needs two objectives.")
     if int(settings.get("nsga_popsize", 100)) < 4:
         raise ValueError("NSGA-II population size must be at least 4.")
@@ -316,6 +325,8 @@ def _finite_float(value: Any, label: str) -> float:
 
 __all__ = [
     "OptimizationSetup",
+    "parse_feasibility_tolerance",
     "parse_optimization_setup",
     "validate_solver_settings",
+    "validate_algorithm_settings",
 ]

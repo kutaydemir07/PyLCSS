@@ -238,6 +238,10 @@ class GenericInspectorMixin:
             if node.__class__.__name__ == "MaterialNode":
                 if name == "failure_strain" and not bool(props.get("enable_fracture")):
                     return True
+                if name in {"strain_rate_c", "strain_rate_p"}:
+                    from pylcss.cae.design_studio.crash.materials import CRASH_MATERIAL_PRESETS
+                    if not bool(props.get("strain_rate_sensitive")) or props.get("preset") in set(CRASH_MATERIAL_PRESETS) - {"Custom"}:
+                        return True
             if node.__class__.__name__ in {"NumberNode", "VariableNode"} and name == "value_input":
                 return True
             if node.__class__.__name__ == "MathExpressionNode" and name == "expression":
@@ -260,8 +264,6 @@ class GenericInspectorMixin:
                     props.get("enable_mass_scaling")
                 ):
                     return True
-                if name == "time_step_scale":
-                    return True
             if node.__class__.__name__ == "SolverNode" and name in {
                 "assembly_connection",
                 "connection_tolerance_mm",
@@ -283,14 +285,6 @@ class GenericInspectorMixin:
                     != "Automatic Bonded"
                 ):
                     return True
-            # Impactor mass moved from the solver into Impact Setup. Keep
-            # the serialized solver property for legacy studies without
-            # presenting two controls for the same physical value.
-            if (
-                node.__class__.__name__ == "CrashSolverNode"
-                and name == "impactor_mass_kg"
-            ):
-                return True
             return False
 
         # Bucket properties into sections, preserving the section order above.

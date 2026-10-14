@@ -6,21 +6,12 @@ Public surface:
     MATERIAL_DATABASE — preset elastic properties.
     suppress_output   — silence Netgen's C-level stdout/stderr.
     OCCGeometry       — Netgen OCC bridge (or None if Netgen is missing).
-
-The in-house scikit-fem FEM solver and the old centroid-based topology
-helpers (build_filter_matrix / sensitivity_filter / heaviside_projection /
-mma_update / shape_recovery / _assemble_traction_force / …) were removed
-along with the solvers that needed them. CalculiX is the trusted FEA
-backend and pyMOTO drives the voxel SIMP loop directly.
 """
 import os
 import sys
 import contextlib
-import logging
 
 from pylcss.config import simulation_config
-
-logger = logging.getLogger(__name__)
 
 
 @contextlib.contextmanager

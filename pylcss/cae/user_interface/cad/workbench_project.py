@@ -152,26 +152,11 @@ class WorkbenchProjectMixin:
             self._project_code_trusted = bool(
                 trusted or not self._session_contains_executable_code(session_data)
             )
-            from pylcss.cae.design_studio.crash.conditions import (
-                migrate_impact_scenario_properties,
-            )
-            from pylcss.cae.design_studio.fem.mesh import (
-                migrate_removed_mesher_properties,
-            )
-
-            migrate_impact_scenario_properties(session_data)
-            migrate_removed_mesher_properties(session_data)
             from pylcss.cae.design_studio.session_persistence import (
-                expand_guided_topology_session,
-                migrate_lattice_topology_nodes,
-                sanitize_unregistered_nodes,
+                prepare_design_studio_session,
             )
 
-            # Retype before expansion: which guided defaults a study is
-            # hydrated with depends on whether it is a lattice study.
-            migrate_lattice_topology_nodes(session_data)
-            expand_guided_topology_session(session_data)
-            omitted_nodes = sanitize_unregistered_nodes(session_data)
+            omitted_nodes = prepare_design_studio_session(session_data)
 
             self.graph.clear_session()
             self.graph.deserialize_session(session_data)

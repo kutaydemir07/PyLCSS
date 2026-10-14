@@ -13,12 +13,12 @@ from .codegen import (
     BLOCK_NODE,
     INTERMEDIATE_NODE,
     GraphCompilationError,
-    as_bool,
     block_function_source,
     connected_value,
+    connection_graph,
+    emit_surrogate_loaders,
     is_node,
     only_port,
-    property_value,
     require_identifier,
     safe_node_id,
     single_source,
@@ -28,7 +28,6 @@ from .codegen import (
 def build_spy_model(
     nodes: list[Any],
     input_nodes: list[Any],
-    _output_nodes: list[Any],
     target_node_id: str,
     function_name: str = "spy_model",
 ) -> tuple[str, list[dict[str, str]], list[dict[str, str]]]:
@@ -58,7 +57,9 @@ def build_spy_model(
         "BASE_DIR = os.path.dirname(os.path.abspath(__file__))",
         "",
     ]
-    surrogate_names = _emit_surrogates(lines, ordered_blocks)
+    surrogate_names = emit_surrogate_loaders(
+        lines, ordered_blocks, exclude={target_node_id}
+    )
     function_names: dict[str, str] = {}
     for block in ordered_blocks:
         if not is_node(block, BLOCK_NODE):
@@ -93,13 +94,8 @@ def build_spy_model(
 
 
 def _dependency_order(nodes: list[Any], target_node_id: str) -> list[Any]:
-    graph = nx.DiGraph()
+    graph = connection_graph(nodes)
     node_by_id = {node.id: node for node in nodes}
-    graph.add_nodes_from(node_by_id)
-    for node in nodes:
-        for port in node.output_ports():
-            for connected in port.connected_ports():
-                graph.add_edge(node.id, connected.node().id)
     if target_node_id not in graph:
         raise GraphCompilationError(f"Target node {target_node_id!r} was not found.")
 
@@ -116,45 +112,6 @@ def _dependency_order(nodes: list[Any], target_node_id: str) -> list[Any]:
         if is_node(node_by_id[node_id], BLOCK_NODE)
         or is_node(node_by_id[node_id], INTERMEDIATE_NODE)
     ]
-
-
-def _emit_surrogates(lines: list[str], blocks: list[Any]) -> dict[str, str]:
-    selected = [
-        block
-        for block in blocks
-        if is_node(block, BLOCK_NODE)
-        and as_bool(property_value(block, "use_surrogate", False))
-        and property_value(block, "surrogate_model_path")
-    ]
-    if not selected:
-        return {}
-
-    lines.extend(
-        [
-            "import joblib",
-            "",
-            "def _load_spy_surrogate(path):",
-            "    candidates = [path]",
-            "    if not os.path.isabs(path):",
-            "        candidates.extend([",
-            "            os.path.join(os.getcwd(), path),",
-            "            os.path.join(BASE_DIR, path),",
-            "        ])",
-            "    for candidate in candidates:",
-            "        if os.path.isfile(candidate):",
-            "            return joblib.load(candidate)",
-            "    raise FileNotFoundError(f'Surrogate model not found: {path}')",
-            "",
-        ]
-    )
-    names: dict[str, str] = {}
-    for block in selected:
-        name = f"_spy_surrogate_{safe_node_id(block.id)}"
-        path = str(property_value(block, "surrogate_model_path"))
-        lines.append(f"{name} = _load_spy_surrogate({path!r})")
-        names[block.id] = name
-    lines.append("")
-    return names
 
 
 def _spy_function_source(
@@ -211,19 +168,17 @@ def _spy_function_source(
 
         if block.id == target.id:
             captured_inputs = ", ".join(
-                f"'input_{index}': {value}"
-                for index, value in enumerate(arguments)
+                f"'input_{index}': {value}" for index, value in enumerate(arguments)
             )
             captured_outputs = ", ".join(
-                f"'output_{index}': {value}"
-                for index, value in enumerate(result_names)
+                f"'output_{index}': {value}" for index, value in enumerate(result_names)
             )
-            lines.append(
-                f"    return {{{captured_inputs}}}, {{{captured_outputs}}}"
-            )
+            lines.append(f"    return {{{captured_inputs}}}, {{{captured_outputs}}}")
             return lines
 
-    raise GraphCompilationError("The target block is not executable from system inputs.")
+    raise GraphCompilationError(
+        "The target block is not executable from system inputs."
+    )
 
 
 __all__ = ["build_spy_model"]

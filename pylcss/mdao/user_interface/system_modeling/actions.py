@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from os import PathLike
 from typing import Any
 
@@ -31,7 +32,12 @@ def save_graph(widget: Any) -> None:
 
 def save_graph_to_file(widget: Any, path: str | PathLike[str]) -> None:
     try:
-        save_systems(widget.system_manager, path)
+        manager = widget.system_manager
+        records = [
+            {"name": system["name"], "graph": system["graph"].serialize_session()}
+            for system in manager.systems
+        ]
+        save_systems(records, path, product_name=manager.product_name.text())
     except Exception as exc:
         _show_error(widget, "Failed to save systems", exc)
         raise
@@ -56,10 +62,39 @@ def load_graph(widget: Any) -> None:
 
 def load_graph_from_file(widget: Any, path: str | PathLike[str]) -> None:
     try:
-        load_systems(widget.system_manager, path)
+        product_name, records = load_systems(path)
+        _replace_loaded_systems(widget.system_manager, product_name, records)
     except Exception as exc:
         _show_error(widget, "Failed to load systems", exc)
         raise
+
+
+def _replace_loaded_systems(
+    manager: Any, product_name: str, records: list[dict[str, Any]]
+) -> None:
+    """Prepare every graph before replacing the currently displayed project."""
+
+    prepared: list[tuple[str, Any]] = []
+    try:
+        for record in records:
+            graph = manager.create_graph()
+            try:
+                session = deepcopy(record["graph"])
+                for node in session.get("nodes", {}).values():
+                    if str(node.get("type_", "")).startswith("com.pfd.custom_block"):
+                        node.get("custom", {}).pop("func_name", None)
+                graph.deserialize_session(session)
+                manager.prepare_loaded_graph(graph)
+            except Exception:
+                graph.widget.deleteLater()
+                raise
+            prepared.append((record["name"], graph))
+    except Exception:
+        for _name, graph in prepared:
+            graph.widget.deleteLater()
+        raise
+    manager.replace_systems(prepared)
+    manager.product_name.setText(product_name)
 
 
 def validate_graph(widget: Any) -> bool:

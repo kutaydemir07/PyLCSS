@@ -1,17 +1,10 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""Watch ``.FCStd`` (and sibling BREP/JSON exports) for changes.
+"""Debounce document and export changes before notifying CAD graph consumers.
 
-When the user saves inside the FreeCAD subprocess, our startup macro
-writes three files next to the .FCStd: ``<base>.brep`` for the geometry
-the PyLCSS viewer can read with OCCT, and ``<base>.fcmeta.json`` for the
-sidecar that maps face/edge indices back to FreeCAD's semantic names +
-any FEM analysis constraints/loads the user authored.
-
-``FCStdWatcher`` raises a single ``saved`` signal once the document and
-sidecar plus any expected BREP have stabilised, so consumers never read a
-half-written export. An intentionally empty document has no BREP.
+Saved documents have companion BREP geometry and JSON metadata. Empty
+documents have metadata declaring no shapes and intentionally have no BREP.
 """
 
 from __future__ import annotations
@@ -44,7 +37,9 @@ class FCStdWatcher(QObject):
 
     saved = Signal(str)
 
-    def __init__(self, fcstd_path: Path | str, parent: Optional[QObject] = None) -> None:
+    def __init__(
+        self, fcstd_path: Path | str, parent: Optional[QObject] = None
+    ) -> None:
         super().__init__(parent)
         self._fcstd_path = Path(fcstd_path).resolve()
         self._brep_path = self._fcstd_path.with_suffix(".brep")
@@ -89,7 +84,11 @@ class FCStdWatcher(QObject):
 
     # ------------------------------------------------------------------
     def _existing_paths(self) -> list[Path]:
-        return [p for p in (self._fcstd_path, self._brep_path, self._sidecar_path) if p.exists()]
+        return [
+            p
+            for p in (self._fcstd_path, self._brep_path, self._sidecar_path)
+            if p.exists()
+        ]
 
     def _on_file_changed(self, _path: str) -> None:
         # On some editors (and on Windows atomic renames) fileChanged fires
@@ -110,8 +109,10 @@ class FCStdWatcher(QObject):
             return
         try:
             source_mtime = self._fcstd_path.stat().st_mtime_ns
-            if self._sidecar_path.stat().st_size <= 0 \
-                    or self._sidecar_path.stat().st_mtime_ns < source_mtime:
+            if (
+                self._sidecar_path.stat().st_size <= 0
+                or self._sidecar_path.stat().st_mtime_ns < source_mtime
+            ):
                 return
             brep_ready = (
                 self._brep_path.is_file()

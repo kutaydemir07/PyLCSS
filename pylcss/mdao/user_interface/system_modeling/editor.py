@@ -18,6 +18,7 @@ from PySide6.QtGui import (
 )
 
 from pylcss.user_interface.common.theme_manager import THEMES, current_theme
+from pylcss.mdao.system_modeling.codegen import GraphCompilationError, require_identifier
 
 __all__ = [
     "CodeEditor",
@@ -82,15 +83,17 @@ class PortListWidget(QtWidgets.QWidget):
         name, ok = QtWidgets.QInputDialog.getText(self, "Add Port", "Name:")
         name = name.strip()
         if ok and name:
-            if not re.match(r"^[A-Za-z_]\w*$", name):
+            try:
+                require_identifier(name, "port")
+            except GraphCompilationError as exc:
                 QtWidgets.QMessageBox.warning(
                     self,
                     "Invalid Variable Name",
-                    "Port names become Python variables. Use letters, digits and underscores, and do not start with a digit.",
+                    str(exc),
                 )
                 return
-            all_ports = self.node.input_ports() + self.node.output_ports()
-            if name in {port.name() for port in all_ports}:
+            ports = self.node.input_ports() if self.port_type == "input" else self.node.output_ports()
+            if name in {port.name() for port in ports}:
                 QtWidgets.QMessageBox.warning(
                     self, "Duplicate Variable", f"A port named '{name}' already exists."
                 )

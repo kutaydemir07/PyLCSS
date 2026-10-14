@@ -19,8 +19,6 @@ from pylcss.cae.design_studio.core.base_node import (
     resolve_shape_input,
 )
 
-from . import mesh_selection as _mesh_selection_module
-from . import selection_payloads as _selection_payloads_module
 from .mesh_selection import (
     _MESH_COMPONENT_INDEX_BASE,
     _MESH_FACE_DIRECTIONS,
@@ -35,25 +33,6 @@ from .mesh_selection import (
 from .selection_payloads import _selection_payload
 
 logger = logging.getLogger(__name__)
-
-_COMPATIBILITY_MODULES = (_mesh_selection_module, _selection_payloads_module)
-
-
-def __getattr__(name: str) -> object:
-    """Resolve private helpers moved during the selection-module split."""
-    for module in _COMPATIBILITY_MODULES:
-        if hasattr(module, name):
-            return getattr(module, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def __dir__() -> list[str]:
-    """Include moved compatibility names in interactive discovery."""
-    names = set(globals())
-    for module in _COMPATIBILITY_MODULES:
-        names.update(dir(module))
-    return sorted(names)
-
 
 _SELECTOR_TYPE_ALIASES = {
     "direction": "Direction",
@@ -395,7 +374,7 @@ class SelectFaceNode(CadQueryNode):
                 ids,
                 method,
                 label,
-                surface_faces=locals().get("surface_faces"),
+                surface_faces=surface_faces,
                 entity_type="Face",
             )
             if payload is None:
@@ -618,21 +597,20 @@ class SelectFaceNode(CadQueryNode):
                 entities = []
 
                 try:
-                    from simpleeval import simple_eval
+                    from simpleeval import SimpleEval
                 except ImportError:
                     self.set_error(
                         "Coordinate Range requires the simpleeval dependency."
                     )
                     return None
 
+                evaluator = SimpleEval()
+                parsed = evaluator.parse(expr)
                 for entity in collection().vals():
                     c = entity.Center()
-                    try:
-                        res = simple_eval(expr, names={"x": c.x, "y": c.y, "z": c.z})
-                        if res:
-                            entities.append(entity)
-                    except Exception:
-                        continue
+                    evaluator.names = {"x": c.x, "y": c.y, "z": c.z}
+                    if evaluator.eval(expr, previously_parsed=parsed):
+                        entities.append(entity)
 
                 if not entities:
                     self.set_error(
@@ -659,10 +637,10 @@ class InteractiveSelectFaceNode(CadQueryNode):
     """
     Select faces, edges, or vertices by clicking them in the 3D viewport.
 
-    This node stores a list of face indices (integers) chosen by the user
+    This node stores entity indices chosen by the user
     when they click 'Pick Faces in 3D Viewer' in the Properties Panel.
-    Its output is identical to SelectFaceNode — a dict with keys
-    ``{'workplane', 'face', 'faces'}`` — so it is a drop-in replacement
+    Its output uses the same entity-selection payload as SelectFaceNode,
+    so it can be used interchangeably
     for any downstream FEA node.
     """
 
@@ -680,10 +658,9 @@ class InteractiveSelectFaceNode(CadQueryNode):
             items=["Face", "Edge", "Vertex"],
             widget_type="combo",
         )
-        # Comma-separated entity indices, e.g. "0,2,5".  The historical
-        # property name is retained so old .cad files keep loading.
+        # Comma-separated entity indices, e.g. "0,2,5".
         # Updated programmatically by the Properties Panel picking session.
-        self.create_property("picked_face_indices", "", widget_type="string")
+        self.create_property("picked_entity_indices", "", widget_type="string")
         # Human-readable label shown in the Properties Panel.
         self.create_property(
             "selection_label", "No geometry selected", widget_type="string"
@@ -695,7 +672,7 @@ class InteractiveSelectFaceNode(CadQueryNode):
     def set_picked_entities(self, entity_indices: Sequence[int]) -> None:
         """Store a list of entity indices and update the label."""
         indices_str = ",".join(str(i) for i in entity_indices)
-        self.set_property("picked_face_indices", indices_str)
+        self.set_property("picked_entity_indices", indices_str)
         entity_type = str(self.get_property("entity_type") or "Face").lower()
         n = len(entity_indices)
         if n == 0:
@@ -709,9 +686,6 @@ class InteractiveSelectFaceNode(CadQueryNode):
             )
         self.set_property("selection_label", label)
 
-    def set_picked_faces(self, face_indices: Sequence[int]) -> None:
-        """Backward-compatible alias used by existing inspector code."""
-        self.set_picked_entities(face_indices)
 
     # ------------------------------------------------------------------
     # Node execution
@@ -721,7 +695,7 @@ class InteractiveSelectFaceNode(CadQueryNode):
         entity_type = str(self.get_property("entity_type") or "Face").title()
         if entity_type not in {"Face", "Edge", "Vertex"}:
             entity_type = "Face"
-        raw = self.get_property("picked_face_indices") or ""
+        raw = self.get_property("picked_entity_indices") or ""
         face_indices = [
             int(token) for token in raw.split(",") if token.strip().isdigit()
         ]
@@ -801,7 +775,7 @@ class InteractiveSelectFaceNode(CadQueryNode):
             )
             if isinstance(payload, dict):
                 selected.extend(
-                    [f for f in payload.get("faces") or [] if f is not None]
+                    [f for f in payload.get("entities") or [] if f is not None]
                 )
 
         if not selected:

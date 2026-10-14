@@ -833,6 +833,9 @@ class DetailedResultsWidget(QtWidgets.QWidget):
 
         modes = self._get_available_3d_modes()
         current = str(self._data.get("visualization_mode") or modes[0])
+        if self._data.get("type") == "topopt_voxel":
+            from .result_fields import topopt_view_mode
+            current = topopt_view_mode(self._data, current)
         if current not in modes:
             current = modes[0]
         self._current_mode = current
@@ -860,12 +863,14 @@ class DetailedResultsWidget(QtWidgets.QWidget):
         self._update_field_controls(current)
 
     def _update_field_controls(self, mode):
-        display_data = fea_result(self._data) if mode.startswith("FEA ") else self._data
+        from .result_fields import topopt_view_result
+        selected = topopt_view_result(self._data, mode)
+        display_data = fea_result(selected) if mode.startswith("FEA ") else selected
         has_disp = display_data.get("displacement") is not None
         self._lbl_scale.setVisible(has_disp)
         self._scale_combo.setVisible(has_disp)
         self._chk_undeformed.setVisible(has_disp)
-        self._chk_extrema.setVisible(mode not in {"Default View", "CAD", "Manufactured Mesh", "Deformed Animation"})
+        self._chk_extrema.setVisible(mode not in {"Default View", "CAD", "STL Shape", "Lattice", "Manufactured Mesh", "Deformed Animation"})
         self._field_controls_widget.setVisible(has_disp or not self._chk_extrema.isHidden())
 
     def _on_3d_combo_changed(self, mode: str):

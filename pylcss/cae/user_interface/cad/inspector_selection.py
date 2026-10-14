@@ -21,7 +21,7 @@ class SelectionInspectorMixin:
 
         SelectFaceNode is a swiss-army-knife with seven different selection
         strategies (bounding box, nearest point, face index, direction tag,
-        range expression…).  The generic inspector shows *all* of their
+        range expressionâ€¦).  The generic inspector shows *all* of their
         fields at once which is overwhelming.  Here we render only the
         fields relevant to the currently chosen ``selector_type``.
         """
@@ -93,7 +93,7 @@ class SelectionInspectorMixin:
                 sel_type = "Direction"
                 node.set_property("selector_type", sel_type)
 
-        # ── 1. Selector type combo ──────────────────────────────────────
+        # â”€â”€ 1. Selector type combo â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         grp_type = QtWidgets.QGroupBox("Selector")
         lay_type = QtWidgets.QFormLayout()
         entity_combo = QtWidgets.QComboBox()
@@ -127,12 +127,12 @@ class SelectionInspectorMixin:
             combo.blockSignals(False)
         combo.setToolTip(
             "How this node picks faces:\n"
-            "  Bounding Box     — every face whose centroid is inside the box\n"
-            "  Nearest Point    — the single face closest to (near_x, near_y, near_z)\n"
-            "  Direction        — every face whose normal is +X / −Z / …\n"
-            "  Face Index       — pick by integer face id (zero-based, brittle)\n"
-            "  Range Expression — Python boolean over x, y, z of the face centroid\n"
-            "  Tag              — match a user-set tag string on the upstream node"
+            "  Bounding Box     â€” every face whose centroid is inside the box\n"
+            "  Nearest Point    â€” the single face closest to (near_x, near_y, near_z)\n"
+            "  Direction        â€” every face whose normal is +X / âˆ’Z / â€¦\n"
+            "  Face Index       â€” pick by integer face id (zero-based, brittle)\n"
+            "  Range Expression â€” Python boolean over x, y, z of the face centroid\n"
+            "  Tag              â€” match a user-set tag string on the upstream node"
         )
         combo.setToolTip(
             f"Choose how to resolve {entity_type.lower()} geometry. Direction "
@@ -150,7 +150,7 @@ class SelectionInspectorMixin:
         grp_type.setLayout(lay_type)
         self.props_layout.addWidget(grp_type)
 
-        # ── 2. Type-specific field group ────────────────────────────────
+        # â”€â”€ 2. Type-specific field group â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         grp = QtWidgets.QGroupBox("Parameters")
         lay = QtWidgets.QFormLayout()
 
@@ -208,7 +208,7 @@ class SelectionInspectorMixin:
                 dir_combo.addItem(label, value)
             dir_combo.setToolTip(
                 "Pick every face whose outward normal points in this direction "
-                "(within ~10° tolerance)."
+                "(within ~10Â° tolerance)."
             )
             cur = _canonical_direction(node.get_property("direction"))
             current_idx = dir_combo.findData(cur)
@@ -224,7 +224,7 @@ class SelectionInspectorMixin:
             w = _intspin("face_index", 0, 100_000)
             w.setToolTip(
                 "Zero-based face index from CadQuery's `faces()` iteration order.\n"
-                "Fragile — adding a fillet or boolean upstream renumbers faces."
+                "Fragile â€” adding a fillet or boolean upstream renumbers faces."
             )
             lay.addRow("Index:", w)
         elif sel_type == "Coordinate Range":
@@ -248,13 +248,13 @@ class SelectionInspectorMixin:
         summary_layout = QtWidgets.QVBoxLayout(summary_group)
         result = getattr(node, "_last_result", None)
         summaries = (
-            result.get("entity_summaries") or result.get("face_summaries")
+            result.get("entity_summaries")
             if isinstance(result, dict)
             else None
         )
         if summaries:
             count = int(
-                result.get("entity_count") or result.get("face_count") or len(summaries)
+                result.get("entity_count", len(summaries))
             )
             summary_layout.addWidget(
                 QtWidgets.QLabel(f"{count} {entity_type.lower()}(s) currently matched.")
@@ -331,7 +331,7 @@ class SelectionInspectorMixin:
 
         # -- Status banner --
         sel_label = node.get_property("selection_label") or "No geometry selected"
-        raw_indices = node.get_property("picked_face_indices") or ""
+        raw_indices = node.get_property("picked_entity_indices") or ""
         face_indices = [
             int(t.strip()) for t in raw_indices.split(",") if t.strip().isdigit()
         ]
@@ -744,11 +744,11 @@ class SelectionInspectorMixin:
         # Wire done signal
         def _on_faces_picked(occ_faces):
             _disconnect_session()
-            # Map picked face objects → indices that the InteractiveSelectFace
+            # Map picked face objects â†’ indices that the InteractiveSelectFace
             # node understands. Two flavours:
             #   * Mesh virtual-face dicts already carry their own 'stored_index'
             #     (a >=1000 patch id encoding direction+component). Read it
-            #     directly — no identity check needed.
+            #     directly â€” no identity check needed.
             #   * OCC face objects: locate them in viewer._all_occ_faces by
             #     hashCode equality so we can record their position.
             all_occ = getattr(
@@ -794,14 +794,7 @@ class SelectionInspectorMixin:
             # stacked on top of each other until the event loop drains.
             app._suppress_graph_property_changed = True
             try:
-                if hasattr(node, "set_picked_entities"):
-                    node.set_picked_entities(picked_indices)
-                elif hasattr(node, "set_picked_faces"):
-                    node.set_picked_faces(picked_indices)
-                else:
-                    node.set_property(
-                        "picked_face_indices", ",".join(str(i) for i in picked_indices)
-                    )
+                node.set_picked_entities(picked_indices)
                 if picked_indices and any(picked_labels):
                     chunks = []
                     for idx, label in zip(picked_indices, picked_labels):
@@ -832,13 +825,7 @@ class SelectionInspectorMixin:
 
     def _clear_face_selection(self, node):
         """Clear all picked geometry from an interactive selector."""
-        if hasattr(node, "set_picked_entities"):
-            node.set_picked_entities([])
-        elif hasattr(node, "set_picked_faces"):
-            node.set_picked_faces([])
-        else:
-            node.set_property("picked_face_indices", "")
-            node.set_property("selection_label", "No geometry selected")
+        node.set_picked_entities([])
         if hasattr(node, "_last_hash"):
             node._last_hash = None
         self.display_node(node)

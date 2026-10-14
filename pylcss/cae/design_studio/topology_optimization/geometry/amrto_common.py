@@ -20,53 +20,11 @@ from typing import Any, Optional, Tuple
 
 import numpy as np
 
+from .cad_tessellation import tessellate_cad_absolute as tessellate_cad_absolute
+
 logger = logging.getLogger(__name__)
 
 
-def tessellate_cad_absolute(shape: Any, tolerance: float, angular_tolerance: float = 0.5,
-                            *, return_face_ranges: bool = False):
-    """Mesh a CAD shape with absolute model-unit deflection, preserving seams.
-
-    CadQuery's Shape.tessellate uses relative OCC deflection. Extract the OCC
-    triangulation directly so it cannot replace this absolute mesh implicitly.
-    """
-    from OCP.BRep import BRep_Tool
-    from OCP.BRepMesh import BRepMesh_IncrementalMesh
-    from OCP.BRepTools import BRepTools
-    from OCP.TopAbs import TopAbs_REVERSED
-    from OCP.TopLoc import TopLoc_Location
-
-    shape = shape.val() if hasattr(shape, "val") else shape
-    BRepTools.Clean_s(shape.wrapped)
-    mesher = BRepMesh_IncrementalMesh(shape.wrapped, float(tolerance), False,
-                                    float(angular_tolerance), True)
-    if not mesher.IsDone():
-        raise RuntimeError("Absolute CAD tessellation failed")
-    vertices, triangles, face_ranges = [], [], []
-    for face in shape.Faces():
-        location = TopLoc_Location()
-        triangulation = BRep_Tool.Triangulation_s(face.wrapped, location)
-        if triangulation is None:
-            BRepMesh_IncrementalMesh(face.wrapped, float(tolerance), False,
-                                     float(angular_tolerance), True)
-            triangulation = BRep_Tool.Triangulation_s(face.wrapped, location)
-        if triangulation is None:
-            face_ranges.append((len(vertices), len(vertices), len(triangles), len(triangles)))
-            continue
-        transform = location.Transformation()
-        offset = len(vertices)
-        triangle_offset = len(triangles)
-        for index in range(1, triangulation.NbNodes() + 1):
-            point = triangulation.Node(index).Transformed(transform)
-            vertices.append((point.X(), point.Y(), point.Z()))
-        reversed_face = face.wrapped.Orientation() == TopAbs_REVERSED
-        for triangle in triangulation.Triangles():
-            a, b, c = triangle.Get()
-            triangles.append((offset + a - 1, offset + (c if reversed_face else b) - 1,
-                              offset + (b if reversed_face else c) - 1))
-        face_ranges.append((offset, len(vertices), triangle_offset, len(triangles)))
-    result = (np.asarray(vertices, dtype=float), np.asarray(triangles, dtype=np.int64))
-    return (*result, face_ranges) if return_face_ranges else result
 
 # Search paths for AMRTO binaries and data
 _WORKSPACE_ROOT = Path(__file__).resolve().parents[5]
@@ -169,7 +127,6 @@ class AMRTOConfig:
 
     # Step 1: Triangular mesh generation & smoothing
     density_cutoff: float = 0.5
-    density_smooth_window: int = 3
     density_smooth_sigma: float = 0.5
     mesh_laplacian_smoothing_iters: int = 2
     mesh_laplacian_lambda: float = 0.3
@@ -177,10 +134,9 @@ class AMRTOConfig:
     # Step 2: Quadrangulation
     target_quad_faces: int = 10000
     quad_crease_deg: float = 0.0  # Topopt isosurfaces are smooth continuum geometry without artificial facet creases
+    quadrangulation_require_native: bool = True
 
     # Step 3: Sparse layouts division
-    layout_min_faces: int = 4
-    layout_max_faces: int = 1500
     layout_target_patch_faces: int = 200  # Raised from 50: larger patches on smooth topology-opt surfaces
     export_layout_patches: bool = False  # Grouped stage 3 OBJ retains every patch
     # Feature charting every sharp input edge is a production extension, not
@@ -194,6 +150,9 @@ class AMRTOConfig:
     sampling_min_d: int = 6       # d_min
     sampling_max_d: int = 2000    # d_max
     parameterization_method: str = "hybrid"
+    # Optional harmonic distortion heuristic; native rectangles follow the paper.
+    # Positivity and source-fit checks always run.
+    parameterization_minimum_area_ratio: float = 0.0
     scaffold_max_iter: int = 50
     scaffold_relative_energy_tolerance: float = 1e-4
     scaffold_rectangle_tolerance: float = 1e-6
@@ -213,11 +172,14 @@ class AMRTOConfig:
     multires_enabled: bool = True
     multires_curvature_ck: float = 0.1
     multires_curvature_cp: float = 10.0
+    # K * reference length is unit-independent. None uses the source diagonal.
+    multires_reference_length: Optional[float] = None
     multires_compression_ratio: float = 0.5  # Highest-layer total controls / original total
     multires_layers: int = 1
     multires_regeneration: str = "author_uniform"
     multires_maximum_knot_removal_attempts: int = 64
     preserve_patch_boundaries: bool = True  # Common boundary curves for sewing
+    source_box_bounds: Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = None
     fitting_workers: int = 4  # Bound patch processes; each uses one BLAS thread
     # Repair is a bounded quality extension run once per patch. Keep its total
     # cost predictable on large layouts; unresolved patches are handled by the
@@ -225,12 +187,6 @@ class AMRTOConfig:
     orientation_repair_seconds: float = 2.0
     orientation_repair_iterations: int = 2
 
-    # OCC B-rep assembly
-    sew_tolerance: float = 1e-3
-    merge_angle_deg: float = 0.0
-    export_step: bool = True
-    export_iges: bool = False
-    export_3dm: bool = False
 
 
 @dataclass

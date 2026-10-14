@@ -19,44 +19,23 @@ from typing import Any
 import numpy as np
 
 from pylcss.cae.design_studio.core.base_node import CadQueryNode
-from pylcss.input_values import as_bool
-
-
-def _flatten(values: Any) -> list[Any]:
-    if values is None:
-        return []
-    if isinstance(values, (list, tuple)):
-        flattened: list[Any] = []
-        for value in values:
-            flattened.extend(_flatten(value))
-        return flattened
-    return [values]
+from pylcss.cae.solver_backends.selection import normalize_geometries
 
 
 def _region_geometries(payload: Any) -> list[Any]:
-    if isinstance(payload, dict):
-        entities = (
-            payload.get("entities") or payload.get("faces") or payload.get("geometries")
-        )
-        if entities:
-            return [entity for entity in entities if entity is not None]
-        entity = payload.get("entity") or payload.get("face") or payload.get("geometry")
-        return [entity] if entity is not None else []
     if hasattr(payload, "vals"):
         try:
-            return [item for item in payload.vals() if item is not None]
+            return normalize_geometries(payload.vals())
         except Exception:
             return []
-    return [payload] if payload is not None else []
+    return normalize_geometries(payload)
 
 
 def _region_payload(node: CadQueryNode, port_name: str) -> list[Any] | None:
     geometries = _region_geometries(node.get_input_value(port_name, None))
     if not geometries:
         # Both selection nodes emit the same payload.
-        node.set_error(
-            f"Connect a selection to '{port_name}'."
-        )
+        node.set_error(f"Connect a selection to '{port_name}'.")
         return None
     return geometries
 
@@ -136,9 +115,7 @@ class TopologySupportNode(CadQueryNode):
             "support_type": support_type,
             "fixed_dofs": mapping.get(support_type, [0, 1, 2]),
             "geometries": geometries,
-            "selection_entity_type": _region_entity_type(
-                self, "target_region"
-            ),
+            "selection_entity_type": _region_entity_type(self, "target_region"),
         }
 
 
@@ -180,7 +157,5 @@ class TopologyLoadNode(CadQueryNode):
             "type": "force",
             "vector": vector,
             "geometries": geometries,
-            "selection_entity_type": _region_entity_type(
-                self, "target_region"
-            ),
+            "selection_entity_type": _region_entity_type(self, "target_region"),
         }

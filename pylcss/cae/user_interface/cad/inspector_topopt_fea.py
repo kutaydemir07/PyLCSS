@@ -9,10 +9,16 @@ from .topopt_fea_worker import TopOptFeaWorker
 from pylcss.cae.design_studio.topology_optimization.configuration.fea_meshing import (
     FEA_ELEMENT_ORDERS,
     FEA_MESH_DEFAULTS,
+    FEA_QUALITY_OPTIONS,
     fea_mesh_options_from_node,
 )
 from pylcss.cae.design_studio.topology_optimization.verification.fea_analysis import (
     topopt_fea_unavailable_reason,
+)
+
+
+from pylcss.cae.design_studio.topology_optimization.verification.quality_gate import (
+    VERIFICATION_DEFAULTS, update_verification_status,
 )
 
 
@@ -28,10 +34,18 @@ class TopOptFeaInspectorMixin:
         def changed(name, value):
             self.update_property(name, value)
             if (result.get("validation") or {}).get("source") == "topopt_cad_fea":
-                result["fea_analysis_status"] = "settings_changed"
-                self._topopt_fea_status_label.setText(
-                    "Settings changed — analyse again"
-                )
+                if name in VERIFICATION_DEFAULTS:
+                    update_verification_status(
+                        result,
+                        safety_factor=node.get_property("validation_yield_safety_factor"),
+                        displacement_limit=node.get_property("validation_displacement_limit_mm"),
+                    )
+                else:
+                    result["fea_analysis_status"] = "settings_changed"
+                    update_verification_status(result)
+                    self._topopt_fea_status_label.setText("Settings changed — analyse again")
+                self._topopt_verification_label.setText((result.get("quality_gate") or {}).get("status", "Not checked"))
+                self._topopt_verification_label.setToolTip("\n".join(result.get("warnings") or []))
 
         mesh_group = QtWidgets.QGroupBox("FEA Meshing")
         mesh_layout = QtWidgets.QFormLayout(mesh_group)
@@ -42,7 +56,7 @@ class TopOptFeaInspectorMixin:
         mesh_note.setWordWrap(True)
         mesh_layout.addRow(mesh_note)
 
-        def number(name, *, minimum=0.0, maximum=1e6, step=0.1, decimals=6):
+        def number(name, *, minimum=0.0, maximum=1e6, step=0.1, decimals=6, scale=1.0):
             widget = QtWidgets.QDoubleSpinBox()
             widget.setObjectName(name)
             widget.setDecimals(decimals)
@@ -50,9 +64,10 @@ class TopOptFeaInspectorMixin:
             widget.setSingleStep(step)
             widget.setKeyboardTracking(False)
             value = node.get_property(name)
-            widget.setValue(FEA_MESH_DEFAULTS[name] if value is None else float(value))
+            default = ({**FEA_MESH_DEFAULTS, **VERIFICATION_DEFAULTS})[name]
+            widget.setValue(scale * (default if value is None else float(value)))
             widget.setEnabled(not running)
-            widget.valueChanged.connect(lambda value: changed(name, value))
+            widget.valueChanged.connect(lambda value: changed(name, value / scale))
             return widget
 
         maximum_size = number("fea_element_size_mm")
@@ -112,6 +127,33 @@ class TopOptFeaInspectorMixin:
         limit.valueChanged.connect(lambda value: changed("fea_max_elements", value))
         mesh_layout.addRow("Maximum elements:", limit)
         layout.addRow(mesh_group)
+        quality = QtWidgets.QComboBox()
+        quality.setObjectName("fea_quality")
+        quality.addItems(FEA_QUALITY_OPTIONS)
+        quality.setCurrentText(node.get_property("fea_quality") or "Standard")
+        quality.setEnabled(not running)
+        quality.setToolTip(
+            "Standard solves one CAD mesh. Mesh Convergence solves a second mesh "
+            "with half the element sizes and compares compliance."
+        )
+        quality.currentTextChanged.connect(lambda value: changed("fea_quality", value))
+        layout.addRow("Analysis mode:", quality)
+        tolerance = number("fea_convergence_tolerance", scale=100, step=1, decimals=2)
+        tolerance.setSuffix(" %")
+        tolerance.setToolTip(
+            "Maximum relative compliance change between the two mesh levels. "
+            "Used when Analysis mode is Mesh Convergence."
+        )
+        layout.addRow("Convergence tolerance:", tolerance)
+        limits_group = QtWidgets.QGroupBox("Verification Limits")
+        limits_layout = QtWidgets.QFormLayout(limits_group)
+        factor = number("validation_yield_safety_factor", minimum=1.0, step=0.1, decimals=2)
+        limits_layout.addRow("Yield safety factor:", factor)
+        displacement = number("validation_displacement_limit_mm")
+        displacement.setSuffix(" mm")
+        displacement.setSpecialValueText("No limit")
+        limits_layout.addRow("Displacement limit:", displacement)
+        layout.addRow(limits_group)
         button = QtWidgets.QPushButton("Analysing FEA..." if running else "Analyse FEA")
         button.setObjectName("topopt_analyse_fea")
         unavailable = topopt_fea_unavailable_reason(result)
@@ -129,6 +171,8 @@ class TopOptFeaInspectorMixin:
             status = "Cancelled"
         elif result.get("fea_analysis_status") == "settings_changed":
             status = "Settings changed — analyse again"
+        elif result.get("fea_analysis_status") == "geometry_changed":
+            status = "Geometry changed — analyse again"
         elif unavailable:
             status = unavailable
         elif (result.get("validation") or {}).get("source") == "topopt_cad_fea":
@@ -140,9 +184,20 @@ class TopOptFeaInspectorMixin:
         label.setToolTip(str(result.get("fea_analysis_error") or ""))
         self._topopt_fea_status_label = label
         layout.addRow("Status:", label)
+        verification = QtWidgets.QLabel((result.get("quality_gate") or {}).get("status", "Not checked"))
+        verification.setToolTip("\n".join(result.get("warnings") or []))
+        self._topopt_verification_label = verification
+        layout.addRow("Checks:", verification)
         analysis = result.get("validation")
         if isinstance(analysis, dict) and analysis.get("source") == "topopt_cad_fea":
-            levels = (analysis.get("convergence_study") or {}).get("levels") or []
+            study = analysis.get("convergence_study") or {}
+            levels = study.get("levels") or []
+            converged = study.get("converged")
+            layout.addRow(
+                "Mesh convergence:", QtWidgets.QLabel(
+                    "Not assessed" if converged is None else "Converged" if converged else "Not converged"
+                ),
+            )
             if levels:
                 final = levels[-1]
                 layout.addRow(
@@ -195,14 +250,14 @@ class TopOptFeaInspectorMixin:
             node.get_input_value("material"),
             node.get_input_list("supports"),
             node.get_input_list("loads"),
-            # Saved convergence-mode values must not add another CAD analysis.
-            quality="Standard",
+            quality=node.get_property("fea_quality") or "Standard",
             mesh_options=fea_mesh_options_from_node(node),
             parent=self,
         )
         self._topopt_fea_worker = worker
         result.pop("fea_analysis_error", None)
         result["fea_analysis_status"] = "running"
+        update_verification_status(result)
         result["fea_analysis_stage"] = "Preparing CAD mesh"
 
         def _current_result():
@@ -224,22 +279,23 @@ class TopOptFeaInspectorMixin:
             if not _current_result():
                 return
             result["validation"] = analysis
-            study = analysis.get("convergence_study") or {}
-            result["validation_summary"] = {
-                "max_stress": analysis.get(
-                    "peak_stress_nodal", analysis.get("max_stress_gauss")
-                ),
-                "max_displacement": analysis.get("peak_displacement"),
-                "compliance": analysis.get("compliance"),
-                "converged": study.get("converged"),
-            }
             result.pop("validation_error", None)
-            result["fea_analysis_status"] = "completed"
+            settings_current = (
+                worker.mesh_options == fea_mesh_options_from_node(node)
+                and worker.quality == (node.get_property("fea_quality") or "Standard")
+            )
+            result["fea_analysis_status"] = "completed" if settings_current else "settings_changed"
+            update_verification_status(
+                result, material=worker.material,
+                safety_factor=node.get_property("validation_yield_safety_factor"),
+                displacement_limit=node.get_property("validation_displacement_limit_mm"),
+            )
             if self.current_node is node:
-                result["visualization_mode"] = "FEA Von Mises Stress"
+                mode = "FEA Lattice Von Mises Stress" if result.get("generated_lattice") else "FEA Von Mises Stress"
+                result["visualization_mode"] = mode
                 window._last_rendered_node = node
                 window._last_rendered_geom = None
-                self.update_property("visualization", "FEA Von Mises Stress")
+                self.update_property("visualization", mode)
                 render = getattr(window, "_render_result_in_viewer", None)
                 if callable(render):
                     render(result)
@@ -257,11 +313,13 @@ class TopOptFeaInspectorMixin:
             if _current_result():
                 result["fea_analysis_status"] = "failed"
                 result["fea_analysis_error"] = message
+                update_verification_status(result)
             QtWidgets.QMessageBox.critical(self, "FEA Analysis Error", message)
 
         def _cancelled():
             if _current_result():
                 result["fea_analysis_status"] = "cancelled"
+                update_verification_status(result)
             if hasattr(window, "statusBar"):
                 window.statusBar().showMessage("TopOpt FEA analysis cancelled.", 10000)
 

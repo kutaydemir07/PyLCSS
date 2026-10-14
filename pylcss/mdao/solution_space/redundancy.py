@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Optional
 
 import numpy as np
@@ -13,16 +12,14 @@ import numpy as np
 from .contracts import FloatArray, ProgressCallback
 from .models import BoxSolutionSpace
 
-logger = logging.getLogger(__name__)
-
 
 class RedundancyResolutionMixin:
-    """Remove redundant boxes before decoupling is attempted.
+    """Retain one representative per connected group of overlapping modal boxes.
 
     Requires the host solver to expose ``self.dv_norm`` (per-dim design-space
-    widths). Two boxes are redundant when they intersect in every design
-    variable; each connected component of that intersection graph keeps only
-    its largest-volume member.
+    widths). Positive overlap is tested in active design coordinates; fixed
+    and uncertain coordinates must agree. The largest box represents each
+    overlap group, following Stage 4 of the multi-modal algorithm.
     """
 
     dv_norm: FloatArray
@@ -32,7 +29,7 @@ class RedundancyResolutionMixin:
         boxes: list[BoxSolutionSpace],
         callback: Optional[ProgressCallback] = None,
     ) -> list[BoxSolutionSpace]:
-        """Resolve overlap-induced redundancy between expanded boxes."""
+        """Resolve overlap groups and assign IDs to the retained modes."""
         if len(boxes) <= 1:
             return list(boxes)
 
@@ -52,56 +49,46 @@ class RedundancyResolutionMixin:
         boxes: list[BoxSolutionSpace],
         callback: Optional[ProgressCallback] = None,
     ) -> list[BoxSolutionSpace]:
-        """Keep only the largest box per connected intersection component."""
-        K = len(boxes)
-        if K <= 1:
+        """Keep the largest box from each connected overlap component."""
+        if len(boxes) <= 1:
             return list(boxes)
-
         lower = np.array([box.bounds[:, 0] for box in boxes])
         upper = np.array([box.bounds[:, 1] for box in boxes])
-        inter_min = np.maximum(lower[:, None, :], lower[None, :, :])
-        inter_max = np.minimum(upper[:, None, :], upper[None, :, :])
-        intersect = np.all(inter_max - inter_min > 0.0, axis=2)
-        np.fill_diagonal(intersect, False)
+        active = np.asarray(self.dv_norm) > 0.0
+        intersection_lower = np.maximum(lower[:, None, :], lower[None, :, :])
+        intersection_upper = np.minimum(upper[:, None, :], upper[None, :, :])
+        overlap = np.all(
+            intersection_upper[:, :, active] > intersection_lower[:, :, active],
+            axis=2,
+        )
+        inactive = ~active
+        overlap &= np.all(
+            lower[:, None, inactive] == lower[None, :, inactive], axis=2
+        ) & np.all(upper[:, None, inactive] == upper[None, :, inactive], axis=2)
+        parent = list(range(len(boxes)))
 
-        parent = list(range(K))
+        def find(index: int) -> int:
+            while parent[index] != index:
+                parent[index] = parent[parent[index]]
+                index = parent[index]
+            return index
 
-        def find(x: int) -> int:
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
-
-        for i in range(K):
-            for j in range(i + 1, K):
-                if not intersect[i, j]:
-                    continue
-                root_i = find(i)
-                root_j = find(j)
-                if root_i != root_j:
-                    parent[root_i] = root_j
-
-        components: dict[int, list[int]] = {}
-        for i in range(K):
-            components.setdefault(find(i), []).append(i)
-
-        kept: list[BoxSolutionSpace] = []
-        for members in components.values():
-            members.sort(key=lambda idx: boxes[idx].volume, reverse=True)
-            winner = boxes[members[0]]
-            kept.append(winner)
-            for idx in members[1:]:
-                msg = (
-                    "Stage 4 - Redundancy: removed solution space "
-                    f"(volume={boxes[idx].volume:.3e}); retained the largest "
-                    f"in its overlap set (volume={winner.volume:.3e})."
+        for left in range(len(boxes)):
+            for right in range(left + 1, len(boxes)):
+                if overlap[left, right]:
+                    parent[find(left)] = find(right)
+        components: dict[int, list[BoxSolutionSpace]] = {}
+        for index, box in enumerate(boxes):
+            components.setdefault(find(index), []).append(box)
+        retained = []
+        for component in components.values():
+            winner = max(component, key=lambda box: box.volume)
+            retained.append(winner)
+            if callback and len(component) > 1:
+                callback(
+                    None,
+                    None,
+                    f"Stage 4 - Redundancy: retained the largest of "
+                    f"{len(component)} overlapping boxes (volume={winner.volume:.3e}).",
                 )
-                logger.info(msg)
-                if callback:
-                    callback(None, None, msg)
-
-        kept.sort(key=lambda box: box.volume, reverse=True)
-        return kept
-
-    # Compatibility for code written before the paper's five-stage naming was
-    # adopted in PyLCSS.
+        return sorted(retained, key=lambda box: box.volume, reverse=True)

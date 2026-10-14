@@ -31,36 +31,18 @@ class TopologyOptVoxelResult:
     passive_source_volfrac: float = 0.0
     optimizer_used: str = ""
     formulation_used: str = "Density (SIMP)"
-    # Surface recovery reads these, not `density`.
-    #
-    # `density` is the physical field that drove the FE solve. With the
-    # three-field projection completed it is essentially binary (measured on a
-    # 48x24x12 cantilever: 96% of voxels outside the 0.2-0.8 band), so its
-    # 0.5-isosurface carries no sub-voxel information and marching cubes
-    # reproduces the voxel terraces as visible stair steps and ripples.
-    #
-    # `recovery_density` is the *filtered* density before projection. The
-    # physical cone filter spreads every interface over its prescribed radius,
-    # what lets an isosurface land at sub-voxel accuracy and come out smooth.
-    # `recovery_cutoff` is the level on that field describing the *same
-    # boundary* as the projected design. The projection is a strictly
-    # increasing map, so that level is the exact inverse image of the density
-    # cutoff, not a volume-matched search: see
-    # `voxel_solver._projection_matched_level`.
-    #
-    # `projection_beta`/`projection_eta` are the final projection parameters, or
-    # None when the network had no projection. They are recorded because the
-    # density cutoff is a post-processing control the user can change without
-    # re-solving, and the matching filtered level has to move with it.
+    # `density` is the delivered blueprint. Robust studies analyze its eroded
+    # counterpart; ordinary studies analyze the blueprint itself.
+    # Recover surfaces on the smoother filtered field at the inverse-projected
+    # cutoff. Retain projection parameters so a later cutoff change can use
+    # the corresponding filtered level without another solve.
     recovery_density: np.ndarray | None = None
     recovery_cutoff: float = 0.5
     projection_beta: float | None = None
     projection_eta: float | None = None
     beta_history: list[float] = field(default_factory=list)
     projection_eta_history: list[float] = field(default_factory=list)
-    # SIMP exponent per iteration. A run that continues p from 1 solves a
-    # different (convex, at p=1) problem early on, so the compliance history is
-    # only comparable within a segment of constant p.
+    # Compare compliance within segments of constant SIMP exponent.
     penal_history: list[float] = field(default_factory=list)
     topology_convergence: dict[str, object] | None = None
     progressive_resolution: dict[str, object] | None = None

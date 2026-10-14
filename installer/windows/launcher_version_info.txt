@@ -2,8 +2,8 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2, 2, 0, 2),
-    prodvers=(2, 2, 0, 2),
+    filevers=(3, 0, 0, 0),
+    prodvers=(3, 0, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -18,12 +18,12 @@ VSVersionInfo(
         [
           StringStruct(u'CompanyName', u'Kutay Demir'),
           StringStruct(u'FileDescription', u'PyLCSS Engineering Design Platform'),
-          StringStruct(u'FileVersion', u'2.2.0.2'),
+          StringStruct(u'FileVersion', u'3.0.0'),
           StringStruct(u'InternalName', u'PyLCSS'),
           StringStruct(u'LegalCopyright', u'Copyright (c) 2026 Kutay Demir'),
           StringStruct(u'OriginalFilename', u'PyLCSS.exe'),
           StringStruct(u'ProductName', u'PyLCSS'),
-          StringStruct(u'ProductVersion', u'2.2.0.2')
+          StringStruct(u'ProductVersion', u'3.0.0')
         ]
       )
     ]),

@@ -6,14 +6,15 @@ Provides both a Visual Layer Stack Builder and a raw PyTorch Code Editor."""
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 from PySide6 import QtCore, QtWidgets
 
 from pylcss.mdao.surrogate_modeling.custom_architecture import (
-    TORCH_AVAILABLE,
     compile_custom_code,
 )
+from pylcss.mdao.surrogate_modeling.torch_utils import TORCH_AVAILABLE
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,7 @@ class ArchitectureBuilderWidget(QtWidgets.QWidget):
         self.table_layers.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.table_layers.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.table_layers.setMinimumHeight(130)
+        self.table_layers.itemChanged.connect(self._on_layer_edited)
         l_vis.addWidget(self.table_layers)
 
         # Layer manipulation buttons in clean 2-row grid
@@ -276,18 +278,67 @@ class ArchitectureBuilderWidget(QtWidgets.QWidget):
             self._refresh_table()
 
     def _refresh_table(self) -> None:
+        blocker = QtCore.QSignalBlocker(self.table_layers)
         self.table_layers.setRowCount(len(self.custom_layers))
         for r, layer in enumerate(self.custom_layers):
             l_type = str(layer.get("type", "")).upper()
             units = str(layer.get("units", "-"))
             act = str(layer.get("activation", "none")).upper()
-            drop = str(layer.get("dropout", 0.0))
+            drop = str(layer.get("rate", layer.get("dropout", 0.0)))
 
             self.table_layers.setItem(r, 0, QtWidgets.QTableWidgetItem(l_type))
             self.table_layers.setItem(r, 1, QtWidgets.QTableWidgetItem(units if l_type in ("LINEAR", "RESBLOCK") else "-"))
             self.table_layers.setItem(r, 2, QtWidgets.QTableWidgetItem(act if l_type in ("LINEAR", "RESBLOCK") else "-"))
             self.table_layers.setItem(r, 3, QtWidgets.QTableWidgetItem(drop if float(drop) > 0 else "-"))
+            for column in range(4):
+                item = self.table_layers.item(r, column)
+                editable = (
+                    column in (1, 2, 3) and l_type in ("LINEAR", "RESBLOCK")
+                ) or (column == 3 and l_type == "DROPOUT")
+                if not editable:
+                    item.setFlags(item.flags() & ~QtCore.Qt.ItemIsEditable)
 
+        del blocker
+        self._update_summary()
+
+    def _on_layer_edited(self, item: QtWidgets.QTableWidgetItem) -> None:
+        """Keep the architecture used for training in sync with visible edits."""
+        row, column = item.row(), item.column()
+        if not 0 <= row < len(self.custom_layers):
+            return
+        layer = self.custom_layers[row]
+        layer_type = str(layer.get("type", "")).lower()
+        text = item.text().strip().lower()
+        try:
+            if column == 1 and layer_type in {"linear", "resblock"}:
+                units = int(text)
+                if units < 1:
+                    raise ValueError("Units must be a positive integer.")
+                layer["units"] = units
+            elif column == 2 and layer_type in {"linear", "resblock"}:
+                activations = {
+                    "relu", "gelu", "silu", "swish", "mish", "tanh",
+                    "leaky_relu", "leakyrelu", "elu", "sigmoid", "logistic",
+                    "identity", "none", "linear",
+                }
+                if text not in activations:
+                    raise ValueError("Enter a supported activation, such as GELU or RELU.")
+                layer["activation"] = text
+            elif column == 3 and layer_type in {"linear", "resblock", "dropout"}:
+                rate = 0.0 if text in {"", "-"} else float(text)
+                if not math.isfinite(rate) or not 0.0 <= rate < 1.0:
+                    raise ValueError("Dropout must be in [0, 1).")
+                layer["dropout"] = rate
+                if layer_type == "dropout":
+                    layer["rate"] = rate
+            else:
+                return
+        except ValueError as exc:
+            self.lbl_vis_summary.setText(str(exc))
+            self.lbl_vis_summary.setToolTip(str(exc))
+            self._refresh_table()
+            return
+        self.lbl_vis_summary.setToolTip("")
         self._update_summary()
 
     def _update_summary(self) -> None:

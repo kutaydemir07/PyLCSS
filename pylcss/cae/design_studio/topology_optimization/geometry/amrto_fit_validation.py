@@ -80,6 +80,7 @@ def apply_validated_multiresolution(
     residual_evaluator: Callable[[Any, Any], float], maximum_knot_removal_attempts: int = 64,
     orientation_evaluator: Callable[[Any, Any], dict] | None = None,
     original_residual: float | None = None, original_orientation: dict | None = None,
+    curvature_reference_length: float = 1.0,
 ) -> Any:
     """Execute classification/hierarchy/removal and accept only validated geometry.
 
@@ -94,6 +95,7 @@ def apply_validated_multiresolution(
         result = apply_multiresolution_strategy(original, curvature_ck=curvature_ck,
             curvature_cp=curvature_cp, compression_ratio=compression_ratio, layers=layers,
             regeneration=regeneration, maximum_error=budget,
+            curvature_reference_length=curvature_reference_length,
             maximum_knot_removal_attempts=maximum_knot_removal_attempts,
             knot_removal_acceptance_predicate=(
                 lambda base, trial: surface_boundary_difference(base, trial)["maximum_distance"] <= boundary_limit

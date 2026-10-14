@@ -8,13 +8,18 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 import networkx as nx
 
-from .dependencies import analyze_model_dependencies
+from .dependencies import output_dependencies
 from .types import CompiledModel, InputSpec, OutputSpec
-from .units import UnitError, conversion_parameters, is_specified_unit
+from .units import (
+    UnitError,
+    conversion_expression,
+    conversion_parameters,
+    is_specified_unit,
+)
 
 
 class ModelMergeError(ValueError):
@@ -47,6 +52,7 @@ class MergeSummary:
 class _ExecutionStep:
     model_index: int
     valid_outputs: tuple[str, ...]
+    required_inputs: tuple[str, ...] | None = None
 
 
 def analyze_merge(models: Sequence[CompiledModel]) -> MergeSummary:
@@ -61,9 +67,7 @@ def analyze_merge(models: Sequence[CompiledModel]) -> MergeSummary:
         providers = tuple(outputs[name])
         consumers = tuple(inputs[name])
         issue = _unit_issue((*providers, *consumers))
-        connections.append(
-            VariableConnection(name, providers, consumers, issue)
-        )
+        connections.append(VariableConnection(name, providers, consumers, issue))
     return MergeSummary(tuple(connections), global_inputs, global_outputs)
 
 
@@ -119,20 +123,21 @@ def _execution_schedule(
             for index in nx.topological_sort(system_graph)
         ]
 
-    internal_dependencies: list[set[tuple[str, str]]] = []
+    internal_dependencies: list[dict[str, tuple[str, ...]]] = []
     variable_graph = nx.DiGraph()
     for index, model in enumerate(models):
-        dependencies = analyze_model_dependencies(
+        dependencies = output_dependencies(
             model["code"],
             (item["name"] for item in model["inputs"]),
             (item["name"] for item in model["outputs"]),
         )
         internal_dependencies.append(dependencies)
-        for input_name, output_name in dependencies:
-            variable_graph.add_edge(
-                (index, "input", input_name),
-                (index, "output", output_name),
-            )
+        for output_name, required in dependencies.items():
+            for input_name in required:
+                variable_graph.add_edge(
+                    (index, "input", input_name),
+                    (index, "output", output_name),
+                )
     for consumer_index, model in enumerate(models):
         for item in model["inputs"]:
             provider_index = provider_by_name.get(item["name"])
@@ -142,12 +147,13 @@ def _execution_schedule(
                     (consumer_index, "input", item["name"]),
                 )
     if not nx.is_directed_acyclic_graph(variable_graph):
-        raise ModelMergeError("Models contain a true variable-level circular dependency.")
+        raise ModelMergeError(
+            "Models contain a circular dependency or lack the explicit output "
+            "evaluators needed for staged execution. Rebuild the system graphs."
+        )
 
     available = set(global_inputs)
-    pending = {
-        item["name"] for model in models for item in model["outputs"]
-    }
+    pending = {item["name"] for model in models for item in model["outputs"]}
     schedule: list[_ExecutionStep] = []
     while pending:
         progress = False
@@ -157,16 +163,15 @@ def _execution_schedule(
                 name = output["name"]
                 if name not in pending:
                     continue
-                required = {
-                    input_name
-                    for input_name, output_name in internal_dependencies[index]
-                    if output_name == name
-                }
-                if required.issubset(available):
+                required = internal_dependencies[index][name]
+                if set(required).issubset(available):
                     ready.append(name)
             if not ready:
                 continue
-            schedule.append(_ExecutionStep(index, tuple(ready)))
+            for name in ready:
+                schedule.append(
+                    _ExecutionStep(index, (name,), internal_dependencies[index][name])
+                )
             available.update(ready)
             pending.difference_update(ready)
             progress = True
@@ -210,7 +215,7 @@ def _merged_source(
         "                f'Subsystem {index} does not define one model function.'",
         "            )",
         "        function = candidates[0]",
-        "    return function",
+        "    return function, namespace.get('_OUTPUT_FUNCTIONS', {})",
         "",
         "_MODEL_FUNCTIONS = [",
         "    _load_model(source, index)",
@@ -227,6 +232,7 @@ def _merged_source(
         "            f'unexpected={sorted(_unexpected)}'",
         "        )",
         "    _values = dict(kwargs)",
+        f"    _caches = [{{}} for _ in range({len(models)})]",
     ]
 
     available = set(global_inputs)
@@ -236,67 +242,55 @@ def _merged_source(
     for step_number, step in enumerate(schedule):
         model = models[step.model_index]
         arguments: list[str] = []
-        for input_spec in model["inputs"]:
+        specs = model["inputs"]
+        if step.required_inputs is not None:
+            specs = [item for item in specs if item["name"] in step.required_inputs]
+        for input_spec in specs:
             name = input_spec["name"]
             if name not in available:
-                arguments.append(f"{name}=0.0")
-                continue
+                raise ModelMergeError(
+                    f"Input {name!r} is unavailable in the execution schedule."
+                )
             source_spec = (
                 all_outputs[name]
                 if name in provider_by_name
                 else global_source_specs[name]
             )
             expression = f"_values[{name!r}]"
-            expression = _conversion_expression(expression, source_spec, input_spec)
-            arguments.append(f"{name}={expression}")
-        lines.append(
-            f"    _result_{step_number} = "
-            f"_MODEL_FUNCTIONS[{step.model_index}]({', '.join(arguments)})"
-        )
-        lines.append(
-            f"    if not isinstance(_result_{step_number}, dict):"
-        )
+            try:
+                expression = conversion_expression(
+                    expression,
+                    source_spec.get("unit", "-"),
+                    input_spec.get("unit", "-"),
+                )
+            except UnitError as exc:
+                raise ModelMergeError(str(exc)) from exc
+            arguments.append(f"{name!r}: {expression}")
+        argument_dict = "{" + ", ".join(arguments) + "}"
+        if step.required_inputs is None:
+            call = f"_MODEL_FUNCTIONS[{step.model_index}][0](**{argument_dict})"
+        else:
+            output_name = step.valid_outputs[0]
+            call = (
+                f"_MODEL_FUNCTIONS[{step.model_index}][1][{output_name!r}]"
+                f"({argument_dict}, _caches[{step.model_index}])"
+            )
+        lines.append(f"    _result_{step_number} = {call}")
+        lines.append(f"    if not isinstance(_result_{step_number}, dict):")
         lines.append(
             f"        raise TypeError('Subsystem {step.model_index} did not return a dict.')"
         )
         for output_name in step.valid_outputs:
             lines.append(
-                f"    _values[{output_name!r}] = "
-                f"_result_{step_number}[{output_name!r}]"
+                f"    _values[{output_name!r}] = _result_{step_number}[{output_name!r}]"
             )
             available.add(output_name)
 
-    return_items = ", ".join(
-        f"{name!r}: _values[{name!r}]" for name in global_outputs
-    )
+    return_items = ", ".join(f"{name!r}: _values[{name!r}]" for name in global_outputs)
     lines.append(f"    return {{{return_items}}}")
     source = "\n".join(lines).rstrip() + "\n"
     compile(source, "<merged system model>", "exec")
     return source
-
-
-def _conversion_expression(
-    expression: str,
-    source: Mapping[str, Any],
-    target: Mapping[str, Any],
-) -> str:
-    source_unit = str(source.get("unit", "-"))
-    target_unit = str(target.get("unit", "-"))
-    if (
-        not is_specified_unit(source_unit)
-        or not is_specified_unit(target_unit)
-        or source_unit == target_unit
-    ):
-        return expression
-    try:
-        scale, offset = conversion_parameters(source_unit, target_unit)
-    except UnitError as exc:
-        raise ModelMergeError(str(exc)) from exc
-    if offset:
-        return f"(({expression}) * {scale!r} + {offset!r})"
-    if scale != 1:
-        return f"(({expression}) * {scale!r})"
-    return expression
 
 
 def _collect_specs(
@@ -404,8 +398,7 @@ def _validate_models(models: Sequence[CompiledModel]) -> None:
                     )
                 if variable_name in variable_names:
                     raise ModelMergeError(
-                        f"Model {name!r} has duplicate {direction} "
-                        f"{variable_name!r}."
+                        f"Model {name!r} has duplicate {direction} {variable_name!r}."
                     )
                 variable_names.add(variable_name)
 
@@ -416,6 +409,5 @@ __all__ = [
     "VariableConnection",
     "VariableEndpoint",
     "analyze_merge",
-    "analyze_model_dependencies",
     "create_merged_model",
 ]

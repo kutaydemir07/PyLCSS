@@ -45,7 +45,3 @@ def expand_box(
     new_low = np.maximum(dsl, bounds[:, 0] - expansion)
     new_up = np.minimum(dsu, bounds[:, 1] + expansion)
     return np.column_stack((new_low, new_up))
-
-
-# Compatibility with the paper-oriented name used before PyLCSS 2.2.
-modification_step_b = expand_box

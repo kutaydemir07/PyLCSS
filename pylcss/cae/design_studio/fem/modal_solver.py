@@ -6,9 +6,12 @@ from __future__ import annotations
 
 import logging
 import math
-from pathlib import Path
 
 from pylcss.cae.design_studio.core.base_node import CadQueryNode
+from pylcss.cae.design_studio.fem._solver_config import (
+    add_external_solver_properties,
+    external_run_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,16 +37,14 @@ class ModalSolverNode(CadQueryNode):
             widget_type="combo",
             items=["Auto", "1x", "5x", "10x", "50x", "100x"],
         )
-        self.create_property("external_solver_path", "", widget_type="text")
-        self.create_property("external_work_dir", "", widget_type="text")
-        self.create_property("deck_only", False, widget_type="checkbox")
-        self.create_property("external_timeout_s", 3600.0, widget_type="float")
+        add_external_solver_properties(self)
 
     def run(self, cancel_callback=None):
         logger.debug("Modal Solver: routing to CalculiX frequency backend.")
-        from pylcss.cae.solver_backends import ExternalRunConfig, SolverBackendError
+        from pylcss.cae.solver_backends import SolverBackendError
         from pylcss.cae.solver_backends.calculix_modal import run_calculix_modal
-        from pylcss.input_values import as_bool, flatten_inputs
+        from pylcss.cae.solver_backends.validation import integer
+        from pylcss.input_values import flatten_inputs
 
         self.clear_error()
         mesh = self.get_input_value("mesh", None)
@@ -68,44 +69,14 @@ class ModalSolverNode(CadQueryNode):
             return None
 
         try:
-            num_modes = int(self.get_property("num_modes") or 6)
-            num_modes = max(1, min(100, num_modes))
-        except (TypeError, ValueError):
-            num_modes = 6
-
-        try:
-            active_mode = int(self.get_property("active_mode") or 1)
-            active_mode = max(1, active_mode)
-        except (TypeError, ValueError):
-            active_mode = 1
-
-        deck_only = as_bool(self.get_property("deck_only"))
-        run_flag = not deck_only
-
-        try:
-            timeout_s = float(self.get_property("external_timeout_s") or 3600.0)
-            if not math.isfinite(timeout_s) or timeout_s <= 0.0:
-                self.set_error("Solver timeout must be finite and greater than zero.")
-                return None
-
-            solver_path = (
-                str(self.get_property("external_solver_path") or "").strip() or None
+            num_modes = integer(
+                self.get_property("num_modes"), label="Number of modes", minimum=1
             )
-            work_dir = (
-                str(self.get_property("external_work_dir") or "").strip() or None
+            active_mode = integer(
+                self.get_property("active_mode"), label="Active mode", minimum=1
             )
-            project_dir = getattr(self, "_project_dir", None)
-            if project_dir:
-                if solver_path and not Path(solver_path).is_absolute():
-                    solver_path = str(Path(project_dir) / solver_path)
-                if work_dir and not Path(work_dir).is_absolute():
-                    work_dir = str(Path(project_dir) / work_dir)
-
-            config = ExternalRunConfig(
-                executable=solver_path,
-                work_dir=work_dir,
-                run_solver=run_flag,
-                timeout_s=timeout_s,
+            config = external_run_config(
+                self,
                 job_name="pylcss_modal",
                 cancel_callback=cancel_callback,
             )

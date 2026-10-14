@@ -16,7 +16,7 @@ from types import ModuleType
 from typing import Any
 from uuid import uuid4
 
-from pylcss.config import TEMP_MODELS_DIR
+from pylcss.config import MODEL_CACHE_DIR
 
 from .types import CompiledModel, InputSpec, ModelCallable, OutputSpec
 
@@ -49,9 +49,6 @@ class SystemModel:
 
         self.name = name.strip()
         self.system_function = system_function
-        # Kept as an alias for callers written against earlier releases. Running
-        # object-mode Numba here caused duplicate execution when a model raised.
-        self.fast_function = system_function
         self.inputs = _copy_specs(inputs, "input")
         self.outputs = _copy_specs(outputs, "output")
         self.source_code = source_code
@@ -66,25 +63,7 @@ class SystemModel:
     ) -> SystemModel:
         """Import trusted source and create a process-importable model."""
 
-        if not isinstance(code_string, str) or not code_string.strip():
-            raise ModelSourceError("Model source must be a non-empty string.")
-
-        source_bytes = code_string.encode("utf-8")
-        digest = hashlib.sha256(source_bytes).hexdigest()[:24]
-        module_name = f"_pylcss_model_{digest}"
-        model_dir = Path(TEMP_MODELS_DIR).resolve()
-        model_path = model_dir / f"{module_name}.py"
-
-        # Report syntax errors before touching the generated-model cache.
-        compile(code_string, str(model_path), "exec")
-        model_dir.mkdir(parents=True, exist_ok=True)
-        _write_source_once(model_path, code_string)
-
-        model_dir_text = os.fspath(model_dir)
-        if model_dir_text not in sys.path:
-            sys.path.insert(0, model_dir_text)
-
-        module = _load_module(module_name, model_path)
+        module = _load_source_module(code_string)
         system_function = _find_entry_point(module)
         return cls(name, system_function, inputs, outputs, code_string)
 
@@ -134,29 +113,52 @@ class SystemModel:
     def get_output_names(self) -> list[str]:
         return [item["name"] for item in self.outputs]
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return JSON-compatible model metadata and source."""
 
-        return {
-            "name": self.name,
-            "inputs": [dict(item) for item in self.inputs],
-            "outputs": [dict(item) for item in self.outputs],
-            "source_code": self.source_code,
-        }
+def load_source_function(
+    source: str, function_name: str | None = None
+) -> Callable[..., Any]:
+    """Load trusted model or probe source with an importable file context."""
 
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> SystemModel:
-        """Rebuild a model serialized by :meth:`to_dict`."""
-
-        source = data.get("source_code")
-        if not isinstance(source, str) or not source.strip():
-            raise ModelSourceError("Serialized model does not contain source code.")
-        return cls.from_code_string(
-            str(data["name"]),
-            source,
-            data["inputs"],
-            data["outputs"],
+    module = _load_source_module(source)
+    if function_name is None:
+        return _find_entry_point(module)
+    function = getattr(module, function_name, None)
+    if not callable(function):
+        raise ModelSourceError(
+            f"Model source does not define callable {function_name!r}."
         )
+    return function
+
+
+def resolve_surrogate_path(path: str, base_dir: str | Path | None = None) -> Path:
+    candidates = [Path(path)]
+    if not candidates[0].is_absolute():
+        candidates.append(Path(base_dir or MODEL_CACHE_DIR) / path)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    raise FileNotFoundError(f"Surrogate model not found: {path}")
+
+
+def load_surrogate(path: str, base_dir: str | Path) -> Any:
+    import joblib
+
+    return joblib.load(resolve_surrogate_path(path, base_dir))
+
+
+def _load_source_module(source: str) -> ModuleType:
+    if not isinstance(source, str) or not source.strip():
+        raise ModelSourceError("Model source must be a non-empty string.")
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:24]
+    module_name = f"_pylcss_model_{digest}"
+    model_dir = Path(MODEL_CACHE_DIR).resolve()
+    model_path = model_dir / f"{module_name}.py"
+    compile(source, str(model_path), "exec")
+    model_dir.mkdir(parents=True, exist_ok=True)
+    _write_source_once(model_path, source)
+    if os.fspath(model_dir) not in sys.path:
+        sys.path.insert(0, os.fspath(model_dir))
+    return _load_module(module_name, model_path)
 
 
 def _copy_specs(
@@ -229,4 +231,10 @@ def _find_entry_point(module: ModuleType) -> ModelCallable:
     return candidates[0]
 
 
-__all__ = ["ModelSourceError", "SystemModel"]
+__all__ = [
+    "ModelSourceError",
+    "SystemModel",
+    "load_source_function",
+    "load_surrogate",
+    "resolve_surrogate_path",
+]

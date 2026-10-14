@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import copy
-import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Mapping, Optional
@@ -15,8 +14,6 @@ import numpy as np
 
 from .contracts import EvaluatableProblem, FloatArray, StopCallback
 from .solver import SolutionSpaceSolver
-
-logger = logging.getLogger(__name__)
 
 FamilyProgressCallback = Callable[[str, int, int, str], None]
 FamilyResults = dict[str, object]
@@ -29,8 +26,6 @@ def compute_product_family_solutions(
     design_upper: FloatArray,
     search_lower: FloatArray,
     search_upper: FloatArray,
-    requirement_upper: FloatArray,
-    requirement_lower: FloatArray,
     parameters: Optional[FloatArray],
     solver_type: str,
     progress_callback: Optional[FamilyProgressCallback] = None,
@@ -63,8 +58,8 @@ def compute_product_family_solutions(
             parameters,
             solver_type=solver_type,
         )
-        box, success, _elapsed, _samples = solver.solve()
-        if not success:
+        box, success, _elapsed, _samples = solver.solve(stop_callback=stop_callback)
+        if not success and not (stop_callback and stop_callback()):
             raise RuntimeError(f"No feasible solution space found for variant {name!r}")
         return box
 
@@ -74,7 +69,10 @@ def compute_product_family_solutions(
                 return results
             if progress_callback:
                 progress_callback(name, completed, total_steps, f"Starting {name}")
-            results[name] = solve_variant(name, lower, upper)
+            box = solve_variant(name, lower, upper)
+            if stop_callback():
+                return results
+            results[name] = box
     elif tasks:
         workers = min(len(tasks), max(1, (os.cpu_count() or 1) // 2))
         with ThreadPoolExecutor(max_workers=workers) as executor:

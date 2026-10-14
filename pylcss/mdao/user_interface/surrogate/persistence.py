@@ -24,7 +24,8 @@ class SurrogatePersistenceMixin:
             "target_node_index": self.combo_nodes.currentIndex(),
             "data_source": "generate" if self.radio_gen.isChecked() else "upload",
             "n_samples": self.spin_samples.value(),
-            "algorithm_index": self.combo_algo.currentIndex(),
+            "algorithm": self.combo_algo.currentText(),
+            "max_consecutive_failures": self.spin_failure_limit.value() or None,
             "active_learning": self.active_learning_values(),
             # Auto Mode
             "auto_preset": (
@@ -70,7 +71,12 @@ class SurrogatePersistenceMixin:
                 self.radio_upload.setChecked(True)
 
             self.spin_samples.setValue(data.get("n_samples", 1000))
-            self.combo_algo.setCurrentIndex(data.get("algorithm_index", 0))
+            if "algorithm" in data:
+                index = self.combo_algo.findText(data["algorithm"])
+            else:
+                index = int(data.get("algorithm_index", 0))
+            self.combo_algo.setCurrentIndex(index if 0 <= index < self.combo_algo.count() else 0)
+            self.spin_failure_limit.setValue(data.get("max_consecutive_failures") or 0)
 
             self.apply_active_learning_settings(data.get("active_learning", {}))
 

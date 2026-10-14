@@ -8,7 +8,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtWidgets
 
-from .workers import EvaluationWorker, create_evaluation_model
+from .workers import EvaluationWorker
 
 __all__ = ["SurrogateEvaluationMixin"]
 
@@ -101,6 +101,7 @@ class SurrogateEvaluationMixin:
             y=self.y_train,
             n_folds=n_folds,
             model_type=model_type,
+            config=self.get_config(),
         )
 
     def _compare_models(self):
@@ -231,7 +232,3 @@ class SurrogateEvaluationMixin:
         )
         self.tab_widget.setCurrentWidget(self.fi_tab)
         self.lbl_metrics.setText("Feature importance computed.")
-
-    def _create_sklearn_model(self, model_type: str):
-        """Compatibility helper used by existing tests and integrations."""
-        return create_evaluation_model(model_type)

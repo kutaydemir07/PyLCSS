@@ -74,7 +74,7 @@ def _restorable_dataclass_name(value: Any) -> str | None:
 
 
 def _restore_dataclass(name: str, values: dict[str, Any]) -> Any:
-    """Rebuild a whitelisted dataclass, or return its fields on failure."""
+    """Rebuild a known dataclass; unknown names keep fields, failed builds return None."""
     import dataclasses
     import importlib
 

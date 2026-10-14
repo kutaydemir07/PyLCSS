@@ -22,8 +22,6 @@ class BoundaryConditionInspectorMixin:
             # Use get_property (NodeGraphQt API) so we always read the live value,
             # not a potentially stale snapshot from node.model.properties.
             ct = node.get_property("constraint_type") or "Fixed"
-            if ct == "Pinned (Fixed for solids)":
-                ct = "Pinned"
 
             grp = QtWidgets.QGroupBox("Support")
             lay = QtWidgets.QFormLayout()

@@ -19,7 +19,10 @@ from .contracts import (
     ProgressCallback,
     StopCallback,
 )
+from .coordinates import VariableLayout
 from .models import BoxSolutionSpace, MMSSParameters
+from .sampling import sample_box_batch
+from .validation import minimum_all_success_sample_size
 
 
 def optimize_modal_boxes(
@@ -78,11 +81,7 @@ def optimize_modal_boxes(
             label=f"Mode {index + 1}",
         )
         box.bounds = result.bounds
-        box.samples = result.samples
-        box.good_fraction = result.good_fraction
-        box.good_fraction_lower_bound = result.good_fraction_lower_bound
-        box.validation_successes = result.successes
-        box.validation_samples = result.sample_count
+        box.record_samples(result.samples, params.good_fraction_confidence)
         return index, result.target_reached and not result.cancelled
 
     successful: set[int] = set()
@@ -137,4 +136,42 @@ def _report_completion(
     )
 
 
-__all__ = ["optimize_modal_boxes"]
+def validate_modal_boxes(
+    problem: EvaluatableProblem,
+    boxes: list[BoxSolutionSpace],
+    parameters: FloatArray,
+    reqL: FloatArray,
+    reqU: FloatArray,
+    sample_size: int,
+    target_good_fraction: float,
+    confidence: float,
+    stop_callback: Optional[StopCallback] = None,
+) -> bool:
+    """Require fresh evidence for every box whose bounds have been projected."""
+    layout = VariableLayout.from_parameters(parameters)
+    count = max(
+        sample_size, minimum_all_success_sample_size(target_good_fraction, confidence)
+    )
+    dimension = layout.active_indices.size
+    for box in boxes:
+        if stop_callback and stop_callback():
+            return False
+        bounds = box.bounds[layout.active_mask]
+        _, samples = sample_box_batch(
+            problem,
+            bounds,
+            parameters,
+            reqL,
+            reqU,
+            np.ones(dimension),
+            np.zeros(dimension),
+            layout.parameter_indices,
+            count,
+        )
+        box.record_samples(samples, confidence)
+        if box.good_fraction_lower_bound < target_good_fraction:
+            return False
+    return True
+
+
+__all__ = ["optimize_modal_boxes", "validate_modal_boxes"]

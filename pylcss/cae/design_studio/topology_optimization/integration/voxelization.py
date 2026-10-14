@@ -6,253 +6,14 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 import numba
 import numpy as np
 
-from ..configuration.length_scale import (
-    MAX_FEATURE_ELEMENTS,
-    MIN_FEATURE_ELEMENTS,
-    PROGRAM_CONTROLLED_FEATURE_ELEMENTS,
-    resolve_physical_length_scale,
-)
 from .geometry_mapping import _surface_mesh_arrays
-from ..configuration.voxel_meshing import voxel_grid_from_size
 
 logger = logging.getLogger(__name__)
-
-
-def _multigrid_aligned_grid(
-    dims: np.ndarray,
-    span: np.ndarray,
-    max_total_cells: int,
-    minimum_dims: Optional[np.ndarray] = None,
-) -> np.ndarray:
-    """Align a guided grid for two geometric-multigrid levels.
-
-    ``minimum_dims`` is a floor the cell ceiling may not cut through. The
-    ceiling is a cost limit; a requested physical feature size is an
-    engineering requirement, and a grid too coarse to represent it is rejected
-    downstream rather than solved, so the requirement wins.
-    """
-    aligned = np.asarray(dims, dtype=int).copy()
-    for axis, value in enumerate(aligned):
-        if value >= 4:
-            aligned[axis] = max(4, int(round(float(value) / 4.0)) * 4)
-        elif value > 1:
-            aligned[axis] = value + value % 2
-
-    minima = np.where(aligned >= 4, 4, np.where(aligned > 1, 2, 1))
-    if minimum_dims is not None:
-        required = np.maximum(np.asarray(minimum_dims, dtype=int), 1)
-        # Round the floor up onto the same alignment, so holding the length
-        # scale does not cost a multigrid level as well.
-        required = np.where(
-            required >= 4,
-            np.ceil(required / 4.0).astype(int) * 4,
-            np.where(required > 1, required + required % 2, required),
-        )
-        minima = np.maximum(minima, required)
-        aligned = np.maximum(aligned, minima)
-    while int(np.prod(aligned)) > int(max_total_cells):
-        candidates = [
-            axis for axis in range(3) if aligned[axis] > minima[axis]
-        ]
-        if not candidates:
-            break
-        # Reduce the most over-resolved physical axis first. This retains
-        # near-isotropic voxels instead of merely shortening the longest axis.
-        axis = max(
-            candidates,
-            key=lambda index: float(aligned[index]) / max(float(span[index]), 1e-12),
-        )
-        aligned[axis] -= 4 if aligned[axis] >= 8 else 2
-    return aligned
-
-
-def _guided_voxel_grid(
-    bounds: Optional[tuple[np.ndarray, np.ndarray]],
-    element_size: Optional[float] = None,
-    feature_bboxes: Optional[
-        list[tuple[float, float, float, float, float, float]]
-    ] = None,
-    feature_lengths: Optional[list[float]] = None,
-    max_total_cells: int = 160_000,
-    inactive_axes: Sequence[int] = (),
-    required_feature_size: Optional[float] = None,
-) -> Optional[tuple[int, int, int]]:
-    """Choose the automatic aspect-correct grid for guided mode.
-
-    Guided mode hides raw voxel counts, so it must derive them from the actual
-    CAD extents and the smallest selected support/load/CAD features. Pass an
-    explicit ``element_size`` to bypass that and state the discretization
-    directly; ``max_total_cells`` is the ceiling the caller lowers for multiple
-    load cases or coupled physics. Release decisions still belong to the
-    independent recovered-solid mesh-convergence validation.
-
-    ``required_feature_size`` is a physical length the study has *stated* — a
-    minimum member or void size — as opposed to a feature merely worth
-    resolving. It must span ``MIN_FEATURE_ELEMENTS`` cells or the study is
-    rejected when its length scale is resolved, so it is treated as a floor the
-    cell ceiling cannot cut through. Without it the sizer could return a grid
-    that the very next step refuses to solve.
-    """
-    if bounds is None:
-        return None
-    mins, maxs = bounds
-    span = np.maximum(
-        np.asarray(maxs[:3], dtype=float) - np.asarray(mins[:3], dtype=float), 1e-9
-    )
-    inactive = {
-        int(axis)
-        for axis in inactive_axes
-        if isinstance(axis, (int, np.integer)) and 0 <= int(axis) < 3
-    }
-    # At least four layers across an extruded thickness, so a planar-extrusion
-    # study still gets a real through-thickness discretization check rather
-    # than the bare minimum the multigrid path needs.
-    #
-    # It is a floor, never a ceiling. The extrusion axis carries no design
-    # freedom, but it still carries the physical cone filter, and coarsening it
-    # past the in-plane pitch squashes the filtered field: on the 120x60x10
-    # cantilever a fixed four layers put a 2.5 mm pitch against 0.83 mm in
-    # plane, the filter then spanned a single layer between two void-padded
-    # faces, and the field it produced ran 0.087..0.888 instead of 0..1. The
-    # recovered profile picked up slivers the spline B-rep could not hold and
-    # CAD reconstruction failed outright. Resolve the thickness at the in-plane
-    # pitch and the same study reconstructs.
-    inactive_layer_count = 4
-
-    def _inactive_dims(dims: np.ndarray, active_pitch: float) -> np.ndarray:
-        """Resolve inactive axes at the active pitch, floored at four layers."""
-        for axis in inactive:
-            dims[axis] = max(
-                inactive_layer_count,
-                int(np.ceil(float(span[axis]) / max(active_pitch, 1e-9))),
-            )
-        return dims
-    volume = float(np.prod(span))
-    if volume <= 0.0:
-        return None
-
-    try:
-        elem_size = float(element_size)
-        if elem_size > 0.0:
-            return voxel_grid_from_size(span, elem_size)
-    except (TypeError, ValueError):
-        pass
-
-    # Pure physical feature-resolution calculation:
-    min_feature_dim = float("inf")
-    for bbox in feature_bboxes or []:
-        try:
-            exts = [
-                abs(float(bbox[1]) - float(bbox[0])),
-                abs(float(bbox[3]) - float(bbox[2])),
-                abs(float(bbox[5]) - float(bbox[4])),
-            ]
-            for axis, e in enumerate(exts):
-                if axis in inactive:
-                    continue
-                if e > 1e-6:
-                    min_feature_dim = min(min_feature_dim, e)
-        except Exception:
-            pass
-
-    for fl in feature_lengths or []:
-        try:
-            val = float(fl)
-            if val > 1e-6:
-                min_feature_dim = min(min_feature_dim, val)
-        except Exception:
-            pass
-
-    target_cells = int(max_total_cells)
-    # Take the minimum of four cells across the smallest selected feature and
-    # the whole-domain cell ceiling. The hard cell cap is applied below.
-    global_voxel_size = (volume / max(float(target_cells), 1.0)) ** (1.0 / 3.0)
-    if np.isfinite(min_feature_dim) and min_feature_dim > 0.0:
-        feature_voxel_size = max(min_feature_dim / 4.0, 1e-6)
-        target_voxel_size = min(feature_voxel_size, global_voxel_size)
-    else:
-        target_voxel_size = global_voxel_size
-
-    # The coarsest edge a stated feature size tolerates. Only the active axes
-    # are constrained, matching how the length scale measures its limiting
-    # edge: an extrusion axis carries no design freedom.
-    required_dims = np.ones(3, dtype=int)
-    try:
-        required_feature = float(required_feature_size or 0.0)
-    except (TypeError, ValueError):
-        required_feature = 0.0
-    if required_feature > 0.0:
-        required_edge = required_feature / MIN_FEATURE_ELEMENTS
-        for axis in range(3):
-            if axis in inactive:
-                continue
-            required_dims[axis] = int(
-                np.ceil(float(span[axis]) / max(required_edge, 1e-12))
-            )
-
-    dims = np.ceil(span / target_voxel_size).astype(int)
-    dims = _inactive_dims(dims, target_voxel_size)
-    total_cells = int(np.prod(dims))
-
-    max_total_cells = max(2_000, int(max_total_cells))
-    if total_cells > max_total_cells:
-        scale = (float(max_total_cells) / float(total_cells)) ** (1.0 / 3.0)
-        dims = np.maximum(np.floor(dims * scale).astype(int), 4)
-    dims = np.maximum(dims, required_dims)
-
-    dims = _multigrid_aligned_grid(
-        dims,
-        span,
-        max_total_cells,
-        minimum_dims=required_dims,
-    )
-    return int(dims[0]), int(dims[1]), int(dims[2])
-
-
-def _use_automatic_guided_grid(workflow_mode: Any) -> bool:
-    """Return True when guided mode should choose the grid from geometry."""
-    return str(workflow_mode or "Guided").strip().lower() != "expert"
-
-
-# Compatibility aliases for older callers that still inspect the historical
-# element-count policy. New guided studies resolve and store physical lengths.
-MIN_MEMBER_ELEMENTS_FLOOR = MIN_FEATURE_ELEMENTS
-MIN_MEMBER_ELEMENTS_CEILING = MAX_FEATURE_ELEMENTS
-RMIN_FLOOR = MIN_MEMBER_ELEMENTS_FLOOR / 2.0
-RMIN_CEILING = MIN_MEMBER_ELEMENTS_CEILING / 2.0
-
-# When no size is requested, use three cells on the coarsest voxel direction.
-PROGRAM_CONTROLLED_MEMBER_ELEMENTS = PROGRAM_CONTROLLED_FEATURE_ELEMENTS
-PROGRAM_CONTROLLED_RMIN = PROGRAM_CONTROLLED_MEMBER_ELEMENTS / 2.0
-
-
-def _guided_rmin(
-    nelx: int,
-    nely: int,
-    nelz: int,
-    bounds: Optional[tuple[np.ndarray, np.ndarray]] = None,
-    minimum_member_size: Optional[float] = None,
-) -> float:
-    """Backward-compatible nominal filter radius, in physical model units.
-
-    Explicit sizes stay in model units. Under-resolved requests raise instead
-    of being silently changed. The helper retains its historical name because
-    saved studies and extension code import it directly.
-    """
-    if bounds is None:
-        return PROGRAM_CONTROLLED_RMIN
-    resolved = resolve_physical_length_scale(
-        bounds,
-        (nelx, nely, nelz),
-        minimum_member_size,
-        robust=False,
-    )
-    return float(resolved.filter_radius)
 
 
 def voxel_size_from_bounds(
@@ -278,17 +39,10 @@ def lattice_voxels_from_length(
     fallback_voxels: float,
     allow_zero: bool = False,
 ) -> float:
-    """Convert a physical lattice length to analysis voxels.
+    """Convert a physical lattice length to voxels.
 
-    Lattice cell size, member thickness and skin thickness were specified in
-    voxels. The guided grid is sized from the CAD bounding box against a cell
-    budget, so a voxel is a different physical length on every part and on
-    every quality preset — "8 voxels" silently meant a different lattice on
-    each study, and there was no way to ask for the 5 mm cell a printer's
-    powder-removal or minimum-feature capability actually dictates.
-
-    A non-positive length keeps the existing voxel-denominated value unless
-    allow_zero is True (e.g. for skin thickness where 0 mm disables skin).
+    Missing or nonpositive lengths use fallback_voxels. With allow_zero,
+    zero disables the feature when the voxel size is known.
     """
     try:
         if length is None or str(length).strip() == "":
@@ -301,111 +55,6 @@ def lattice_voxels_from_length(
     if physical < 0.0 or (physical == 0.0 and not allow_zero) or voxel_size is None or voxel_size <= 0.0:
         return float(fallback_voxels)
     return float(physical / voxel_size)
-
-
-def guided_minimum_member_size(
-    nelx: int,
-    nely: int,
-    nelz: int,
-    rmin: float,
-    bounds: Optional[tuple[np.ndarray, np.ndarray]] = None,
-) -> Optional[float]:
-    """Physical minimum member size implied by a physical filter radius.
-
-    The inverse of `_guided_rmin`. Professional tools always echo the length
-    scale they resolved, in model units, because a radius in elements is not
-    something a user can check against a drawing or a process capability.
-    """
-    _ = (nelx, nely, nelz, bounds)
-    value = 2.0 * float(rmin)
-    return value if np.isfinite(value) and value > 0.0 else None
-
-
-def _axis_radial_indices(axis: Any) -> tuple[int, int]:
-    axis_name = str(axis or "z").strip().lower()
-    if axis_name == "x":
-        return 1, 2
-    if axis_name == "y":
-        return 0, 2
-    return 0, 1
-
-
-def _cylinder_actual_radii(
-    cylinder: tuple[Any, ...],
-    span: np.ndarray,
-) -> Optional[tuple[str, float, float, float, float, float, float]]:
-    if len(cylinder) < 6:
-        return None
-    axis = str(cylinder[0] or "z").strip().lower()
-    c0 = float(cylinder[1])
-    c1 = float(cylinder[2])
-    lo = float(cylinder[3])
-    hi = float(cylinder[4])
-    r0 = float(cylinder[5])
-    r1 = float(cylinder[6]) if len(cylinder) > 6 else r0
-    if r0 <= 0.0 or r1 <= 0.0:
-        return None
-    a0, a1 = _axis_radial_indices(axis)
-    return (
-        axis,
-        c0,
-        c1,
-        min(lo, hi),
-        max(lo, hi),
-        r0 * float(span[a0]),
-        r1 * float(span[a1]),
-    )
-
-
-def _cylinder_feature_lengths(
-    bounds: Optional[tuple[np.ndarray, np.ndarray]],
-    solid_cylinders: Optional[list[tuple[Any, ...]]] = None,
-    void_cylinders: Optional[list[tuple[Any, ...]]] = None,
-) -> list[float]:
-    """Return physical feature lengths that should be resolved by the grid."""
-    if bounds is None:
-        return []
-    mins, maxs = bounds
-    span = np.maximum(
-        np.asarray(maxs[:3], dtype=float) - np.asarray(mins[:3], dtype=float), 1e-12
-    )
-    solids = [
-        c
-        for c in (
-            _cylinder_actual_radii(cylinder, span)
-            for cylinder in (solid_cylinders or [])
-        )
-        if c is not None
-    ]
-    voids = [
-        c
-        for c in (
-            _cylinder_actual_radii(cylinder, span)
-            for cylinder in (void_cylinders or [])
-        )
-        if c is not None
-    ]
-
-    lengths: list[float] = []
-    for cylinder in solids + voids:
-        _, _, _, _, _, r0, r1 = cylinder
-        lengths.extend([2.0 * r0, 2.0 * r1])
-
-    center_tol = 1e-4
-    for solid in solids:
-        s_axis, s_c0, s_c1, s_lo, s_hi, s_r0, s_r1 = solid
-        for void in voids:
-            v_axis, v_c0, v_c1, v_lo, v_hi, v_r0, v_r1 = void
-            if s_axis != v_axis:
-                continue
-            if abs(s_c0 - v_c0) > center_tol or abs(s_c1 - v_c1) > center_tol:
-                continue
-            if min(s_hi, v_hi) <= max(s_lo, v_lo):
-                continue
-            gap = min(abs(s_r0 - v_r0), abs(s_r1 - v_r1))
-            if gap > 0.0:
-                lengths.append(gap)
-    return lengths
 
 
 def _source_material_fraction(
@@ -525,7 +174,7 @@ def _meaningful_material_components(
 
 
 def _effective_density_cutoff(cutoff: Any, density: Optional[np.ndarray] = None, target_volfrac: Optional[float] = None) -> float:
-    """Use adaptive volume-preserving bisection or the saved threshold consistently."""
+    """Choose a volume-matching order statistic or use the saved numeric threshold."""
     if density is not None and target_volfrac is not None and (cutoff is None or str(cutoff).strip().lower() in ("auto", "automatic", "")):
         try:
             flat = np.ascontiguousarray(density.ravel())

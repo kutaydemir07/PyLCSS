@@ -6,10 +6,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from numbers import Integral
 from typing import Any, Optional
 
 import numpy as np
 
+from .bayesian import good_fraction_lower_bound
 from .contracts import FloatArray, SampleBatch
 
 
@@ -17,9 +19,7 @@ from .contracts import FloatArray, SampleBatch
 class MMSSParameters:
     # --- Discovery & clustering ---
     lhs_restart_count: int = 0  # 0 -> auto, scaled with dimension/capacity
-    initial_sample_size: int = 0  # deprecated pre-deflation setting
     max_modes: int = 0  # 0 -> unknown K, inferred by HDBSCAN
-    max_clusters: int = 0  # deprecated optional safety limit
     min_cluster_size: int = 2
     solver_type: str = "goal_attainment"
     deflation_gamma: float = 0.5
@@ -45,13 +45,6 @@ class MMSSParameters:
     decoupling_enabled: bool = True
     min_common_width_ratio: float = 0.0
 
-    # Compatibility with configurations written before the five-stage
-    # terminology was aligned with the MMSS paper.  Decoupling is not a third
-    # optimization phase: Phase I and Phase II belong to Stage 3 (Computation).
-    phase3_decoupling_enabled: Optional[bool] = None
-    phase3_find_commonality: Optional[bool] = None
-    phase3_min_common_width_ratio: Optional[float] = None
-
     # --- Parallelism ---
     n_workers: int = 0  # 0 → auto (cpu_count() // 2)
 
@@ -59,13 +52,13 @@ class MMSSParameters:
         """Reject invalid settings before starting an expensive solve."""
         non_negative = {
             "lhs_restart_count": self.lhs_restart_count,
-            "initial_sample_size": self.initial_sample_size,
             "max_modes": self.max_modes,
-            "max_clusters": self.max_clusters,
             "phase2_max_iterations": self.phase2_max_iterations,
             "n_workers": self.n_workers,
         }
         for name, value in non_negative.items():
+            if not isinstance(value, Integral) or isinstance(value, bool):
+                raise TypeError(f"{name} must be an integer")
             if value < 0:
                 raise ValueError(f"{name} must not be negative")
 
@@ -76,8 +69,20 @@ class MMSSParameters:
             "max_iterations": self.max_iterations,
         }
         for name, value in positive.items():
+            if not isinstance(value, Integral) or isinstance(value, bool):
+                raise TypeError(f"{name} must be an integer")
             if value <= 0:
                 raise ValueError(f"{name} must be positive")
+        if self.min_cluster_size < 2:
+            raise ValueError("min_cluster_size must be at least 2 for HDBSCAN")
+        if str(self.solver_type).lower() not in {
+            "goal_attainment",
+            "slsqp",
+            "nevergrad",
+        }:
+            raise ValueError(
+                "solver_type must be 'goal_attainment', 'slsqp', or 'nevergrad'"
+            )
 
         for name, value in {
             "target_good_fraction": self.target_good_fraction,
@@ -88,19 +93,17 @@ class MMSSParameters:
 
         if not 0.0 < self.phase1_growth_rate <= 1.0:
             raise ValueError("phase1_growth_rate must be in (0, 1]")
-        if self.phase1_convergence_tol < 0.0:
+        if (
+            not np.isfinite(self.phase1_convergence_tol)
+            or self.phase1_convergence_tol < 0.0
+        ):
             raise ValueError("phase1_convergence_tol must not be negative")
-        if self.deflation_gamma < 0.0:
+        if not np.isfinite(self.deflation_gamma) or self.deflation_gamma < 0.0:
             raise ValueError("deflation_gamma must not be negative")
-        if self.deflation_sigma <= 0.0:
+        if not np.isfinite(self.deflation_sigma) or self.deflation_sigma <= 0.0:
             raise ValueError("deflation_sigma must be positive")
         if not 0.0 <= self.min_common_width_ratio <= 1.0:
             raise ValueError("min_common_width_ratio must be in [0, 1]")
-        if (
-            self.phase3_min_common_width_ratio is not None
-            and not 0.0 <= self.phase3_min_common_width_ratio <= 1.0
-        ):
-            raise ValueError("phase3_min_common_width_ratio must be in [0, 1]")
 
 
 @dataclass
@@ -117,6 +120,20 @@ class BoxSolutionSpace:
     label: str = ""
     volume: float = 0.0
 
+    def record_samples(self, samples: SampleBatch, confidence: float) -> None:
+        self.samples = samples
+        self.validation_successes = int(np.count_nonzero(samples["is_good"]))
+        self.validation_samples = int(samples["is_good"].size)
+        self.good_fraction = (
+            self.validation_successes / self.validation_samples
+            if self.validation_samples
+            else 0.0
+        )
+        self.good_fraction_confidence = confidence
+        self.good_fraction_lower_bound = good_fraction_lower_bound(
+            self.validation_successes, self.validation_samples, confidence
+        )
+
     def compute_volume(self, dv_norm: FloatArray) -> float:
         """Compute and store volume relative to the design-space widths."""
         dv_norm = np.asarray(dv_norm, dtype=float)
@@ -124,7 +141,7 @@ class BoxSolutionSpace:
             raise ValueError("bounds must have shape (n_dimensions, 2)")
         if dv_norm.shape != (self.bounds.shape[0],):
             raise ValueError("dv_norm must match the number of box dimensions")
-        active = dv_norm > 1e-20
+        active = dv_norm > 0.0
         widths = self.bounds[:, 1] - self.bounds[:, 0]
         widths = np.maximum(widths, 0.0)
         self.volume = float(np.prod(widths[active] / dv_norm[active]))
@@ -135,9 +152,8 @@ class BoxSolutionSpace:
 class DecoupledMultiModalForm:
     """Paper notation ``D_MMSS`` for a decoupled union of modal boxes.
 
-    Canonical terminology follows the paper: common variables, separating
-    variables, and modes. Compatibility properties expose names used by the
-    initial PyLCSS port.
+    Common variables share intervals across modes; separating variables
+    retain mode-specific intervals.
     """
 
     common_variable_indices: list[int] = field(default_factory=list)
@@ -159,47 +175,14 @@ class DecoupledMultiModalForm:
             )
         )
 
-    @property
-    def shared_variable_indices(self) -> list[int]:
-        return self.common_variable_indices
-
-    @property
-    def branch_variable_indices(self) -> list[int]:
-        return self.separating_variable_indices
-
-    @property
-    def branch_boxes(self) -> list[BoxSolutionSpace]:
-        return self.mode_boxes
-
-    @property
-    def shared_groups_per_dim(self) -> dict[int, list[dict[str, Any]]]:
-        return self.common_groups_per_dim
-
-
-# Backward-compatible name used by the first PyLCSS port.
-SharedIntervalFamily = DecoupledMultiModalForm
-
 
 @dataclass
 class MultiModalResult:
     boxes: list[BoxSolutionSpace] = field(default_factory=list)
     decoupled_form: Optional[DecoupledMultiModalForm] = None
-    decoupled_forms: list[DecoupledMultiModalForm] = field(default_factory=list)
     computation_time: float = 0.0
     total_volume: float = 0.0
     n_boxes_valid: int = 0
     n_clusters_found: int = 0
     clustering_method: str = ""
     samples_all: Optional[SampleBatch] = None
-
-    @property
-    def shared_family(self) -> Optional[DecoupledMultiModalForm]:
-        return self.decoupled_form
-
-    @shared_family.setter
-    def shared_family(self, value: Optional[DecoupledMultiModalForm]) -> None:
-        self.decoupled_form = value
-
-    @property
-    def shared_families(self) -> list[DecoupledMultiModalForm]:
-        return self.decoupled_forms

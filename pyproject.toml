@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pylcss"
-version = "2.2.0.2"
+version = "3.0.0"
 description = "Source-available desktop engineering design, simulation, sensitivity, and optimization workbench"
 readme = "README.md"
 requires-python = ">=3.10"

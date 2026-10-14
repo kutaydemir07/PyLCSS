@@ -13,55 +13,18 @@ from pylcss.cae.design_studio.topology_optimization.integration.study_identity i
     TOPOLOGY_SOLVER_IDENTIFIER,
     TOPOLOGY_SOLVER_CLASS_NAME,
     is_density_study_record,
+    is_lattice_study_record,
 )
 
-# Guided studies store engineering intent.  Numerical controls derived from
-# that intent (grid dimensions, optimizer, tolerance, SIMP penalty, recovery
-# parameters, and iteration budgets) belong in the result report/sidecar.
-_GUIDED_TOPOLOGY_BASE_PROPERTIES = frozenset(
-    {
-        "workflow_mode",
-        "design_goal",
-        "volfrac",
-        "stress_constraint",
-        "yield_stress",
-        "load_aggregation",
-        "structure_mode",
-        "lattice_settings_mode",
-        "visualization",
-        "validate_after_optimize",
-        "cad_export_filename",
-        "cad_export_format",
-        "description",
-        "tags",
-        "notes",
-    }
-)
-
-# A lattice's physical dimensions are printer capabilities, not numerics
-# derived from the design goal, so they are intent and must survive a save.
-# These names have to match the properties the infill node actually
-# declares: they are looked up by name and anything that does not match is
-# dropped silently, which is how a Guided lattice study used to be re-opened
-# with its cell pitch, wall thickness and mass budget reset to zero.
-_LATTICE_INTENT_PROPERTIES = frozenset(
+# Retired lattice settings translated or removed before node construction.
+_LATTICE_ONLY_PROPERTIES = frozenset(
     {
         "lattice_cell_size_mm",
         "lattice_member_thickness_mm",
         "lattice_skin_thickness_mm",
-        # The mass budget for the manufactured lattice. Cell pitch and member
-        # thickness do not predict it, so losing it loses the one number that
-        # says what the part weighs.
         "lattice_target_relative_density",
         "lattice_porosity",
         "repair_lattice_connections",
-    }
-)
-
-# Retired cell controls translated or removed before TopOpt deserialization.
-_LATTICE_ONLY_PROPERTIES = frozenset(
-    _LATTICE_INTENT_PROPERTIES
-    | {
         "lattice_settings_mode",
         "structure_cell_size_voxels",
         "structure_member_thickness_voxels",
@@ -83,9 +46,14 @@ _LATTICE_ONLY_PROPERTIES = frozenset(
 # still carries one of these fails to open until it is stripped here.
 _RETIRED_TOPOLOGY_PROPERTIES = frozenset(
     {
+        "validate_after_optimize",
+        "generate_cad_after_optimize",
+        "validation_quality",
         "draw_direction",
         "extrusion_axis",
         "manufacturing_process",
+        "workflow_mode",
+        "yield_stress",
         "max_member_size_mm",
         "max_member_size_voxels",
         "maximum_member_size_mm",
@@ -136,6 +104,42 @@ _RETIRED_TOPOLOGY_PROPERTIES = frozenset(
 )
 
 
+_RETIRED_INFILL_PROPERTIES = frozenset({
+    "automatic_grid", "voxel_mesh_quality", "voxel_size", "max_voxel_elements",
+    "automatic_mesh_refinement", "automatic_filter_radius", "advanced_overrides",
+    "design_goal", "physics_mode", "formulation", "advanced_settings_visible",
+    "validation_displacement_limit_mm", "validation_yield_safety_factor",
+    "topology_convergence_enabled", "topology_convergence_levels", "volfrac", "rmin",
+    "penal", "E0", "Emin", "nu", "optimizer", "load_aggregation", "load_pnorm_p",
+    "max_iter", "tol", "convergence_patience", "stress_constraint",
+    "structure_cell_size_voxels", "structure_member_thickness_voxels",
+    "structure_skin_thickness_voxels", "lattice_settings_mode", "lattice_variable_density",
+    "lattice_cell_size_mm", "lattice_member_thickness_mm", "lattice_skin_thickness_mm",
+    "lattice_min_relative_density", "lattice_max_relative_density",
+    "lattice_solid_transition_density", "lattice_porosity",
+    "post_lattice_type", "post_lattice_cell_size_mm", "post_lattice_min_thickness_mm",
+    "post_lattice_skin_thickness_mm", "post_lattice_min_density", "post_lattice_max_density",
+})
+
+
+def _migrate_infill_properties(custom):
+    # Older zero skin meant Automatic. New None/Automatic/Manual choices are explicit.
+    if "infill_skin_mode" not in custom:
+        try:
+            thickness = float(custom.get("infill_skin_thickness_mm") or 0.0)
+        except (TypeError, ValueError):
+            thickness = -1.0
+        custom["infill_skin_mode"] = "Automatic" if thickness == 0 else "Manual"
+    custom.setdefault("infill_allow_pitch_coarsening", True)
+    if custom.get("infill_cell_size_mode") == "Manual" and not custom.get("infill_cell_size_mm"):
+        custom["infill_cell_size_mode"] = "Automatic"
+    for name in _RETIRED_INFILL_PROPERTIES | _RETIRED_TOPOLOGY_PROPERTIES:
+        custom.pop(name, None)
+    for name in list(custom):
+        if name.startswith("fea_"):
+            custom.pop(name)
+
+
 def parse_design_studio_session(text: str) -> dict[str, Any]:
     """Parse one unambiguous Design Studio JSON object.
 
@@ -169,38 +173,9 @@ def parse_design_studio_session(text: str) -> dict[str, Any]:
     return session
 
 
-def _is_topology_node(record: Any) -> bool:
-    return is_density_study_record(record)
-
-
-def _guided_topology_property_names(
-    custom: dict[str, Any],
-    *,
-    lattice_study: bool = False,
-) -> set[str]:
-    """Return the context-sensitive intent fields for one Guided study."""
-    names = set(_GUIDED_TOPOLOGY_BASE_PROPERTIES)
-    structure = str(custom.get("structure_mode") or "Solid Envelope").strip().lower()
-    # The lattice node always owns a cell, so its manufacturing dimensions are
-    # always intent. The structure check remains for topology records saved
-    # before lattice generation became a post-processing action.
-    if lattice_study or structure != "solid envelope":
-        names.update(_LATTICE_INTENT_PROPERTIES)
-        # Manual reconstruction settings are user choices even when the
-        # analysis grid uses Guided sizing. Saving must not reset them.
-        if str(custom.get("lattice_settings_mode") or "Guided").lower() == "manual":
-            names.update(_LATTICE_ONLY_PROPERTIES)
-    return names
-
-
 def migrate_cad_reconstruction_properties(session: dict[str, Any]) -> dict[str, Any]:
     """Normalize retired reconstruction selections before graph deserialization."""
     # Structure capability lookup does not load the CAD kernel.
-    names = {
-        "auto (amrto)": "Auto", "amrto": "AMRTO",
-        "amrto bicubic nurbs": "AMRTO", "faceted": "Auto",
-        "recovered shape": "Auto", "smooth freeform": "Smooth spline",
-    }
     nodes = session.get("nodes")
     if isinstance(nodes, dict):
         for record in nodes.values():
@@ -208,25 +183,40 @@ def migrate_cad_reconstruction_properties(session: dict[str, Any]) -> dict[str, 
                 continue
             custom = record.get("custom")
             if isinstance(custom, dict):
-                custom.pop('cad_reconstruction_method', None)
-                density_node = any(name in str(record.get('type_', '')) for name in
-                                   ('topopt_voxel', 'lattice_voxel', 'lattice_infill'))
-                if density_node and 'visualization' in custom and custom['visualization'] not in {'CAD', 'Density'}:
-                    custom['visualization'] = 'CAD'
-                from .topology_optimization.geometry.lattice_cad import topopt_export_formats
+                custom.pop("cad_reconstruction_method", None)
+                density_node = any(
+                    name in str(record.get("type_", ""))
+                    for name in ("topopt_voxel", "lattice_voxel", "lattice_infill")
+                )
+                if (
+                    density_node
+                    and "visualization" in custom
+                    and custom["visualization"]
+                    not in {"CAD", "STL Shape", "Lattice", "Density"}
+                    and not str(custom["visualization"]).startswith("FEA ")
+                ):
+                    custom["visualization"] = "STL Shape"
+                if not density_node:
+                    continue
+                from .topology_optimization.geometry.lattice_cad import (
+                    topopt_export_formats,
+                )
+
                 formats = topopt_export_formats(custom.get("structure_mode"))
-                if custom.get("cad_export_format") and custom["cad_export_format"].upper() not in formats:
+                if (
+                    custom.get("cad_export_format")
+                    and custom["cad_export_format"].upper() not in formats
+                ):
                     custom["cad_export_format"] = formats[0]
                     filename = custom.get("cad_export_filename")
                     if filename:
                         from pathlib import Path
-                        custom["cad_export_filename"] = str(Path(filename).with_suffix(".stl"))
-                if "STEP" not in formats:
-                    custom["generate_cad_after_optimize"] = False
-            if isinstance(custom, dict) and "cad_reconstruction_method" in custom:
-                key = str(custom["cad_reconstruction_method"]).strip().lower()
-                if key in names:
-                    custom["cad_reconstruction_method"] = names[key]
+
+                        custom["cad_export_filename"] = str(
+                            Path(filename).with_suffix(
+                                "." + custom["cad_export_format"].lower()
+                            )
+                        )
     return session
 
 
@@ -274,7 +264,7 @@ def _reject_legacy_independent_loads(session: dict[str, Any]) -> None:
         return
     connections = session.get("connections") or []
     for node_id, record in nodes.items():
-        if not _is_topology_node(record):
+        if not is_density_study_record(record):
             continue
         custom = record.get("custom", {})
         if not isinstance(custom, dict):
@@ -295,15 +285,16 @@ def _reject_legacy_independent_loads(session: dict[str, Any]) -> None:
 
 def compact_design_studio_session(session: dict[str, Any]) -> dict[str, Any]:
     """Preserve inspector settings, including advanced edits and face layers."""
-    migrate_lattice_topology_nodes(session)
-    _reject_legacy_independent_loads(session)
     compact = deepcopy(session)
+    migrate_lattice_topology_nodes(compact)
+    _reject_legacy_independent_loads(compact)
+    migrate_fem_properties(compact)
     compact.pop("_guided_topology_policy", None)
     return compact
 
 
-def migrate_legacy_box_properties(session: dict[str, Any]) -> dict[str, Any]:
-    """Normalize interim BoxNode aliases to the registered x/y/z properties."""
+def migrate_authoring_properties(session: dict[str, Any]) -> dict[str, Any]:
+    """Convert retired authoring properties once, before node construction."""
     nodes = session.get("nodes")
     if not isinstance(nodes, dict):
         return session
@@ -311,18 +302,28 @@ def migrate_legacy_box_properties(session: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(record, dict):
             continue
         type_name = str(record.get("type_") or "")
+        custom = record.get("custom")
+        if not isinstance(custom, dict):
+            continue
+        if type_name.endswith((".NumberNode", ".VariableNode")) or type_name in {
+            "NumberNode", "VariableNode", "com.cad.number", "com.cad.variable",
+        }:
+            if "value_input" not in custom and "value" in custom:
+                custom["value_input"] = str(custom["value"])
+            custom.pop("value", None)
+        if type_name.endswith(".InteractiveSelectFaceNode") or type_name in {
+            "InteractiveSelectFaceNode", "com.cad.select_face_interactive",
+        }:
+            if "picked_face_indices" in custom:
+                custom.setdefault("picked_entity_indices", custom.pop("picked_face_indices"))
         if "BoxNode" in type_name or type_name.endswith(".box"):
-            custom = record.get("custom")
-            if isinstance(custom, dict):
-                for alias, registered_name in (
-                    ("length", "length_x"),
-                    ("width", "width_y"),
-                    ("height", "height_z"),
-                ):
-                    if alias in custom:
-                        if registered_name not in custom:
-                            custom[registered_name] = custom[alias]
-                        custom.pop(alias, None)
+            for alias, registered_name in (
+                ("length", "length_x"),
+                ("width", "width_y"),
+                ("height", "height_z"),
+            ):
+                if alias in custom:
+                    custom.setdefault(registered_name, custom.pop(alias))
     return session
 
 
@@ -341,6 +342,225 @@ _LEGACY_PORT_RENAMES = {
 }
 
 
+def migrate_impact_scenario_properties(session: dict[str, Any]) -> bool:
+    """Normalize retired impact nodes, ports, and physical settings on import."""
+    nodes = session.get("nodes", {}) if isinstance(session, dict) else {}
+    if not isinstance(nodes, dict):
+        return False
+    before = json.dumps(session, sort_keys=True)
+    connections = session.get("connections", [])
+    if not isinstance(connections, list):
+        connections = []
+
+    def kind(record):
+        return str(record.get("type_", "")) if isinstance(record, dict) else ""
+
+    def rename_ports(record, direction, names):
+        ports = record.get(direction)
+        if isinstance(ports, dict):
+            for old, new in names.items():
+                if old not in ports:
+                    continue
+                value = ports.pop(old)
+                existing = ports.setdefault(new, value)
+                if isinstance(existing, dict) and isinstance(value, dict):
+                    for node_id, connected in value.items():
+                        current = existing.setdefault(node_id, [])
+                        for port in connected:
+                            if port not in current:
+                                current.append(port)
+        declarations = record.get(direction[:-1] + "_ports")
+        if isinstance(declarations, list):
+            seen = set()
+            normalized = []
+            for port in declarations:
+                if not isinstance(port, dict):
+                    normalized.append(port)
+                    continue
+                port["name"] = names.get(port.get("name"), port.get("name"))
+                if port["name"] not in seen:
+                    seen.add(port["name"])
+                    normalized.append(port)
+            record[direction[:-1] + "_ports"] = normalized
+
+    for record in nodes.values():
+        type_name = kind(record)
+        if not isinstance(record, dict):
+            continue
+        custom = record.setdefault("custom", {})
+        if not isinstance(custom, dict):
+            continue
+        if type_name.endswith(
+            (".CrashMaterialNode", ".ImpactMaterialNode")
+        ) or type_name.startswith("com.cad.sim.crash_material"):
+            record["type_"] = "com.cad.sim.material.MaterialNode"
+            custom["analysis_purpose"] = "Impact"
+            type_name = record["type_"]
+        if type_name.endswith(".MaterialNode"):
+            rename_ports(
+                record,
+                "outputs",
+                {"impact_material": "material", "crash_material": "material"},
+            )
+        if type_name.endswith(".CrashSolverNode"):
+            rename_ports(
+                record,
+                "inputs",
+                {"impact_material": "material", "crash_material": "material"},
+            )
+            rename_ports(record, "outputs", {"crash_results": "results"})
+        if type_name.endswith(".ImpactConditionNode"):
+            scope = str(custom.get("application_scope", "")).lower().replace("_", " ")
+            if scope == "impact face":
+                custom["application_scope"] = "Fixed specimen + moving impactor"
+            elif scope == "moving body":
+                custom["application_scope"] = "Moving body + fixed wall"
+            try:
+                if float(custom.get("wall_friction", 0.0)) < 0.0:
+                    custom["wall_friction"] = (
+                        0.0 if scope.startswith("moving body") else 0.08
+                    )
+            except (TypeError, ValueError):
+                pass
+
+    # NodeGraphQt also stores connection names inside node port dictionaries.
+    for record in nodes.values():
+        if not isinstance(record, dict):
+            continue
+        for direction in ("inputs", "outputs"):
+            ports = record.get(direction, {})
+            if not isinstance(ports, dict):
+                continue
+            for linked in ports.values():
+                if not isinstance(linked, dict):
+                    continue
+                for node_id, port_names in linked.items():
+                    remote = kind(nodes.get(str(node_id)))
+                    names = {}
+                    if direction == "outputs" and remote.endswith(".CrashSolverNode"):
+                        names = {
+                            "impact_material": "material",
+                            "crash_material": "material",
+                        }
+                    elif direction == "inputs":
+                        if remote.endswith(".MaterialNode"):
+                            names = {
+                                "impact_material": "material",
+                                "crash_material": "material",
+                            }
+                        elif remote.endswith(".CrashSolverNode"):
+                            names = {"crash_results": "results"}
+                    if isinstance(port_names, list):
+                        linked[node_id] = list(
+                            dict.fromkeys(names.get(name, name) for name in port_names)
+                        )
+
+    normalized_connections = []
+    seen = set()
+    for connection in connections:
+        if not isinstance(connection, dict):
+            normalized_connections.append(connection)
+            continue
+        output_ref, input_ref = connection.get("out"), connection.get("in")
+        if (
+            not isinstance(output_ref, (list, tuple))
+            or not isinstance(input_ref, (list, tuple))
+            or len(output_ref) != 2
+            or len(input_ref) != 2
+        ):
+            normalized_connections.append(connection)
+            continue
+        source = nodes.get(str(output_ref[0]))
+        target = nodes.get(str(input_ref[0]))
+        output_ref, input_ref = list(output_ref), list(input_ref)
+        if kind(source).endswith(".MaterialNode") and output_ref[1] in {
+            "impact_material",
+            "crash_material",
+        }:
+            output_ref[1] = "material"
+            source["custom"]["analysis_purpose"] = "Impact"
+        if (
+            kind(source).endswith(".CrashSolverNode")
+            and output_ref[1] == "crash_results"
+        ):
+            output_ref[1] = "results"
+        if kind(target).endswith(".CrashSolverNode") and input_ref[1] in {
+            "impact_material",
+            "crash_material",
+        }:
+            input_ref[1] = "material"
+        if (
+            kind(source).endswith(".ImpactConditionNode")
+            and kind(target).endswith(".CrashSolverNode")
+            and output_ref[1] == input_ref[1] == "impact"
+        ):
+            scenario_custom, solver_custom = source["custom"], target["custom"]
+            if solver_custom.get("impactor_mass_kg") is not None:
+                scenario_custom.setdefault(
+                    "impactor_mass_kg", solver_custom["impactor_mass_kg"]
+                )
+            if "enable_contact" in solver_custom:
+                scenario_custom.setdefault(
+                    "self_contact_enabled", solver_custom["enable_contact"]
+                )
+                scenario_custom.setdefault("self_contact_friction", 0.08)
+        connection.update(out=output_ref, **{"in": input_ref})
+        identity = tuple(output_ref + input_ref)
+        if identity not in seen:
+            seen.add(identity)
+            normalized_connections.append(connection)
+    if "connections" in session:
+        session["connections"] = normalized_connections
+    for record in nodes.values():
+        if kind(record).endswith(".CrashSolverNode") and isinstance(
+            record.get("custom"), dict
+        ):
+            record["custom"].pop("impactor_mass_kg", None)
+            record["custom"].pop("enable_contact", None)
+    return before != json.dumps(session, sort_keys=True)
+
+
+def migrate_fem_properties(session: object) -> bool:
+    """Normalize retired FEM settings before graph deserialization."""
+    if not isinstance(session, dict) or not isinstance(session.get("nodes"), dict):
+        return False
+    support_names = {
+        "Pinned": "Fixed",
+        "Pinned (Fixed for solids)": "Fixed",
+        **{
+            f"{kind} {axis}": f"Block {axis} Translation"
+            for kind in ("Roller", "Symmetry") for axis in "XYZ"
+        },
+    }
+    changed = False
+    for record in session["nodes"].values():
+        if not isinstance(record, dict) or not isinstance(record.get("custom"), dict):
+            continue
+        type_name = str(record.get("type_") or "")
+        custom = record["custom"]
+        retired = ()
+        if type_name.endswith(".MeshNode") or type_name in {
+            "MeshNode", "com.cad.sim.mesh",
+        }:
+            retired = ("mesher", "gmsh_algorithm", "curvature_elements")
+        elif type_name.endswith(".LoadNode") or type_name in {
+            "LoadNode", "com.cad.sim.load",
+        }:
+            retired = ("moment_x", "moment_y", "moment_z")
+        elif type_name.endswith(".ConstraintNode") or type_name in {
+            "ConstraintNode", "com.cad.sim.constraint",
+        }:
+            support = custom.get("constraint_type")
+            if isinstance(support, str) and support in support_names:
+                custom["constraint_type"] = support_names[support]
+                changed = True
+        for name in retired:
+            if name in custom:
+                custom.pop(name)
+                changed = True
+    return changed
+
+
 def migrate_legacy_ports_and_nodes(session: dict[str, Any]) -> dict[str, Any]:
     """Clean up retired ports and legacy properties from saved sessions.
 
@@ -348,9 +568,9 @@ def migrate_legacy_ports_and_nodes(session: dict[str, Any]) -> dict[str, Any]:
     workplane -> selection, part_1..part_4 -> bodies, etc.) and pops retired
     properties like fuse_parts on Group Bodies.
     """
-    from pylcss.cae.design_studio.crash.conditions import migrate_impact_scenario_properties
-
+    migrate_authoring_properties(session)
     migrate_impact_scenario_properties(session)
+    migrate_fem_properties(session)
     nodes = session.get("nodes")
     retired_topology_ports = {"preserved_regions", "obstacle_regions", "thermal_sinks", "thermal_loads"}
     retired_by_node = {}
@@ -359,7 +579,18 @@ def migrate_legacy_ports_and_nodes(session: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(record, dict):
                 continue
             type_name = str(record.get("type_") or "")
-            retired_ports = retired_topology_ports if _is_topology_node(record) else set()
+            retired_ports = retired_topology_ports if is_density_study_record(record) else set()
+            if is_lattice_study_record(record):
+                retired_ports = retired_ports | {"material", "supports", "loads"}
+            if is_density_study_record(record):
+                outputs = record.get("outputs")
+                if isinstance(outputs, dict):
+                    for retired_name in ("result", "topopt_result"):
+                        if retired_name in outputs:
+                            outputs.setdefault("results", outputs.pop(retired_name))
+                for port in record.get("output_ports") or []:
+                    if isinstance(port, dict) and port.get("name") in {"result", "topopt_result"}:
+                        port["name"] = "results"
             if type_name.endswith((".MaterialNode", ".material")):
                 retired_ports = {"thermal_conductivity"}
             if retired_ports:
@@ -408,6 +639,8 @@ def migrate_legacy_ports_and_nodes(session: dict[str, Any]) -> dict[str, Any]:
                     in_info[1] = _LEGACY_PORT_RENAMES[in_info[1]]
             out_info = conn.get("out")
             if isinstance(out_info, list) and len(out_info) == 2:
+                if out_info[1] in {"result", "topopt_result"} and isinstance(nodes, dict) and is_density_study_record(nodes.get(out_info[0])):
+                    out_info[1] = "results"
                 if out_info[1] in _LEGACY_PORT_RENAMES:
                     out_info[1] = _LEGACY_PORT_RENAMES[out_info[1]]
 
@@ -415,17 +648,12 @@ def migrate_legacy_ports_and_nodes(session: dict[str, Any]) -> dict[str, Any]:
 
 
 def expand_guided_topology_session(session: dict[str, Any]) -> dict[str, Any]:
-    """Hydrate derived Guided controls before NodeGraphQt deserialization.
+    """Fill missing solver defaults before NodeGraphQt deserialization.
 
-    This preserves the compact file format without making execution depend on
-    whatever low-level defaults happen to be declared in the node constructor.
-    A policy upgrade changes one deterministic mapping, while the saved design
-    goal, fidelity, process, physical sizes, and user-visible choices remain
-    authoritative.
+    Saved user settings override defaults derived from the current design goal.
     """
     migrate_lattice_topology_nodes(session)
     _reject_legacy_independent_loads(session)
-    session = migrate_legacy_box_properties(session)
     session = migrate_legacy_ports_and_nodes(session)
     nodes = session.get("nodes")
     if not isinstance(nodes, dict):
@@ -433,14 +661,17 @@ def expand_guided_topology_session(session: dict[str, Any]) -> dict[str, Any]:
 
     from pylcss.cae.design_studio.topology_optimization.configuration.presets import (
         industrial_topopt_defaults,
-        migrate_design_goal,
+        normalize_design_goal,
     )
 
     for record in nodes.values():
-        if not _is_topology_node(record):
+        if not is_density_study_record(record):
             continue
         custom = record.get("custom")
         if not isinstance(custom, dict):
+            continue
+        if is_lattice_study_record(record):
+            _migrate_infill_properties(custom)
             continue
         # Remove retired/legacy property keys that are no longer registered
         # NodeGraphQt properties. An unknown name is not ignored on load — it
@@ -449,22 +680,8 @@ def expand_guided_topology_session(session: dict[str, Any]) -> dict[str, Any]:
         for retired in _RETIRED_TOPOLOGY_PROPERTIES:
             custom.pop(retired, None)
         custom["physics_mode"] = "Structural"
-        goal, aggregation = migrate_design_goal(custom.get("design_goal"))
-        custom["design_goal"] = goal
-        if aggregation is not None:
-            custom["load_aggregation"] = aggregation
-        legacy_workflow = custom.pop("workflow_mode", None)
-        if str(legacy_workflow or "").lower() == "expert":
-            custom.setdefault("automatic_grid", False)
-            custom.setdefault("automatic_filter_radius", False)
-            custom.setdefault("advanced_overrides", json.dumps(sorted(custom)))
-            continue
-        resolved = industrial_topopt_defaults(custom.get("design_goal"))
-        # The former Guided policy always used these stopping controls. Keep
-        # that behavior on migration while allowing new advanced edits to persist.
-        if legacy_workflow is not None:
-            custom.update(max_iter=120, tol=0.0035, convergence_patience=6)
-        resolved.pop("workflow_mode", None)
+        custom["design_goal"] = normalize_design_goal(custom.get("design_goal"))
+        resolved = industrial_topopt_defaults(custom["design_goal"])
         record["custom"] = {**resolved, **custom}
     return session
 
@@ -531,3 +748,18 @@ def sanitize_unregistered_nodes(
             session["connections"] = cleaned_connections
 
     return omitted_descriptions
+
+
+def prepare_design_studio_session(
+    session: dict[str, Any],
+    known_classes: dict[str, type] | None = None,
+) -> list[str]:
+    """Apply the common GUI/runtime import policy and return omitted node labels.
+
+    Reconstruction settings are normalized before retired lattice nodes are
+    retyped; expansion then migrates ports and fills missing solver defaults.
+    The supplied session is updated in place, ready for deserialization.
+    """
+    migrate_cad_reconstruction_properties(session)
+    expand_guided_topology_session(session)
+    return sanitize_unregistered_nodes(session, known_classes=known_classes)

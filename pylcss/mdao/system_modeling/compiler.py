@@ -9,6 +9,8 @@ import keyword
 import re
 from typing import Any
 
+import networkx as nx
+
 from .codegen import (
     BLOCK_NODE as _BLOCK_NODE,
     INPUT_NODE as _INPUT_NODE,
@@ -19,6 +21,8 @@ from .codegen import (
     as_bool as _as_bool,
     block_function_source as _block_function_source,
     connected_value as _connected_value,
+    connection_graph,
+    emit_surrogate_loaders,
     is_node as _is_node,
     only_port as _only_port,
     plot_color as _plot_color,
@@ -27,7 +31,6 @@ from .codegen import (
     safe_node_id as _safe_node_id,
     single_source as _single_source,
     topological_nodes as _topological_nodes,
-    wrapper_source as _wrapper_source,
 )
 from .types import InputSpec, OutputSpec
 
@@ -47,7 +50,11 @@ class GraphBuilder:
             clean = "block"
         if clean[0].isdigit():
             clean = f"_{clean}"
-        if keyword.iskeyword(clean) or clean in _RESERVED_NAMES:
+        if (
+            keyword.iskeyword(clean)
+            or clean in _RESERVED_NAMES
+            or re.fullmatch(r"system_function(?:_\d+)?", clean)
+        ):
             clean = f"block_{clean}"
         return clean
 
@@ -64,7 +71,6 @@ class GraphBuilder:
     def build_system_model(
         self,
         function_name: str = "system_function",
-        global_reserved_names: set[str] | None = None,
     ) -> tuple[str, list[InputSpec], list[OutputSpec]]:
         """Build source plus input/output metadata for the graph."""
 
@@ -72,14 +78,10 @@ class GraphBuilder:
         nodes = list(self.graph.all_nodes())
         input_nodes = [node for node in nodes if _is_node(node, _INPUT_NODE)]
         output_nodes = [node for node in nodes if _is_node(node, _OUTPUT_NODE)]
-        if not input_nodes:
-            raise GraphCompilationError("The graph has no input nodes.")
         if not output_nodes:
             raise GraphCompilationError("The graph has no output nodes.")
 
         self.used_names = {function_name}
-        if global_reserved_names:
-            self.used_names.update(global_reserved_names)
 
         inputs, input_names = self._collect_inputs(input_nodes)
         outputs, output_names = self._collect_outputs(output_nodes)
@@ -100,11 +102,13 @@ class GraphBuilder:
             "",
         ]
 
-        surrogate_names = self._emit_surrogate_loaders(lines, blocks)
+        surrogate_names = emit_surrogate_loaders(lines, blocks)
+        block_names: dict[str, str] = {}
         for block in blocks:
             if not _is_node(block, _BLOCK_NODE):
                 continue
-            block_name = self._allocate_block_name(block, global_reserved_names)
+            block_name = self._get_unique_name(block.name())
+            block_names[block.id] = block_name
             lines.extend(
                 _block_function_source(
                     block,
@@ -113,9 +117,8 @@ class GraphBuilder:
                 )
             )
 
-        core_name = f"_{function_name}_core"
         arguments = ", ".join(item["name"] for item in inputs)
-        lines.append(f"def {core_name}({arguments}):")
+        lines.append(f"def {function_name}({arguments}):")
         lines.extend(
             self._core_body(
                 blocks,
@@ -123,9 +126,49 @@ class GraphBuilder:
                 output_nodes,
                 input_names,
                 output_names,
+                block_names,
             )
         )
-        lines.extend(_wrapper_source(function_name, core_name, inputs))
+        # Separate evaluators execute only an output's upstream blocks. A cache
+        # shared by merged calls prevents repeating a block for several outputs.
+        flow = connection_graph(nodes)
+        dependencies: dict[str, list[str]] = {}
+        output_functions: dict[str, str] = {}
+        for index, output in enumerate(output_nodes):
+            ancestors = nx.ancestors(flow, output.id)
+            relevant_inputs = [node for node in input_nodes if node.id in ancestors]
+            relevant_blocks = [block for block in blocks if block.id in ancestors]
+            name = output_names[output.id]
+            dependencies[name] = [input_names[node.id] for node in relevant_inputs]
+            evaluator = self._get_unique_name(f"_pylcss_output_{index}")
+            values_name = self._get_unique_name("_pylcss_values")
+            cache_name = self._get_unique_name("_pylcss_cache")
+            output_functions[name] = evaluator
+            lines.extend(["", f"def {evaluator}({values_name}, {cache_name}):"])
+            for node in relevant_inputs:
+                variable = input_names[node.id]
+                lines.append(f"    {variable} = {values_name}[{variable!r}]")
+            lines.extend(
+                self._core_body(
+                    relevant_blocks,
+                    relevant_inputs,
+                    [output],
+                    input_names,
+                    output_names,
+                    block_names,
+                    cache_name,
+                )
+            )
+        entries = ", ".join(
+            f"{name!r}: {function}" for name, function in output_functions.items()
+        )
+        lines.extend(
+            [
+                "",
+                f"_OUTPUT_INPUTS = {dependencies!r}",
+                f"_OUTPUT_FUNCTIONS = {{{entries}}}",
+            ]
+        )
 
         source = "\n".join(lines).rstrip() + "\n"
         try:
@@ -135,26 +178,6 @@ class GraphBuilder:
                 f"Generated source is invalid at line {exc.lineno}: {exc.msg}."
             ) from exc
         return source, inputs, outputs
-
-    def build_spy_model(
-        self,
-        nodes: list[Any],
-        input_nodes: list[Any],
-        output_nodes: list[Any],
-        target_node_id: str,
-        function_name: str = "spy_model",
-    ) -> tuple[str, list[dict[str, str]], list[dict[str, str]]]:
-        """Build the training probe used by the surrogate-modeling UI."""
-
-        from .spy_compiler import build_spy_model
-
-        return build_spy_model(
-            nodes,
-            input_nodes,
-            output_nodes,
-            target_node_id,
-            function_name,
-        )
 
     def _collect_inputs(
         self,
@@ -202,17 +225,11 @@ class GraphBuilder:
                     "name": name,
                     "display_name": name,
                     "unit": props.get("unit", _property(node, "unit", "-")),
-                    "req_min": props.get(
-                        "req_min", _property(node, "req_min", "-1e9")
-                    ),
-                    "req_max": props.get(
-                        "req_max", _property(node, "req_max", "1e9")
-                    ),
-                    "minimize": bool(_property(node, "minimize", False)),
-                    "maximize": bool(_property(node, "maximize", False)),
-                    "show_in_legend": bool(
-                        _property(node, "show_in_legend", True)
-                    ),
+                    "req_min": props.get("req_min", _property(node, "req_min", "-1e9")),
+                    "req_max": props.get("req_max", _property(node, "req_max", "1e9")),
+                    "minimize": _as_bool(_property(node, "minimize", False)),
+                    "maximize": _as_bool(_property(node, "maximize", False)),
+                    "show_in_legend": _as_bool(_property(node, "show_in_legend", True)),
                     "color": _plot_color(node),
                 }
             )
@@ -225,61 +242,6 @@ class GraphBuilder:
             )
         self.used_names.add(name)
 
-    def _allocate_block_name(
-        self,
-        block: Any,
-        global_reserved_names: set[str] | None,
-    ) -> str:
-        name = self._get_unique_name(block.name())
-        if global_reserved_names is not None:
-            while name in global_reserved_names:
-                name = self._get_unique_name(name)
-            global_reserved_names.add(name)
-        block.set_property("func_name", name)
-        return name
-
-    def _emit_surrogate_loaders(
-        self,
-        lines: list[str],
-        blocks: list[Any],
-    ) -> dict[str, str]:
-        surrogate_names: dict[str, str] = {}
-        surrogate_blocks = [
-            block
-            for block in blocks
-            if _is_node(block, _BLOCK_NODE)
-            and _as_bool(_property(block, "use_surrogate", False))
-            and _property(block, "surrogate_model_path")
-        ]
-        if not surrogate_blocks:
-            return surrogate_names
-
-        lines.extend(
-            [
-                "import joblib",
-                "",
-                "def _load_surrogate(path):",
-                "    candidates = [path]",
-                "    if not os.path.isabs(path):",
-                "        candidates.extend([",
-                "            os.path.join(os.getcwd(), path),",
-                "            os.path.join(BASE_DIR, path),",
-                "        ])",
-                "    for candidate in candidates:",
-                "        if os.path.isfile(candidate):",
-                "            return joblib.load(candidate)",
-                "    raise FileNotFoundError(f'Surrogate model not found: {path}')",
-                "",
-            ]
-        )
-        for block in surrogate_blocks:
-            model_name = f"_surrogate_{_safe_node_id(block.id)}"
-            path = str(_property(block, "surrogate_model_path"))
-            lines.append(f"{model_name} = _load_surrogate({path!r})")
-            surrogate_names[block.id] = model_name
-        lines.append("")
-        return surrogate_names
-
     def _core_body(
         self,
         blocks: list[Any],
@@ -287,6 +249,8 @@ class GraphBuilder:
         output_nodes: list[Any],
         input_names: dict[str, str],
         output_names: dict[str, str],
+        block_names: dict[str, str],
+        cache_name: str | None = None,
     ) -> list[str]:
         lines: list[str] = []
         values: dict[tuple[str, str], str] = {}
@@ -319,18 +283,20 @@ class GraphBuilder:
                 _connected_value(values, _single_source(port, block), block)
                 for port in block.input_ports()
             ]
-            function = _property(block, "func_name")
-            if not isinstance(function, str) or not function:
-                raise GraphCompilationError(
-                    f"Function name was not assigned for block {block.name()!r}."
-                )
+            function = block_names[block.id]
             result_names: list[str] = []
             for port in block.output_ports():
                 _require_identifier(port.name(), f"output port on {block.name()!r}")
-                result_name = f"_v_{_safe_node_id(block.id)}_{port.name()}"
+                result_name = self._get_unique_name(
+                    f"_v_{_safe_node_id(block.id)}_{port.name()}"
+                )
                 result_names.append(result_name)
                 values[(block.id, port.name())] = result_name
             call = f"{function}({', '.join(call_arguments)})"
+            if cache_name is not None:
+                lines.append(f"    if {block.id!r} not in {cache_name}:")
+                lines.append(f"        {cache_name}[{block.id!r}] = {call}")
+                call = f"{cache_name}[{block.id!r}]"
             if result_names:
                 lines.append(f"    {', '.join(result_names)} = {call}")
             else:

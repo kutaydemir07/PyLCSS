@@ -9,19 +9,6 @@ from pylcss.cae.design_studio.core.base_node import CadQueryNode
 def _finite_value_node_result(node):
     """Resolve the visible text field without silently masking invalid text."""
     raw = node.get_property('value_input')
-    legacy = node.get_property('value')
-    if raw is None or str(raw).strip() == '':
-        raw = legacy
-    elif str(raw).strip() in {'10', '10.0'} and legacy is not None:
-        try:
-            legacy_value = float(legacy)
-        except (TypeError, ValueError):
-            legacy_value = 10.0
-        if legacy_value != 10.0:
-            # Old sessions stored Number values only in ``value``.  The newer
-            # inline editor contributes its default ``value_input='10.0'``
-            # during deserialization, which otherwise masks the saved value.
-            raw = legacy
     try:
         value = float(raw)
     except (TypeError, ValueError):
@@ -46,8 +33,6 @@ class NumberNode(CadQueryNode):
         # Add input field directly on the node for easy access
         self.add_text_input('value_input', 'Value', text='10.0')
 
-        # Keep property for backward compatibility and property panel access
-        self.create_property('value', 10.0, widget_type='float')
         # When non-empty, this number becomes a named input on the cad runtime
         # API (cad.fea("file.cad", <exposed_name>=value, ...)).
         self.create_property('exposed_name', '', widget_type='text')
@@ -70,7 +55,6 @@ class VariableNode(CadQueryNode):
         self.add_text_input('variable_name', 'Name', text='var1')
         self.add_text_input('value_input', 'Value', text='0.0')
 
-        self.create_property('value', 0.0, widget_type='float')
         # When non-empty, this variable becomes a named input on the cad runtime
         # API (cad.fea("file.cad", <exposed_name>=value, ...)). Defaults to the
         # ``variable_name`` value when left blank.

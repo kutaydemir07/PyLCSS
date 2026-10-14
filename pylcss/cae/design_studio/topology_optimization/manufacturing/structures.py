@@ -1,20 +1,15 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-"""Optimization-aware printable structures for topology-optimized designs.
+"""Explicit lattice geometry inside a topology envelope.
 
-Every mode here uses the optimized continuum density as a local relative-density
-design field, so the explicit wall or strut is sized locally from that field
-instead of inserting one constant-thickness lattice after the solve.
-
-The families with a cubic effective tensor are de-homogenized from the measured
-cell laws in :mod:`.cell_material`, which are the same laws the part-scale solve
-was driven by. The rest — honeycomb, and the surfaces whose symmetry is not
-cubic — keep an isotropic continuum interpretation. Independent re-analysis of
-the explicit manufactured geometry is mandatory either way.
-
-Which families exist, what each one's geometry is, and which of them carry a
-measured law is not decided here: it all comes from :mod:`.lattice_families`.
+The desktop workflow optimizes a solid SIMP field before generating cells.
+This module builds uniform or density-graded cells, preserves passive regions,
+and reports connectivity and envelope coverage. Available material laws
+calibrate strut thickness; TPMS walls use implicit-field occupancy calibration.
+The resulting geometry requires its own structural verification.
+Cell definitions and resolution guidance come from :mod:`.lattice_families`.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -26,7 +21,6 @@ import numpy as np
 
 from . import lattice_families as families
 from .lattice_families import FAMILIES, LatticeFamily, normalize_family_key
-from .lattice_families import PUBLIC_LATTICE_FAMILY_NAMES as PUBLIC_LATTICE_FAMILY_NAMES
 from .member_sizing import OptimizedMemberPlan, rasterize_member_plan
 
 logger = logging.getLogger(__name__)
@@ -49,18 +43,9 @@ class ManufacturingStructureOptions:
     minimum_relative_density: float = 0.15
     maximum_relative_density: float = 0.60
     solid_transition_density: float = 0.92
-    # Fraction of the envelope the built structure should occupy. Zero keeps
-    # ``member_thickness_voxels`` as the control. Cell pitch and member
-    # thickness are the two numbers a printer's capability is stated in, but
-    # they map onto mass in a way nobody can predict by eye: an 8 mm octet cell
-    # with 1.6 mm struts measures 34% relative density -- a perforated solid,
-    # not the open lattice those numbers suggest. Stating the target directly
-    # and solving for the thickness is how a mass budget is actually met.
+    # Optional whole-envelope occupancy target, fitted by building trials.
     target_relative_density: float = 0.0
-    # Uniform thickening of a de-homogenized strut lattice. On that path the
-    # cell law sets the member thickness from the local density, so member
-    # thickness is no longer a free control and this is what a whole-part mass
-    # budget has to move instead. 1.0 builds exactly what the law asks for.
+    # Scale density-derived strut radii while retaining the minimum diameter.
     member_scale: float = 1.0
     # Off-pattern ligaments are a geometry change that requires explicit intent.
     repair_connections: bool = False
@@ -70,9 +55,7 @@ class ManufacturingStructureOptions:
         if not mode:
             raise ValueError(
                 "Structure mode must be Solid Envelope or one of: "
-                + ", ".join(
-                    family.display_name for family in FAMILIES.values()
-                )
+                + ", ".join(family.display_name for family in FAMILIES.values())
                 + "."
             )
         object.__setattr__(self, "mode", mode)
@@ -90,42 +73,31 @@ class ManufacturingStructureOptions:
             if not math.isfinite(value) or value < 0.0:
                 raise ValueError(f"{name} must be finite and non-negative.")
             object.__setattr__(self, name, value)
-        if not (0.05 <= self.member_scale <= 20.0):
-            raise ValueError("Lattice member scale must be between 0.05 and 20.")
-        if self.target_relative_density and not (
-            0.02 <= self.target_relative_density <= 0.95
-        ):
-            raise ValueError(
-                "Target relative density must be between 0.02 and 0.95, or 0 to "
-                "size the structure from an explicit member thickness instead."
-            )
         object.__setattr__(self, "variable_density", bool(self.variable_density))
         object.__setattr__(self, "repair_connections", bool(self.repair_connections))
         is_lattice = self.mode != "solid"
-        if is_lattice and self.cell_size_voxels <= 0.0:
-            # Pitch is measured in source-grid voxels. Surface recovery sizes
-            # its independent build grid to resolve the actual cell family.
+        if not is_lattice:
+            return
+        if self.cell_size_voxels <= 0.0:
             raise ValueError("A lattice cell size must be positive.")
-        if is_lattice and self.member_thickness_voxels <= 0.0:
+        if self.member_thickness_voxels <= 0.0:
             raise ValueError("A lattice member thickness must be positive.")
-        if is_lattice and self.cell_size_voxels < 4.0 * self.member_thickness_voxels:
+        if self.member_scale <= 0.0:
+            raise ValueError("Lattice member scale must be positive.")
+        if self.target_relative_density > 1.0:
             raise ValueError(
-                "Lattice cell size must be at least four times the member "
-                "thickness so the cell openings remain resolved."
+                "Target relative density must be between 0 and 1; "
+                "0 sizes the structure from member thickness."
             )
-        if is_lattice and self.skin_thickness_voxels > 0.25 * self.cell_size_voxels:
-            raise ValueError(
-                "Lattice skin thickness must not exceed one quarter of the "
-                "cell size."
-            )
-        if not (
-            0.0 < self.minimum_relative_density
-            < self.maximum_relative_density
+        if self.variable_density and not (
+            0.0
+            < self.minimum_relative_density
+            <= self.maximum_relative_density
             <= self.solid_transition_density
             <= 1.0
         ):
             raise ValueError(
-                "Lattice densities require 0 < minimum < maximum <= solid "
+                "Lattice densities require 0 < minimum <= maximum <= solid "
                 "transition <= 1."
             )
 
@@ -141,20 +113,10 @@ class ManufacturingStructureOptions:
 
 
 def _envelope_thickness_voxels(envelope: np.ndarray) -> float:
-    """Representative wall thickness of an optimized envelope, in voxels.
+    """Estimate representative envelope rib thickness in voxels.
 
-    A periodic cell has to fit inside the material it is filling. The bounding
-    box says nothing about that — an optimized result is a set of ribs whose
-    thickness is a small fraction of the box — so this measures the ribs.
-
-    The statistic is the material-weighted median of twice the interior
-    distance transform: for every solid voxel, twice its distance to the
-    nearest free surface is the local wall thickness, and the median over the
-    material is the thickness that describes most of the part. A minimum would
-    be set by a single tapering rib tip and would collapse the pitch for the
-    whole study; a mean is pulled up by the few thick blocks around the load
-    and support interfaces, which are exactly the regions that do *not* need a
-    lattice fitted into them.
+    Return twice the median interior distance to a free surface. Padding with
+    void includes the array's exterior faces in the measurement.
     """
     from scipy import ndimage as ndi
 
@@ -203,23 +165,13 @@ def _tpms_band_for_relative_density(
     mode: str,
     samples: int = 64,
 ) -> np.ndarray:
-    """Map requested cell-relative density to an implicit level threshold.
+    """Convert requested occupancy to a calibrated implicit-field threshold.
 
-    The lookup table is the numerical cumulative distribution of the level-set
-    value over one periodic cell.  Consequently a requested relative density of
-    ``r`` occupies approximately ``r`` of a resolved unit cell before skin and
-    attachment solids are added.
-
-    Which value is tabulated is what separates the two wall interpretations. A
-    sheet is the shell ``|f| <= t`` around the surface, so its table is the
-    distribution of ``|f|`` and the threshold is a half-band. A skeletal
-    network is one side of it, ``f <= t``, so its table is the distribution of
-    the signed ``f`` and the threshold is a level — which for these surfaces is
-    negative over most of the useful density range. Sharing one calibration
-    routine is what keeps a requested density meaning the same thing in both.
+    Cache sorted samples from one periodic cell at the requested resolution.
+    Sheets use absolute field values; skeletal networks use signed values.
+    Choose the first threshold containing at least the requested fraction.
     """
-    # Calibrate at the actual resolved points per cell. A continuum 64³ lookup
-    # badly overfilled a Diamond sheet sampled on only 6–8 voxels per cell.
+    # Calibrate at the resolved sampling density, including discrete ties.
     samples = int(np.clip(round(samples), 3, 64))
     key = (mode, samples)
     if key not in _TPMS_BAND_LUT:
@@ -229,13 +181,8 @@ def _tpms_band_for_relative_density(
         values = implicit if skeletal else np.abs(implicit)
         _TPMS_BAND_LUT[key] = np.sort(values.ravel())
     bands = _TPMS_BAND_LUT[key]
-    requested = np.clip(
-        np.asarray(relative_density, dtype=float), 0.0, 1.0
-    )
-    # Select the first discrete threshold that contains at least the requested
-    # cell fraction. Interpolating repeated quantiles is unreliable on coarse
-    # 6--8 voxel cells and previously collapsed nominal 20--35% sheets to a
-    # few isolated voxels.
+    requested = np.clip(np.asarray(relative_density, dtype=float), 0.0, 1.0)
+    # Quantile interpolation across repeated values can miss thin walls.
     indices = np.ceil(requested * bands.size).astype(int) - 1
     indices = np.clip(indices, 0, bands.size - 1)
     return bands[indices] + 32.0 * np.finfo(float).eps
@@ -254,44 +201,25 @@ def _periodic_lattice(
     family = FAMILIES.get(mode)
     skeletal = family is not None and family.wall_mode == "skeletal"
 
-    # Convert the minimum printable wall thickness to a cell-relative volume
-    # fraction, then use the same calibrated implicit-field CDF as the target
-    # density. A raw π*t/cell band strongly overfilled Diamond cells (often
-    # >80% solid for a one-voxel wall in an 8-voxel cell).
-    #
-    # The conversion is the surface's own specific area: a sheet of thickness
-    # ``t`` around a mid-surface of area ``A`` per unit cell fills ``A*t/a`` of
-    # that cell. ``A`` is measured from this family's field
-    # (:func:`~.lattice_families.tpms_specific_surface_area`), not assumed.
-    # A single shared factor of 2 was wrong by roughly +55% for the gyroid and
-    # -15% for the Schwarz P, in opposite directions, so a stated printable
-    # wall built a different thickness on every surface.
-    #
-    # A skeletal ligament of thickness t is one solid body of width t rather
-    # than two shells of t/2 either side of the surface, and its solid already
-    # occupies half the cell at the surface itself, so the same printable wall
-    # buys roughly half the cell fraction it does for a sheet.
+    # Approximate thin-wall occupancy as specific area * thickness / pitch.
+    # Skeletal ligaments use half the sheet conversion.
     wall_to_fraction = families.tpms_specific_surface_area(mode)
     if skeletal:
         wall_to_fraction *= 0.5
-    minimum_fraction = float(np.clip(
-        wall_to_fraction
-        * float(member_thickness)
-        / max(float(cell_size), 1e-9),
-        0.02,
-        0.80,
-    ))
-    minimum_band = float(_tpms_band_for_relative_density(
-        np.asarray(minimum_fraction), mode, samples=int(round(cell_size))
-    ))
+    minimum_fraction = float(
+        np.clip(
+            wall_to_fraction * float(member_thickness) / max(float(cell_size), 1e-9),
+            0.02,
+            0.80,
+        )
+    )
+    minimum_band = float(
+        _tpms_band_for_relative_density(
+            np.asarray(minimum_fraction), mode, samples=int(round(cell_size))
+        )
+    )
     if relative_density is None:
-        # A calibrated floor, not a fixed level. The previous constant 0.12 was
-        # tied to the gyroid/diamond amplitude and meant nothing for a surface
-        # like Neovius, whose level-set runs to about 7; worse, at the common
-        # 8-voxel cell it selected *no* voxels at all for either family, so a
-        # uniform-density lattice survived only because the printable-wall
-        # floor below happened to be larger. Stating it as a density gives the
-        # same thin default sheet at fine resolution and cannot collapse.
+        # Uniform cells use the 10% baseline or the larger wall-derived floor.
         default = _tpms_band_for_relative_density(
             np.asarray(0.10), mode, samples=int(round(cell_size))
         )
@@ -316,12 +244,7 @@ def _periodic_lattice(
 
 
 def dehomogenizing_cell_law(mode: str) -> Any:
-    """Return the homogenized law that sizes ``mode``, or ``None``.
-
-    One predicate for "does this family de-homogenize from a measured law",
-    so the sizing code and the mass-budget search cannot disagree about which
-    control actually moves the built density.
-    """
+    """Return an available geometry-calibration law without building a new one."""
     from .cell_material import cell_material_law
 
     return cell_material_law(mode, allow_build=False)
@@ -333,24 +256,11 @@ _STRUT_DENSITY_CURVE: dict[tuple[str, int], tuple[np.ndarray, np.ndarray]] = {}
 def _strut_density_curve(
     mode: str, cell_size: float
 ) -> tuple[np.ndarray, np.ndarray] | None:
-    """Measured ``(relative density, member radius)`` for one strut family.
+    """Measure and cache a strut family's density-to-radius calibration.
 
-    The strut counterpart of the TPMS level-set CDF, and it exists for the same
-    reason: a requested relative density has to select the geometry that
-    actually measures that density, on this family, at this resolution.
-
-    Without it the fallback was ``r = r0 * sqrt(rho / 0.35)`` clipped to a
-    narrow band — an approximation that carries no information about the
-    family at all, so the same request built wildly different parts. Measured
-    on the bundled crush block, a BCC lattice asked for 10-50% relative density
-    delivered 11% and fragmented into 223 pieces, because the requested density
-    never reached the radius: only the member thickness did, and that had
-    become a resolution floor rather than a design control.
-
-    One distance field per (family, resolution), thresholded across the radius
-    range through the same :func:`~.lattice_families.strut_occupancy` the part
-    is rasterized with, so the raster allowance is included rather than being a
-    systematic offset between the curve and the build.
+    Threshold one unit-cell distance field over a radius sweep, including the
+    raster allowance, and retain strictly increasing occupancy samples.
+    Return densities and radii expressed as fractions of cell pitch.
     """
     samples = int(np.clip(round(float(cell_size)), 12, 40))
     key = (str(mode), samples)
@@ -365,9 +275,7 @@ def _strut_density_curve(
     densities = np.asarray(
         [
             float(
-                families.strut_occupancy(
-                    distance, float(radius), float(samples)
-                ).mean()
+                families.strut_occupancy(distance, float(radius), float(samples)).mean()
             )
             for radius in radii
         ],
@@ -393,29 +301,12 @@ def _strut_radius_field(
     cell_size: float = 0.0,
     member_scale: float = 1.0,
 ) -> np.ndarray | float:
-    """Return the local strut radius, in voxels, for a requested density field.
+    """Convert requested local density to a strut radius in voxels.
 
-    This is the de-homogenization map for the strut families: it converts the
-    macro optimizer's relative density back into the geometry that measures
-    that density. When the family has a homogenized cell law, the conversion
-    uses the measured density-to-thickness relation the law was built from,
-    which is the same relation that produced the stiffness the optimizer was
-    driven by. Anything else would generate geometry the macro solve did not
-    describe.
-
-    On that path the law fixes the *distribution* of material and
-    ``member_scale`` sets its *level*: the requested member thickness no
-    longer means anything, because the density field already determines the
-    thickness everywhere. A whole-part mass budget therefore has to move
-    ``member_scale``, which is what :func:`resolve_target_relative_density`
-    searches on.
-
-    Without a shipped law it uses the family's measured density-radius curve
-    (:func:`_strut_density_curve`), which is the same inversion the law itself
-    was built from. Only if that measurement is unavailable does it fall back
-    to the old approximation — strut volume scaling with radius squared about a
-    35% reference — which is clipped tightly because outside a narrow band it
-    stops resembling the real relation at all.
+    Use the material law's measured thickness parameters when available,
+    otherwise a measured radius curve. The explicit member thickness remains
+    a minimum diameter; member_scale adjusts the density-derived radius.
+    Only an unavailable calibration uses the square-root approximation.
     """
     radius = max(0.25, 0.5 * float(member_thickness))
     if relative_density is None:
@@ -452,17 +343,10 @@ def _strut_lattice(
     origin: tuple[int, int, int] = (0, 0, 0),
     mask: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Rasterize any strut family from its registry edge list.
+    """Rasterize the family edge list using constant or density-derived radii.
 
-    One distance evaluation against the family's centrelines, thresholded at
-    the local member radius. This replaces the hand-written cubic and octet
-    rasterizers and reproduces both of them voxel for voxel, which is what let
-    the four families added around them share the calibration those two were
-    tuned with.
-
-    With ``mask`` the distance is evaluated only on the selected voxels and the
-    result is written back into a full array. A lattice exists only inside the
-    optimized envelope, so on a typical part that is most of the work skipped.
+    A mask restricts distance evaluation to selected voxels; the returned mask
+    still has the full block shape.
     """
     period = max(float(cell_size), 1e-9)
     radius = (
@@ -491,29 +375,8 @@ def _strut_lattice(
         radius[selected] if np.ndim(radius) else radius  # type: ignore[index]
     )
     result = np.zeros(tuple(int(v) for v in shape), dtype=bool)
-    result[selected] = families.strut_occupancy(
-        distance, local_radius, period
-    )
+    result[selected] = families.strut_occupancy(distance, local_radius, period)
     return result
-
-
-def _cubic_or_octet_lattice(
-    shape: tuple[int, int, int],
-    mode: str,
-    cell_size: float,
-    member_thickness: float,
-    relative_density: np.ndarray | None,
-    member_scale: float = 1.0,
-) -> np.ndarray:
-    """Backwards-compatible alias for :func:`_strut_lattice`."""
-    return _strut_lattice(
-        shape,
-        mode,
-        cell_size,
-        member_thickness,
-        relative_density,
-        member_scale,
-    )
 
 
 def _honeycomb_lattice(
@@ -528,10 +391,7 @@ def _honeycomb_lattice(
 
     # Map to the nearest flat-top hex center using axial/cube rounding.
     q = (2.0 / 3.0) * x / circumradius
-    r = (
-        (-1.0 / 3.0) * x
-        + (np.sqrt(3.0) / 3.0) * y
-    ) / circumradius
+    r = ((-1.0 / 3.0) * x + (np.sqrt(3.0) / 3.0) * y) / circumradius
     cube_x, cube_z = q, r
     cube_y = -cube_x - cube_z
     rx, ry, rz = np.rint(cube_x), np.rint(cube_y), np.rint(cube_z)
@@ -547,17 +407,18 @@ def _honeycomb_lattice(
     center_y = circumradius * np.sqrt(3.0) * (rz + 0.5 * rx)
     local_x, local_y = x - center_x, y - center_y
     inradius = np.sqrt(3.0) * 0.5 * circumradius
-    projections = np.stack([
-        np.abs(np.cos(angle) * local_x + np.sin(angle) * local_y)
-        for angle in (np.pi / 6.0, np.pi / 2.0, 5.0 * np.pi / 6.0)
-    ])
-    distance_to_wall = np.maximum(
-        0.0, inradius - np.max(projections, axis=0)
+    projections = np.stack(
+        [
+            np.abs(np.cos(angle) * local_x + np.sin(angle) * local_y)
+            for angle in (np.pi / 6.0, np.pi / 2.0, 5.0 * np.pi / 6.0)
+        ]
     )
+    distance_to_wall = np.maximum(0.0, inradius - np.max(projections, axis=0))
     if relative_density is not None:
         dens = np.clip(np.asarray(relative_density, dtype=float), 0.02, 0.90)
         half_wall = np.maximum(
-            0.25, (np.sqrt(3.0) / 4.0) * circumradius * dens
+            max(0.25, 0.5 * float(member_thickness)),
+            (np.sqrt(3.0) / 4.0) * circumradius * dens,
         )
     else:
         half_wall = max(0.25, 0.5 * float(member_thickness))
@@ -570,23 +431,11 @@ def _remove_floating_lattice(
     skin: np.ndarray,
     member_thickness: float,
 ) -> np.ndarray:
-    """Keep lattice members that reach the envelope boundary.
+    """Retain lattice components touching the skin or envelope boundary.
 
-    Sampling an implicit cell family on a coarse voxel grid can create tiny
-    islands between the periodic network and the skin.  Binary propagation from
-    the attachment surface removes any genuinely floating island.  When skin is
-    disabled, the envelope boundary is used only as the attachment seed and is
-    not added to the returned structure.
-
-    What this must not do is keep only the *largest* piece.  A periodic network
-    trimmed to an arbitrary optimized envelope fragments wherever the envelope
-    is thinner than the resolved cell, and those fragments are real lattice
-    standing on the real load path.  The no-skin branch used to collapse them to
-    the single largest component, and on the bundled rocker link that deleted
-    96% of a no-skin Octet lattice -- the Density view showed the whole part and
-    the Manufactured Mesh showed a corner of it.  Every fragment that reaches
-    the envelope boundary is therefore kept, with or without a skin, and
-    :func:`_connect_lattice_components` joins them into one body afterwards.
+    Without a skin, the boundary is only an attachment seed. If no component
+    touches an attachment seed, retain the largest component as a fallback.
+    Disconnected boundary fragments remain available for optional repair.
     """
     from scipy import ndimage as ndi
 
@@ -601,9 +450,7 @@ def _remove_floating_lattice(
         structure=ndi.generate_binary_structure(3, 1),
         border_value=0,
     )
-    labels, count = ndi.label(
-        core, structure=ndi.generate_binary_structure(3, 3)
-    )
+    labels, count = ndi.label(core, structure=ndi.generate_binary_structure(3, 3))
     if count <= 1:
         return core
 
@@ -632,35 +479,12 @@ def _connect_lattice_components(
     maximum_components: int = 20_000,
     maximum_rounds: int = 4,
 ) -> tuple[np.ndarray, int]:
-    """Join lattice fragments with short ligaments routed inside the envelope.
+    """Attempt to join voxel fragments within each envelope body.
 
-    Trimming a periodic cell family to an optimized envelope fragments it
-    wherever the envelope is thinner than the resolved cell pitch. The fragments
-    are all standing on the optimizer's own load path -- the Density view shows
-    one connected envelope -- so the manufacturable repair is to connect them,
-    not to delete every fragment but one.
-
-    Each bridge is one member thick and is clipped to the envelope, so this can
-    only add material the optimizer already asked for. It never crosses a
-    designed void, which is what keeps the repair honest: a study whose density
-    field is genuinely in two pieces still comes out in two pieces and still
-    fails the downstream connectivity gate. Fragments in *different* envelope
-    bodies are never joined, for the same reason.
-
-    Returns the connected structure and the number of ligaments added. This is
-    the same technique :func:`_attach_passive_interfaces` uses to reach a
-    preserved interface, generalized to the lattice itself.
-
-    ``maximum_components`` is a cost ceiling, and it used to sit at 512 — below
-    the fragment counts this routine is most needed for. A badly under-resolved
-    octet on the bundled crush block arrived here in 724 pieces, tripped the
-    ceiling, returned immediately with zero ligaments, and the speck cull then
-    reported 88 disconnected load-bearing bodies as the delivered part. The
-    ceiling is now far above any repairable case, because the per-round cost is
-    two whole-array passes regardless of how many fragments they find; the
-    per-fragment work is a short line segment. A study that still exceeds it is
-    not under-resolved, it is broken, and it leaves through the connectivity
-    gate rather than through a silent early return.
+    Connect fragments to the largest component with thickened straight lines
+    clipped to that body. Repeat within the cost limits and return the field
+    and number of attempted ligaments. Connectivity diagnostics report any
+    remaining disconnection; clipping a straight line does not guarantee a path.
     """
     from scipy import ndimage as ndi
 
@@ -689,9 +513,7 @@ def _connect_lattice_components(
             # One distance transform serves every fragment in this round: it
             # gives each void voxel its distance to the trunk and the index of
             # the trunk voxel that is nearest to it.
-            distance, nearest = ndi.distance_transform_edt(
-                ~trunk, return_indices=True
-            )
+            distance, nearest = ndi.distance_transform_edt(~trunk, return_indices=True)
             # `minimum_position` finds each fragment's closest voxel to the
             # trunk in a single labelled pass. Scanning `labels == fragment_id`
             # per fragment instead is a full array traversal each time, which on
@@ -700,9 +522,7 @@ def _connect_lattice_components(
             fragment_ids = [
                 index for index in range(1, int(count) + 1) if index != trunk_id
             ]
-            starts = ndi.minimum_position(
-                distance, labels=labels, index=fragment_ids
-            )
+            starts = ndi.minimum_position(distance, labels=labels, index=fragment_ids)
             addition = np.zeros_like(result, dtype=bool)
             for start in starts:
                 start = np.asarray(start, dtype=int)
@@ -710,9 +530,7 @@ def _connect_lattice_components(
                 segment_length = int(
                     max(2, np.ceil(np.linalg.norm(end.astype(float) - start)) + 1)
                 )
-                samples = np.rint(
-                    np.linspace(start, end, segment_length)
-                ).astype(int)
+                samples = np.rint(np.linspace(start, end, segment_length)).astype(int)
                 samples = np.clip(
                     samples,
                     np.zeros(3, dtype=int),
@@ -735,31 +553,16 @@ def _keep_load_bearing_components(
     manufactured: np.ndarray,
     member_thickness: float,
 ) -> np.ndarray:
-    """Remove sub-resolution raster specks from the manufactured structure.
+    """Remove disconnected raster specks smaller than a member-sized volume.
 
-    A one-voxel skin sampled on a curved boundary can contain isolated corner
-    voxels even when the lattice core itself is connected. Those islands become
-    separate shells in the recovered STL and cannot carry load. Explicit passive
-    solids are added after this cleanup, so a user-preserved attachment is never
-    silently removed.
-
-    This deliberately no longer keeps only the largest component per source
-    body. That rule was written for stray skin corners and is far too blunt for
-    a trimmed periodic network, which legitimately fragments: on the bundled
-    rocker link it cut a no-skin Octet lattice to 3.6% of its envelope while the
-    Density view still showed the whole part. :func:`_connect_lattice_components`
-    joins the fragments instead, and anything it cannot join is reported by the
-    study's connectivity gate rather than quietly deleted here.
-
-    A speck is a component too small to contain one member of the requested
-    thickness, so removing it cannot remove a resolved feature.
+    This is a geometric size filter, not a structural load-path analysis.
+    If all components are below the floor, retain the largest. Passive solids
+    are added after cleanup so preserved interfaces are retained.
     """
     from scipy import ndimage as ndi
 
     source = np.asarray(manufactured, dtype=bool)
-    labels, count = ndi.label(
-        source, structure=ndi.generate_binary_structure(3, 3)
-    )
+    labels, count = ndi.label(source, structure=ndi.generate_binary_structure(3, 3))
     if count <= 1:
         return source
 
@@ -783,15 +586,10 @@ def _attach_passive_interfaces(
     passive_solid: np.ndarray,
     member_thickness: float,
 ) -> np.ndarray:
-    """Bridge preserved interfaces to the nearest resolved lattice member.
+    """Attempt to attach preserved interfaces to nearby lattice material.
 
-    A graph-sized member plan can reach a bearing sleeve analytically while
-    the final voxel raster misses it by one or two samples. Adding the passive
-    sleeve after rasterization then creates the misleading result of an
-    isolated, perfectly preserved interface. Build one short, physical
-    attachment strut inside the topology envelope for each such component.
-    The bridge never crosses a topology void, so a genuinely disconnected
-    design still fails the downstream connectivity gate.
+    Thicken a straight connection and clip it to the allowed envelope.
+    Final connectivity checks determine whether the attachment succeeded.
     """
     from scipy import ndimage as ndi
 
@@ -807,10 +605,7 @@ def _attach_passive_interfaces(
 
     for component_id in range(1, int(count) + 1):
         component = labels == component_id
-        if np.any(
-            ndi.binary_dilation(component, structure=connectivity)
-            & result
-        ):
+        if np.any(ndi.binary_dilation(component, structure=connectivity) & result):
             result |= component
             continue
 
@@ -828,9 +623,7 @@ def _attach_passive_interfaces(
         segment_length = int(
             max(2, np.ceil(np.linalg.norm(end.astype(float) - start)) + 1)
         )
-        samples = np.rint(
-            np.linspace(start, end, segment_length)
-        ).astype(int)
+        samples = np.rint(np.linspace(start, end, segment_length)).astype(int)
         samples = np.clip(
             samples,
             np.zeros(3, dtype=int),
@@ -881,17 +674,8 @@ def _record_structure_diagnostics(
         np.asarray(envelope, dtype=bool),
         structure=ndi.generate_binary_structure(3, 3),
     )
-    # A lattice reaching only a corner of its envelope is the failure this
-    # measurement exists to catch: the relative density still looks plausible,
-    # because it is measured against the whole envelope, but most of the part is
-    # not there. Ask instead whether every cell-sized block of the envelope
-    # actually received some material.
-    #
-    # Block reduction rather than a dilation or a distance transform: this runs
-    # on every trial of the relative-density bisection, and at a resolved pitch
-    # of 35 voxels a dilation of that radius costs seconds per call on a
-    # supersampled grid while a max-pool over the same blocks costs milliseconds
-    # and answers the same question.
+    # Cell-sized block pooling estimates how much of the envelope received
+    # lattice material without a costly whole-grid dilation.
     reach = 0.0
     if built and occupied:
         from skimage.measure import block_reduce
@@ -916,17 +700,9 @@ def _record_structure_diagnostics(
         component_count=int(components),
         envelope_body_count=int(envelope_bodies),
         connecting_ligaments=int(bridge_count),
-        # What fraction of the delivered part the connectivity repair invented.
-        # A ligament is routed straight from a fragment to the nearest trunk
-        # voxel, so it does not lie on the cell pattern: it reads as material
-        # in the middle of a pore, and at any real quantity it is the visible
-        # sign that the cell does not fit the envelope. Reported rather than
-        # left implicit in a ligament count, because a count means nothing
-        # without the size of the part it was added to.
+        # Report added material as a fraction of the delivered geometry.
         repaired_voxels=int(repaired_voxels),
-        repaired_fraction=(
-            float(repaired_voxels) / float(built) if built else 0.0
-        ),
+        repaired_fraction=(float(repaired_voxels) / float(built) if built else 0.0),
         resolved_cell_voxels=float(cell_size),
         resolved_member_voxels=float(member),
         envelope_thickness_voxels=_envelope_thickness_voxels(envelope),
@@ -1075,9 +851,7 @@ def build_manufacturing_field(
                 manufactured,
                 member,
             )
-            repaired_voxels = int(
-                np.count_nonzero(manufactured & ~before_repair)
-            )
+            repaired_voxels = int(np.count_nonzero(manufactured & ~before_repair))
         else:
             bridge_count = 0
             repaired_voxels = 0
@@ -1108,21 +882,10 @@ def cell_fit_warning(
     options: ManufacturingStructureOptions | None,
     diagnostics: dict[str, Any] | None = None,
 ) -> str | None:
-    """Report a cell too large for the ribs of the envelope it was trimmed to.
+    """Warn when cell pitch exceeds representative envelope rib thickness.
 
-    Distinct from :func:`cell_resolution_warning`, and it catches a case that
-    one cannot. Resolution asks whether the *grid* can represent the cell;
-    this asks whether the *part* can hold it. An optimized envelope is a set of
-    ribs, and a cell wider than a rib cannot tile inside one: the periodic
-    network arrives in hundreds of pieces, and the connectivity repair then
-    rebuilds a load path out of straight off-pattern ligaments.
-
-    On the bundled payload fitting an octet cell resolved to 16 voxels against
-    ribs a median 9.5 voxels thick, fragmented into 356 pieces, and needed 981
-    ligaments — 3.2% of the delivered part invented by the repair. Every
-    individual check passed: the pitch met the family's resolution floor, the
-    envelope reach was 99%, and the component count came back at 1. The part
-    was still wrong, and this is the question none of them asked.
+    This assesses whether the part can hold a cell, independently of whether
+    the build grid can resolve it. Include explicit repair statistics.
     """
     if options is None or options.mode == "solid" or not diagnostics:
         return None
@@ -1138,13 +901,15 @@ def cell_fit_warning(
     repair_note = (
         f"Explicit connection repair added {fragments} ligament(s), contributing "
         f"{100.0 * repaired:.1f}% of the delivered part outside the cell pattern. "
-        if fragments else "Connection repair added no ligaments. "
+        if fragments
+        else "Connection repair added no ligaments. "
     )
     return (
         f"{options.display_name} builds a {cell:.0f}-voxel cell inside an "
         f"envelope whose ribs are a median {thickness:.0f} voxels thick, so the "
         "cell cannot tile within the material it is filling. "
-        + repair_note + "Reduce the "
+        + repair_note
+        + "Reduce the "
         "cell pitch, refine the analysis grid so a finer pitch resolves, or "
         "choose a family with a lower resolution floor."
     )
@@ -1154,15 +919,7 @@ def cell_resolution_warning(
     options: ManufacturingStructureOptions | None,
     resolution_scale: float = 1.0,
 ) -> str | None:
-    """Report a cell pitch too coarse for the family to stay connected.
-
-    A periodic surface sampled below its own neck width does not come out
-    thinner — it comes out in pieces, and the connectivity cull then removes
-    most of it. The resulting body has a plausible-looking relative density and
-    no load path, which is the failure mode worth naming explicitly rather than
-    leaving to the component count. Each family carries its own measured floor;
-    see :attr:`LatticeFamily.minimum_cell_voxels`.
-    """
+    """Warn when the resolved pitch is below the family's sampling guidance."""
     if options is None or options.mode == "solid":
         return None
     family = options.family
@@ -1190,10 +947,7 @@ def passive_region_masks(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Voxelize fractional passive regions for manufacturing verification."""
     dims = tuple(max(1, int(v)) for v in shape)
-    coordinates = [
-        (np.arange(n, dtype=float) + 0.5) / float(n)
-        for n in dims
-    ]
+    coordinates = [(np.arange(n, dtype=float) + 0.5) / float(n) for n in dims]
     x, y, z = np.meshgrid(*coordinates, indexing="ij")
     grids = (x, y, z)
 
@@ -1228,14 +982,10 @@ def passive_region_masks(
             r0 = float(cylinder[5])
             r1 = float(cylinder[6]) if len(cylinder) > 6 else r0
             a0, a1 = radial_axes[axis]
-            radial = (
-                ((grids[a0] - c0) / max(r0, 1e-12)) ** 2
-                + ((grids[a1] - c1) / max(r1, 1e-12)) ** 2
-                <= 1.0
-            )
-            axial = (grids[axis_index[axis]] >= lo) & (
-                grids[axis_index[axis]] <= hi
-            )
+            radial = ((grids[a0] - c0) / max(r0, 1e-12)) ** 2 + (
+                (grids[a1] - c1) / max(r1, 1e-12)
+            ) ** 2 <= 1.0
+            axial = (grids[axis_index[axis]] >= lo) & (grids[axis_index[axis]] <= hi)
             result |= radial & axial
         return result
 
@@ -1243,33 +993,6 @@ def passive_region_masks(
     void = boxes_mask(void_boxes) | cylinders_mask(void_cylinders)
     solid &= ~void
     return solid, void
-
-
-def structure_options_from_values(
-    mode: Any,
-    cell_size_voxels: Any,
-    member_thickness_voxels: Any,
-    skin_thickness_voxels: Any,
-    variable_density: Any = True,
-    minimum_relative_density: Any = 0.15,
-    maximum_relative_density: Any = 0.60,
-    solid_transition_density: Any = 0.92,
-    target_relative_density: Any = 0.0,
-    repair_connections: Any = False,
-) -> ManufacturingStructureOptions:
-    """Parse graph-property values with one consistent validation path."""
-    return ManufacturingStructureOptions(
-        mode=str(mode or "Solid Envelope"),
-        cell_size_voxels=float(cell_size_voxels or 8.0),
-        member_thickness_voxels=float(member_thickness_voxels or 1.0),
-        skin_thickness_voxels=float(skin_thickness_voxels or 0.0),
-        variable_density=bool(variable_density),
-        minimum_relative_density=float(minimum_relative_density or 0.15),
-        maximum_relative_density=float(maximum_relative_density or 0.60),
-        solid_transition_density=float(solid_transition_density or 0.92),
-        target_relative_density=float(target_relative_density or 0.0),
-        repair_connections=bool(repair_connections),
-    )
 
 
 def achieved_relative_density(
@@ -1301,25 +1024,12 @@ def resolve_target_relative_density(
     tolerance: float = 0.01,
     max_evaluations: int = 14,
 ) -> tuple[ManufacturingStructureOptions, float]:
-    """Size the member thickness so the built structure hits its target density.
+    """Fit the built envelope occupancy by measuring trial geometries.
 
-    Returns the options to build with and the relative density achieved. There
-    is no closed form to invert here: the built field is the intersection of a
-    periodic lattice with an arbitrary optimized envelope, then culled of
-    members that carry no load path, so the only reliable relation between
-    thickness and mass is to build it and measure. Relative density rises
-    monotonically with member thickness, which is what makes bisection sound.
-
-    Bisecting at the *recovery* resolution rather than the analysis resolution
-    is deliberate: the two disagree by about 20% because the recovery grid is
-    supersampled anisotropically, and the recovered solid is the one that gets
-    manufactured.
-
-    Which control is searched depends on how the lattice is sized. A family
-    that de-homogenizes from a measured cell law takes its member thickness
-    from the local density, so thickness is not free and moving it changes
-    nothing; the uniform ``member_scale`` is searched instead. Everything else
-    searches the member thickness as before.
+    Search member_scale for graded struts with an available material law;
+    otherwise search member thickness. Trials run on the recovery grid and
+    include skin, cleanup, and passive regions. Return the closest sampled
+    occupancy when rasterization or minimum features prevent an exact fit.
     """
     target = float(options.target_relative_density)
     if target <= 0.0 or options.mode == "solid":
@@ -1343,13 +1053,9 @@ def resolve_target_relative_density(
         low, high = 0.25, 4.0
     else:
         control = "member_thickness_voxels"
-        # Search only the band a member is actually allowed to occupy. The
-        # option validation rejects a member thicker than a quarter of the cell
-        # so the cell openings stay resolved, and build_manufacturing_field
-        # floors the resolved member at 0.75 recovery voxels, below which the
-        # grid cannot represent it.
-        high = 0.25 * options.cell_size_voxels
-        low = min(0.75 / scale, 0.5 * high)
+        # Search through a full pitch and measure when each family fills.
+        high = max(options.cell_size_voxels, options.member_thickness_voxels)
+        low = min(0.5 / scale, 0.5 * high)
     if not (high > low > 0.0):
         return replace(options, target_relative_density=0.0), float("nan")
 

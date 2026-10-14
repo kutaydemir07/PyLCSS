@@ -23,7 +23,7 @@ __all__ = [
     "build_manufacturing_field",
     "cell_material_law",
     "reconstruct_topopt_cad",
-    "run_topopt_validation",
+    "run_topopt_fea",
 ]
 
 _MODELS = "pylcss.cae.design_studio.topology_optimization.models"
@@ -61,9 +61,9 @@ _LAZY_EXPORTS = {
         "pylcss.cae.design_studio.topology_optimization.geometry",
         "reconstruct_topopt_cad",
     ),
-    "run_topopt_validation": (
+    "run_topopt_fea": (
         "pylcss.cae.design_studio.topology_optimization.verification",
-        "run_topopt_validation",
+        "run_topopt_fea",
     ),
 }
 

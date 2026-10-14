@@ -2,14 +2,14 @@
 ; Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
 #define AppName "PyLCSS"
-#define AppVersion "2.2.0.2"
+#define AppVersion "3.0.0"
 #define AppPublisher "Kutay Demir"
 #define StagingRoot "..\..\build\windows-installer\staging"
 #ifndef PythonArchiveName
 #define PythonArchiveName "python-3.12.10-embed-amd64.zip"
 #endif
 #ifndef OutputBaseFilename
-#define OutputBaseFilename "PyLCSS-2.2.0.2-Setup-x64"
+#define OutputBaseFilename "PyLCSS-3.0.0-Setup-x64"
 #endif
 
 [Setup]

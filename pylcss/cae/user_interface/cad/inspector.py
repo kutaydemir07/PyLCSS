@@ -348,12 +348,6 @@ class PropertiesPanel(
         "PressureLoadNode": {"pressure": "pressure"},
         "ImportStepNode": {"filepath": "file"},
         "ImportStlNode": {"filepath": "file"},
-        "CadQueryCodeNode": {
-            **{f"param_{index}_value": f"param_{index}" for index in range(1, 33)}
-        },
-        "FreeCadPartNode": {
-            **{f"param_{index}_value": f"param_{index}" for index in range(1, 33)}
-        },
         "TransformNode": {
             "translate_x": "translate_x",
             "translate_y": "translate_y",
@@ -401,21 +395,13 @@ class PropertiesPanel(
             "mass_scaling_threshold",
             "assembly_name",
             "fuse_parts",
-            # Duplicate of the on-canvas value_input text field — kept for
-            # NodeGraphQt back-compat but redundant in the inspector.
-            "value",
             # Carried on legacy nodes but not honoured by the new solver paths:
             # 'min_safety_factor' is computed by the optimizer, not set by user;
             # 'fixed_faces' was a JSON-string condition list — the new ShapeOpt
             #   only supports SelectFaceNode-driven constraints (logged warning);
-            # 'moment_x/y/z' on LoadNode were never wired to either CalculiX
-            #   *CLOAD or OpenCourant; only force_x/y/z are exported.
             "min_safety_factor",
             "fixed_faces",
             "bc_preset",
-            "moment_x",
-            "moment_y",
-            "moment_z",
             # Internal topology-optimization numerical policy. These may exist in
             # old project JSON but are no longer engineering-facing controls.
             "projection",
@@ -448,6 +434,14 @@ class PropertiesPanel(
     )
 
     _PROPERTY_TOOLTIPS = {
+        "topology_minimum_solid_size_mm": "Minimum retained solid feature in model units. 0 derives it from the grid. Explicit sizes must span at least three voxels; refine the grid for smaller physical features.",
+        "topology_minimum_void_size_mm": "Minimum void feature in model units. 0 uses the resolved solid size. Applied when Automatic Filter Radius is enabled.",
+        "voxel_ram_fraction": "Fraction of available RAM allowed for automatic voxel planning: 0.5 means 50%. The allowance is conservative, not a measured allocation or an accuracy guarantee.",
+        "topology_objective_tolerance": "Maximum relative objective change between the final comparison grids. 0.05 means 5%; this is an application criterion, not a paper guarantee.",
+        "topology_overlap_tolerance": "Minimum Jaccard overlap of thresholded topologies between comparison grids. 0.9 means 90% overlap.",
+        "topology_convergence_levels": "Number of comparison resolutions, including the initial solve. Each additional level increases the base grid scale by 0.5, subject to Maximum Elements.",
+        "infill_skin_mode": "None leaves cells open at the trimmed boundary. Automatic chooses a resolved skin. Manual preserves the stated physical thickness.",
+        "infill_allow_pitch_coarsening": "Allow larger cells when the build budget cannot resolve a manual pitch. The result reports the requested and built pitch.",
         "analysis_type": "Linear           — fastest, valid for small deflections and elastic only.\n"
         "Nonlinear (Geometric) — large rotations / deflections (NLGEOM).\n"
         "Nonlinear (Plastic)   — plastic yielding too (requires yield_strength on Material).",
@@ -568,27 +562,17 @@ class PropertiesPanel(
         "automatic_filter_radius": "Derive the filter from the analysis grid. Disable to use the Rmin value below.",
         "design_goal": "Engineering objective for structural stiffness or stress-constrained minimum mass.",
         "physics_mode": "Topology studies use structural analysis.",
-        "formulation": "Density (SIMP) is robust and supports explicit lattice interpretation. "
-        "Level Set evolves a crisp solid boundary and does not create an explicit lattice.",
+        "formulation": "Structural density optimization uses SIMP. Lattice generation is a separate geometry action.",
         "load_aggregation": "Weighted Sum optimizes average weighted performance. Worst Case protects the least "
         "favourable connected load or operating case.",
         "load_pnorm_p": "Smooth maximum exponent for multiple load cases. Higher approaches a hard worst case "
         "but can make optimization less smooth.",
-        "projected_gradient_step": "Expert update size for projected-gradient optimization. Guided Auto chooses "
-        "a suitable optimizer for the active constraints.",
-        "validate_after_optimize": "Re-mesh and independently re-analyse the recovered solid. Strongly recommended "
-        "for final designs and required for lattice interpretations.",
-        "validation_quality": "Standard performs one independent re-analysis. Mesh Convergence repeats it on a "
-        "refined mesh to estimate discretization sensitivity.",
         "E0": "Solid material modulus used by the voxel optimizer (normally derived from the connected material).",
         "Emin": "Small void stiffness used to keep the voxel system solvable.",
         "nu": "Poisson's ratio used by the structured voxel analysis.",
         "force_x": "Total force component in X (N), distributed over the connected target region.",
         "force_y": "Total force component in Y (N), distributed over the connected target region.",
         "force_z": "Total force component in Z (N), distributed over the connected target region.",
-        "moment_x": "Applied moment about global X (N·mm).",
-        "moment_y": "Applied moment about global Y (N·mm).",
-        "moment_z": "Applied moment about global Z (N·mm).",
         "support_type": "Constraint type applied to the selected topology interface.",
         "region_type": "Keep Material creates a prescribed solid; Keep Void creates an obstacle/exclusion volume.",
         "joint_type": "Idealized kinematic connection between two selected anchor regions.",
@@ -647,6 +631,8 @@ class PropertiesPanel(
         "fixed wall it is lumped onto the projectile trailing edge.\n"
         "A zero mass moving wall is prescribed velocity, not inertial impact.",
         "enable_fracture": "Delete elements whose plastic strain exceeds failure_strain.",
+        "strain_rate_c": "Custom Cowper-Symonds C [1/s]. Set both C and P to zero to disable rate hardening.",
+        "strain_rate_p": "Custom Cowper-Symonds exponent P. Named impact presets supply their own constants.",
         # ── Constraint / Load extras ───────────────────────────────────
         "condition": "Optional NumPy boolean expression over the mesh-node coordinates\n"
         "x, y, z (mm).  Used only when no SelectFace node is connected.\n"
@@ -673,7 +659,7 @@ class PropertiesPanel(
         "range_expr": "Boolean coordinate expression used to select entities, for example (x > 0) & (z < 10).",
         "face_index": "Zero-based entity index. Index selection is sensitive to upstream geometry changes.",
         "tag": "CadQuery tag assigned upstream. Prefer tags when a stable semantic selection is available.",
-        "picked_face_indices": "Stored entity IDs chosen in the 3-D viewer. Use the Pick control instead of editing this list.",
+        "picked_entity_indices": "Stored entity IDs chosen in the 3-D viewer. Use the Pick control instead of editing this list.",
         "selection_label": "Read-only summary of the entities selected in the 3-D viewer.",
         "length_x": "Box length along X [mm].",
         "width_y": "Box width along Y [mm].",
@@ -742,7 +728,7 @@ class PropertiesPanel(
         "engine_executable_path": "Override the auto-discovered OpenCourant engine executable.",
         "work_dir": "Solver working directory. Empty creates an isolated temporary run directory.",
         "timeout_s": "Maximum external-solver wall time [s] before PyLCSS stops waiting.",
-        "cad_reconstruction_method": "Auto uses analytic cylinders/cones for beam lattices and compact cubic surfaces with shared curves for continuum boundaries. TPMS, sheet and honeycomb lattices stay as STL meshes. Fused beam lattice requests a checked boolean union. Geometry error and STEP reimport are validated.",
+        "cad_reconstruction_method": "Auto recovers analytic solids when possible and fits spline CAD to other closed boundaries, including TPMS, sheet and honeycomb lattices. Beam lattices use cylinders/cones; Fused beam lattice requests a checked union. STEP output must pass geometry and transfer validation.",
         "cad_export_filename": "Destination path and filename for the exported model.",
         "cad_export_format": "File format to export (STEP, STL, or 3MF).",
         "nelx": "Manual voxel count in X. Disable Automatic Grid to use it.",
@@ -751,6 +737,11 @@ class PropertiesPanel(
     }
 
     _PROPERTY_LABELS = {
+        "topology_minimum_solid_size_mm": "Minimum Solid Size (mm)",
+        "topology_minimum_void_size_mm": "Minimum Void Size (mm)",
+        "voxel_ram_fraction": "Available RAM Fraction",
+        "topology_objective_tolerance": "Objective Change Tolerance",
+        "topology_overlap_tolerance": "Minimum Topology Overlap",
         "automatic_grid": "Automatic Grid",
         "automatic_filter_radius": "Automatic Filter Radius",
         "length_x": "Length (mm)",
@@ -888,7 +879,6 @@ class PropertiesPanel(
         "density_cutoff": "Solid/Void Cutoff Density",
         "yield_stress": "Allowable Stress (MPa)",
         "load_pnorm_p": "Load-Case Aggregation (p-norm)",
-        "projected_gradient_step": "Projected-Gradient Step Size",
         "convergence_patience": "Convergence Patience (iterations)",
         "validation_displacement_limit_mm": "Displacement Limit (mm)",
         "validation_yield_safety_factor": "Required Yield Safety Factor",
@@ -1084,7 +1074,12 @@ class PropertiesPanel(
 
     def _apply_driven_property_states(self, node):
         """Disable fallback editors while an upstream port drives the value."""
-        mapping = self._DRIVEN_PROPERTY_PORTS.get(node.__class__.__name__, {})
+        mapping = dict(self._DRIVEN_PROPERTY_PORTS.get(node.__class__.__name__, {}))
+        if callable(getattr(node, "get_param_count", None)):
+            mapping.update({
+                f"param_{index}_value": f"param_{index}"
+                for index in range(1, node.get_param_count() + 1)
+            })
         for property_name, port_name in mapping.items():
             widget = self.property_widgets.get(property_name)
             if widget is None:

@@ -1,27 +1,10 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""Headless parameter push into a FreeCAD ``.FCStd`` document.
+"""Update FreeCAD spreadsheet aliases, recompute, and save through its console.
 
-Why this exists
----------------
-The :class:`FreeCadPartNode` exposes Spreadsheet aliases discovered in the
-document as ``param_<i>_name`` / ``param_<i>_value`` properties so the rest
-of PyLCSS (optimizer, sensitivity sweeper, parameter editor) can edit them
-exactly the same way they edit CadQuery code-part parameters.
-
-When the optimizer mutates ``param_<i>_value`` the next graph execute
-needs to materialise the **new** geometry, not the old cached one.  We do
-that by spawning FreeCADCmd headless, opening the .FCStd, writing the
-new values into the matching Spreadsheet cells (via their aliases),
-recomputing, and saving.  The PyLCSS Mod observer (installed by
-:mod:`mod_installer`) fires its ``slotFinishSaveDocument`` hook and
-writes a fresh ``.brep`` + ``.fcmeta.json`` next to the .FCStd; the
-node's ``run()`` then re-reads them and emits the new shape downstream.
-
-This is a one-shot subprocess per parameter change.  For sweep-style
-optimization that's fine: each iteration is bounded by a single
-FreeCADCmd invocation (~1-2 s on a small model).
+Names shared by multiple sheets use ``SheetName.alias``. Unique aliases remain
+unqualified. Values use FreeCAD's internal units, as exported by the observer.
 """
 
 from __future__ import annotations
@@ -32,21 +15,17 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Dict, Mapping
+from typing import Mapping
 
-from pylcss.cae.design_studio.freecad_bridge.paths import find_freecad_cmd
+from pylcss.cae.design_studio.freecad_bridge.paths import freecad_console_command
 from pylcss.process_utils import headless_subprocess_kwargs
 
 logger = logging.getLogger(__name__)
 
 
-# Headless script template.  Runs inside FreeCADCmd, opens the doc, walks
-# every Spreadsheet, sets each alias-mapped cell to the new value, then
-# recomputes + saves.  The PyLCSS Mod observer fires on save and writes
-# the BREP + sidecar JSON.
-_SCRIPT = '''\
+# Resolve every alias before changing cells; failed requests must not be saved.
+_SCRIPT = """\
 import sys
-import traceback
 
 try:
     import FreeCAD
@@ -57,73 +36,42 @@ except Exception:
 DOC_PATH = {doc_path!r}
 PARAMS = {params!r}
 
+doc = None
 try:
     doc = FreeCAD.openDocument(DOC_PATH)
-except Exception as exc:
-    sys.stderr.write("PYLCSS_PARAM_WRITER: openDocument failed: {{}}\\n".format(exc))
-    sys.exit(3)
-
-updated = []
-unmatched = list(PARAMS.keys())
-
-for obj in list(doc.Objects):
-    if obj.TypeId != "Spreadsheet::Sheet":
-        continue
-    for alias, new_value in PARAMS.items():
-        # FreeCAD exposes spreadsheet aliases as ordinary properties on the
-        # Sheet object: ``sheet.<alias>`` is the live value.  Setting via
-        # ``sheet.set("<cell>", "<expr>")`` requires knowing the cell
-        # address; we look that up by scanning until ``getAlias`` matches.
-        cell = None
-        try:
-            cell = obj.getCellFromAlias(alias)
-        except Exception:
-            cell = None
-        if not cell:
-            # Compatibility fallback for older FreeCAD Spreadsheet builds.
-            for column in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-                for row in range(1, 500):
-                    addr = "{{}}{{}}".format(column, row)
-                    try:
-                        cur_alias = obj.getAlias(addr)
-                    except Exception:
-                        cur_alias = None
-                    if cur_alias == alias:
-                        cell = addr
-                        break
-                if cell is not None:
-                    break
-        if cell is None:
-            continue
-        try:
-            obj.set(cell, str(new_value))
-            updated.append("{{}}={{}}".format(alias, new_value))
-            if alias in unmatched:
-                unmatched.remove(alias)
-        except Exception as exc:
-            sys.stderr.write(
-                "PYLCSS_PARAM_WRITER: failed to set {{}}={{}} -> {{}}\\n".format(alias, new_value, exc)
-            )
-
-try:
+    sheets = [obj for obj in doc.Objects if obj.TypeId == "Spreadsheet::Sheet"]
+    updates = []
+    for name, new_value in PARAMS.items():
+        sheet_name, separator, alias = name.rpartition(".")
+        if not separator:
+            alias = name
+        matches = []
+        for sheet in sheets:
+            if separator and sheet.Name != sheet_name:
+                continue
+            cell = sheet.getCellFromAlias(alias)
+            if cell:
+                matches.append((sheet, cell))
+        if len(matches) != 1:
+            raise ValueError("Alias {{!r}} matched {{}} cells; use SheetName.alias for duplicates".format(name, len(matches)))
+        sheet, cell = matches[0]
+        previous = getattr(sheet, cell)
+        expression = str(FreeCAD.Units.Quantity(new_value, previous.Unit)) if hasattr(previous, "Unit") else str(new_value)
+        updates.append((sheet, cell, expression))
+    for sheet, cell, expression in updates:
+        sheet.set(cell, expression)
     doc.recompute()
     doc.save()
 except Exception as exc:
-    sys.stderr.write("PYLCSS_PARAM_WRITER: recompute/save failed: {{}}\\n".format(exc))
-    try:
+    sys.stderr.write("PYLCSS_PARAM_WRITER: update failed: {{}}\\n".format(exc))
+    sys.exit(3)
+finally:
+    if doc is not None:
         FreeCAD.closeDocument(doc.Name)
-    except Exception:
-        pass
-    sys.exit(4)
 
-try:
-    FreeCAD.closeDocument(doc.Name)
-except Exception:
-    pass
-
-print("PYLCSS_PARAM_WRITER: updated", updated, "unmatched", unmatched)
+print("PYLCSS_PARAM_WRITER: updated", list(PARAMS))
 sys.exit(0)
-'''
+"""
 
 
 def write_parameters_to_fcstd(
@@ -133,17 +81,32 @@ def write_parameters_to_fcstd(
 ) -> bool:
     """Push ``params`` into the spreadsheet of ``fcstd_path`` + save.
 
-    Returns True on a clean run (rc=0).  Logs at WARNING when FreeCADCmd
-    is missing or the headless run fails.  Callers must not use stale geometry
-    after False because it no longer represents the requested parameters.
+    Returns False for invalid inputs, missing/ambiguous aliases, or execution
+    failure. Callers must not use stale geometry after a failed update.
     """
     if not params:
         return True
+    try:
+        values = {str(k): float(v) for k, v in params.items()}
+        timeout_s = float(timeout_s)
+        if not all(
+            name.strip() and math.isfinite(value) for name, value in values.items()
+        ):
+            raise ValueError(
+                "Parameter names must be nonempty and values must be finite."
+            )
+        if not math.isfinite(timeout_s) or timeout_s <= 0:
+            raise ValueError(
+                "Parameter update timeout must be a positive finite number."
+            )
+    except (TypeError, ValueError) as exc:
+        logger.warning("Invalid FreeCAD parameter update: %s", exc)
+        return False
     fcstd_path = Path(fcstd_path).resolve()
     if not fcstd_path.is_file():
         logger.warning("write_parameters_to_fcstd: %s does not exist", fcstd_path)
         return False
-    cmd = find_freecad_cmd()
+    cmd = freecad_console_command()
     if not cmd:
         logger.warning(
             "FreeCADCmd not found -- cannot push parameters to %s. "
@@ -156,46 +119,55 @@ def write_parameters_to_fcstd(
     # installed here as well as in the GUI launcher so headless optimization
     # always refreshes the sibling BREP and sidecar.
     from pylcss.cae.design_studio.freecad_bridge.mod_installer import install_pylcss_mod
+
     if not install_pylcss_mod():
         logger.warning("PyLCSS FreeCAD auto-export Mod could not be installed.")
         return False
 
     script = _SCRIPT.format(
         doc_path=str(fcstd_path),
-        params={str(k): float(v) for k, v in params.items()},
+        params=values,
     )
 
     script_path = None
     try:
         with tempfile.NamedTemporaryFile(
-            "w", suffix=".FCMacro", delete=False, encoding="utf-8",
+            "w",
+            suffix=".FCMacro",
+            delete=False,
+            encoding="utf-8",
         ) as fh:
             fh.write(script)
             script_path = fh.name
         proc = subprocess.run(
-            [cmd, script_path],
-            capture_output=True, text=True,
-            encoding="utf-8", errors="replace",
+            [*cmd, script_path],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout_s,
             **headless_subprocess_kwargs(),
         )
         if proc.returncode != 0:
             logger.warning(
                 "FreeCADCmd param push rc=%s for %s\n  stderr: %s\n  stdout: %s",
-                proc.returncode, fcstd_path.name,
+                proc.returncode,
+                fcstd_path.name,
                 (proc.stderr or "").strip()[:300],
                 (proc.stdout or "").strip()[:300],
             )
             return False
         logger.debug(
             "FreeCADCmd param push ok for %s: %s",
-            fcstd_path.name, (proc.stdout or "").strip()[:200],
+            fcstd_path.name,
+            (proc.stdout or "").strip()[:200],
         )
         return True
     except subprocess.TimeoutExpired:
         logger.warning(
             "FreeCADCmd param push timed out after %.1fs for %s",
-            timeout_s, fcstd_path.name,
+            timeout_s,
+            fcstd_path.name,
         )
         return False
     except Exception as exc:
@@ -207,34 +179,3 @@ def write_parameters_to_fcstd(
                 os.unlink(script_path)
             except OSError:
                 pass
-
-
-def collect_param_values_from_node(node, max_slots: int = 8) -> Dict[str, float]:
-    """Walk a :class:`FreeCadPartNode`'s ``param_<i>_*`` properties and
-    return ``{alias_name: float_value}``.
-
-    Skips empty slots, treats non-numeric ``param_<i>_value`` as missing
-    -- the optimizer hands us strings sometimes and we don't want to
-    push garbage into FreeCAD.
-    """
-    out: Dict[str, float] = {}
-    for i in range(1, max_slots + 1):
-        try:
-            name = (node.get_property(f"param_{i}_name") or "").strip()
-        except Exception:
-            name = ""
-        if not name:
-            continue
-        try:
-            raw = node.get_property(f"param_{i}_value")
-        except Exception:
-            continue
-        if raw is None or raw == "":
-            continue
-        try:
-            value = float(raw)
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(value):
-            out[name] = value
-    return out

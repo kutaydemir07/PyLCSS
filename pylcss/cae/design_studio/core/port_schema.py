@@ -17,7 +17,6 @@ from typing import Any
 from pylcss.cae.design_studio.topology_optimization.integration.study_identity import (
     LATTICE_INFILL_CLASS_NAME,
     TOPOLOGY_SOLVER_CLASS_NAME,
-    is_density_study_class,
 )
 
 
@@ -88,7 +87,6 @@ _PORT_LABELS = {
     "region_shape": "Region Volume",
     "recovered_shape": "Recovered Surface",
     "selection": "Selection",
-    "workplane": "Selection (Legacy)",
     "target_face": "Target Selection",
     "target_region": "Target Selection",
     "refinement_faces": "Local Refinement Selection",
@@ -97,7 +95,6 @@ _PORT_LABELS = {
     "impact_face": "Impact Surface",
     "mesh": "Mesh",
     "material": "Structural Material",
-    "impact_material": "Impact Material",
     "component": "Component",
     "components": "Components",
     "constraints": "Supports",
@@ -107,7 +104,6 @@ _PORT_LABELS = {
     "results": "Results",
     "result_view": "View",
     "topology_results": "Result",
-    "topopt_result": "Topology Result (Legacy)",
     "value": "Value",
     "result": "Result",
     "properties": "Mass Properties",
@@ -126,6 +122,9 @@ _EXPLICIT_LABELS = {
     ("TopologyOptVoxelNode", "input", "loads"): "Forces",
     ("TopologyOptVoxelNode", "output", "results"): "Optimization Result",
     ("TopologyOptVoxelNode", "output", "recovered_shape"): "Recovered Surface",
+    (LATTICE_INFILL_CLASS_NAME, "input", "design_domain"): "Design Domain",
+    (LATTICE_INFILL_CLASS_NAME, "output", "results"): "Infill Result",
+    (LATTICE_INFILL_CLASS_NAME, "output", "recovered_shape"): "Recovered Surface",
     ("ConstraintNode", "input", "mesh"): "FE Mesh (FEA)",
     ("ConstraintNode", "input", "target_face"): "Selection",
     ("ConstraintNode", "output", "constraints"): "Support",
@@ -204,7 +203,6 @@ _NUMERIC_NAME_TYPES = {
 }
 
 _GENERIC_SCALAR_PORT_NAMES = {
-    *(f"param_{i}" for i in range(1, 33)),
     "value",
     "x",
     "y",
@@ -215,10 +213,6 @@ _GEOMETRY_PORT_NAMES = {
     "base",
     "bodies",
     "design_domain",
-    "part_1",
-    "part_2",
-    "part_3",
-    "part_4",
     "recovered_shape",
     "region_shape",
     "shape",
@@ -241,11 +235,10 @@ _SELECTION_PORT_NAMES = {
 
 _EXPLICIT_TYPES = {
     ("TopologyOptVoxelNode", "input", "design_domain"): "Design Space",
+    (LATTICE_INFILL_CLASS_NAME, "input", "design_domain"): "Solid Geometry",
+    (LATTICE_INFILL_CLASS_NAME, "output", "results"): "Topology Result",
     # SelectFaceNode can select entities from either a CAD shape or an FE mesh.
     ("SelectFaceNode", "input", "shape"): "Selection Source",
-    # Legacy selection output is deliberately not geometry.
-    ("SelectFaceNode", "output", "workplane"): "Selection",
-    ("InteractiveSelectFaceNode", "output", "workplane"): "Selection",
     # ``loads`` means different things in structural and topology workflows.
     ("LoadNode", "output", "loads"): "Structural Load",
     ("PressureLoadNode", "output", "loads"): "Structural Load",
@@ -262,12 +255,8 @@ _EXPLICIT_TYPES = {
     ("TopologyOptVoxelNode", "input", "loads"): "Topology Load",
     ("ImpactConditionNode", "output", "impact"): "Impact Condition",
     ("CrashSolverNode", "input", "impact"): "Impact Condition",
-    ("MaterialNode", "output", "impact_material"): "Impact Material",
-    ("MaterialNode", "output", "crash_material"): "Impact Material",
     ("CrashSolverNode", "input", "material"): "Material",
-    ("CrashSolverNode", "input", "impact_material"): "Impact Material",
     ("TopologyOptVoxelNode", "output", "results"): "Topology Result",
-    ("TopologyOptVoxelNode", "output", "topopt_result"): "Topology Result",
     ("BoxNode", "output", "shape"): "Solid Geometry",
     ("CylinderNode", "output", "shape"): "Solid Geometry",
     ("BooleanNode", "input", "base"): "Solid Geometry",
@@ -287,14 +276,11 @@ _NAME_TYPES = {
     "mesh": "Mesh",
     "component": "Body",
     "components": "Body",
-    "bodies": "Geometry",
     "constraints": "Support",
     "impact": "Impact Condition",
-    "impact_material": "Impact Material",
     "results": "Result Dataset",
     "result_view": "Result Dataset",
     "topology_results": "Topology Result",
-    "topopt_result": "Topology Result",
     "file": "File",
     "filepath_in": "File",
     "properties": "Table",
@@ -324,7 +310,10 @@ _ACCEPTED_OUTPUT_TYPES = {
         "Design Space",
         "Topology Region",
     },
-    "Surface Geometry": {"Surface Geometry", "Geometry"},
+    # Shell meshing can use a surface or the boundary of a solid CAD body.
+    "Surface Geometry": {
+        "Surface Geometry", "Geometry", "Solid Geometry", "Design Space",
+    },
     "Region Scope": {
         "Selection",
         "Geometry",
@@ -373,42 +362,18 @@ _REQUIRED_INPUTS = {
     "CrashSolverNode": {"mesh", "material", "impact"},
     "ModalSolverNode": {"mesh", "material"},
     "FEAComponentNode": {"mesh", "material"},
-    "ImpactConditionNode": {"impact_face"},
     "InteractiveSelectFaceNode": {"shape"},
     "LinearPatternNode": {"shape"},
     "MassPropertiesNode": {"shape"},
     "MeasureDistanceNode": {"shape_a", "shape_b"},
-    "MeshNode": {"shape"},
     "PressureLoadNode": {"target_face"},
     "SelectFaceNode": {"shape"},
     "SurfaceAreaNode": {"shape"},
     "TopologyLoadNode": {"target_region"},
-    "TopologyOptVoxelNode": {"design_domain", "material"},
+    LATTICE_INFILL_CLASS_NAME: {"design_domain"},
     "TopologySupportNode": {"target_region"},
     "TransformNode": {"shape"},
 }
-
-
-def _mirror_topology_study_entries(table: dict) -> None:
-    """Give the other density studies the topology study's port vocabulary.
-
-    ``LatticeInfillNode`` descends from the
-    topology node and declare no ports of their own, so restating these tables
-    by hand would only create a second place for the same label, type, and
-    requirement to drift from. The infill deletes the ports it does not use
-    rather than relabelling them, so the entries it inherits for those never
-    resolve against a real port.
-    """
-    for key, value in list(table.items()):
-        if isinstance(key, tuple) and key[0] == TOPOLOGY_SOLVER_CLASS_NAME:
-            table[(LATTICE_INFILL_CLASS_NAME, *key[1:])] = value
-        elif key == TOPOLOGY_SOLVER_CLASS_NAME:
-            table[LATTICE_INFILL_CLASS_NAME] = value
-
-
-for _study_table in (_EXPLICIT_LABELS, _EXPLICIT_TYPES, _REQUIRED_INPUTS):
-    _mirror_topology_study_entries(_study_table)
-del _study_table
 
 
 def _node_class_name(node: object) -> str:
@@ -441,9 +406,6 @@ def human_port_label(name: str) -> str:
     """Return a stable engineering label for a serialized port name."""
     if name in _PORT_LABELS:
         return _PORT_LABELS[name]
-    part_match = re.fullmatch(r"part_(\d+)", name)
-    if part_match:
-        return f"Body {part_match.group(1)}"
     return " ".join(
         token.upper() if token in {"x", "y", "z"} else token.title()
         for token in str(name).split("_")
@@ -471,11 +433,13 @@ def semantic_port_type(node: object, name: str, direction: str) -> str:
     if explicit:
         return explicit
     if class_name == "MeshNode":
+        source = str(_property(node, "mesh_source", "CAD") or "CAD").strip()
         mesh_type = str(_property(node, "mesh_type", "Tet") or "Tet")
         if name == "shape" and direction == "input":
             return "Surface Geometry" if mesh_type == "Shell" else "Solid Geometry"
         if name == "mesh" and direction == "output":
-            return "Shell Mesh" if mesh_type == "Shell" else "Solid Mesh"
+            is_shell = source == "Mesh NPZ" or mesh_type == "Shell"
+            return "Shell Mesh" if is_shell else "Solid Mesh"
     if name in _GEOMETRY_PORT_NAMES:
         return "Geometry"
     if name in _SELECTION_PORT_NAMES:
@@ -560,21 +524,24 @@ def apply_context_port_visibility(node: object) -> None:
             "moving body"
         )
         _set_port_visible(node, "impact_face", not is_moving_body)
-    elif is_density_study_class(class_name):
+    elif class_name == TOPOLOGY_SOLVER_CLASS_NAME:
         for name in ("supports", "loads"):
             _set_port_visible(node, name, True)
     elif class_name == "AssemblyNode":
         _set_port_visible(node, "bodies", True)
-        for index in range(1, 5):
-            _set_port_visible(node, f"part_{index}", False)
+    elif class_name == "MeshNode":
+        is_cad = str(_property(node, "mesh_source", "CAD") or "CAD").strip() == "CAD"
+        for name in ("shape", "element_size", "refinement_faces", "refinement_size"):
+            _set_port_visible(node, name, is_cad)
     elif class_name == "FreeCadPartNode":
         # These ports are useful before the first FreeCAD save: a user can
         # wire Parameters while authoring, then the discovered Spreadsheet
         # aliases rename the sockets in place.  Hiding blank slots made them
         # impossible to reach and they were never reliably shown again after
         # aliases arrived from the background execution worker.
-        for index in range(1, 33):
-            _set_port_visible(node, f"param_{index}", True)
+        for name in node.inputs():
+            if name.startswith("param_"):
+                _set_port_visible(node, name, True)
 
 
 def is_required_input(node: object, name: str) -> bool:
@@ -594,17 +561,12 @@ def is_required_input(node: object, name: str) -> bool:
         )
     if class_name == "ConstraintNode" and name == "target_face":
         return not str(_property(node, "condition", "")).strip()
-    if class_name == "ModalSolverNode":
-        return name in {"mesh", "material"}
+    if class_name == "MeshNode" and name == "shape":
+        return str(_property(node, "mesh_source", "CAD") or "CAD").strip() == "CAD"
     if class_name == "SolverNode":
         if name in {"mesh", "material"}:
             return not _has_connection(node, "components")
         return name in {"constraints", "loads"}
-    if class_name == "AssemblyNode" and name == "bodies":
-        legacy_connected = any(
-            _has_connection(node, f"part_{index}") for index in range(1, 5)
-        )
-        return not legacy_connected
     if class_name == "CrashSolverNode" and name == "constraints":
         try:
             impact_port = node.get_input("impact")
@@ -623,7 +585,7 @@ def is_required_input(node: object, name: str) -> bool:
         return scenario.strip().lower().replace("_", " ").startswith(
             "fixed specimen"
         )
-    if is_density_study_class(class_name):
+    if class_name == TOPOLOGY_SOLVER_CLASS_NAME:
         if name in {"design_domain", "material"}:
             return True
         physics = str(_property(node, "physics_mode", "Structural")).lower()

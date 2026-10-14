@@ -13,7 +13,7 @@ from PySide6 import QtCore, QtWidgets
 from .result_presentation import result_state_rows
 from pylcss.cae.design_studio.topology_optimization.geometry.lattice_cad import topopt_export_formats
 
-from pylcss.cae.design_studio.topology_optimization.manufacturing.structures import (
+from pylcss.cae.design_studio.topology_optimization.manufacturing.lattice_families import (
     PUBLIC_LATTICE_FAMILY_NAMES,
 )
 from pylcss.cae.design_studio.topology_optimization.integration.lattice_infill_node import (
@@ -26,7 +26,7 @@ from pylcss.cae.design_studio.topology_optimization.configuration.presets import
 from pylcss.cae.design_studio.topology_optimization.configuration.voxel_meshing import (
     DEFAULT_VOXEL_MESH_QUALITY,
     DEFAULT_MAX_VOXEL_ELEMENTS,
-    VOXEL_MESH_RESOLUTIONS,
+    VOXEL_MESH_ELEMENT_BUDGETS,
 )
 
 from .execution_workers import (
@@ -363,12 +363,7 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
                     if p == "design_goal"
                     else node.get_property("design_goal")
                 )
-                settings = industrial_topopt_defaults(
-                    goal,
-                    nelx=node.get_property("nelx") or 30,
-                    nely=node.get_property("nely") or 20,
-                    nelz=node.get_property("nelz") or 10,
-                )
+                settings = industrial_topopt_defaults(goal)
                 _apply_guided_settings(settings)
                 _refresh_topopt_later()
 
@@ -441,14 +436,13 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         mesh_group = QtWidgets.QGroupBox("Voxel Meshing")
         mesh_layout = QtWidgets.QFormLayout(mesh_group)
         automatic_grid = _check("automatic_grid")
-        quality = _combo("voxel_mesh_quality", list(VOXEL_MESH_RESOLUTIONS), DEFAULT_VOXEL_MESH_QUALITY)
+        quality = _combo("voxel_mesh_quality", list(VOXEL_MESH_ELEMENT_BUDGETS), DEFAULT_VOXEL_MESH_QUALITY)
         quality.setToolTip(
-            "Geometry-based final resolution: approximately 24 / 40 / 64 / 96 "
-            "cells across the longest CAD dimension, and at least 3 / 4 / 6 / 8 "
-            "across selected small features, for Coarse / Medium / Fine / Very Fine. "
-            "The physical voxel pitch is the same on X, Y and Z. Automatic mode "
-            "fits the geometric target to Maximum Elements and available RAM; "
-            "the resolved grid and pitch are reported in the estimate."
+            "Element budgets for Coarse / Medium / Fine / Very Fine: "
+            + " / ".join(f"{budget:,}" for budget in VOXEL_MESH_ELEMENT_BUDGETS.values())
+            + ". Automatic sizing finds the finest cubic grid within the preset "
+            "budget, Maximum Elements and available RAM. The estimate reports "
+            "the effective budget, grid and voxel size."
         )
         size = _double("voxel_size", 0.0, 0.0, 1e6, decimals=6, step=0.1, suffix=" mm")
         size.setSpecialValueText("Automatic")
@@ -462,7 +456,7 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         limit.setSpecialValueText("Unlimited")
         limit.setToolTip(
             "Default 1,000,000 grid elements. Automatic mode selects its pitch "
-            "within this limit and available RAM. Explicit voxel sizes and manual "
+            "within the preset budget, this limit and available RAM. Explicit voxel sizes and manual "
             "counts are checked without changing them. 0 disables the element cap."
         )
         estimate = QtWidgets.QLabel()
@@ -492,6 +486,7 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             self.property_widgets[prop] = widget
 
         def _mesh_controls():
+            self._topopt_source_bounds = None
             explicit_size = size.value() > 0
             quality.setEnabled(automatic_grid.isChecked() and not explicit_size)
             automatic_grid.setEnabled(not explicit_size)
@@ -500,7 +495,7 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
                 widget.setEnabled(manual)
                 mesh_layout.setRowVisible(widget, manual)
             from pylcss.cae.design_studio.topology_optimization.integration.execution_setup import plan_topology_voxel_mesh
-            from pylcss.cae.design_studio.topology_optimization.integration.geometry_mapping import _flatten, _mesh_bounds
+            from pylcss.cae.design_studio.topology_optimization.integration.geometry_mapping import _mesh_bounds
             try:
                 # Inspecting a node must not use lazy input resolution: an
                 # uncomputed Mesh/support/load can launch Netgen on the GUI
@@ -509,28 +504,28 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
                     node.get_cached_input_value("design_domain"),
                     allow_tessellation=False,
                 )
+                self._topopt_source_bounds = source_bounds
                 if source_bounds is None:
                     estimate.setText("Run to estimate")
                     estimate.setToolTip("Run the upstream geometry or mesh to update this estimate.")
                     estimate.setStyleSheet("color:#8f98a5; font-size:10px;")
                     return
-                plan = plan_topology_voxel_mesh(
-                    node, source_bounds,
-                    constraints=_flatten(node.get_cached_input_list("supports")),
-                    loads=_flatten(node.get_cached_input_list("loads")),
-                )
+                plan = plan_topology_voxel_mesh(node, source_bounds)
                 ram = plan.estimated_memory_bytes / (1024 ** 3)
                 pitch_text = f"{plan.pitch:.6g} mm · " if plan.pitch is not None else ""
                 estimate.setText(
-                    f"{pitch_text}{' × '.join(map(str, plan.shape))} · {plan.elements:,} elements · {ram:.2f}–{2 * ram:.2f} GiB"
+                    f"{pitch_text}{' × '.join(map(str, plan.shape))} · {plan.elements:,} elements · {ram:.2f} GiB planning allowance"
+                    + (f" · Budget {plan.automatic_element_budget:,}" if plan.automatic_element_budget is not None else "")
                     + (" · Resource limited" if plan.resource_limited else "")
                     + (" · Over limit" if plan.resource_error() else "")
                 )
                 detail = "Estimated grid size and RAM."
-                if plan.resource_limited:
-                    detail = (f"Geometric target {plan.geometric_target_pitch:.6g} mm; "
-                              f"resolved automatic pitch {plan.pitch:.6g} mm to fit "
-                              f"the {plan.automatic_element_budget:,}-element RAM/element budget.")
+                if plan.automatic_element_budget is not None:
+                    detail = (f"{plan.quality} preset: {plan.preset_element_budget:,} elements; "
+                              f"effective budget: {plan.automatic_element_budget:,} elements "
+                              "after Maximum Elements and available RAM. "
+                              "Cubic grid counts are rounded for the solver, "
+                              "so the actual count can be below the budget.")
                 estimate.setToolTip(plan.resource_error() or detail)
                 estimate.setStyleSheet("color:#ffb35c; font-size:10px;" if plan.resource_error() else "color:#8f98a5; font-size:10px;")
             except (TypeError, ValueError, OverflowError) as exc:
@@ -567,6 +562,7 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         view_layout = QtWidgets.QFormLayout()
 
         visualization = QtWidgets.QComboBox()
+        visualization.setObjectName("TopOptViewMode")
         last_result = getattr(node, "_last_result", None)
         has_recovered_surface = bool(
             isinstance(last_result, dict)
@@ -574,11 +570,11 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             and last_result["recovered_shape"].get("vertices") is not None
             and last_result["recovered_shape"].get("faces") is not None
         )
-        visualization_modes = ['CAD', 'Density']
-        visualization_modes.extend(
-            field for field in available_result_fields(last_result)
-            if field.startswith("FEA ")
-        )
+        from .result_fields import topopt_view_mode
+        geometry_view = "Lattice" if is_lattice_structure else "STL Shape"
+        visualization_modes = available_result_fields(last_result)
+        if visualization_modes == ["Default View"]:
+            visualization_modes = ["Density"]
         visualization.addItems(visualization_modes)
         current_view = str(
             (
@@ -587,21 +583,9 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
                 else None
             )
             or node.get_property("visualization")
-            or "CAD"
+            or geometry_view
         )
-        geometry_view = "CAD"
-        recovered_view = (
-            "CAD"
-            if has_recovered_surface and not is_lattice_structure
-            else geometry_view
-        )
-        current_view = {
-            "Recovered Shape": recovered_view,
-            "Recovered Surface (Mesh)": recovered_view,
-            "Surface": recovered_view,
-            "Reconstructed CAD (B-rep)": "CAD",
-            "Voxel Density": "Density",
-        }.get(current_view, current_view)
+        current_view = topopt_view_mode(last_result or {}, current_view)
         if "density" in current_view.lower() or "voxel" in current_view.lower():
             current_view = "Density"
         view_index = visualization.findText(current_view)
@@ -610,8 +594,11 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             lambda v: self._set_topopt_visualization(node, v)
         )
         visualization.setToolTip(
-            "CAD: reconstructed geometry; a surface preview is shown while CAD builds\n"
-            "Density: voxel design field"
+            "Density: solved voxel field\n"
+            "STL Shape: recovered solid surface mesh\n"
+            "CAD: completed CAD body\n"
+            "FEA: completed independent analysis\n"
+            "Lattice: generated cells with preserved solid regions"
         )
         view_layout.addRow("Mode:", visualization)
 
@@ -621,7 +608,7 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             isinstance(last_result, dict)
             and (last_result.get("cad_shape") is not None or last_result.get("shape") is not None)
         )
-        if has_recovered_surface and not has_cad_body and "STEP" in self._topopt_available_formats(node):
+        if has_recovered_surface:
             triangle_count = len(last_result["recovered_shape"]["faces"])
             preview_status = QtWidgets.QLabel(
                 f"{triangle_count:,} triangles"
@@ -629,9 +616,36 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             preview_status.setWordWrap(True)
             preview_status.setStyleSheet("color:#ffb74d; font-size:10px;")
             view_layout.addRow("Surface:", preview_status)
-            build_cad = QtWidgets.QPushButton("Build CAD")
-            build_cad.clicked.connect(lambda _checked=False: self._preview_topopt_cad(node))
-            view_layout.addRow(build_cad)
+
+        has_density = bool(
+            isinstance(last_result, dict) and last_result.get("density") is not None
+        )
+        supports_cad = "STEP" in self._topopt_available_formats(node)
+        cad_worker = getattr(self, "_topopt_cad_preview_worker", None)
+        building_cad = cad_worker is not None and cad_worker.isRunning()
+        build_cad = QtWidgets.QPushButton("Build CAD")
+        build_cad.setObjectName("TopOptBuildCad")
+        build_cad.setEnabled(
+            supports_cad and (has_recovered_surface or has_density)
+            and not has_cad_body and not building_cad
+        )
+        build_cad.clicked.connect(lambda _checked=False: self._preview_topopt_cad(node))
+        view_layout.addRow(build_cad)
+        if building_cad:
+            cad_hint = "Building CAD in the background."
+        elif has_cad_body:
+            cad_hint = "CAD is ready. Select CAD above to view it or export as STEP."
+        elif not supports_cad:
+            cad_hint = "This lattice supports STL export; a complete CAD body is unavailable."
+        elif not (has_recovered_surface or has_density):
+            cad_hint = "Run TopOpt first, then use Build CAD to create the CAD body."
+        else:
+            cad_hint = "Build CAD creates a CAD body from the solved result for STEP export."
+        build_cad.setToolTip(cad_hint)
+        cad_hint_label = QtWidgets.QLabel(cad_hint)
+        cad_hint_label.setObjectName("TopOptCadHint")
+        cad_hint_label.setWordWrap(True)
+        view_layout.addRow(cad_hint_label)
 
         # Report a lazily cached CAD body or a failed reconstruction.
         cad_report = (
@@ -679,6 +693,8 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             "optimizer", "max_iter", "tol", "convergence_patience", "penal",
             "automatic_filter_radius", "rmin", "density_cutoff", "stress_constraint",
             "topology_convergence_enabled", "topology_convergence_levels",
+            "topology_minimum_solid_size_mm", "topology_minimum_void_size_mm",
+            "topology_objective_tolerance", "topology_overlap_tolerance", "voxel_ram_fraction",
         }
         names &= set(node.properties().get("custom", {}))
         self._topopt_advanced_property_names = names
@@ -690,10 +706,40 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             self._build_generic_ui(node, property_names=names)
         finally:
             self.props_layout = panel_layout
+        feature_estimate = QtWidgets.QLabel()
+        feature_estimate.setWordWrap(True)
+        feature_estimate.setObjectName("TopOptPhysicalLengthEstimate")
+        content_layout.addWidget(feature_estimate)
         def _manual_controls():
-            self.property_widgets["rmin"].setEnabled(not bool(node.get_property("automatic_filter_radius")))
+            from pylcss.input_values import as_bool
+            automatic = as_bool(node.get_property("automatic_filter_radius"))
+            self.property_widgets["rmin"].setEnabled(not automatic)
+            for name in ("topology_minimum_solid_size_mm", "topology_minimum_void_size_mm"):
+                self.property_widgets[name].setEnabled(automatic)
+            if not automatic:
+                feature_estimate.setText("Manual density filter; radius is stated in voxel units.")
+                return
+            bounds = getattr(self, "_topopt_source_bounds", None)
+            if bounds is None:
+                feature_estimate.setText("Run upstream geometry to estimate physical feature sizes.")
+                return
+            from pylcss.cae.design_studio.topology_optimization.configuration.length_scale import resolve_physical_length_scale
+            from pylcss.cae.design_studio.topology_optimization.integration.execution_setup import plan_topology_voxel_mesh
+            try:
+                plan = plan_topology_voxel_mesh(node, bounds)
+                scale = resolve_physical_length_scale(
+                    plan.bounds, plan.shape,
+                    node.get_property("topology_minimum_solid_size_mm"),
+                    node.get_property("topology_minimum_void_size_mm"),
+                )
+                feature_estimate.setText(f"Planning sizes: solid {scale.minimum_solid_size:.4g} mm · void {scale.minimum_void_size:.4g} mm · filter radius {scale.filter_radius:.4g} mm")
+            except (TypeError, ValueError) as exc:
+                feature_estimate.setText(str(exc))
 
         self.property_widgets["automatic_filter_radius"].toggled.connect(lambda _value: _manual_controls())
+        for name in ("topology_minimum_solid_size_mm", "topology_minimum_void_size_mm", "voxel_ram_fraction"):
+            self.property_widgets[name].value_changed.connect(lambda _value: _manual_controls())
+        self.property_widgets["voxel_ram_fraction"].value_changed.connect(lambda _value: self._topopt_mesh_estimate_refresh())
         _manual_controls()
         section = InspectorSection(
             "Advanced Settings", content, parent=self.props_widget,
@@ -752,6 +798,12 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         button.setEnabled(isinstance(result, dict) and result.get("density") is not None and not running)
         button.clicked.connect(lambda _checked=False: self._generate_topopt_lattice(node))
         layout.addRow(button)
+        mesh_note = QtWidgets.QLabel(
+            "Creates a surface mesh for STL. Non-design regions remain solid. "
+            "STEP is optional for supported strut lattices."
+        )
+        mesh_note.setWordWrap(True)
+        layout.addRow(mesh_note)
         if isinstance(result, dict) and result.get("generated_lattice"):
             report = result["generated_lattice"]
             label = QtWidgets.QLabel(f"{report['cell_family']} · {report['cell_size_mm']:.3g} mm cells")
@@ -783,13 +835,24 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         node._last_result = result
         node._last_structure_options = result.get("structure_options")
         node._last_member_plan = None
-        node.set_property("visualization", "CAD")
-        result["visualization_mode"] = "CAD"
+        from .result_fields import topopt_view_mode
+        mode = "Lattice" if result.get("generated_lattice") else topopt_view_mode(result, result.get("visualization_mode") or "STL Shape")
+        node.set_property("visualization", mode)
+        result["visualization_mode"] = mode
+        if result.get("generated_lattice"):
+            node.set_property("cad_export_format", "STL")
+            filename = node.get_property("cad_export_filename") or "topopt_lattice.stl"
+            node.set_property("cad_export_filename", str(Path(filename).with_suffix(".stl")))
         window = self.window()
         window = getattr(window, "cad_widget", window)
         window._last_render_data = result
+        window._last_rendered_node = node
+        window._last_rendered_geom = None
         viewer = getattr(window, "viewer", None)
-        if viewer is not None:
+        render_result = getattr(window, "_render_result_in_viewer", None)
+        if callable(render_result):
+            render_result(result)
+        elif viewer is not None:
             viewer.render_simulation(result)
         results_panel = getattr(window, "results", None)
         if results_panel is not None:
@@ -958,7 +1021,8 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         infill_group = QtWidgets.QGroupBox("Lattice Infill Settings")
         infill_layout = QtWidgets.QFormLayout()
         infill_layout.addRow("Lattice Pattern", _combo("structure_mode", list(PUBLIC_LATTICE_FAMILY_NAMES), "Gyroid Lattice"))
-        infill_layout.addRow("Relative Density", _double("lattice_target_relative_density", 0.25, 0.05, 1.0, decimals=2, step=0.05))
+        infill_layout.addRow("Relative Density", _double("lattice_target_relative_density", 0.25, 0.0001, 1.0, decimals=4, step=0.05))
+        infill_layout.addRow("Build Quality", _combo("infill_build_quality", ["Standard", "High", "Professional"], "High"))
         # Swapping the mode swaps the control below it, so the panel has to be
         # rebuilt; without this the fineness picker stayed on screen in Manual
         # mode and the pitch field never appeared.
@@ -969,10 +1033,24 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             infill_layout.addRow("Cell Fineness", _combo("infill_fineness", list(AUTOMATIC_FINENESS_FRACTIONS.keys()), "Medium"))
         else:
             infill_layout.addRow("Cell Size (mm)", _double("infill_cell_size_mm", 10.0, 0.1, 10000.0, decimals=2, step=1.0, suffix=" mm"))
-        outer_skin = _double("infill_skin_thickness_mm", 0.0, 0.0, 100.0, decimals=2, step=0.5, suffix=" mm")
-        outer_skin.setSpecialValueText("Automatic")
-        outer_skin.setToolTip("A thin connected outer skin closes cells at the boundary. Automatic derives a resolved thickness from the cell pitch.")
-        infill_layout.addRow("Outer Skin", outer_skin)
+        if str(node.get_property("infill_cell_size_mode")) == "Manual":
+            coarsening = QtWidgets.QCheckBox("Allow Larger Cells")
+            coarsening.setObjectName("infill_allow_pitch_coarsening")
+            coarsening.setChecked(bool(node.get_property("infill_allow_pitch_coarsening")))
+            coarsening.setToolTip("Allow the build budget to increase the requested pitch. Otherwise preserve it and report insufficient resolution.")
+            coarsening.toggled.connect(lambda value: self.update_property("infill_allow_pitch_coarsening", value))
+            infill_layout.addRow(coarsening)
+        skin_mode = _combo("infill_skin_mode", ["None", "Automatic", "Manual"], "None")
+        skin_mode.currentTextChanged.connect(lambda _value: _rebuild_later())
+        infill_layout.addRow("Outer Skin", skin_mode)
+        if str(node.get_property("infill_skin_mode")) == "Manual":
+            outer_skin = _double("infill_skin_thickness_mm", 0.0, 0.0, 10000.0, decimals=3, step=0.1, suffix=" mm")
+            outer_skin.setToolTip("Requested thickness is preserved. The remaining lattice core depends on the part's local thickness.")
+            infill_layout.addRow("Skin Thickness", outer_skin)
+        repair = QtWidgets.QCheckBox("Repair Trimmed Connections")
+        repair.setChecked(bool(node.get_property("repair_lattice_connections")))
+        repair.toggled.connect(lambda value: self.update_property("repair_lattice_connections", value))
+        infill_layout.addRow(repair)
         infill_group.setLayout(infill_layout)
         self.props_layout.addWidget(infill_group)
 
@@ -1124,38 +1202,13 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         self.props_layout.addWidget(group)
 
     def _set_topopt_visualization(self, node, mode):
-        """Switch result views and lazily build the requested CAD body."""
+        """Switch between computed views without starting another operation."""
         mode = str(mode)
-        if mode != "CAD":
-            self.update_property("visualization", mode)
-            return
-        if "STEP" not in self._topopt_available_formats(node):
-            self.update_property("visualization", "CAD")
-            result = getattr(node, "_last_result", None)
-            if isinstance(result, dict):
-                result["visualization_mode"] = "CAD"
-            return
-
         result = getattr(node, "_last_result", None)
-        if not isinstance(result, dict) or result.get("recovered_shape") is None:
-            window = self.window()
-            if hasattr(window, "statusBar") and window.statusBar():
-                window.statusBar().showMessage(
-                    "Run Topology first.",
-                    7000,
-                )
+        if not isinstance(result, dict) or mode not in available_result_fields(result):
             return
-
-        settings = self._topopt_cad_settings(node, result)
-        from pylcss.cae.design_studio.topology_optimization.geometry.cad_config import cached_cad_shape
-        if cached_cad_shape(result, settings["strategy"]) is not None:
-            self.update_property("visualization", mode)
-            result["visualization_mode"] = mode
-            viewer = getattr(self.window(), "viewer", None)
-            if viewer is not None:
-                viewer.render_simulation(result)
-            return
-        self._preview_topopt_cad(node)
+        result["visualization_mode"] = mode
+        self.update_property("visualization", mode)
 
     def _build_and_show_lattice_infill(self, node):
         window = self.window()
@@ -1209,7 +1262,9 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             return
 
         result = getattr(node, "_last_result", None)
-        if not isinstance(result, dict) or result.get("recovered_shape") is None:
+        if not isinstance(result, dict) or (
+            result.get("recovered_shape") is None and result.get("density") is None
+        ):
             QtWidgets.QMessageBox.warning(
                 self,
                 "No Result",
@@ -1226,6 +1281,22 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             parent=self,
         )
         self._topopt_cad_preview_worker = worker
+        if self.current_node is node:
+            button = self.props_widget.findChild(QtWidgets.QPushButton, "TopOptBuildCad")
+            if button is not None:
+                button.setEnabled(False)
+            hint = self.props_widget.findChild(QtWidgets.QLabel, "TopOptCadHint")
+            if hint is not None:
+                hint.setText("Building CAD in the background.")
+
+        def _refresh_cad_inspector():
+            from pylcss.cae.design_studio.topology_optimization.integration.study_identity import (
+                is_density_study_node,
+            )
+
+            current = self.current_node
+            if current is not None and is_density_study_node(current):
+                self.display_node(current)
 
         def _finish(shape, report):
             self._topopt_cad_preview_worker = None
@@ -1233,8 +1304,15 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             layout = report.pop('_surface_layout', None)
             if layout is not None:
                 result['surface_layout'] = layout
-                result['recovered_shape']['surface_layout'] = layout
+                if isinstance(result.get('recovered_shape'), dict):
+                    result['recovered_shape']['surface_layout'] = layout
             result["cad_shape"] = shape
+            if result.get("validation"):
+                result.pop("validation", None)
+                result.pop("validation_summary", None)
+                result["fea_analysis_status"] = "geometry_changed"
+                from pylcss.cae.design_studio.topology_optimization.verification.quality_gate import update_verification_status
+                update_verification_status(result)
             result["shape"] = shape
             result["cad_reconstruction"] = report
             result.pop("cad_error", None)
@@ -1281,10 +1359,7 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
                     f"CAD ready{count_text}",
                     12000,
                 )
-            QtCore.QTimer.singleShot(
-                0,
-                lambda: self.display_node(node) if self.current_node is node else None,
-            )
+            QtCore.QTimer.singleShot(0, _refresh_cad_inspector)
 
         def _fail(message):
             self._topopt_cad_preview_worker = None
@@ -1293,8 +1368,11 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
                 "method": "CAD reconstruction failed", "failed": True,
                 "editable": False, "error": message,
             }
-            result["visualization_mode"] = "CAD"
-            node.set_property("visualization", "CAD")
+            mode = "Lattice" if result.get("generated_lattice") else "STL Shape"
+            if mode not in available_result_fields(result):
+                mode = "Density"
+            result["visualization_mode"] = mode
+            node.set_property("visualization", mode)
             viewer = getattr(window, "viewer", None)
             if viewer is not None:
                 viewer.render_simulation(result)
@@ -1306,15 +1384,15 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
                 "CAD Error",
                 message,
             )
-            QtCore.QTimer.singleShot(
-                0,
-                lambda: self.display_node(node) if self.current_node is node else None,
-            )
+            QtCore.QTimer.singleShot(0, _refresh_cad_inspector)
 
         def _cancelled():
             self._topopt_cad_preview_worker = None
-            result["visualization_mode"] = "CAD"
-            node.set_property("visualization", "CAD")
+            mode = "Lattice" if result.get("generated_lattice") else "STL Shape"
+            if mode not in available_result_fields(result):
+                mode = "Density"
+            result["visualization_mode"] = mode
+            node.set_property("visualization", mode)
             viewer = getattr(window, "viewer", None)
             if viewer is not None:
                 viewer.render_simulation(result)
@@ -1323,6 +1401,7 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
                 clear_progress()
             if hasattr(window, "statusBar") and window.statusBar():
                 window.statusBar().showMessage("CAD reconstruction cancelled.")
+            QtCore.QTimer.singleShot(0, _refresh_cad_inspector)
 
         worker.preview_finished.connect(_finish)
         worker.preview_error.connect(_fail)

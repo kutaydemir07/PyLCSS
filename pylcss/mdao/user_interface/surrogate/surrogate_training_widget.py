@@ -8,7 +8,6 @@ from typing import Any
 
 from PySide6 import QtWidgets
 
-from pylcss.mdao.surrogate_modeling.training_engine import SKLEARN_AVAILABLE
 from pylcss.mdao.surrogate_modeling.active_learning import ActiveLearningConfig
 from pylcss.user_interface.common.theme_manager import COLORS
 
@@ -30,13 +29,6 @@ class SurrogateTrainingWidget(
     QtWidgets.QWidget,
 ):
     """Main workflow widget for surrogate-model training."""
-
-    _FIELD_CHOICES_BY_SOLVER = {
-        "fea": ["von_mises", "displacement", "stress_tensor", "ener_nodal"],
-        "impact": ["stress_vm", "displacement", "von_mises"],
-        "crash": ["stress_vm", "displacement", "von_mises"],
-        "topopt": ["density"],
-    }
 
     def _update_active_budget_label(self) -> None:
         self.lbl_al_budget.setText(
@@ -101,11 +93,3 @@ class SurrogateTrainingWidget(
         self._evaluation_control_states = []
 
         self.setup_ui()
-
-        if not SKLEARN_AVAILABLE:
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Missing Dependency",
-                "Scikit-learn is required for this feature.\nPlease install it: pip install scikit-learn",
-            )
-            self.setEnabled(False)

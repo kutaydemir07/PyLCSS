@@ -9,9 +9,8 @@ import logging
 import pyqtgraph as pg
 from PySide6 import QtCore, QtWidgets
 
-from pylcss.mdao.surrogate_modeling.training_engine import (
-    TORCH_AVAILABLE,
-)
+from pylcss.mdao.surrogate_modeling.torch_utils import TORCH_AVAILABLE
+from pylcss.mdao.surrogate_modeling.training import SurrogateTrainer
 from pylcss.user_interface.common.theme_manager import COLORS
 from pylcss.user_interface.common.ui_kit import CollapsibleSection as _CollapsibleSection
 
@@ -161,10 +160,17 @@ class SurrogateUiMixin:
         p_gen = QtWidgets.QWidget()
         l_gen = QtWidgets.QFormLayout(p_gen)
         self.spin_samples = QtWidgets.QSpinBox()
-        self.spin_samples.setRange(100, 1000000)
+        self.spin_samples.setRange(2, 2147483647)
         self.spin_samples.setValue(1000)
         self.spin_samples.setSingleStep(500)
         l_gen.addRow("Sample Count:", self.spin_samples)
+        self.spin_failure_limit = QtWidgets.QSpinBox()
+        self.spin_failure_limit.setRange(0, 2147483647)
+        self.spin_failure_limit.setSpecialValueText("No limit")
+        self.spin_failure_limit.setToolTip(
+            "Stop after this many consecutive failed simulations. Zero evaluates all requested points."
+        )
+        l_gen.addRow("Consecutive failure limit:", self.spin_failure_limit)
 
         self.btn_generate = QtWidgets.QPushButton("Generate Data")
         self.btn_generate.clicked.connect(self.start_generation)
@@ -194,15 +200,10 @@ class SurrogateUiMixin:
         l_arch.setContentsMargins(0, 0, 0, 0)
 
         self.combo_algo = QtWidgets.QComboBox()
-        model_options = [
-            "Auto Mode",
-        ]
-        if TORCH_AVAILABLE:
-            model_options.append("Your Own Architecture (Deep Learning)")
-        self.combo_algo.addItems(model_options)
+        self.combo_algo.addItems(SurrogateTrainer().available_models)
         self.combo_algo.setToolTip(
             "Choose surrogate modeling workflow:\n"
-            "- Auto Mode: Automatic multi-model benchmarking and champion selection across peer-reviewed MDAO algorithms (Kriging, KPLS, Polyharmonic RBF, Sparse PCE, SVR, Goel-Haftka Ensembles)\n"
+            "- Auto Mode: Compare Kriging, PLS + Kriging, RBF, sparse polynomial regression, SVR, and weighted ensembles\n"
             "- Your Own Architecture (Deep Learning): Visual or PyTorch deep learning architecture builder (Residual blocks, Fourier embeddings, LayerNorm, MC Dropout)"
         )
         self.combo_algo.currentIndexChanged.connect(self.update_hyperparams)
@@ -211,126 +212,6 @@ class SurrogateUiMixin:
         # Dynamic Hyperparameters Stack
         self.stack_params = QtWidgets.QStackedWidget()
 
-        # --- Geom-DeepONet / GINO shared params (geometric backbones) ---
-        # Both backbones need: CAD graph path + solver kind + nodal field name +
-        # sample count + epochs + a small set of architecture knobs.
-        p_geom = QtWidgets.QWidget()
-        f_geom = QtWidgets.QFormLayout(p_geom)
-
-        cad_row = QtWidgets.QHBoxLayout()
-        self.txt_cad_path = QtWidgets.QLineEdit()
-        self.txt_cad_path.setPlaceholderText("Path to .cad / .json CAD graph...")
-        self.txt_cad_path.setToolTip(
-            "PyLCSS CAD graph file. The wrapper will call pylcss.cae.design_studio.runtime "
-            "with each design's parameters to materialise its mesh."
-        )
-        self.btn_browse_cad = QtWidgets.QPushButton("Browse...")
-        self.btn_browse_cad.clicked.connect(self._browse_cad_path)
-        cad_row.addWidget(self.txt_cad_path, 1)
-        cad_row.addWidget(self.btn_browse_cad)
-        cad_holder = QtWidgets.QWidget()
-        cad_holder.setLayout(cad_row)
-        f_geom.addRow("CAD Graph:", cad_holder)
-
-        self.combo_cad_kind = QtWidgets.QComboBox()
-        self.combo_cad_kind.addItems(["fea", "impact", "topopt"])
-        self.combo_cad_kind.setToolTip(
-            "Which CAD terminal solver to call (fea/impact/topopt)."
-        )
-        self.combo_cad_kind.currentTextChanged.connect(self._refresh_field_choices)
-        f_geom.addRow("Solver:", self.combo_cad_kind)
-
-        # Field is editable in case the user has a custom raw key, but the
-        # dropdown is pre-populated with the names PyLCSS's known backends
-        # actually emit -- so the common case is a single click.
-        self.combo_field = QtWidgets.QComboBox()
-        self.combo_field.setEditable(True)
-        self.combo_field.setToolTip(
-            "Which nodal field the surrogate will predict.\n"
-            "Choices are filtered by the selected solver."
-        )
-        f_geom.addRow("Field:", self.combo_field)
-        self._refresh_field_choices(self.combo_cad_kind.currentText())
-
-        self.spin_geom_samples = QtWidgets.QSpinBox()
-        self.spin_geom_samples.setRange(4, 1000)
-        self.spin_geom_samples.setValue(30)
-        self.spin_geom_samples.setToolTip(
-            "Number of LHS-sampled design points used to train (one CAD eval each)."
-        )
-        f_geom.addRow("CAD Samples:", self.spin_geom_samples)
-
-        self.spin_geom_epochs = QtWidgets.QSpinBox()
-        self.spin_geom_epochs.setRange(10, 5000)
-        self.spin_geom_epochs.setValue(300)
-        f_geom.addRow("Epochs:", self.spin_geom_epochs)
-
-        self.spin_geom_lr = QtWidgets.QDoubleSpinBox()
-        self.spin_geom_lr.setRange(1e-5, 1.0)
-        self.spin_geom_lr.setDecimals(5)
-        self.spin_geom_lr.setValue(1e-3)
-        self.spin_geom_lr.setSingleStep(1e-4)
-        f_geom.addRow("Learning rate:", self.spin_geom_lr)
-
-        # ---- Geom-DeepONet-specific knobs (branch/trunk MLP). ----
-        self.spin_donet_latent = QtWidgets.QSpinBox()
-        self.spin_donet_latent.setRange(8, 512)
-        self.spin_donet_latent.setValue(64)
-        self.spin_donet_latent.setToolTip(
-            "Inner-product dimension between branch (params) and trunk (geometry) outputs."
-        )
-        self._lbl_donet_latent = QtWidgets.QLabel("Latent dim:")
-        f_geom.addRow(self._lbl_donet_latent, self.spin_donet_latent)
-
-        self.spin_donet_trunk = QtWidgets.QSpinBox()
-        self.spin_donet_trunk.setRange(16, 512)
-        self.spin_donet_trunk.setValue(64)
-        self.spin_donet_trunk.setToolTip("Hidden width of the SIREN trunk network.")
-        self._lbl_donet_trunk = QtWidgets.QLabel("Trunk hidden:")
-        f_geom.addRow(self._lbl_donet_trunk, self.spin_donet_trunk)
-
-        # ---- GINO-specific knobs (3-D FNO on background SDF grid). ----
-        self.spin_gino_channels = QtWidgets.QSpinBox()
-        self.spin_gino_channels.setRange(4, 256)
-        self.spin_gino_channels.setValue(16)
-        self.spin_gino_channels.setToolTip("Width of the FNO hidden channels.")
-        self._lbl_gino_channels = QtWidgets.QLabel("Hidden channels:")
-        f_geom.addRow(self._lbl_gino_channels, self.spin_gino_channels)
-
-        self.spin_gino_grid = QtWidgets.QSpinBox()
-        self.spin_gino_grid.setRange(8, 64)
-        self.spin_gino_grid.setValue(24)
-        self.spin_gino_grid.setToolTip(
-            "Background-grid resolution per axis (R x R x R SDF volume)."
-        )
-        self._lbl_gino_grid = QtWidgets.QLabel("Grid resolution:")
-        f_geom.addRow(self._lbl_gino_grid, self.spin_gino_grid)
-
-        self.spin_gino_modes = QtWidgets.QSpinBox()
-        self.spin_gino_modes.setRange(2, 16)
-        self.spin_gino_modes.setValue(4)
-        self.spin_gino_modes.setToolTip(
-            "Number of low-frequency Fourier modes mixed by each FNO layer (per axis)."
-        )
-        self._lbl_gino_modes = QtWidgets.QLabel("FNO modes:")
-        f_geom.addRow(self._lbl_gino_modes, self.spin_gino_modes)
-
-        # Single page (geometric backbones share CAD/training config); the
-        # backbone-specific arch rows above get hidden/shown by
-        # _set_geom_visibility() when the user picks Geom-DeepONet vs GINO.
-        # Default-hide both groups so only the active backbone's knobs show
-        # the moment the user lands on the page.
-        for _lbl, _w in [
-            (self._lbl_donet_latent, self.spin_donet_latent),
-            (self._lbl_donet_trunk, self.spin_donet_trunk),
-            (self._lbl_gino_channels, self.spin_gino_channels),
-            (self._lbl_gino_grid, self.spin_gino_grid),
-            (self._lbl_gino_modes, self.spin_gino_modes),
-        ]:
-            _lbl.setVisible(False)
-            _w.setVisible(False)
-        self._geom_page_index = self.stack_params.addWidget(p_geom)
-
         # --- Auto Mode Params ---
         p_auto = QtWidgets.QWidget()
         f_auto = QtWidgets.QFormLayout(p_auto)
@@ -338,23 +219,22 @@ class SurrogateUiMixin:
         f_auto.setSpacing(8)
 
         lbl_auto_info = QtWidgets.QLabel(
-            "Auto Mode benchmarks peer-reviewed MDAO surrogate architectures "
-            "(Kriging with ARD, KPLS, Polyharmonic RBF, Sparse Legendre PCE, "
-            "Anisotropic SVR, and Goel-Haftka Convex Ensembles) to identify the optimal surrogate."
+            "Auto Mode compares engineering regressors on a validation split "
+            "and can combine leading models in a weighted ensemble."
         )
         lbl_auto_info.setWordWrap(True)
         lbl_auto_info.setStyleSheet("color: #b0b0b0; font-size: 8.5pt; padding-bottom: 4px;")
         f_auto.addRow(lbl_auto_info)
 
         self.combo_auto_preset = QtWidgets.QComboBox()
-        self.combo_auto_preset.addItem("Quick (Kriging, RBF, PCE, SVR)", "quick")
+        self.combo_auto_preset.addItem("Quick (Kriging, RBF, polynomial, SVR)", "quick")
         self.combo_auto_preset.addItem("Standard (+ KPLS, Matern 3/2)", "standard")
         self.combo_auto_preset.addItem("Thorough (Full search & Ensembling)", "thorough")
         self.combo_auto_preset.setToolTip(
             "Search Presets:\n"
-            "- Quick: Fast evaluation of 4 core models (Kriging, RBF, PCE, SVR)\n"
+            "- Quick: Four core models, plus PLS + Kriging for three or more inputs\n"
             "- Standard: Adds high-dimensional KPLS and Matern 3/2 rough response\n"
-            "- Thorough: Adds degree-3 PCE, Gaussian Kriging, and full Goel-Haftka ensemble"
+            "- Thorough: Adds cubic polynomial regression, Gaussian Kriging, and linear SVR"
         )
         f_auto.addRow("Search Preset:", self.combo_auto_preset)
 
@@ -362,50 +242,32 @@ class SurrogateUiMixin:
         self.combo_auto_metric.addItem("R2 Score (Maximize)", "R2")
         self.combo_auto_metric.addItem("RMSE (Minimize)", "RMSE")
         self.combo_auto_metric.addItem("MAE (Minimize)", "MAE")
-        self.combo_auto_metric.addItem("RMAE (Constraint Safety)", "RMAE")
+        self.combo_auto_metric.addItem("RMAE (Maximum relative error)", "RMAE")
         self.combo_auto_metric.setToolTip(
             "Optimization Metric for Champion Selection:\n"
             "- R2: Maximize coefficient of determination (overall fit)\n"
             "- RMSE: Minimize root mean squared error (penalizes large residuals)\n"
             "- MAE: Minimize mean absolute error (robust against outliers)\n"
-            "- RMAE: Minimize relative maximum absolute error (critical for constraint safety)"
+            "- RMAE: Minimize maximum absolute error divided by each output's standard deviation"
         )
         f_auto.addRow("Primary Metric:", self.combo_auto_metric)
 
-        self.chk_auto_ensemble = QtWidgets.QCheckBox("Enable Goel-Haftka Optimal Ensemble")
+        self.chk_auto_ensemble = QtWidgets.QCheckBox("Enable weighted ensemble")
         self.chk_auto_ensemble.setToolTip(
-            "Solves quadratic programming min error covariance across top candidate models to create an optimal convex ensemble."
+            "Fits nonnegative ensemble weights from validation residuals and keeps the ensemble if it improves the selected metric."
         )
         self.chk_auto_ensemble.setChecked(True)
         f_auto.addRow("", self.chk_auto_ensemble)
 
         self._auto_page_index = self.stack_params.addWidget(p_auto)
 
-        # --- Custom Architecture Params ---
-        p_custom = QtWidgets.QWidget()
-        l_custom = QtWidgets.QVBoxLayout(p_custom)
-        l_custom.setContentsMargins(0, 0, 0, 0)
+        self._algo_to_page = {"Auto Mode": self._auto_page_index}
+        if TORCH_AVAILABLE:
+            from .architecture_builder_widget import ArchitectureBuilderWidget
 
-        from .architecture_builder_widget import ArchitectureBuilderWidget
-
-        self.arch_builder = ArchitectureBuilderWidget()
-        l_custom.addWidget(self.arch_builder)
-
-        self._custom_page_index = self.stack_params.addWidget(p_custom)
-
-        # Map algorithm display name -> stack page index. Used by
-        # update_hyperparams to switch the hyperparam panel.
-        self._algo_to_page = {
-            "Auto Mode": self._auto_page_index,
-            "Auto Mode (Recommended)": self._auto_page_index,
-            "Auto Mode": self._auto_page_index,
-            "Your Own Architecture (Deep Learning)": self._custom_page_index,
-            "Custom Architecture (Deep Learning)": self._custom_page_index,
-            "Your Own Architecture": self._custom_page_index,
-            "Custom Architecture": self._custom_page_index,
-            "Geom-DeepONet": self._geom_page_index,
-            "GINO": self._geom_page_index,
-        }
+            self.arch_builder = ArchitectureBuilderWidget()
+            self._custom_page_index = self.stack_params.addWidget(self.arch_builder)
+            self._algo_to_page["Your Own Architecture (Deep Learning)"] = self._custom_page_index
         self.update_hyperparams(self.combo_algo.currentIndex())
 
         l_arch.addRow(self.stack_params)

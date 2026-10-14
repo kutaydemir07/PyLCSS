@@ -67,6 +67,7 @@ def fit_nurbs_surface_for_layout(
     maximum_knot_removal_attempts: int = 64,
     orientation_repair_seconds: float = 60.0,
     orientation_repair_iterations: int = 8,
+    curvature_reference_length: float = 1.0,
 ) -> Any:
     """Fit a bicubic B-spline surface to the layout's 3D sampling grid (Eq. 16, 17)."""
     if fitting is None:
@@ -78,6 +79,9 @@ def fit_nurbs_surface_for_layout(
         raise ValueError(f"Layout {layout.layout_id} has no sampling points.")
 
     n_u, n_v = layout.sampled_shape
+    if not np.isfinite(curvature_reference_length) or curvature_reference_length <= 0:
+        raise ValueError('Curvature reference length must be finite and positive')
+    layout.curvature_reference_length = curvature_reference_length
     pts_3d = layout.sampled_grid_3d
 
     if n_u <= degree_u or n_v <= degree_v:
@@ -245,6 +249,7 @@ def _finalize_multiresolution_fit(layout, surface, *, multires_enabled, curvatur
         layout.multiresolution_report = {"enabled": False, "paper_algorithm_executed": False}
         return surface
     candidate = apply_validated_multiresolution(layout, surface, curvature_ck=curvature_ck,
+        curvature_reference_length=getattr(layout, 'curvature_reference_length', 1.),
         curvature_cp=curvature_cp, compression_ratio=compression_ratio, layers=layers,
         regeneration=regeneration, fit_tolerance=fit_tolerance, preserve_boundary=preserve_boundary,
         residual_evaluator=residual_evaluator or _surface_map_residual,
@@ -418,6 +423,26 @@ def prepare_shared_fit_boundaries(layouts: List[QuadLayout], tolerance: float) -
             "paper_multiresolution": False}
 
 
+def _bounded_interior_fit(initial, multiply_normal, target, bounds):
+    """Minimize the existing fitting objective inside the physical CAD box."""
+    from scipy.optimize import minimize
+
+    shape = initial.shape
+    lower = np.broadcast_to(bounds[0], shape).reshape(-1)
+    upper = np.broadcast_to(bounds[1], shape).reshape(-1)
+
+    def objective(values):
+        controls = values.reshape(shape)
+        normal_controls = multiply_normal(controls)
+        value = .5 * np.sum(controls * normal_controls) - np.sum(target * controls)
+        return float(value), (normal_controls - target).reshape(-1)
+
+    solution = minimize(objective, np.clip(initial.reshape(-1), lower, upper),
+        jac=True, method="L-BFGS-B", bounds=list(zip(lower, upper)),
+        options={"maxiter": 200, "ftol": 1e-12, "gtol": 1e-8})
+    return np.clip(solution.x, lower, upper).reshape(shape)
+
+
 def _fit_with_exact_polyline_boundaries(layout: QuadLayout, degree_u: int, degree_v: int,
                                         target_u: int, target_v: int, dense_fitting: bool = False,
                                         local_knots: tuple = ((), ()), *, fitted_bases=None,
@@ -554,6 +579,8 @@ def _fit_with_exact_polyline_boundaries(layout: QuadLayout, degree_u: int, degre
     along_v = lstsq(av[:, 1:-1], along_u.transpose(1, 0, 2).reshape(len(grid_v), -1),
                     lapack_driver="gelsy")[0]
     controls[1:-1, 1:-1] = along_v.reshape(count_v - 2, count_u - 2, 3).transpose(1, 0, 2)
+    box_bounds = getattr(layout, "source_box_bounds", None)
+    bounded_dense_fit = False
     if dense_fitting and layout.parameter_coords is not None:
         # A uniform UV grid can miss physical features compressed by the
         # harmonic map. Include the original mesh vertices in the objective.
@@ -592,7 +619,21 @@ def _fit_with_exact_polyline_boundaries(layout: QuadLayout, degree_u: int, degre
             # basis. Tiny diagonal regularization guards numerical roundoff.
             normal.setdiag(normal.diagonal() + max(float(normal.diagonal().max()), 1.) * 1e-12)
             correction = spsolve(normal, right)
+            constrained_target = normal @ controls[1:-1, 1:-1].reshape(-1, 3) + right
             controls[1:-1, 1:-1] += correction.reshape(count_u - 2, count_v - 2, 3)
+            if box_bounds is not None:
+                controls[1:-1, 1:-1] = _bounded_interior_fit(
+                    controls[1:-1, 1:-1],
+                    lambda values: (normal @ values.reshape(-1, 3)).reshape(values.shape),
+                    constrained_target.reshape(count_u - 2, count_v - 2, 3), box_bounds)
+                bounded_dense_fit = True
+    if box_bounds is not None and not bounded_dense_fit:
+        inner_u, inner_v = au[:, 1:-1], av[:, 1:-1]
+        normal_u, normal_v = inner_u.T @ inner_u, inner_v.T @ inner_v
+        target = np.einsum("ui,uvc,vj->ijc", inner_u, residual, inner_v, optimize=True)
+        controls[1:-1, 1:-1] = _bounded_interior_fit(controls[1:-1, 1:-1],
+            lambda values: np.einsum("ij,jkc,kl->ilc", normal_u, values, normal_v, optimize=True),
+            target, box_bounds)
     if not np.isfinite(controls).all():
         raise ValueError("Boundary-constrained fitting produced nonfinite control points")
     surface = BSpline.Surface()
@@ -876,6 +917,8 @@ def assemble_brep_cad_model(
     sewing = BRepBuilderAPI_Sewing(float(sew_tolerance))
     valid_faces = 0
     failed_layout_ids = []
+    from OCP.BRep import BRep_Tool
+    layout_surfaces = []
 
     for lay in layouts:
         if lay.nurbs_surface is None:
@@ -883,6 +926,7 @@ def assemble_brep_cad_model(
             continue
         try:
             face = nurbs_surface_to_occ_face(lay.nurbs_surface, tol=sew_tolerance)
+            layout_surfaces.append((BRep_Tool.Surface_s(face), int(lay.layout_id)))
             sewing.Add(face)
             valid_faces += 1
         except Exception as exc:
@@ -947,6 +991,11 @@ def assemble_brep_cad_model(
     workplane = cq.Workplane().newObject([final_shape])
     report = {
         "step": 5, "nurbs_patch_count": valid_faces,
+        "face_layout_ids": [
+            [layout_id for surface, layout_id in layout_surfaces
+             if surface == BRep_Tool.Surface_s(face.wrapped)]
+            for face in final_shape.Faces()
+        ],
         "input_layout_count": len(layouts), "failed_layout_ids": failed_layout_ids,
         "cad_volume": _solid_volume(final_shape, relative_tolerance=1e-4) if is_solid else None,
         "volume_relative_integration_tolerance": 1e-4,

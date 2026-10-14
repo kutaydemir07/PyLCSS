@@ -52,7 +52,8 @@ def initialize_geodesic_coordinates(layout: QuadLayout, *, edge_counts: bool = F
 def solve_iterative_harmonic_mapping(layout: QuadLayout, *, initialization: str = "geodesic",
                                      edge_counts: bool = False, max_iter: int = 1000,
                                      energy_threshold: float = 1e-10,
-                                     residual_threshold: float = 1e-8) -> tuple[np.ndarray, dict]:
+                                     residual_threshold: float = 1e-8,
+                                     minimum_area_ratio: float = 1e-3) -> tuple[np.ndarray, dict]:
     """Apply ordered in-place mean-value updates, equivalent to Gauss-Seidel."""
     from .amrto_parameterization import (
         _validate_parameter_triangles, compute_floater_mean_value_weights, parameterize_layout_boundaries,
@@ -111,7 +112,7 @@ def solve_iterative_harmonic_mapping(layout: QuadLayout, *, initialization: str 
             previous_energy = current_energy
     if not np.isfinite(coordinates).all():
         raise ValueError("Harmonic iteration generated nonfinite coordinates")
-    _validate_parameter_triangles(layout, coordinates)
+    _validate_parameter_triangles(layout, coordinates, minimum_area_ratio=minimum_area_ratio)
     report = {"method": "Algorithm 1 ordered mean-value iteration", "initialization": initialization,
               "geodesic_metric": "edge count" if edge_counts else "physical edge length",
               "iterations": iterations, "maximum_iterations": max_iter, "converged": converged,

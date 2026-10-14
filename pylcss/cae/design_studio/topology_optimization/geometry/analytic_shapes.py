@@ -51,20 +51,8 @@ def _voxel_origin_cell(
 
 
 
-def smin(a: np.ndarray, b: np.ndarray, k: float) -> np.ndarray:
-    """Smooth minimum of two fields a and b with blending radius k."""
-    if k <= 1e-9:
-        return np.minimum(a, b)
-    h = np.maximum(k - np.abs(a - b), 0.0) / k
-    return np.minimum(a, b) - h * h * h * k / 6.0
 
 
-def smax(a: np.ndarray, b: np.ndarray, k: float) -> np.ndarray:
-    """Smooth maximum of two fields a and b with blending radius k."""
-    if k <= 1e-9:
-        return np.maximum(a, b)
-    h = np.maximum(k - np.abs(a - b), 0.0) / k
-    return np.maximum(a, b) + h * h * h * k / 6.0
 
 
 class AnalyticShape:
@@ -575,7 +563,7 @@ def _orthogonal_vectors(v: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _parse_shape_from_dict(
-    d: dict, bounds: Optional[tuple[np.ndarray, np.ndarray]]
+    d: dict,
 ) -> Optional[AnalyticShape]:
     """Parse a shape dictionary into an AnalyticShape object."""
     shape_type = str(d.get("type") or d.get("shape") or "").strip().lower()
@@ -708,7 +696,7 @@ def _convert_legacy_to_physical_shapes(
     # Parse solid boxes
     for box in solid_boxes or ():
         if isinstance(box, dict):
-            shape = _parse_shape_from_dict(box, bounds)
+            shape = _parse_shape_from_dict(box)
             if shape is not None:
                 shapes.append(shape)
         elif len(box) >= 6:
@@ -728,7 +716,7 @@ def _convert_legacy_to_physical_shapes(
     # Parse void boxes
     for box in void_boxes or ():
         if isinstance(box, dict):
-            shape = _parse_shape_from_dict(box, bounds)
+            shape = _parse_shape_from_dict(box)
             if shape is not None:
                 shapes.append(shape)
         elif len(box) >= 6:
@@ -748,7 +736,7 @@ def _convert_legacy_to_physical_shapes(
     # Parse solid cylinders
     for cyl in solid_cylinders or ():
         if isinstance(cyl, dict):
-            shape = _parse_shape_from_dict(cyl, bounds)
+            shape = _parse_shape_from_dict(cyl)
             if shape is not None:
                 shapes.append(shape)
         else:
@@ -773,7 +761,7 @@ def _convert_legacy_to_physical_shapes(
     # Parse joint pin cylinders (treated as solid cylinders)
     for cyl in joint_pin_cylinders or ():
         if isinstance(cyl, dict):
-            shape = _parse_shape_from_dict(cyl, bounds)
+            shape = _parse_shape_from_dict(cyl)
             if shape is not None:
                 shapes.append(shape)
         else:
@@ -798,7 +786,7 @@ def _convert_legacy_to_physical_shapes(
     # Parse void cylinders
     for cyl in void_cylinders or ():
         if isinstance(cyl, dict):
-            shape = _parse_shape_from_dict(cyl, bounds)
+            shape = _parse_shape_from_dict(cyl)
             if shape is not None:
                 shapes.append(shape)
         else:

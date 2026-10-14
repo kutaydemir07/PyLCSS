@@ -17,7 +17,7 @@ function          terminal node identifier       backend
 ================  =============================  =======================
 ``cad.fea``       ``com.cad.sim.solver``         CalculiX (linear static)
 ``cad.impact``    ``com.cad.sim.crash_solver``   OpenCourant (explicit dynamics)
-``cad.topopt``    ``com.cad.sim.topopt_voxel``   Density / level-set topology
+``cad.topopt``    ``com.cad.sim.topopt_voxel``   Density (SIMP) topology
 ================  =============================  =======================
 
 Inputs are matched against ``NumberNode`` / ``VariableNode`` instances in the
@@ -29,24 +29,34 @@ are wrapped in :class:`CadResult`, which gives attribute *and* dict access plus
 a small fixed-name standard subset (``max_stress``, ``compliance``, ``mass``,
 ``volume``, ``peak_disp``, …) so user code is stable across graph versions.
 
-Evaluations are cached on ``(absolute_path, mtime, kind, sorted_inputs)`` for
-the lifetime of the running Python process.  Identical inputs never re-solve;
-this is also the layer a surrogate model plugs into (a function block's
-``use_surrogate`` checkbox short-circuits the call entirely before it reaches
-here).
+Each call executes the selected solver's upstream dependencies. Studies with
+several matching solvers require ``_solver="saved-node-id"`` or a unique name.
+Completed evaluations use a process-local LRU cache capped at 32 entries and
+256 MiB of estimated Python/array memory. Keys include project and input-file
+metadata, analysis kind, solver selection, numeric inputs and settings.
 """
 from __future__ import annotations
 
-import ast
-import json
 import logging
 import os
-import re
-import threading
 from pathlib import Path
 from typing import Any, Dict, Mapping, Sequence
 
 import numpy as np
+
+from pylcss.cae.design_studio.core.evaluation_cache import EvaluationCache, result_size_bytes
+from pylcss.cae.design_studio.core.graph import node_name, upstream_closure
+from pylcss.cae.design_studio.core.parameters import (
+    PARAMETER_NAME_RE,
+    parse_parameter_text, format_parameter_text, parameter_slot_indices,
+)
+from pylcss.cae.design_studio.core.study_dependencies import (
+    study_dependency_fingerprint as _study_dependency_fingerprint,
+)
+from pylcss.cae.design_studio.core.study_schema import (
+    STUDY_NODE_SCHEMAS, MATERIAL_CUSTOM_PROPERTIES,
+    study_node_identifier as _override_identifier,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,136 +76,31 @@ _CRASH_ID  = "com.cad.sim.crash_solver"
 _TOPOPT_IDS = ("com.cad.sim.topopt_voxel",)
 
 
-# Numeric Design Studio controls that are safe and meaningful to drive from a
-# system-model function block.  File paths, display options, face selections,
-# and backend switches intentionally remain owned by the saved .cad study.
-_OVERRIDEABLE_PROPERTIES = {
-    "com.cad.sim.material": (
-        "youngs_modulus", "poissons_ratio", "density",
-        "yield_strength", "tangent_modulus",
-    ),
-    "com.cad.sim.crash_material": (
-        "youngs_modulus", "poissons_ratio", "density", "yield_strength",
-        "tangent_modulus", "failure_strain", "enable_fracture",
-        "strain_rate_sensitive",
-    ),
-    "com.cad.sim.mesh": (
-        "element_size", "refinement_size", "shell_thickness", "shell_nip",
-    ),
-    "com.cad.sim.constraint": (
-        "displacement_x", "displacement_y", "displacement_z",
-        "displacement_x_enabled", "displacement_y_enabled",
-        "displacement_z_enabled",
-    ),
-    "com.cad.sim.load": (
-        "force_x", "force_y", "force_z", "pressure", "gravity_accel",
-    ),
-    "com.cad.topopt.load": ("force_x", "force_y", "force_z"),
-    "com.cad.sim.pressure_load": ("pressure",),
-    "com.cad.sim.impact": (
-        "velocity_x", "velocity_y", "velocity_z", "node_tolerance",
-        "wall_friction", "wall_gap_mm", "impactor_mass_kg",
-        "self_contact_enabled", "self_contact_friction",
-    ),
-    "com.cad.sim.crash_solver": (
-        "end_time", "n_frames", "time_steps", "enable_mass_scaling",
-    ),
-    "com.cad.sim.topopt_voxel": (
-        "nelx", "nely", "nelz", "volfrac", "rmin", "penal",
-        "density_cutoff", "max_iter", "tol", "convergence_patience",
-        "stress_constraint", "yield_stress",
-
-
-
-        "topology_convergence_enabled", "topology_convergence_levels",
-
-    ),
-}
-_OVERRIDE_GROUPS = {
-    "com.cad.sim.material": "Material",
-    "com.cad.sim.mesh": "Mesh",
-    "com.cad.sim.constraint": "Boundary condition",
-    "com.cad.sim.load": "Load",
-    "com.cad.topopt.load": "Topology load",
-    "com.cad.sim.pressure_load": "Load",
-    "com.cad.sim.impact": "Impact",
-    "com.cad.sim.crash_solver": "Impact solver",
-    "com.cad.sim.topopt_voxel": "Topology optimization",
-}
-
-_PROPERTY_LABELS = {
-    "youngs_modulus": "Young's modulus",
-    "poissons_ratio": "Poisson's ratio",
-    "density": "Density",
-    "yield_strength": "Yield strength",
-    "tangent_modulus": "Tangent modulus",
-    "failure_strain": "Failure strain",
-    "force_x": "Force X",
-    "force_y": "Force Y",
-    "force_z": "Force Z",
-    "relative_stiffness": "Relative joint stiffness",
-    "weight": "Case weight",
-    "element_size": "Element size",
-    "refinement_size": "Refinement size",
-    "shell_thickness": "Shell thickness",
-    "shell_nip": "Shell integration points",
-    "end_time": "End time",
-    "n_frames": "Result frames",
-    "time_steps": "Time steps",
-    "volfrac": "Target material fraction",
-    "rmin": "Filter radius",
-    "penal": "SIMP penalty",
-    "max_iter": "Maximum iterations",
-    "tol": "Convergence tolerance",
-    "structure_cell_size_voxels": "Lattice cell size",
-    "structure_member_thickness_voxels": "Minimum lattice wall/member",
-    "lattice_cell_size_mm": "Lattice cell pitch",
-    "lattice_member_thickness_mm": "Lattice wall/member thickness",
-    "lattice_skin_thickness_mm": "Lattice skin thickness",
-    "lattice_target_relative_density": "Lattice target relative density",
-    "lattice_min_relative_density": "Minimum lattice relative density",
-    "lattice_max_relative_density": "Maximum lattice relative density",
-    "impactor_mass_kg": "Impactor mass",
-}
-
-
-def _override_identifier(type_name: str) -> str | None:
-    text = str(type_name or "")
-    for identifier in sorted(_OVERRIDEABLE_PROPERTIES, key=len, reverse=True):
-        if text == identifier or text.startswith(identifier + "."):
-            return identifier
-    return None
-
-
 def discover_override_controls(session_data: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Return material/mesh/load/solver controls available in a saved study.
-
-    The returned ``key`` is stable for that saved graph and can be passed in
-    the private ``_settings`` mapping of :func:`fea`, :func:`crash`, or
-    :func:`topopt`.
-    """
+    """List numeric controls using the same metadata as override validation."""
     controls: list[dict[str, Any]] = []
-    for node_id, node_data in (session_data.get("nodes", {}) or {}).items():
-        identifier = _override_identifier(node_data.get("type_", ""))
-        if not identifier:
+    for node_id, record in (session_data.get("nodes", {}) or {}).items():
+        identifier = _override_identifier(record.get("type_", ""))
+        schema = STUDY_NODE_SCHEMAS.get(identifier)
+        if schema is None:
             continue
-        custom = node_data.get("custom", {}) or {}
-        node_name = str(node_data.get("name") or identifier.rsplit(".", 1)[-1])
-        for prop in _OVERRIDEABLE_PROPERTIES[identifier]:
+        custom = record.get("custom", {}) or {}
+        node_name = str(record.get("name") or identifier.rsplit(".", 1)[-1])
+        for prop, label in schema.numeric_controls.items():
             value = custom.get(prop)
             if not isinstance(value, (bool, int, float)):
                 continue
-            controls.append({
-                # NodeGraphQt IDs are stable in a saved session and avoid the
-                # ambiguity of several default-named Material or Load nodes.
-                "key": f"{node_id}::{prop}",
-                "node_id": str(node_id),
-                "node": node_name,
-                "group": _OVERRIDE_GROUPS.get(identifier, "Analysis setting"),
-                "property": prop,
-                "label": _PROPERTY_LABELS.get(prop, prop.replace("_", " ").title()),
-                "value": value,
-            })
+            controls.append(
+                {
+                    "key": f"{node_id}::{prop}",
+                    "node_id": str(node_id),
+                    "node": node_name,
+                    "group": schema.group,
+                    "property": prop,
+                    "label": label,
+                    "value": value,
+                }
+            )
     return controls
 
 
@@ -217,17 +122,16 @@ def discover_exposed_parameters(session_data: Mapping[str, Any]) -> list[str]:
         exposed = str(custom.get("exposed_name") or "").strip()
         if not exposed and "variable" in node_type:
             exposed = str(custom.get("variable_name") or "").strip()
-        if exposed and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", exposed):
+        if exposed and PARAMETER_NAME_RE.fullmatch(exposed):
             names.add(exposed)
-        max_params = 8 if "freecad_part" in node_type else 6
-        for index in range(1, max_params + 1):
+        for index in parameter_slot_indices(custom):
             parameter = str(custom.get(f"param_{index}_name") or "").strip()
-            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", parameter):
+            if PARAMETER_NAME_RE.fullmatch(parameter):
                 names.add(parameter)
         raw_parameters = str(custom.get("parameters") or "").strip()
         if raw_parameters:
             try:
-                names.update(_parse_code_part_parameters(raw_parameters))
+                names.update(parse_parameter_text(raw_parameters))
             except (SyntaxError, ValueError):
                 logger.debug(
                     "Could not parse saved Code Part parameters while "
@@ -243,8 +147,8 @@ def discover_exposed_parameters(session_data: Mapping[str, Any]) -> list[str]:
 class CadResult:
     """Standardised view of a CAD-graph evaluation result.
 
-    Standard fields are always present (filled with ``0.0`` / ``None`` when the
-    underlying solver did not emit them).  The raw result dict from the
+    Fields are standardized per analysis kind, with zero defaults for most
+    missing numeric values. Optional diagnostics remain optional. The raw result dict from the
     terminal node remains accessible via attribute / item lookup, so anything
     the solver produces — VTK-renderable mesh, ENER fields, FRD step list — is
     still reachable when a function-block needs it.
@@ -290,7 +194,7 @@ class CadResult:
         return dict(self._standard)
 
     def raw(self) -> Dict[str, Any]:
-        """Return the raw underlying result dict (mesh, fields, FRD path, …)."""
+        """Return a shallow raw-result copy; arrays and mesh objects are shared."""
         return dict(self._raw)
 
     @property
@@ -398,8 +302,7 @@ def _standardize(kind: str, raw: Mapping[str, Any]) -> Dict[str, Any]:
 # ──────────────────────────────────────────────────────────────────────
 # Cache
 # ──────────────────────────────────────────────────────────────────────
-_cache: Dict[tuple, CadResult] = {}
-_cache_lock = threading.Lock()
+_cache = EvaluationCache()
 # Keep the Python wrapper alive when the runtime creates QApplication itself.
 # Without a strong reference, headless ``cad.topopt(...)`` calls can destroy
 # the fallback application before NodeGraphQt constructs its first widget.
@@ -407,109 +310,55 @@ _headless_qapp: Any | None = None
 
 
 def clear_cache() -> None:
-    """Drop every cached CAD-graph evaluation (per-process)."""
-    with _cache_lock:
-        _cache.clear()
-
-
-_DEPENDENCY_SUFFIXES = {
-    ".step", ".stp", ".iges", ".igs", ".stl", ".obj", ".fcstd",
-    ".brep", ".k", ".rad",
-}
-
-
-def _study_dependency_fingerprint(cad_path: str) -> tuple:
-    """Fingerprint geometry/deck files referenced by a saved study.
-
-    The runtime cache previously watched only the ``.cad`` JSON timestamp, so
-    editing an imported STEP/STL/FreeCAD model or a referenced Courant deck
-    could return an old solve. Missing paths are included too, which means the
-    cache also invalidates when a previously missing dependency appears.
-    """
-    project = Path(cad_path).resolve()
-    try:
-        session = json.loads(project.read_text(encoding="utf-8"))
-    except Exception:
-        return ()
-
-    try:
-        from pylcss.config import BASE_DIR
-        repo_root = Path(BASE_DIR).resolve().parent
-    except Exception:
-        repo_root = project.parent
-
-    records = []
-    for node_data in (session.get("nodes", {}) or {}).values():
-        node_type = str(node_data.get("type_", "")).lower()
-        custom = node_data.get("custom", {}) or {}
-        for prop, raw_value in custom.items():
-            if not isinstance(raw_value, str) or not raw_value.strip():
-                continue
-            raw = os.path.expandvars(os.path.expanduser(raw_value.strip()))
-            suffix = Path(raw).suffix.lower()
-            if suffix not in _DEPENDENCY_SUFFIXES:
-                continue
-
-            candidates = []
-            if "freecad_part" in node_type and str(prop) == "fcstd_filename":
-                try:
-                    from pylcss.cae.design_studio.freecad_bridge.paths import freecad_data_dir
-                    candidates.append(freecad_data_dir(create=False) / Path(raw).name)
-                except Exception:
-                    pass
-            raw_path = Path(raw)
-            if raw_path.is_absolute():
-                candidates.append(raw_path)
-            else:
-                candidates.extend((project.parent / raw_path, repo_root / raw_path))
-
-            resolved = next((p.resolve() for p in candidates if p.is_file()), None)
-            if resolved is None:
-                records.append((str(prop), raw, "missing"))
-                continue
-            try:
-                stat = resolved.stat()
-                records.append((
-                    str(resolved), int(stat.st_mtime_ns), int(stat.st_size),
-                ))
-            except OSError:
-                records.append((str(resolved), "unreadable"))
-    return tuple(sorted(set(records), key=repr))
+    """Release every cached evaluation and its retained arrays."""
+    _cache.clear()
 
 
 # ──────────────────────────────────────────────────────────────────────
 # Public entry points
 # ──────────────────────────────────────────────────────────────────────
-def fea(cad_path: str, _settings: Mapping[str, Any] | None = None, **inputs) -> CadResult:
-    """Run the FEA-solver path of a CAD graph and return its scalar results."""
-    return _evaluate(cad_path, inputs, terminal_id=_FEA_ID, kind="fea", settings=_settings)
+def fea(
+    cad_path: str,
+    _settings: Mapping[str, Any] | None = None,
+    *,
+    _solver: str | None = None,
+    **inputs,
+) -> CadResult:
+    """Run the static FEA solver; select a saved node id/name with _solver."""
+    return _evaluate(cad_path, inputs, _FEA_ID, "fea", _settings, _solver)
 
 
-def impact(cad_path: str, _settings: Mapping[str, Any] | None = None, **inputs) -> CadResult:
-    """Run the explicit-impact path of a CAD graph and return its scalar results."""
-    return _evaluate(
-        cad_path,
-        inputs,
-        terminal_id=_CRASH_ID,
-        kind="impact",
-        settings=_settings,
-    )
+def impact(
+    cad_path: str,
+    _settings: Mapping[str, Any] | None = None,
+    *,
+    _solver: str | None = None,
+    **inputs,
+) -> CadResult:
+    """Run the selected explicit-impact solver and its upstream dependencies."""
+    return _evaluate(cad_path, inputs, _CRASH_ID, "impact", _settings, _solver)
 
 
-def crash(cad_path: str, _settings: Mapping[str, Any] | None = None, **inputs) -> CadResult:
-    """Backward-compatible name for existing models; prefer :func:`impact`."""
-    return _evaluate(
-        cad_path,
-        inputs,
-        terminal_id=_CRASH_ID,
-        kind="crash",
-        settings=_settings,
-    )
+def crash(
+    cad_path: str,
+    _settings: Mapping[str, Any] | None = None,
+    *,
+    _solver: str | None = None,
+    **inputs,
+) -> CadResult:
+    """Backward-compatible impact entry point for existing function blocks."""
+    return _evaluate(cad_path, inputs, _CRASH_ID, "crash", _settings, _solver)
 
 
-def topopt(cad_path: str, _settings: Mapping[str, Any] | None = None, **inputs) -> CadResult:
-    """Run the saved density or level-set topology study in a CAD graph."""
-    return _evaluate(cad_path, inputs, terminal_id=_TOPOPT_IDS, kind="topopt", settings=_settings)
+def topopt(
+    cad_path: str,
+    _settings: Mapping[str, Any] | None = None,
+    *,
+    _solver: str | None = None,
+    **inputs,
+) -> CadResult:
+    """Run the selected topology solver and its upstream dependencies."""
+    return _evaluate(cad_path, inputs, _TOPOPT_IDS, "topopt", _settings, _solver)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -521,6 +370,7 @@ def _evaluate(
     terminal_id: str | Sequence[str],
     kind: str,
     settings: Mapping[str, Any] | None = None,
+    solver_selector: str | None = None,
 ) -> CadResult:
     abs_path = os.path.abspath(str(cad_path))
     if not os.path.isfile(abs_path):
@@ -528,6 +378,7 @@ def _evaluate(
         # so saved models can reference `data/cad_environment/foo.cad` portably.
         try:
             from pylcss.config import BASE_DIR
+
             repo_relative = os.path.join(os.path.dirname(BASE_DIR), str(cad_path))
             if os.path.isfile(repo_relative):
                 abs_path = os.path.abspath(repo_relative)
@@ -551,25 +402,28 @@ def _evaluate(
         project_fingerprint,
         _study_dependency_fingerprint(abs_path),
         kind,
+        str(solver_selector) if solver_selector is not None else None,
         canonical_inputs,
         canonical_settings,
     )
 
-    with _cache_lock:
-        cached = _cache.get(cache_key)
+    cached = _cache.get(cache_key)
     if cached is not None:
         logger.debug("cad runtime: cache hit %s %s", kind, abs_path)
         return cached
 
     logger.info(
         "cad runtime: evaluating %s on %s with %d input(s)",
-        kind, abs_path, len(canonical_inputs),
+        kind,
+        abs_path,
+        len(canonical_inputs),
     )
 
     _ensure_qapp()
     graph = None
     try:
         graph = _load_graph(abs_path)
+        terminal = _select_terminal_node(graph, terminal_id, solver_selector)
 
         _set_count, available_names = _apply_exposed_inputs(
             graph, dict(canonical_inputs)
@@ -584,9 +438,10 @@ def _evaluate(
         _apply_property_overrides(graph, dict(canonical_settings))
 
         from pylcss.cae.design_studio.engine import execute_graph
-        execute_graph(graph)
 
-        terminal_result = _find_terminal_result(graph, terminal_id)
+        execute_graph(upstream_closure(terminal))
+
+        terminal_result = getattr(terminal, "_last_result", None)
         if terminal_result is None:
             expected = (
                 "', '".join(terminal_id)
@@ -602,8 +457,9 @@ def _evaluate(
         # CadResult copies the result mapping and retains any solver arrays, so
         # the temporary Qt graph can be destroyed immediately after evaluation.
         wrapped = CadResult(kind, terminal_result)
-        with _cache_lock:
-            _cache[cache_key] = wrapped
+        _cache.put(
+            cache_key, wrapped, result_size_bytes((wrapped.raw(), wrapped.standard()))
+        )
         return wrapped
     finally:
         _dispose_graph(graph)
@@ -613,74 +469,59 @@ def _evaluate(
 # Graph helpers
 # ──────────────────────────────────────────────────────────────────────
 def _load_graph(abs_path: str):
-    """Spin up a fresh ``NodeGraph``, register every CAD node, deserialise the file."""
+    """Prepare a saved session using the same migrations as the GUI loader."""
     from NodeGraphQt import NodeGraph
     from pylcss.cae.design_studio.node_library import NODE_CLASS_MAPPING
-
-    graph = NodeGraph()
-    for node_class in dict.fromkeys(NODE_CLASS_MAPPING.values()):
-        try:
-            graph.register_node(node_class)
-        except Exception as exc:
-            logger.warning(
-                "Could not register CAD node %s while loading %s: %s",
-                getattr(node_class, "__name__", node_class), abs_path, exc,
-            )
-
     from pylcss.cae.design_studio.session_persistence import (
         parse_design_studio_session,
+        prepare_design_studio_session,
     )
 
-    with open(abs_path, "r", encoding="utf-8") as f:
-        session_data = parse_design_studio_session(f.read())
-    from pylcss.cae.design_studio.crash.conditions import (
-        migrate_impact_scenario_properties,
-    )
-    from pylcss.cae.design_studio.fem.mesh import migrate_removed_mesher_properties
+    with open(abs_path, "r", encoding="utf-8") as handle:
+        session_data = parse_design_studio_session(handle.read())
+    graph = NodeGraph()
+    try:
+        registered = {}
+        for node_class in dict.fromkeys(NODE_CLASS_MAPPING.values()):
+            try:
+                graph.register_node(node_class)
+                registered[node_class.__identifier__] = node_class
+            except Exception as exc:
+                logger.warning(
+                    "Could not register CAD node %s while loading %s: %s",
+                    node_class.__name__,
+                    abs_path,
+                    exc,
+                )
+        omitted = prepare_design_studio_session(session_data, known_classes=registered)
+        if omitted:
+            logger.warning("Omitted unsupported study nodes: %s", ", ".join(omitted))
+        graph.deserialize_session(session_data)
+        loaded_nodes = list(graph.all_nodes())
+        for node in loaded_nodes:
+            node._project_dir = str(Path(abs_path).resolve().parent)
 
-    migrate_impact_scenario_properties(session_data)
-    migrate_removed_mesher_properties(session_data)
-    from pylcss.cae.design_studio.session_persistence import (
-        expand_guided_topology_session,
-        migrate_cad_reconstruction_properties,
-        migrate_lattice_topology_nodes,
-        sanitize_unregistered_nodes,
-    )
-
-    # Retype before expansion: which guided defaults a study is hydrated with
-    # depends on whether it is a lattice study.
-    migrate_cad_reconstruction_properties(session_data)
-    migrate_lattice_topology_nodes(session_data)
-    expand_guided_topology_session(session_data)
-    sanitize_unregistered_nodes(session_data)
-    graph.clear_session()
-    graph.deserialize_session(session_data)
-    project_dir = str(Path(abs_path).resolve().parent)
-    loaded_nodes = list(graph.all_nodes())
-    for node in loaded_nodes:
-        node._project_dir = project_dir
-
-    # Hand-authored example files use readable saved keys (for example
-    # ``force`` and ``topopt``). NodeGraphQt assigns fresh pointer-like runtime
-    # ids when deserialising those keys, so keep the project key on each node.
-    # Function-block and AI overrides must remain stable across every load.
-    saved_nodes = list((session_data.get("nodes", {}) or {}).items())
-    unmatched = set(range(len(loaded_nodes)))
-    for saved_index, (saved_id, saved_data) in enumerate(saved_nodes):
-        saved_name = str(saved_data.get("name") or "")
-        matches = [
-            idx for idx in unmatched
-            if str(loaded_nodes[idx].name()) == saved_name
-        ]
-        if len(matches) == 1:
-            loaded_index = matches[0]
-        elif saved_index in unmatched:
-            loaded_index = saved_index
-        else:
-            continue
-        loaded_nodes[loaded_index]._pylcss_saved_node_id = str(saved_id)
-        unmatched.discard(loaded_index)
-    return graph
+        # Preserve saved IDs even when NodeGraphQt assigns new runtime IDs.
+        unmatched = set(range(len(loaded_nodes)))
+        for saved_index, (saved_id, saved_data) in enumerate(
+            session_data["nodes"].items()
+        ):
+            saved_name = str(saved_data.get("name") or "")
+            matches = [
+                idx for idx in unmatched if str(loaded_nodes[idx].name()) == saved_name
+            ]
+            if len(matches) == 1:
+                loaded_index = matches[0]
+            elif saved_index in unmatched:
+                loaded_index = saved_index
+            else:
+                continue
+            loaded_nodes[loaded_index]._pylcss_saved_node_id = str(saved_id)
+            unmatched.discard(loaded_index)
+        return graph
+    except Exception:
+        _dispose_graph(graph)
+        raise
 
 
 def _dispose_graph(graph) -> None:
@@ -736,8 +577,6 @@ def _apply_exposed_inputs(graph, inputs: Mapping[str, float]) -> tuple[int, set]
                     try:
                         if node.has_property("value_input"):
                             node.set_property("value_input", repr(value))
-                        if node.has_property("value"):
-                            node.set_property("value", value)
                     except Exception as exc:
                         logger.warning(
                             "cad runtime: failed to set %s=%s: %s", ename, value, exc
@@ -788,10 +627,13 @@ def _apply_property_overrides(graph, settings: Mapping[str, float]) -> int:
                 )
             node = named[0] if named else None
         if node is None:
-            raise KeyError(f"Design Studio node {node_key!r} no longer exists in the saved study.")
+            raise KeyError(
+                f"Design Studio node {node_key!r} no longer exists in the saved study."
+            )
 
         identifier = _override_identifier(getattr(node, "__identifier__", ""))
-        allowed = _OVERRIDEABLE_PROPERTIES.get(identifier or "", ())
+        schema = STUDY_NODE_SCHEMAS.get(identifier)
+        allowed = schema.numeric_controls if schema is not None else {}
         if prop not in allowed or not node.has_property(prop):
             node_name = node.name() if hasattr(node, "name") else node_key
             raise KeyError(
@@ -808,14 +650,7 @@ def _apply_property_overrides(graph, settings: Mapping[str, float]) -> int:
         # Named material presets own their database values.  A numeric override
         # must switch the affected material to Custom or the backend would
         # silently ignore the requested value.
-        if identifier == "com.cad.sim.material" and prop in {
-            "youngs_modulus", "poissons_ratio", "density",
-        }:
-            node.set_property("preset", "Custom")
-        elif identifier == "com.cad.sim.crash_material" and prop in {
-            "youngs_modulus", "poissons_ratio", "density", "yield_strength",
-            "tangent_modulus", "failure_strain",
-        }:
+        if identifier == "com.cad.sim.material" and prop in MATERIAL_CUSTOM_PROPERTIES:
             node.set_property("preset", "Custom")
         node.set_property(prop, value)
         _mark_node_dirty(node)
@@ -840,51 +675,17 @@ def _mark_node_dirty(node) -> None:
     node._force_execute = True
 
 
-_PARAM_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def _parse_code_part_parameters(text: str) -> Dict[str, Any]:
-    raw = str(text or "").strip()
-    if not raw:
-        return {}
-    if raw.startswith("{"):
-        parsed = ast.literal_eval(raw)
-        if not isinstance(parsed, dict):
-            return {}
-        return {str(k): v for k, v in parsed.items()}
-
-    params: Dict[str, Any] = {}
-    for line in raw.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        name, value = stripped.split("=", 1)
-        name = name.strip()
-        if _PARAM_NAME_RE.match(name):
-            params[name] = value.strip()
-    return params
-
-
-def _format_code_part_parameters(params: Mapping[str, Any]) -> str:
-    lines = []
-    for name, value in params.items():
-        if isinstance(value, str):
-            try:
-                float(value)
-                text = value
-            except ValueError:
-                text = repr(value)
-        else:
-            text = repr(float(value))
-        lines.append(f"{name}={text}")
-    return "\n".join(lines)
-
-
 def _apply_code_part_inputs(node, inputs: Mapping[str, float], available: set) -> int:
     applied = 0
 
-    max_params = max(1, int(getattr(node, "MAX_PARAMS", 6) or 6))
-    for idx in range(1, max_params + 1):
+    count_getter = getattr(node, "get_param_count", None)
+    if callable(count_getter):
+        indices = range(1, count_getter() + 1)
+    else:
+        properties = getattr(node, "properties", None)
+        custom = properties().get("custom", {}) if callable(properties) else {}
+        indices = parameter_slot_indices(custom)
+    for idx in indices:
         name_prop = f"param_{idx}_name"
         value_prop = f"param_{idx}_value"
         if not node.has_property(name_prop) or not node.has_property(value_prop):
@@ -898,7 +699,9 @@ def _apply_code_part_inputs(node, inputs: Mapping[str, float], available: set) -
         try:
             node.set_property(value_prop, float(inputs[pname]))
         except Exception as exc:
-            logger.warning("cad runtime: failed to set code parameter %s: %s", pname, exc)
+            logger.warning(
+                "cad runtime: failed to set code parameter %s: %s", pname, exc
+            )
         else:
             _mark_node_dirty(node)
             if getattr(node, "__identifier__", "") == "com.cad.freecad_part":
@@ -909,7 +712,7 @@ def _apply_code_part_inputs(node, inputs: Mapping[str, float], available: set) -
         return applied
 
     try:
-        params = _parse_code_part_parameters(node.get_property("parameters") or "")
+        params = parse_parameter_text(node.get_property("parameters") or "")
     except Exception as exc:
         logger.warning("cad runtime: failed to parse extra code parameters: %s", exc)
         return applied
@@ -927,57 +730,49 @@ def _apply_code_part_inputs(node, inputs: Mapping[str, float], available: set) -
         applied += 1
 
     if changed:
-        node.set_property("parameters", _format_code_part_parameters(params))
+        node.set_property("parameters", format_parameter_text(params))
         _mark_node_dirty(node)
 
     return applied
 
 
-def _find_terminal_result(graph, terminal_id: str | Sequence[str]):
-    """Pick the *last-executed* node whose identifier matches.
-
-    A graph may legitimately contain more than one solver node (e.g. two FEA
-    configurations).  Convention: the one farther downstream wins — that's the
-    one with the most upstream-connected inputs that produced a result.
-    """
-    terminal_ids = (
-        {terminal_id}
-        if isinstance(terminal_id, str)
-        else {str(item) for item in terminal_id}
-    )
+def _select_terminal_node(graph, terminal_id: str | Sequence[str], selector=None):
+    """Require explicit selection when a study contains several matching solvers."""
+    terminal_ids = {terminal_id} if isinstance(terminal_id, str) else set(terminal_id)
     candidates = [
-        n for n in graph.all_nodes()
-        if getattr(n, "__identifier__", "") in terminal_ids
+        node
+        for node in graph.all_nodes()
+        if getattr(node, "__identifier__", "") in terminal_ids
     ]
+    if selector is not None:
+        key = str(selector).strip()
+        candidates = [
+            node
+            for node in candidates
+            if key
+            in {
+                str(getattr(node, "id", "")),
+                str(getattr(node, "_pylcss_saved_node_id", "")),
+                node_name(node),
+            }
+        ]
+        if not candidates:
+            raise KeyError(f"No matching solver {selector!r} in the saved study.")
     if not candidates:
-        return None
-
-    def _depth(node, visited=None) -> int:
-        visited = set(visited or ())
-        if id(node) in visited:
-            return 0
-        visited.add(id(node))
-        count = 0
-        if not hasattr(node, "input_ports"):
-            return 0
-        ports = node.input_ports()
-        if isinstance(ports, dict):
-            ports = list(ports.values())
-        for port in ports:
-            if not hasattr(port, "connected_ports"):
-                continue
-            for cp in port.connected_ports():
-                count += 1
-                up = cp.node()
-                count += _depth(up, visited) if up is not node else 0
-        return count
-
-    candidates.sort(key=_depth, reverse=True)
-    for node in candidates:
-        result = getattr(node, "_last_result", None)
-        if result is not None:
-            return result
-    return None
+        raise RuntimeError(
+            f"Saved study has no solver with identifier {sorted(terminal_ids)}."
+        )
+    if len(candidates) > 1:
+        choices = [
+            f"{node_name(node)} ({getattr(node, '_pylcss_saved_node_id', getattr(node, 'id', ''))})"
+            for node in candidates
+        ]
+        raise ValueError(
+            "Several matching solvers are available: "
+            + ", ".join(choices)
+            + ". Choose a saved node ID or unique name with _solver."
+        )
+    return candidates[0]
 
 
 # ──────────────────────────────────────────────────────────────────────

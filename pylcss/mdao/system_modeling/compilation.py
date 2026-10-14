@@ -37,7 +37,6 @@ def compile_systems(systems: Sequence[SystemRecord]) -> list[CompiledModel]:
 
     models: list[CompiledModel] = []
     failures: list[CompilationFailure] = []
-    global_names = {f"system_function_{index}" for index in range(len(systems))}
 
     for index, system in enumerate(systems):
         system_name = str(system.get("name") or f"System {index + 1}")
@@ -45,7 +44,6 @@ def compile_systems(systems: Sequence[SystemRecord]) -> list[CompiledModel]:
             builder = GraphBuilder(system["graph"])
             code, inputs, outputs = builder.build_system_model(
                 function_name=f"system_function_{index}",
-                global_reserved_names=global_names,
             )
             models.append(
                 {

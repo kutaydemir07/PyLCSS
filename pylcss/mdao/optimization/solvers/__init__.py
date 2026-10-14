@@ -7,7 +7,6 @@ from .global_opt import GlobalSolver
 from .multi_start import MultiStartSolver
 from .pareto import ParetoSolver
 from .scipy_solver import ScipySolver
-from .weighted_sum import WeightedSumSolver
 
 __all__ = [
     "BaseSolver",
@@ -15,6 +14,5 @@ __all__ = [
     "MultiStartSolver",
     "ParetoSolver",
     "ScipySolver",
-    "WeightedSumSolver",
     "get_solver",
 ]

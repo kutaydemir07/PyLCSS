@@ -6,11 +6,10 @@ from __future__ import annotations
 
 import logging
 
-import networkx as nx
 import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from pylcss.mdao.system_modeling.problem import DesignProblem
+from pylcss.mdao.problem import DesignProblem
 
 from .plotting import (
     ColorConfigDialog,
@@ -22,33 +21,6 @@ __all__ = ["SolutionModelMixin"]
 
 
 class SolutionModelMixin:
-    def _execute_code_safely(self, code):
-        """Execute code safely using exec with a custom filename.
-        Avoids temporary files which can cause issues with pickling/dill."""
-        namespace = {}
-        try:
-            # Compile with a descriptive filename for tracebacks
-            bytecode = compile(code, "<dynamic_system_model>", "exec")
-            exec(bytecode, namespace)
-        except Exception as e:
-            logger.exception("Error executing code")
-            raise e
-
-        if "system_function" in namespace:
-            return namespace["system_function"]
-        else:
-            # Fallback: look for any callable
-            for k, v in namespace.items():
-                if callable(v) and k not in [
-                    "__builtins__",
-                    "np",
-                    "joblib",
-                    "os",
-                    "sys",
-                ]:
-                    return v
-            raise AttributeError("system_function not found in generated code")
-
     def load_model(self, code, inputs, outputs, name=None):
         """
         Loads the model code and populates the tables (from Modeling Tab).
@@ -510,113 +482,6 @@ class SolutionModelMixin:
         # Refresh ADG system list when models are loaded
         if hasattr(self, "refresh_adg_system_list"):
             self.refresh_adg_system_list()
-
-    def create_merged_model(self, models):
-        """
-        Creates a merged model from multiple subsystems.
-        Detects dependencies based on shared variable names.
-        """
-        # Collect all variables
-        all_inputs = {}
-        all_outputs = {}
-
-        for model in models:
-            for inp in model["inputs"]:
-                name = inp["name"]
-                if name not in all_inputs:
-                    all_inputs[name] = inp
-            for out in model["outputs"]:
-                name = out["name"]
-                if name not in all_outputs:
-                    all_outputs[name] = out
-
-        # Build dependency graph
-        G = nx.DiGraph()
-        for i in range(len(models)):
-            G.add_node(i)
-
-        for i, model_a in enumerate(models):
-            for inp in model_a["inputs"]:
-                inp_name = inp["name"]
-                for j, model_b in enumerate(models):
-                    if i != j:
-                        for out in model_b["outputs"]:
-                            if inp_name == out["name"]:
-                                G.add_edge(j, i)  # b provides input to a
-
-        # Topological sort for execution order
-        try:
-            order = list(nx.topological_sort(G))
-        except nx.NetworkXError:
-            raise ValueError("Circular dependency detected in models")
-
-        # Identify global inputs and outputs
-        input_names = set(all_inputs.keys())
-        output_names = set(all_outputs.keys())
-
-        global_inputs = sorted(list(input_names - output_names))
-        global_outputs = sorted(list(output_names - input_names))
-
-        if not global_outputs:
-            raise ValueError("No global outputs found (all outputs are used as inputs)")
-
-        # Generate merged code
-        code = "import numpy as np\n\n"
-
-        # Add each model's function with unique name
-        for i, model in enumerate(models):
-            model_code = model["code"]
-            code += model_code + "\n\n"
-
-        # Merged system_function
-        code += "def system_function(**kwargs):\n"
-
-        # Extract global inputs
-        for name in global_inputs:
-            code += f"    {name} = kwargs['{name}']\n"
-
-        code += "    intermediates = {}\n\n"
-
-        # Execute models in order
-        for idx in order:
-            model = models[idx]
-            code += f"    # Execute model {idx} ({model['name']})\n"
-
-            # Build call arguments
-            call_args = []
-            for inp in model["inputs"]:
-                name = inp["name"]
-                if name in global_inputs:
-                    call_args.append(f"{name}={name}")
-                else:
-                    call_args.append(f"{name}=intermediates['{name}']")
-
-            call_str = ", ".join(call_args)
-            code += f"    outputs_{idx} = system_function_{idx}({call_str})\n"
-
-            # Store outputs in intermediates
-            for out in model["outputs"]:
-                name = out["name"]
-                code += f"    intermediates['{name}'] = outputs_{idx}['{name}']\n"
-
-            code += "\n"
-
-        # Return global outputs
-        code += "    return {\n"
-        for name in global_outputs:
-            code += f"        '{name}': intermediates['{name}'],\n"
-        code += "    }\n"
-
-        # Create merged model dict
-        merged_inputs = [all_inputs[name] for name in global_inputs]
-        merged_outputs = [all_outputs[name] for name in global_outputs]
-
-        return {
-            "name": "Merged",
-            "code": code,
-            "inputs": merged_inputs,
-            "outputs": merged_outputs,
-        }
 
     def on_system_changed(self):
         self.load_selected_system()

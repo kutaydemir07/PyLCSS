@@ -1,23 +1,58 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-"""Typed study definitions and JSON parsers for voxel topology optimization."""
+"""Typed, validated study inputs for voxel topology optimization."""
 from __future__ import annotations
 
-import json
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Any, List, Tuple
 
-_SUPPORT_TO_DOFS: Dict[str, List[int]] = {
-    'None':    [],
-    'Fix X':   [0],
-    'Fix Y':   [1],
-    'Fix Z':   [2],
-    'Fix XY':  [0, 1],
-    'Fix YZ':  [1, 2],
-    'Fix XZ':  [0, 2],
-    'Fix XYZ': [0, 1, 2],
-}
+import numpy as np
+
+
+def _finite_tuple(values: Any, length: int, label: str) -> tuple[float, ...]:
+    """Normalize numeric inputs before the solver uses them in arithmetic."""
+    try:
+        if isinstance(values, (str, bytes)):
+            raise ValueError
+        result = tuple(float(value) for value in values)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{label} must contain {length} finite numbers.") from exc
+    if len(result) != length or not all(math.isfinite(value) for value in result):
+        raise ValueError(f"{label} must contain {length} finite numbers.")
+    return result
+
+
+def _integer(value: Any, label: str) -> int:
+    """Accept integral values without silently truncating fractional values."""
+    try:
+        result = int(value)
+        if isinstance(value, (bool, np.bool_)) or float(value) != result:
+            raise ValueError
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{label} must be an integer.") from exc
+    return result
+
+
+def _support_dofs(values: Any, label: str, *, allow_empty: bool = False) -> list[int]:
+    try:
+        result = [_integer(value, label) for value in values]
+    except TypeError as exc:
+        raise ValueError(f"{label} must be a list of X, Y, and/or Z DOFs.") from exc
+    if (not result and not allow_empty) or any(
+        value not in (0, 1, 2) for value in result
+    ):
+        raise ValueError(f"{label} must constrain X, Y, and/or Z.")
+    return result
+
+
+def _box_coordinates(values: Any, label: str) -> tuple[float, ...]:
+    result = _finite_tuple(values, 6, label)
+    if not all(0.0 <= value <= 1.0 for value in result):
+        raise ValueError(f"{label} coordinates must be in [0, 1].")
+    if any(result[index] > result[index + 1] for index in (0, 2, 4)):
+        raise ValueError(f"{label} intervals must be ordered.")
+    return result
 
 
 @dataclass
@@ -47,18 +82,19 @@ class JointDefinition:
             raise ValueError(
                 f"Joint {self.name!r} type must be fixed, revolute, spherical, or prismatic."
             )
-        self.anchor_a = tuple(float(v) for v in self.anchor_a)
-        self.anchor_b = tuple(float(v) for v in self.anchor_b)
-        if len(self.anchor_a) != 3 or len(self.anchor_b) != 3 or not all(
-            math.isfinite(v) and 0.0 <= v <= 1.0
-            for v in (*self.anchor_a, *self.anchor_b)
-        ):
+        self.anchor_a = _finite_tuple(self.anchor_a, 3, f"Joint {self.name!r} anchor A")
+        self.anchor_b = _finite_tuple(self.anchor_b, 3, f"Joint {self.name!r} anchor B")
+        if not all(0.0 <= v <= 1.0 for v in (*self.anchor_a, *self.anchor_b)):
             raise ValueError(
                 f"Joint {self.name!r} anchors must contain three fractions in [0, 1]."
             )
         self.axis = str(self.axis or "x").strip().lower()
         if self.axis not in {"x", "y", "z"}:
-            raise ValueError(f"Joint {self.name!r} axis must be X, Y, or Z.")
+            if self.kind in {"revolute", "prismatic"}:
+                raise ValueError(f"Joint {self.name!r} axis must be X, Y, or Z.")
+            # Fixed and spherical joints have no preferred axis. Keep a valid
+            # placeholder for consumers that construct directional vectors.
+            self.axis = "x"
         self.relative_stiffness = float(self.relative_stiffness)
         if not math.isfinite(self.relative_stiffness) or self.relative_stiffness <= 0.0:
             raise ValueError(
@@ -80,6 +116,63 @@ class BoundaryMesh:
     cell_forces: Any = None
     fixed_dofs: List[int] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Validate geometry and conditions, including changes made by graph nodes."""
+        try:
+            vertices = np.asarray(self.vertices, dtype=float)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                "Boundary vertices must contain finite XYZ coordinates."
+            ) from exc
+        if (
+            vertices.ndim != 2
+            or vertices.shape[1] != 3
+            or len(vertices) == 0
+            or not np.all(np.isfinite(vertices))
+            or np.any(vertices < 0.0)
+            or np.any(vertices > 1.0)
+        ):
+            raise ValueError(
+                "Boundary vertices must be a non-empty (N, 3) array in [0, 1]."
+            )
+        try:
+            cells = np.asarray(self.cells, dtype=float)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Boundary cells must contain vertex index rows.") from exc
+        if (
+            cells.ndim != 2
+            or cells.shape[1] not in (1, 2, 3)
+            or len(cells) == 0
+            or not np.all(np.isfinite(cells))
+            or np.any(cells != np.floor(cells))
+            or np.any(cells < 0)
+            or np.any(cells >= len(vertices))
+        ):
+            raise ValueError(
+                "Boundary cells must contain 1, 2, or 3 valid integer vertex "
+                "indices per row."
+            )
+        forces = None
+        if self.cell_forces is not None:
+            try:
+                forces = np.asarray(self.cell_forces, dtype=float)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(
+                    "Boundary forces must contain finite XYZ vectors."
+                ) from exc
+            if forces.shape != (len(cells), 3) or not np.all(np.isfinite(forces)):
+                raise ValueError(
+                    "Boundary forces must contain one finite XYZ vector per cell."
+                )
+        dofs = _support_dofs(self.fixed_dofs, "Boundary support", allow_empty=True)
+        self.vertices = vertices
+        self.cells = cells.astype(np.intp)
+        self.cell_forces = forces
+        self.fixed_dofs = dofs
+
 
 @dataclass
 class LoadCase:
@@ -91,7 +184,7 @@ class LoadCase:
     # Localized patch forces over a fractional node box:
     # (x0, x1, y0, y1, z0, z1, fx_total, fy_total, fz_total)
     box_forces:         List[Tuple[float, float, float, float, float, float, float, float, float]] = field(default_factory=list)
-    # Distributed face force: list of (face, fx_per, fy_per, fz_per)
+    # Total face force: list of (face, fx_total, fy_total, fz_total).
     distributed_forces: List[Tuple[str, float, float, float]] = field(default_factory=list)
     boundary_forces: List[BoundaryMesh] = field(default_factory=list)
     boundary_supports: List[BoundaryMesh] = field(default_factory=list)
@@ -117,64 +210,64 @@ class LoadCase:
         if not math.isfinite(self.weight) or self.weight <= 0.0:
             raise ValueError(f"Load case {self.name!r} weight must be finite and positive.")
 
+        # Existence checks use exact zero so their meaning does not depend on
+        # force units. Solver convergence tolerances are handled separately.
         has_nonzero_force = False
         for boundary in self.boundary_forces:
+            boundary.validate()
             if boundary.cell_forces is None:
                 raise ValueError(f"Load case {self.name!r} has a boundary without forces.")
-            for vector in boundary.cell_forces:
-                if len(vector) != 3 or not all(math.isfinite(float(v)) for v in vector):
-                    raise ValueError(f"Load case {self.name!r} has an invalid boundary force.")
-                has_nonzero_force |= any(abs(float(v)) > 1e-15 for v in vector)
+            has_nonzero_force |= bool(np.any(boundary.cell_forces != 0.0))
+        for boundary in self.boundary_supports:
+            boundary.validate()
+        points = []
         for point in self.point_forces:
-            if len(point) != 6 or not all(math.isfinite(float(v)) for v in point):
-                raise ValueError(f"Load case {self.name!r} has an invalid point force.")
-            if not all(0.0 <= float(v) <= 1.0 for v in point[:3]):
+            point = _finite_tuple(point, 6, f"Load case {self.name!r} point force")
+            if not all(0.0 <= v <= 1.0 for v in point[:3]):
                 raise ValueError(f"Load case {self.name!r} point coordinates must be in [0, 1].")
-            has_nonzero_force |= any(abs(float(v)) > 1e-15 for v in point[3:])
+            points.append(point)
+            has_nonzero_force |= any(v != 0.0 for v in point[3:])
+        boxes = []
         for box in self.box_forces:
-            if len(box) != 9 or not all(math.isfinite(float(v)) for v in box):
-                raise ValueError(f"Load case {self.name!r} has an invalid box force.")
-            if not all(0.0 <= float(v) <= 1.0 for v in box[:6]):
-                raise ValueError(f"Load case {self.name!r} box coordinates must be in [0, 1].")
-            if any(float(box[i]) > float(box[i + 1]) for i in (0, 2, 4)):
-                raise ValueError(f"Load case {self.name!r} box intervals must be ordered.")
-            has_nonzero_force |= any(abs(float(v)) > 1e-15 for v in box[6:])
+            box = _finite_tuple(box, 9, f"Load case {self.name!r} box force")
+            _box_coordinates(box[:6], f"Load case {self.name!r} box")
+            boxes.append(box)
+            has_nonzero_force |= any(v != 0.0 for v in box[6:])
         allowed_faces = {"left", "right", "top", "bottom", "front", "back"}
-        for face, fx, fy, fz in self.distributed_forces:
-            values = (fx, fy, fz)
-            if str(face).lower() not in allowed_faces or not all(
-                math.isfinite(float(v)) for v in values
-            ):
+        distributed = []
+        for force in self.distributed_forces:
+            if len(force) != 4:
                 raise ValueError(f"Load case {self.name!r} has an invalid distributed force.")
-            has_nonzero_force |= any(abs(float(v)) > 1e-15 for v in values)
+            face = str(force[0]).strip().lower()
+            values = _finite_tuple(force[1:], 3, f"Load case {self.name!r} face force")
+            if face not in allowed_faces:
+                raise ValueError(f"Load case {self.name!r} has an invalid distributed force.")
+            distributed.append((face, *values))
+            has_nonzero_force |= any(v != 0.0 for v in values)
         if not has_nonzero_force:
             raise ValueError(f"Load case {self.name!r} must contain a non-zero force.")
 
+        supports = []
         for box in self.fixed_boxes:
             if len(box) != 7:
                 raise ValueError(f"Load case {self.name!r} has an invalid support box.")
-            values = box[:6]
-            if not all(math.isfinite(float(v)) and 0.0 <= float(v) <= 1.0 for v in values):
-                raise ValueError(
-                    f"Load case {self.name!r} support coordinates must be in [0, 1]."
-                )
-            if any(float(box[i]) > float(box[i + 1]) for i in (0, 2, 4)):
-                raise ValueError(f"Load case {self.name!r} support intervals must be ordered.")
-            if not box[6] or any(int(d) not in (0, 1, 2) for d in box[6]):
-                raise ValueError(
-                    f"Load case {self.name!r} support must constrain X, Y, and/or Z."
-                )
-
+            label = f"Load case {self.name!r} support"
+            values = _box_coordinates(box[:6], label)
+            supports.append((*values, _support_dofs(box[6], label)))
+        self.point_forces = points
+        self.box_forces = boxes
+        self.distributed_forces = distributed
+        self.fixed_boxes = supports
 
 
 @dataclass
 class VoxelBC:
     """Fully configurable boundary conditions for a 3-D voxel domain.
 
-    ix/iy/iz coordinates are INTEGER node indices in the domain grid:
-        ix : 0 … nelx   (left  → right,  X)
-        iy : 0 … nely   (bottom → top,   Y)
-        iz : 0 … nelz   (front → back,   Z)
+    Positions and region bounds are fractions of the domain extent in [0, 1].
+    The solver maps them to integer node indices: X runs left to right,
+    Y bottom to top, and Z front to back. DOFs 0, 1, and 2 are translations
+    along X, Y, and Z respectively.
     """
     fixed_left_face_dofs:   List[int] = field(default_factory=list)  # ix=0 face
     fixed_right_face_dofs:  List[int] = field(default_factory=list)  # ix=nelx face
@@ -187,8 +280,8 @@ class VoxelBC:
     fixed_boxes: List[Tuple[float, float, float, float, float, float, List[int]]] = field(default_factory=list)
     boundary_supports: List[BoundaryMesh] = field(default_factory=list)
     boundary_forces: List[BoundaryMesh] = field(default_factory=list)
-    # Multi-load-case objective: weighted sum of compliances.  If empty, legacy
-    # point_forces / distributed_forces below are normalised into a single LC.
+    # Explicit operating scenarios. If empty, the global force fields below
+    # are assembled into a single load case.
     load_cases: List[LoadCase] = field(default_factory=list)
     # Non-design regions in fractional coordinates (x0, x1, y0, y1, z0, z1).
     # Voxels inside solid_boxes are clamped to ρ=1, voxels inside void_boxes to ρ≈0.
@@ -204,15 +297,12 @@ class VoxelBC:
     joint_pin_cylinders: List[
         Tuple[str, float, float, float, float, float, float]
     ] = field(default_factory=list)
-    # Legacy single-LC fields — used only when load_cases is empty.
+    # Global forces for a single scenario, including graph-connected loads.
+    # Used when no explicit load cases are assembled.
     point_forces: List[Tuple[float, float, float, float, float, float]] = field(default_factory=list)
     box_forces:   List[Tuple[float, float, float, float, float, float, float, float, float]] = field(default_factory=list)
     distributed_forces: List[Tuple[str, float, float, float]] = field(default_factory=list)
     joints: List[JointDefinition] = field(default_factory=list)
-
-
-
-
 
 
 @dataclass
@@ -229,8 +319,8 @@ class ManufacturingConstraints:
     # Force the density to be uniform along this axis (extruded part).  One of
     # {'x','y','z'} or 'none'.
     extrusion:           str = 'none'
-    # AM build direction; voxels can only have material where they are
-    # supported by a 3×3 neighbourhood of denser voxels in the layer below.
+    # AM build direction; support is propagated through a neighborhood
+    # determined by the build direction, overhang angle, and analysis grid.
     # One of {'+x','-x','+y','-y','+z','-z'} or 'none'.
     overhang_build_axis: str = 'none'
     overhang_angle_deg: float = 45.0
@@ -240,8 +330,8 @@ class ManufacturingConstraints:
     # '-z'} or 'none'. This is independent of the additive overhang rule.
     pull_out_axis: str = 'none'
     # Maximum member size as a radius in *voxels*.  Where the local mean
-    # density in a (2r+1)³ window exceeds `max_member_threshold`, voxels are
-    # scaled down so the local mean equals the threshold.  0 disables.
+    # density in a (2r+1)³ window exceeds `max_member_threshold`, voxel
+    # densities are scaled down to discourage thick members. 0 disables.
     max_member_size_voxels: float = 0.0
     # Preferred physical maximum diameter. Zero retains the legacy voxel radius.
     max_member_size_physical: float = 0.0
@@ -253,11 +343,13 @@ class ManufacturingConstraints:
     pattern_axis:   str = 'y'  # 'x' | 'y' | 'z'
 
     def __post_init__(self) -> None:
-        self.symmetry = str(self.symmetry or "none").lower()
-        self.extrusion = str(self.extrusion or "none").lower()
-        self.overhang_build_axis = str(self.overhang_build_axis or "none").lower()
-        self.pull_out_axis = str(self.pull_out_axis or "none").lower()
-        self.pattern_axis = str(self.pattern_axis or "y").lower()
+        self.symmetry = str(self.symmetry or "none").strip().lower() or "none"
+        self.extrusion = str(self.extrusion or "none").strip().lower() or "none"
+        self.overhang_build_axis = (
+            str(self.overhang_build_axis or "none").strip().lower() or "none"
+        )
+        self.pull_out_axis = str(self.pull_out_axis or "none").strip().lower() or "none"
+        self.pattern_axis = str(self.pattern_axis or "y").strip().lower() or "y"
         if self.symmetry != "none" and not set(self.symmetry) <= {"x", "y", "z"}:
             raise ValueError("Symmetry must be None or a combination of X, Y, and Z.")
         if self.extrusion not in {"none", "x", "y", "z"}:
@@ -283,67 +375,22 @@ class ManufacturingConstraints:
             raise ValueError(
                 "Physical maximum member size must be finite and non-negative."
             )
-        if not math.isfinite(self.max_member_threshold) or not 0.0 < self.max_member_threshold <= 1.0:
-            raise ValueError("Maximum member threshold must be in (0, 1].")
+        if not math.isfinite(self.max_member_threshold):
+            raise ValueError("Maximum member threshold must be finite.")
         if (
-            not math.isfinite(self.overhang_angle_deg)
-            or not 0.0 < self.overhang_angle_deg < 90.0
+            (self.max_member_size_voxels > 0.0 or self.max_member_size_physical > 0.0)
+            and not 0.0 < self.max_member_threshold <= 1.0
+        ):
+            raise ValueError("Maximum member threshold must be in (0, 1].")
+        if not math.isfinite(self.overhang_angle_deg):
+            raise ValueError("Overhang angle must be finite.")
+        if (
+            self.overhang_build_axis != "none"
+            and not 0.0 < self.overhang_angle_deg < 90.0
         ):
             raise ValueError("Overhang angle must be between 0 and 90 degrees.")
-        self.pattern_repeat = int(self.pattern_repeat)
-        if self.pattern_repeat < 1 or self.pattern_axis not in {"x", "y", "z"}:
+        self.pattern_repeat = _integer(self.pattern_repeat, "Pattern repeat")
+        if self.pattern_repeat < 1:
+            raise ValueError("Pattern repeat must be at least 1.")
+        if self.pattern_repeat > 1 and self.pattern_axis not in {"x", "y", "z"}:
             raise ValueError("Pattern repeat must be at least 1 with axis X, Y, or Z.")
-
-
-
-
-def _parse_support_region_dofs(value: Any) -> List[int]:
-    if isinstance(value, (list, tuple)):
-        return [int(v) for v in value if int(v) in (0, 1, 2)]
-
-    text = str(value or "").strip()
-    if not text:
-        return []
-    if text in _SUPPORT_TO_DOFS:
-        return _SUPPORT_TO_DOFS[text]
-
-    axes = text.upper().replace("FIX", "").replace(" ", "")
-    return [idx for axis, idx in (("X", 0), ("Y", 1), ("Z", 2)) if axis in axes]
-
-
-def _parse_joints(value: Any, field_name: str = "multibody_joints") -> List[JointDefinition]:
-    """Parse joint couplings from JSON or an already-decoded list."""
-    if isinstance(value, list):
-        items = value
-    else:
-        text = str(value or "").strip()
-        if not text:
-            return []
-        try:
-            items = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid {field_name} JSON: {exc}") from exc
-    if not isinstance(items, list):
-        raise ValueError(f"{field_name} must be a JSON list")
-
-    joints: List[JointDefinition] = []
-    for index, item in enumerate(items):
-        if not isinstance(item, dict):
-            continue
-        anchor_a = item.get('anchor_a', item.get('a', [0.25, 0.5, 0.5]))
-        anchor_b = item.get('anchor_b', item.get('b', [0.75, 0.5, 0.5]))
-        if not isinstance(anchor_a, (list, tuple)) or not isinstance(
-            anchor_b, (list, tuple)
-        ):
-            raise ValueError(f"{field_name} joint anchors must be coordinate lists")
-        joints.append(JointDefinition(
-            name=str(item.get('name') or f"Joint {index + 1}"),
-            kind=str(item.get('type', item.get('kind', 'spherical'))),
-            anchor_a=tuple(anchor_a),
-            anchor_b=tuple(anchor_b),
-            axis=str(item.get('axis', 'x')),
-            relative_stiffness=float(
-                item.get('relative_stiffness', item.get('stiffness_factor', 100.0))
-            ),
-        ))
-    return joints

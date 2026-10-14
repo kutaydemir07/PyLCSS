@@ -5,17 +5,14 @@
 
 from typing import Any
 
-try:
-    import pint as _pint
-except ImportError:  # pragma: no cover - pint is a declared runtime dependency.
-    _pint = None  # type: ignore[assignment]
+import pint
 
 
 class UnitError(ValueError):
     """Raised when a unit is invalid or two units are incompatible."""
 
 
-UNIT_REGISTRY: Any | None = _pint.UnitRegistry() if _pint is not None else None
+UNIT_REGISTRY = pint.UnitRegistry()
 _UNSPECIFIED_UNITS = {"", "-", None}
 
 
@@ -25,18 +22,12 @@ def is_specified_unit(unit: str | None) -> bool:
     return unit not in _UNSPECIFIED_UNITS
 
 
-def _require_registry() -> Any:
-    if UNIT_REGISTRY is None:
-        raise UnitError("Unit support is unavailable because pint is not installed.")
-    return UNIT_REGISTRY
-
-
 def units_compatible(first: str, second: str) -> bool:
     """Return whether two specified unit expressions have equal dimensionality."""
 
     if not is_specified_unit(first) or not is_specified_unit(second):
         return True
-    registry = _require_registry()
+    registry = UNIT_REGISTRY
     try:
         first_quantity = registry.Quantity(1, first)
         second_quantity = registry.Quantity(1, second)
@@ -48,12 +39,16 @@ def units_compatible(first: str, second: str) -> bool:
 def conversion_parameters(source: str, target: str) -> tuple[float, float]:
     """Return ``scale, offset`` for ``target = source * scale + offset``."""
 
-    if not is_specified_unit(source) or not is_specified_unit(target) or source == target:
+    if (
+        not is_specified_unit(source)
+        or not is_specified_unit(target)
+        or source == target
+    ):
         return 1.0, 0.0
     if not units_compatible(source, target):
         raise UnitError(f"Incompatible units: {source!r} and {target!r}.")
 
-    registry = _require_registry()
+    registry = UNIT_REGISTRY
     try:
         zero = registry.Quantity(0, source).to(target).magnitude
         one = registry.Quantity(1, source).to(target).magnitude
@@ -69,10 +64,22 @@ def convert_value(value: Any, source: str, target: str) -> Any:
     return value * scale + offset
 
 
+def conversion_expression(expression: str, source: str, target: str) -> str:
+    """Apply the same unit conversion to a generated Python expression."""
+
+    scale, offset = conversion_parameters(source, target)
+    if offset:
+        return f"(({expression}) * {scale!r} + {offset!r})"
+    if scale != 1:
+        return f"(({expression}) * {scale!r})"
+    return expression
+
+
 __all__ = [
     "UNIT_REGISTRY",
     "UnitError",
     "conversion_parameters",
+    "conversion_expression",
     "convert_value",
     "is_specified_unit",
     "units_compatible",

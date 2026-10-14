@@ -1,24 +1,11 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""Read the BREP + sidecar JSON the FreeCAD startup macro writes.
+"""Read FreeCAD's exported BREP through CadQuery's OCCT bindings.
 
-Why BREP and not STEP
----------------------
-STEP loses face identity round-trip in both FreeCAD's exporter and
-CadQuery's importer (research notes in pylcss/design_studio/freecad_bridge/__init__.py).
-BREP keeps OCCT topology + face indices intact, and CadQuery already ships
-the OCCT bindings (``cadquery.occ_impl``), so PyLCSS can read what FreeCAD
-just wrote without a new dependency.
-
-The reader returns a :class:`FreeCadImportedShape` that bundles:
-  - ``shape``: a ``cadquery.Shape`` PyLCSS's existing viewer + the rest of
-    the node graph can consume exactly like a CadQuery-produced shape;
-  - ``sidecar``: the parsed ``.fcmeta.json`` dict (parameters, FEM
-    summary, per-shape face counts), or ``{}`` if it's missing.
-
-Callers who only want the shape can ignore the sidecar; the FEM /
-selection translation layers live in their own modules and consume it.
+The returned container also carries spreadsheet parameters, object metadata,
+and FEM definitions from the companion JSON. Missing or stale geometry is
+represented separately from an unauthored document.
 """
 
 from __future__ import annotations
@@ -36,10 +23,9 @@ logger = logging.getLogger(__name__)
 # at app startup and we don't want a slow OCP import to delay the splash
 # screen if FreeCAD isn't being used this session.
 def _occt_modules():
-    """Return ``(BRepTools, TopoDS, Shape_factory)`` from CadQuery's OCP."""
+    """Return the BREP reader, shape, builder, and CadQuery wrapper classes."""
     from cadquery.occ_impl.shapes import Shape as ShapeCls  # type: ignore
-    # OCP wraps BRepTools as BRepTools_BRepTools_Read in some builds; use
-    # cadquery's helper which papers over the variants.
+
     try:
         from OCP.BRepTools import BRepTools  # type: ignore
         from OCP.TopoDS import TopoDS_Shape  # type: ignore
@@ -77,10 +63,9 @@ class FreeCadImportedShape:
 def read_brep_from_fcstd(fcstd_path: Path | str) -> Optional[FreeCadImportedShape]:
     """Locate the BREP + sidecar siblings of ``fcstd_path`` and load them.
 
-    Returns ``None`` if the BREP was never written (e.g. user opened
-    FreeCAD, edited but never saved; or the startup macro failed to
-    install). Always parses the sidecar JSON if present, even when the
-    BREP itself is missing -- callers may still want the parameter set.
+    Returns None if neither BREP nor metadata is available. When only metadata
+    is available, or geometry is stale/unreadable, returns a container with
+    shape=None so callers can distinguish pending documents from bad exports.
     """
     fcstd_path = Path(fcstd_path).resolve()
     brep_path = fcstd_path.with_suffix(".brep")
@@ -94,9 +79,6 @@ def read_brep_from_fcstd(fcstd_path: Path | str) -> Optional[FreeCadImportedShap
             logger.warning("Sidecar JSON %s unreadable: %s", sidecar_path, exc)
 
     if not brep_path.is_file():
-        # Was INFO -- demoted to DEBUG because the CAD engine re-walks the
-        # graph on every property tweak / Run click, and this is the
-        # expected "user hasn't saved yet" state, not an error.
         logger.debug(
             "No BREP sibling for %s; user hasn't saved in FreeCAD yet (or the "
             "auto-export macro didn't install).",
@@ -105,8 +87,10 @@ def read_brep_from_fcstd(fcstd_path: Path | str) -> Optional[FreeCadImportedShap
         if sidecar:
             # Still return the sidecar so e.g. parameter-only consumers can run.
             return FreeCadImportedShape(
-                shape=None, sidecar=sidecar,
-                brep_path=None, fcstd_path=fcstd_path,
+                shape=None,
+                sidecar=sidecar,
+                brep_path=None,
+                fcstd_path=fcstd_path,
             )
         return None
 
@@ -114,7 +98,10 @@ def read_brep_from_fcstd(fcstd_path: Path | str) -> Optional[FreeCadImportedShap
     # This happens when the save observer failed or FreeCAD was closed before
     # the BREP export completed.
     try:
-        if fcstd_path.is_file() and brep_path.stat().st_mtime_ns < fcstd_path.stat().st_mtime_ns:
+        if (
+            fcstd_path.is_file()
+            and brep_path.stat().st_mtime_ns < fcstd_path.stat().st_mtime_ns
+        ):
             logger.warning(
                 "BREP %s is older than %s; refusing stale geometry.",
                 brep_path.name,
@@ -157,6 +144,8 @@ def read_brep_from_fcstd(fcstd_path: Path | str) -> Optional[FreeCadImportedShap
 
     cq_shape = ShapeCls.cast(occ_shape)
     return FreeCadImportedShape(
-        shape=cq_shape, sidecar=sidecar,
-        brep_path=brep_path, fcstd_path=fcstd_path,
+        shape=cq_shape,
+        sidecar=sidecar,
+        brep_path=brep_path,
+        fcstd_path=fcstd_path,
     )

@@ -23,7 +23,7 @@ from typing import Dict, Iterable, Optional
 import numpy as np
 
 from pylcss.process_utils import headless_subprocess_kwargs
-from pylcss.cae.solver_backends.common import resolve_executable
+from pylcss.cae.solver_backends.execution import resolve_executable
 
 
 _GLOBAL_CHANNEL_ALIASES = {
@@ -154,20 +154,16 @@ def convert_time_history_to_csv(
     try:
         if (
             expected.is_file()
-            and expected.stat().st_mtime
-            >= source.stat().st_mtime - 2.0
+            and expected.stat().st_mtime >= source.stat().st_mtime - 2.0
         ):
             return expected
     except OSError:
         pass
-    before = {
-        p.resolve()
-        for p in source.parent.glob("*.csv")
-        if p.is_file()
-    }
+    before = {p.resolve() for p in source.parent.glob("*.csv") if p.is_file()}
     env = os.environ.copy()
     converter_path = Path(converter).resolve()
     env["PATH"] = str(converter_path.parent) + os.pathsep + env.get("PATH", "")
+
     # ``th_to_csv`` is a Windows console executable. Without the headless
     # options it opens its own console window on top of the running study,
     # which is the one place in the impact workflow that still flashed a
@@ -221,8 +217,7 @@ def convert_time_history_to_csv(
     if after:
         return max(after, key=lambda p: p.stat().st_mtime)
     raise RuntimeError(
-        "th_to_csv reported success but produced no CSV file next to "
-        f"{source.name}."
+        f"th_to_csv reported success but produced no CSV file next to {source.name}."
     )
 
 
@@ -274,7 +269,11 @@ def _match_column(normalized_header: str, aliases: Iterable[str]) -> bool:
     return False
 
 
-def parse_time_history_csv(path: str | Path) -> Dict[str, object]:
+def parse_time_history_csv(
+    path: str | Path,
+    *,
+    relative_energy_unit: str | None = None,
+) -> Dict[str, object]:
     """Parse an official ``th_to_csv`` result into canonical numeric arrays."""
     csv_path = Path(path)
     headers, rows = _read_csv_rows(csv_path)
@@ -293,18 +292,14 @@ def parse_time_history_csv(path: str | Path) -> Dict[str, object]:
     normalized = {header: _normalise_header(header) for header in headers}
     canonical: Dict[str, object] = {
         "source_csv": str(csv_path.resolve()),
-        "raw_columns": {
-            header: values for header, values in columns.items()
-        },
+        "raw_columns": {header: values for header, values in columns.items()},
         "column_map": {},
         "warnings": [],
     }
 
     for output_name, aliases in _GLOBAL_CHANNEL_ALIASES.items():
         matches = [
-            header
-            for header in headers
-            if _match_column(normalized[header], aliases)
+            header for header in headers if _match_column(normalized[header], aliases)
         ]
         if not matches:
             continue
@@ -321,14 +316,23 @@ def parse_time_history_csv(path: str | Path) -> Dict[str, object]:
         canonical[output_name] = columns[selected]
         canonical["column_map"][output_name] = selected
 
+    # Keep an unlabelled DTE_REL ambiguous; magnitude is not a unit indicator.
+    header = canonical["column_map"].get("delta_total_energy_relative", "")
+    if relative_energy_unit is None:
+        if "%" in header or "percent" in header.lower():
+            relative_energy_unit = "percent"
+        elif "fraction" in header.lower() or "dimensionless" in header.lower():
+            relative_energy_unit = "fraction"
+    if relative_energy_unit is not None:
+        if relative_energy_unit not in {"percent", "fraction"}:
+            raise ValueError("Relative-energy units must be 'percent' or 'fraction'.")
+        canonical["units"] = {"delta_total_energy_relative": relative_energy_unit}
+
     for output_name, aliases in _WALL_CHANNEL_ALIASES.items():
         matches = [
             header
             for header in headers
-            if (
-                "RWALL" in normalized[header]
-                or "RIGIDWALL" in normalized[header]
-            )
+            if ("RWALL" in normalized[header] or "RIGIDWALL" in normalized[header])
             and _match_column(normalized[header], aliases)
         ]
         if not matches:
@@ -337,9 +341,7 @@ def parse_time_history_csv(path: str | Path) -> Dict[str, object]:
             (
                 header
                 for header in matches
-                if np.isfinite(
-                    np.asarray(columns[header], dtype=float)
-                ).any()
+                if np.isfinite(np.asarray(columns[header], dtype=float)).any()
             ),
             matches[0],
         )
@@ -369,11 +371,7 @@ def read_opencourant_time_history(
     """Locate, convert, and parse the run's primary time-history file."""
     source = find_time_history_file(work_dir, job_name)
     if source is None:
-        return {
-            "warnings": [
-                "OpenCourant produced no T01/.thy time-history file."
-            ]
-        }
+        return {"warnings": ["OpenCourant produced no T01/.thy time-history file."]}
 
     converter_path = resolve_th_to_csv(converter, solver_executable)
     if not converter_path:

@@ -331,7 +331,6 @@ class ModelingWidget(QtWidgets.QWidget):
             self.search_bar.setStyleSheet("")
             return
 
-        found = False
         matching_nodes = []
         for node in self.current_graph.all_nodes():
             if (
@@ -753,8 +752,8 @@ class ModelingWidget(QtWidgets.QWidget):
                 if hasattr(node, "surrogate_widget"):
                     node.surrogate_widget.set_status(value)
 
-            # --- EXISTING: Variable/Function Name Changes & Port Renaming ---
-            if prop_name == "var_name" or prop_name == "func_name":
+            # Keep variable labels and interface ports synchronized.
+            if prop_name == "var_name":
                 node.set_name(value)
 
                 # --- INPUT NODE RENAMING ---

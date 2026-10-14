@@ -5,22 +5,30 @@
 
 from __future__ import annotations
 
-import ast
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
-import keyword
 from typing import Any
 
 import networkx as nx
 
 from .types import SystemRecord
 from .units import UnitError, is_specified_unit, units_compatible
-
-_INPUT_NODE = "com.pfd.input"
-_OUTPUT_NODE = "com.pfd.output"
-_INTERMEDIATE_NODE = "com.pfd.intermediate"
-_BLOCK_NODE = "com.pfd.custom_block"
+from .codegen import (
+    INPUT_NODE as _INPUT_NODE,
+    OUTPUT_NODE as _OUTPUT_NODE,
+    INTERMEDIATE_NODE as _INTERMEDIATE_NODE,
+    BLOCK_NODE as _BLOCK_NODE,
+    GraphCompilationError,
+    block_function_source,
+    connection_graph as _connection_graph,
+    is_node as _is_node,
+    property_value as _property,
+    require_identifier,
+    surrogate_path,
+    unbound_outputs,
+)
+from .model import resolve_surrogate_path
 
 
 @dataclass(frozen=True)
@@ -68,7 +76,12 @@ def validate_systems(systems: Sequence[SystemRecord]) -> ValidationReport:
             continue
 
         nodes = list(graph.all_nodes())
-        local_graph = _connection_graph(nodes)
+        try:
+            local_graph = _connection_graph(nodes)
+        except GraphCompilationError as exc:
+            errors.append(f"System {system_name!r}: {exc}")
+            definitions.append({"inputs": {}, "outputs": {}, "flow": nx.DiGraph()})
+            continue
         if not nx.is_directed_acyclic_graph(local_graph):
             errors.append(f"System {system_name!r} contains a circular dependency.")
 
@@ -86,11 +99,10 @@ def validate_systems(systems: Sequence[SystemRecord]) -> ValidationReport:
                     )
                 else:
                     named_nodes.append((variable, kind, node.name()))
-                    if not variable.isidentifier() or keyword.iskeyword(variable):
-                        errors.append(
-                            f"System {system_name!r}: {variable!r} is not a "
-                            "valid Python variable name."
-                        )
+                    try:
+                        require_identifier(variable, f"{kind} on {node.name()!r}")
+                    except GraphCompilationError as exc:
+                        errors.append(f"System {system_name!r}: {exc}")
                     unit = str(_property(node, "unit", "-"))
                     _validate_unit(unit, system_name, node.name(), errors)
                     if kind == "input":
@@ -101,14 +113,12 @@ def validate_systems(systems: Sequence[SystemRecord]) -> ValidationReport:
                         output_locations[variable].append((index, system_name, unit))
 
             if kind == "block":
-                _validate_block(node, system_name, errors)
+                _validate_block(node, system_name, errors, warnings)
 
             if kind != "input":
                 _validate_input_connections(node, system_name, errors)
 
-        for variable, count in Counter(
-            name for name, _, _ in named_nodes
-        ).items():
+        for variable, count in Counter(name for name, _, _ in named_nodes).items():
             if count <= 1:
                 continue
             locations = [
@@ -145,49 +155,23 @@ def validate_systems(systems: Sequence[SystemRecord]) -> ValidationReport:
     )
 
 
-def _validate_block(node: Any, system_name: str, errors: list[str]) -> None:
-    input_names = [port.name() for port in node.input_ports()]
-    output_names = [port.name() for port in node.output_ports()]
-    for port_name in input_names + output_names:
-        if not port_name.isidentifier() or keyword.iskeyword(port_name):
-            errors.append(
-                f"System {system_name!r}: block {node.name()!r} has invalid "
-                f"port name {port_name!r}."
-            )
-    duplicates = set(input_names) & set(output_names)
-    if duplicates:
-        errors.append(
-            f"System {system_name!r}: block {node.name()!r} reuses "
-            f"{', '.join(sorted(duplicates))} as input and output names."
-        )
-
-    source = _block_code(node)
+def _validate_block(
+    node: Any, system_name: str, errors: list[str], warnings: list[str]
+) -> None:
     try:
-        tree = ast.parse(source or "pass")
-    except SyntaxError as exc:
-        errors.append(
-            f"System {system_name!r}: syntax error in {node.name()!r}, "
-            f"line {exc.lineno}: {exc.msg}."
-        )
-        return
-
-    assigned = {
-        child.id
-        for child in ast.walk(tree)
-        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store)
-    }
-    missing = sorted(set(output_names) - assigned)
-    uses_surrogate = _as_bool(_property(node, "use_surrogate", False))
-    if missing and not uses_surrogate:
-        errors.append(
-            f"System {system_name!r}: block {node.name()!r} never assigns "
-            f"output(s) {', '.join(missing)}."
-        )
-    if uses_surrogate and not _property(node, "surrogate_model_path"):
-        errors.append(
-            f"System {system_name!r}: block {node.name()!r} enables a "
-            "surrogate but has no model path."
-        )
+        path = surrogate_path(node)
+        block_function_source(node, "_check_block", "_surrogate" if path else None)
+        if path:
+            resolve_surrogate_path(path)
+        else:
+            missing = unbound_outputs(node)
+            if missing:
+                warnings.append(
+                    f"System {system_name!r}: block {node.name()!r} may leave "
+                    f"output(s) unbound: {', '.join(missing)}."
+                )
+    except (GraphCompilationError, OSError) as exc:
+        errors.append(f"System {system_name!r}: {exc}")
 
 
 def _validate_input_connections(
@@ -228,10 +212,7 @@ def _validate_connection_units(
                 _compare_units(
                     source_unit,
                     target_unit,
-                    (
-                        f"System {system_name!r}: {source.name()!r} "
-                        f"to {target.name()!r}"
-                    ),
+                    (f"System {system_name!r}: {source.name()!r} to {target.name()!r}"),
                     errors,
                     warnings,
                 )
@@ -245,9 +226,7 @@ def _validate_global_outputs(
         systems = {system_index for system_index, _, _ in entries}
         if len(systems) > 1:
             names = ", ".join(system_name for _, system_name, _ in entries)
-            errors.append(
-                f"Output {variable!r} has multiple providers: {names}."
-            )
+            errors.append(f"Output {variable!r} has multiple providers: {names}.")
 
 
 def _validate_cross_system_units(
@@ -366,26 +345,6 @@ def _validate_global_cycles(
     errors.append(f"Cross-system circular dependency: {readable}.")
 
 
-def _connection_graph(nodes: list[Any]) -> nx.DiGraph:
-    graph = nx.DiGraph()
-    graph.add_nodes_from(node.id for node in nodes)
-    for node in nodes:
-        for port in node.output_ports():
-            for connected in port.connected_ports():
-                graph.add_edge(node.id, connected.node().id)
-    return graph
-
-
-def _block_code(node: Any) -> str:
-    widget = node.get_widget("code_content")
-    source = widget.get_value() if widget is not None else _property(
-        node, "code_content", ""
-    )
-    if not source:
-        source = _property(node, "code", "")
-    return str(source or "")
-
-
 def _node_kind(node: Any) -> str:
     if _is_node(node, _INPUT_NODE):
         return "input"
@@ -396,26 +355,6 @@ def _node_kind(node: Any) -> str:
     if _is_node(node, _BLOCK_NODE):
         return "block"
     return "unknown"
-
-
-def _property(node: Any, name: str, default: Any = None) -> Any:
-    try:
-        if hasattr(node, "has_property") and not node.has_property(name):
-            return default
-        value = node.get_property(name)
-    except (AttributeError, KeyError, RuntimeError):
-        return default
-    return default if value is None else value
-
-
-def _is_node(node: Any, prefix: str) -> bool:
-    return str(getattr(node, "type_", "")).startswith(prefix)
-
-
-def _as_bool(value: Any) -> bool:
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "on", "true", "yes"}
-    return bool(value)
 
 
 __all__ = ["ValidationReport", "validate_systems"]

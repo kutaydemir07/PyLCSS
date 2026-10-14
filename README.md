@@ -3,7 +3,7 @@ Copyright (c) 2026 Kutay Demir.
 Licensed under the PolyForm Shield License 1.0.0. See LICENSE.
 -->
 
-# PyLCSS
+# PyLCSS 3.0.0
 
 **Low-Code System Solutions** — a desktop workbench for engineering design,
 simulation and optimization through visual, node-based workflows.

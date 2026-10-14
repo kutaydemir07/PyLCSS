@@ -84,8 +84,6 @@ class BoxNode(CadQueryNode):
         self.clear_error()
         try:
             raw_len = self.get_property("length_x")
-            if raw_len is None and self.has_property("length"):
-                raw_len = self.get_property("length")
             length = _positive(
                 "Length",
                 resolve_numeric_input(self.get_input("length"), raw_len),
@@ -299,6 +297,7 @@ class LinearPatternNode(CadQueryNode):
             self.add_input(port, color=_NUMBER_COLOR)
         self.add_output("shape", color=_SHAPE_COLOR)
         self.create_property("count", 2, widget_type="int")
+        self.create_property("max_instances", 1000, widget_type="int")
         self.create_property("spacing", 20.0, widget_type="float")
         self.create_property(
             "axis",
@@ -316,9 +315,15 @@ class LinearPatternNode(CadQueryNode):
             return None
         try:
             raw_count = resolve_numeric_input(self.get_input("count"), self.get_property("count"))
-            count = int(raw_count or 0)
-            if not 1 <= count <= 1000:
-                raise ValueError("Count must be between 1 and 1000.")
+            number = _positive("Count", raw_count)
+            limit = _positive("Instance limit", self.get_property("max_instances"))
+            if not number.is_integer() or not limit.is_integer():
+                raise ValueError("Count and instance limit must be whole numbers.")
+            count = int(number)
+            if count > int(limit):
+                raise ValueError(
+                    f"Count exceeds {int(limit)}; increase the instance limit."
+                )
             spacing = _finite(
                 "Spacing",
                 resolve_numeric_input(self.get_input("spacing"), self.get_property("spacing")),

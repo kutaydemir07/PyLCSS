@@ -4,14 +4,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
 
-from ..geometry.lattice_cad import lattice_cad_strategy, topopt_export_formats
-from ..configuration.fea_meshing import CadFeaMeshOptions
-from .calculix_validation import _flatten
+from ..geometry.lattice_cad import topopt_export_formats
+from ..configuration.fea_meshing import CadFeaMeshOptions, FEA_QUALITY_OPTIONS
+from ._common import cad_tet_mesh, validate_boundary_definitions, validated_cad_shape
 
 
 def topopt_fea_unavailable_reason(result):
@@ -22,54 +21,11 @@ def topopt_fea_unavailable_reason(result):
         return "Unsupported study physics"
     if (result.get("multibody") or {}).get("global_joints"):
         return "Connector analysis required"
-    options = result.get("structure_options")
     if "STEP" not in topopt_export_formats(result):
         return "STL lattice"
     if result.get("cad_shape") is None and result.get("shape") is None:
         return "Build CAD"
-    if lattice_cad_strategy(options) == "beam" and not (
-        result.get("cad_reconstruction") or {}
-    ).get("fused"):
-        return "Unfused beam CAD"
     return ""
-
-
-def _cad_tet_mesh(
-    shape,
-    element_size,
-    directory,
-    *,
-    minimum_size=0.0,
-    grading=0.3,
-    element_order="C3D10",
-    max_elements=500_000,
-):
-    """Mesh the native CAD boundary with the requested tetrahedral settings."""
-    from netgen.occ import OCCGeometry
-    from skfem import Mesh, MeshTet2
-    from pylcss.cae.design_studio.fem.quality import attach_mesh_quality
-    from pylcss.cae.design_studio.fem._helpers import suppress_output
-
-    step_path = Path(directory) / "analysis.step"
-    mesh_path = Path(directory) / "analysis.msh"
-    shape.exportStep(str(step_path))
-    with suppress_output():
-        generated = OCCGeometry(str(step_path)).GenerateMesh(
-            maxh=element_size, minh=minimum_size, grading=grading
-        )
-        if generated.ne > max_elements:
-            raise ValueError(
-                f"CAD FEA mesh has {generated.ne:,} elements, exceeding the "
-                f"requested limit of {max_elements:,}. Increase element size "
-                "or the FEA element limit."
-            )
-        generated.Export(str(mesh_path), "Gmsh2 Format")
-    mesh = Mesh.load(str(mesh_path))
-    if element_order == "C3D10":
-        mesh = MeshTet2.from_mesh(mesh)
-    if not attach_mesh_quality(mesh)["solver_ready"]:
-        raise ValueError("CAD FEA mesh contains invalid or collapsed elements.")
-    return mesh
 
 
 def run_topopt_fea(
@@ -85,25 +41,17 @@ def run_topopt_fea(
 ):
     """Re-mesh the CAD solid and solve with the connected study definitions."""
     from pylcss.cae.solver_backends import ExternalRunConfig, run_calculix_static
-    from pylcss.cae.solver_backends.selection import dict_geometries
 
     reason = topopt_fea_unavailable_reason(result)
     if reason:
         raise ValueError(f"CAD FEA unavailable: {reason}.")
-    if not isinstance(material, dict) or not material:
-        raise ValueError("Connect a Material to TopOpt before analysing FEA.")
-    supports, loads = _flatten(supports), _flatten(loads)
-    if not supports or not loads:
-        raise ValueError("Connect supports and loads to TopOpt before analysing FEA.")
-    # Node IDs belong to the old mesh and cannot identify the new CAD mesh.
-    pending = [*supports, *loads]
-    while pending:
-        record = pending.pop()
-        if isinstance(record, dict):
-            if record.get("node_ids") is not None:
-                raise ValueError("CAD FEA requires geometric supports and loads.")
-            pending.extend(dict_geometries(record))
-    if quality not in {"Standard", "Mesh Convergence"}:
+    material, supports, loads = validate_boundary_definitions(
+        material,
+        supports,
+        loads,
+        context="CAD FEA",
+    )
+    if quality not in FEA_QUALITY_OPTIONS:
         raise ValueError("Choose Standard or Mesh Convergence FEA quality.")
     options = CadFeaMeshOptions(**(mesh_options or {}))
 
@@ -115,9 +63,7 @@ def run_topopt_fea(
     shape = result.get("cad_shape")
     if shape is None:
         shape = result.get("shape")
-    shape = shape.val() if hasattr(shape, "val") else shape
-    if not shape.isValid() or not shape.Solids() or shape.Volume() <= 0:
-        raise ValueError("CAD FEA requires a valid solid CAD body.")
+    shape = validated_cad_shape(shape)
     bounds = shape.BoundingBox()
     spans = np.array([bounds.xlen, bounds.ylen, bounds.zlen], dtype=float)
     size, minimum_size = options.resolve_sizes(spans)
@@ -133,7 +79,7 @@ def run_topopt_fea(
                 progress_callback(
                     f"Meshing CAD, level {level + 1} (maximum size {level_size:.4g} mm)"
                 )
-            mesh = _cad_tet_mesh(
+            mesh = cad_tet_mesh(
                 shape,
                 level_size,
                 directory,
@@ -204,9 +150,11 @@ def run_topopt_fea(
         convergence_study={
             "element_order": options.element_order,
             "levels": levels,
-            "tolerance": 0.05,
+            "tolerance": options.convergence_tolerance,
             "compliance_rel_change": change,
-            "converged": change <= 0.05 if change is not None else None,
+            "converged": change <= options.convergence_tolerance
+            if change is not None
+            else None,
         },
     )
     return analysis

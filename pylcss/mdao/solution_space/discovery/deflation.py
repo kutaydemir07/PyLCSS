@@ -8,8 +8,8 @@ from typing import Optional
 
 import numpy as np
 
-from .feasibility import FeasibilityProblem
 from ..contracts import FloatArray, ProgressCallback, StopCallback
+from ..feasibility import FeasibilityProblem
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ class DeflationOptimizationMixin:
         _solve_ng = None
 
         if solver_type == "nevergrad":
-            from ...optimization.solvers.backends import (
+            from ...numerics import (
                 solve_with_nevergrad as _solve_ng,
             )
         else:
@@ -120,7 +120,7 @@ class DeflationOptimizationMixin:
                         x_start,
                         method="SLSQP",
                         bounds=bounds,
-                        options={"maxiter": min(100, solver_maxiter), "ftol": 1e-8},
+                        options={"maxiter": solver_maxiter, "ftol": 1e-8},
                     )
                     x_rec = np.asarray(result.x).flatten()
 
@@ -145,13 +145,13 @@ class DeflationOptimizationMixin:
                 callback(
                     None,
                     None,
-                    f"Phase 1 start {i + 1}/{len(start_points)}: "
+                    f"Stage 1 start {i + 1}/{len(start_points)}: "
                     f"{len(found_points_norm)} seeds found",
                 )
 
         if len(found_points_phys) > 0:
             logger.info(
-                f"  Deflation search discovered {len(found_points_phys)} distinct "
+                f"  Deflation search discovered {len(found_points_phys)} feasible "
                 f"seed candidates in {completed_starts} optimization runs"
             )
             return np.array(found_points_phys).T

@@ -15,7 +15,6 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .code_editor import CadCodeEditorDialog
 from .crash_plot_dialog import CrashPlotDialog
 from .inspector_controls import ExpressionEdit
-from .panels import LibraryPanel
 
 __all__ = ["StudyInspectorMixin"]
 
@@ -119,9 +118,11 @@ class StudyInspectorMixin:
 
         current_count = node.get_param_count() if hasattr(node, "get_param_count") else 6
         spin_ports = QtWidgets.QSpinBox()
-        spin_ports.setRange(0, 32)
+        has_limit = node.has_property("parameter_limit")
+        maximum = max(current_count, int(node.get_property("parameter_limit"))) if has_limit else 2_147_483_647
+        spin_ports.setRange(0, maximum)
         spin_ports.setValue(current_count)
-        spin_ports.setToolTip("Set the number of parameter input sockets for this node (0 to 32).")
+        spin_ports.setToolTip("Set the number of parameter input sockets for this node.")
 
         btn_add = QtWidgets.QPushButton("+ Add")
         btn_add.setToolTip("Add an additional parameter port.")
@@ -137,9 +138,25 @@ class StudyInspectorMixin:
         ctrl_bar.addWidget(btn_remove)
         ctrl_bar.addStretch()
         param_vlayout.addLayout(ctrl_bar)
+        if has_limit:
+            limit_row = QtWidgets.QHBoxLayout()
+            limit_row.addWidget(QtWidgets.QLabel("Port limit:"))
+            limit_spin = QtWidgets.QSpinBox()
+            limit_spin.setRange(max(1, current_count), 2_147_483_647)
+            limit_spin.setValue(maximum)
+            limit_spin.setToolTip("Increase this limit when the part needs more parameter sockets.")
+
+            def _on_limit_change(value):
+                spin_ports.setMaximum(value)
+                self.update_property("parameter_limit", value)
+
+            limit_spin.valueChanged.connect(_on_limit_change)
+            limit_row.addWidget(limit_spin)
+            limit_row.addStretch()
+            param_vlayout.addLayout(limit_row)
 
         def _on_count_change(new_val: int):
-            new_val = max(0, min(int(new_val), 32))
+            new_val = max(0, min(int(new_val), spin_ports.maximum()))
             curr = node.get_param_count() if hasattr(node, "get_param_count") else 6
             if new_val == curr:
                 return
@@ -166,6 +183,8 @@ class StudyInspectorMixin:
             name_edit = QtWidgets.QLineEdit(str(node.get_property(name_prop) or ""))
             name_edit.setPlaceholderText("name")
             value_edit = ExpressionEdit(node.get_property(value_prop) or 0.0)
+            if hasattr(self, "property_widgets"):
+                self.property_widgets[value_prop] = value_edit
             name_edit.editingFinished.connect(
                 lambda n=name_prop, w=name_edit: self.update_property(n, w.text())
             )
@@ -210,6 +229,16 @@ class StudyInspectorMixin:
         )
         doc_layout.addWidget(chk_auto)
 
+        timeout_layout = QtWidgets.QFormLayout()
+        timeout_value = node.get_property("parameter_timeout_s")
+        timeout_edit = ExpressionEdit(60.0 if timeout_value is None else timeout_value)
+        timeout_edit.setToolTip("Maximum time allowed for a parameter update, in seconds.")
+        timeout_edit.value_changed.connect(
+            lambda value: self.update_property("parameter_timeout_s", value)
+        )
+        timeout_layout.addRow("Parameter update timeout (s):", timeout_edit)
+        doc_layout.addLayout(timeout_layout)
+
         btn_preview = QtWidgets.QPushButton("Preview in 3D")
         btn_preview.setToolTip("Run the graph (CAD only) and render this part.")
         btn_preview.clicked.connect(
@@ -226,6 +255,7 @@ class StudyInspectorMixin:
             title="Parameters (Spreadsheet Aliases)",
             tooltip=(
                 "Parameters linked to FreeCAD spreadsheet aliases.\n"
+                "Use SheetName.alias when multiple sheets share an alias.\n"
                 "Adjust 'Ports' to scale available sockets up or down."
             ),
         )
@@ -986,20 +1016,38 @@ class StudyInspectorMixin:
         qual_grp = QtWidgets.QGroupBox("Solution Quality and Energy Gates")
         qual_layout = QtWidgets.QFormLayout(qual_grp)
 
-        q_status = str(result.get("quality_status") or quality.get("status") or "").lower()
+        q_status = str(
+            result.get("numerical_status") or quality.get("numerical_status")
+            or result.get("quality_status") or quality.get("status") or ""
+        ).lower()
         if q_status == "pass":
-            stat_lbl = QtWidgets.QLabel("✓ PASS (Qualified Explicit Solution)")
+            stat_lbl = QtWidgets.QLabel("✓ Numerical checks passed")
             stat_lbl.setStyleSheet("color: #66d17a; font-weight: bold; font-size: 11px;")
         elif q_status == "warning":
-            stat_lbl = QtWidgets.QLabel("⚠ WARNING (Review Hourglass / Dissipation)")
+            stat_lbl = QtWidgets.QLabel("⚠ Numerical checks need review")
             stat_lbl.setStyleSheet("color: #ffb74d; font-weight: bold; font-size: 11px;")
         elif q_status == "fail":
-            stat_lbl = QtWidgets.QLabel("✕ FAIL (Energy Balance / Termination Issue)")
+            stat_lbl = QtWidgets.QLabel("✕ Numerical checks failed")
             stat_lbl.setStyleSheet("color: #ff5252; font-weight: bold; font-size: 11px;")
         else:
-            stat_lbl = QtWidgets.QLabel("Evaluated")
+            stat_lbl = QtWidgets.QLabel("Numerical checks incomplete")
             stat_lbl.setStyleSheet("color: #9aa0a6; font-size: 11px;")
-        qual_layout.addRow("Quality Qualification", stat_lbl)
+        qual_layout.addRow("Numerical Status", stat_lbl)
+        physical_status = str(quality.get("physical_validation_status") or "unverified")
+        qual_layout.addRow(
+            "Material Validation",
+            QtWidgets.QLabel(physical_status.replace("_", " ").title()),
+        )
+        for check in quality.get("checks", []):
+            if isinstance(check, dict) and check.get("status") != "pass":
+                detail = QtWidgets.QLabel(
+                    f"{str(check.get('status', '')).replace('_', ' ').title()}: "
+                    f"{check.get('message', '')}"
+                )
+                detail.setWordWrap(True)
+                qual_layout.addRow(
+                    str(check.get("id", "")).replace("_", " ").title(), detail,
+                )
 
         # Extract quality check limits
         checks = {c.get("id"): c for c in quality.get("checks", []) if isinstance(c, dict)}

@@ -11,13 +11,15 @@ import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from pylcss.config import SOLVER_DESCRIPTIONS, optimization_config
-
+from pylcss.mdao.optimization.evaluator import constraint_scale
+from pylcss.mdao.optimization.methods import SUPPORTED_METHODS
 from pylcss.user_interface.common.empty_state import EmptyStateOverlay
 from pylcss.user_interface.common.theme_manager import (
     THEMES,
     current_theme,
 )
 from pylcss.user_interface.common.ui_kit import secondary_button
+
 from .optimization_settings_dialog import OptimizationSettingsDialog
 
 FEASIBILITY_TOL = 1e-6
@@ -74,7 +76,7 @@ class SolverSettingsWidget(QtWidgets.QWidget):
 
         # 2. Algorithm Selection
         self.combo_method = QtWidgets.QComboBox()
-        self.combo_method.addItems(list(SOLVER_DESCRIPTIONS.keys()))
+        self.combo_method.addItems(list(SUPPORTED_METHODS))
         self.combo_method.currentTextChanged.connect(self.on_method_changed)
 
         self.btn_info = secondary_button(QtWidgets.QPushButton("\u24d8"))
@@ -606,22 +608,14 @@ class OptimizationPlotsWidget(QtWidgets.QTabWidget):
             return bound
         v = float(value)
 
-        # Judge feasibility on a *relative* tolerance (matching solver precision),
-        # so an active constraint resting on its bound (~1e-5) reads OK instead of
-        # being flagged for numerical noise. Mirrors the evaluator's violation scale.
-        if has_lo and has_hi and abs(hi - lo) > 1e-12:
-            scale = abs(hi - lo)
-        else:
-            mags = [abs(b) for b in (lo, hi) if np.isfinite(b) and abs(b) > 1e-12]
-            scale = min(mags) if mags else 1.0
+        scale = constraint_scale(lo, hi)
         tolerance = getattr(self, "feasibility_tolerance", FEASIBILITY_TOL)
-        tol = max(tolerance * scale, 1e-9)
         violation = max(
             (lo - v) if has_lo else 0.0,
             (v - hi) if has_hi else 0.0,
             0.0,
         )
-        ok = violation <= tol
+        ok = violation / scale <= tolerance
         return f"{bound}   {'OK' if ok else 'VIOLATED'}"
 
     def _render_results_table(self, x, cost, raw):

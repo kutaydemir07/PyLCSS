@@ -9,24 +9,17 @@ import os
 import time
 from typing import Any
 
-import joblib
 import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtWidgets
 
-from pylcss.mdao.surrogate_modeling.training_engine import (
-    TORCH_AVAILABLE,
-    SurrogateTrainer,
-)
-from pylcss.mdao.system_modeling.compiler import GraphBuilder
+from pylcss.mdao.surrogate_modeling.training import SurrogateTrainer
+from pylcss.mdao.system_modeling.spy_compiler import build_spy_model
 
 from .workers import (
     AdaptiveTrainingWorker,
     ModelTrainingWorker,
 )
-
-if TORCH_AVAILABLE:
-    import torch
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +28,11 @@ __all__ = ["SurrogateTrainingMixin"]
 
 class SurrogateTrainingMixin:
     def stop_training(self):
+        generation_worker = getattr(self, "gen_worker", None)
+        if generation_worker is not None and generation_worker.isRunning():
+            generation_worker.requestInterruption()
+            self.btn_stop.setText("Stopping...")
+            self.btn_stop.setEnabled(False)
         evaluation_worker = getattr(self, "evaluation_worker", None)
         if evaluation_worker is not None and evaluation_worker.isRunning():
             evaluation_worker.stop()
@@ -98,88 +96,20 @@ class SurrogateTrainingMixin:
                 config["auto_metric"] = self.combo_auto_metric.currentData() or "R2"
                 config["auto_ensemble"] = self.chk_auto_ensemble.isChecked()
 
-        elif algo in (
-            "Your Own Architecture (Deep Learning)",
-            "Custom Architecture (Deep Learning)",
-            "Your Own Architecture",
-            "Custom Architecture",
-        ):
-            config["model_type"] = "Your Own Architecture (Deep Learning)"
-            if hasattr(self, "arch_builder"):
-                config.update(self.arch_builder.get_config())
-        elif algo in ("Geom-DeepONet", "GINO"):
-            # Geometric backbones drive the CAD pipeline directly; they need
-            # the CAD path, solver kind, target nodal field, parameter bounds,
-            # and sample count. Bounds + names come from the system graph via
-            # the existing target-node mechanism.
-            config["cad_path"] = self.txt_cad_path.text().strip()
-            config["cad_kind"] = self.combo_cad_kind.currentText()
-            config["field_name"] = self.combo_field.currentText().strip() or "von_mises"
-            config["n_samples"] = self.spin_geom_samples.value()
-            config["epochs"] = self.spin_geom_epochs.value()
-            config["learning_rate"] = self.spin_geom_lr.value()
-            if algo == "Geom-DeepONet":
-                config["latent_dim"] = self.spin_donet_latent.value()
-                config["trunk_hidden"] = self.spin_donet_trunk.value()
-            else:  # GINO
-                config["hidden_channels"] = self.spin_gino_channels.value()
-                config["grid_size"] = self.spin_gino_grid.value()
-                config["fno_modes"] = self.spin_gino_modes.value()
-            # input_names / input_bounds are populated by start_training from
-            # the current spy-model context (same source the LHS data-gen uses).
+        elif algo == "Your Own Architecture (Deep Learning)":
+            config.update(self.arch_builder.get_config())
 
-        # Default debug mode
-        config["debug_mode"] = False
         config["active_learning"] = self.active_learning_values()
 
         return config
 
     def start_training(self) -> None:
         config = self.get_config()
-        algo = config.get("model_type", "")
-        is_geometric = algo in ("Geom-DeepONet", "GINO")
-
-        if is_geometric:
-            # Geometric backbones drive the CAD pipeline themselves; they
-            # don't use (X, y) generated from a spy model. Validate config
-            # instead.
-            if not config.get("cad_path"):
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "Error",
-                    "Geometric surrogates need a CAD graph file.\n"
-                    "Pick one via 'Browse...' in step 3 (Model).",
-                )
-                return
-            if not config.get("field_name"):
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "Error",
-                    "Geometric surrogates need a nodal field name (e.g. 'von_mises').",
-                )
-                return
-            # Pull input bounds + names from the same source the LHS data-gen
-            # uses: the currently selected target node's spy-model context.
-            try:
-                bounds, names = self._collect_input_bounds_for_target()
-            except Exception as exc:
-                QtWidgets.QMessageBox.critical(
-                    self,
-                    "Error",
-                    f"Couldn't determine input bounds from the system graph: {exc}\n"
-                    "Make sure a target node is selected and its inputs have ranges set.",
-                )
-                return
-            config["input_bounds"] = bounds
-            config["input_names"] = names
-        else:
-            if not hasattr(self, "X_train") or self.X_train is None:
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "Error",
-                    "No training data available. Please generate or upload data first.",
-                )
-                return
+        if self.X_train is None:
+            QtWidgets.QMessageBox.warning(
+                self, "Error", "Generate or upload training data first.",
+            )
+            return
 
         self.btn_train.setEnabled(False)
         self.btn_save.setEnabled(False)
@@ -217,21 +147,7 @@ class SurrogateTrainingMixin:
             self.progress_text.hide()
             self.curve_plot.setYRange(-1, 1)
 
-        # --- START WORKER (BACKGROUND THREAD) ---
-        # For geometric backbones we pass placeholder (X, y) -- the strategy
-        # ignores them and uses cad_path / input_bounds from config instead.
-        if is_geometric:
-            X_tr = np.zeros((1, len(config["input_names"])))
-            y_tr = np.zeros((1, 1))
-            X_te = np.zeros((0, len(config["input_names"])))
-            y_te = np.zeros((0, 1))
-        else:
-            X_tr, y_tr, X_te, y_te = (
-                self.X_train,
-                self.y_train,
-                self.X_test,
-                self.y_test,
-            )
+        X_tr, y_tr, X_te, y_te = self.X_train, self.y_train, self.X_test, self.y_test
         self.worker = ModelTrainingWorker(X_tr, y_tr, X_te, y_te, config)
         self.worker.progress_sig.connect(self.update_progress)
         self.worker.loss_sig.connect(self.update_loss_plot)
@@ -311,8 +227,8 @@ class SurrogateTrainingMixin:
         if y_std is not None:
             msg += f"<br>Mean Uncertainty: {np.mean(y_std):.4f}"
 
-        if metrics.get("debug_mode", False):
-            msg += "<br>Evaluation: debug mode"
+        if "evaluation_source" in metrics:
+            msg += f"<br>Evaluation: {metrics['evaluation_source']}"
 
         self.lbl_metrics.setText(msg)
 
@@ -459,15 +375,11 @@ class SurrogateTrainingMixin:
         fname = os.path.join(folder, f"surrogate_{safe_id}.joblib")
 
         try:
-            if (
-                TORCH_AVAILABLE
-                and hasattr(self.current_model, "model")
-                and isinstance(self.current_model.model, torch.nn.Module)
-            ):
-                self.current_model.model.cpu()  # Move to CPU before serialization
-                self.current_model.device = torch.device("cpu")  # Update wrapper state
+            from pylcss.io_manager.data_io import DataExporter
 
-            joblib.dump(self.current_model, fname)
+            if hasattr(self.current_model, "to_cpu"):
+                self.current_model.to_cpu()
+            DataExporter.to_pickle(fname, self.current_model)
 
             # Update Node Properties automatically
             target_node.set_property("surrogate_model_path", fname)
@@ -503,22 +415,6 @@ class SurrogateTrainingMixin:
         target_node = self.combo_nodes.itemData(idx)
         config = self.get_config()
 
-        # Check for PyTorch with zero dropout (breaks uncertainty estimation)
-        if (
-            config.get("model_type") == "Deep Neural Network (PyTorch)"
-            and config.get("dropout", 0.0) == 0.0
-        ):
-            reply = QtWidgets.QMessageBox.warning(
-                self,
-                "Zero Dropout Warning",
-                "PyTorch model has 0% dropout, so uncertainty estimation for adaptive sampling is disabled.\n\n"
-                "Continue anyway?",
-                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                QtWidgets.QMessageBox.No,
-            )
-            if reply == QtWidgets.QMessageBox.No:
-                return
-
         self.btn_adaptive.setEnabled(False)
         self.btn_train.setEnabled(False)
         self.btn_save.setEnabled(False)
@@ -548,11 +444,8 @@ class SurrogateTrainingMixin:
             graph = self.modeling_widget.current_graph
             nodes = graph.all_nodes()
             input_nodes = [n for n in nodes if n.type_.startswith("com.pfd.input")]
-            output_nodes = [n for n in nodes if n.type_.startswith("com.pfd.output")]
-
-            builder = GraphBuilder(graph)
-            spy_code, spy_inputs, spy_outputs = builder.build_spy_model(
-                nodes, input_nodes, output_nodes, target_node.id, "spy_model"
+            spy_code, spy_inputs, spy_outputs = build_spy_model(
+                nodes, input_nodes, target_node.id, "spy_model"
             )
 
             input_bounds = []
@@ -616,8 +509,8 @@ class SurrogateTrainingMixin:
 
         # Update metrics display (similar to training_finished)
         msg = f"<b>Completed</b> · RMSE: {metrics['RMSE']:.4f} · R²: {metrics['R2']:.4f}"
-        if metrics.get("debug_mode", False):
-            msg += "<br>Evaluation: debug mode"
+        if "evaluation_source" in metrics:
+            msg += f"<br>Evaluation: {metrics['evaluation_source']}"
         if "y_std" in metrics and metrics["y_std"] is not None:
             y_std = np.array(metrics["y_std"])
             msg += f"<br>Mean Uncertainty: {np.mean(y_std):.4f}"

@@ -1,49 +1,19 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
-"""Homogenized material laws for the lattice cell families PyLCSS builds.
+"""Density-dependent lattice stiffness and geometry calibration.
 
-A lattice study is a two-scale problem. At the micro scale a unit cell has an
-effective anisotropic stiffness; at the macro scale the part is optimized as a
-graded continuum made of that effective material. This module is the bridge:
-it turns :mod:`.homogenization` — which solves one cell — into a continuous,
-differentiable law
+CellMaterialLaw interpolates normalized C11, C12, and C44 values and their
+density derivatives, and maps density back to measured cell parameters.
+The registry determines which families can build a reduced material law.
+Bundled tables cover gyroid, diamond, cubic, and octet at Poisson ratios
+0.30 and 0.34 on 24-voxel cells; other eligible laws can be built on demand
+with build_cell_material_law and cached under the local PyLCSS directory.
 
-    C^H(rho) = [C11(rho), C12(rho), C44(rho)]     per unit Young's modulus
-
-that the part-scale sensitivity loop can call on every element of every
-iteration, together with the exact derivatives dC/drho the adjoint needs.
-
-Why this replaces ``E = E0 * rho^p``
------------------------------------
-A single isotropic power law cannot represent a lattice, for three reasons
-that are measurable rather than stylistic:
-
-* Two families at the same relative density have different stiffness. A
-  gyroid sheet and an octet truss at rho = 0.3 differ by a large factor, and
-  no choice of exponent fixes both at once.
-* A lattice is not isotropic. The octet cell measures a Zener ratio near 1.6,
-  meaning its shear stiffness is over 50% higher than any isotropic law with
-  the same bulk response can produce. Optimizing against an isotropic
-  surrogate therefore mis-ranks shear-dominated load paths.
-* The power law has no correct exponent even in one direction. Stretch-
-  dominated cells run near rho^1, bending-dominated ones near rho^2, and the
-  real curve moves between those regimes as density rises.
-
-Scope
------
-The four cubic families (gyroid, diamond, cubic, octet) are covered. Their
-periodic cell is a cube and their homogenized tensor has cubic symmetry, so
-three constants describe it exactly and the part-scale operator stays a
-three-term sum. Honeycomb is deliberately excluded: it is an extruded prism
-whose periodic cell is not a cube and whose tensor is strongly orthotropic, so
-it keeps the continuum-density surrogate until the orthotropic assembly path
-exists.
-
-The laws are generated offline by ``scripts/build_lattice_material_database.py``
-and shipped in :mod:`.cell_material_data`. Anything not in the shipped table —
-an unusual Poisson ratio, a different cell resolution — is computed on demand
-and cached under ``%LOCALAPPDATA%/PyLCSS``, which costs about a minute once.
+The desktop workflow solves solid SIMP and generates cells afterward.
+These laws calibrate strut geometry and remain available to library callers
+that configure a homogenized lattice-material solve.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -83,9 +53,7 @@ __all__ = [
 # Declared once, in the registry, next to the geometry each one generates.
 HOMOGENIZED_CELL_FAMILIES = HOMOGENIZED_FAMILIES
 
-# Voxels per axis of the periodic cell used to build a law. 24 is where the
-# measured constants stop moving by more than a few percent (checked against
-# 32) while a full four-family sweep still finishes in about a minute.
+# Voxels per axis of the periodic FE cell; matches the bundled tables.
 DATABASE_RESOLUTION = 24
 
 # Rasterization refinement used to turn the cell into partial volumes before
@@ -98,23 +66,7 @@ CELL_SUPERSAMPLE = 4
 # gets its own homogenization rather than a rescaled table.
 DATABASE_POISSON = 0.30
 
-# How far a study's Poisson ratio may sit from a tabulated one before the law
-# is recomputed.
-#
-# Measured, not assumed. Moving the base ratio from 0.30 to 0.34 across the
-# four families at rho = 0.15 and 0.40 moves C44 by under 2% — the struts carry
-# axial load, so shear barely notices — but moves C11 by up to 4.4% and C12 by
-# up to 13%. C12 is the sensitive constant, because it is the one that carries
-# the transverse coupling the base ratio actually sets. A tolerance of 0.04 was
-# therefore too loose to justify; 0.025 keeps the worst tabulated error near
-# the few-percent level of the voxel rasterization itself.
-#
-# The band matters practically because it decides who pays for an on-demand
-# homogenization. Tables are shipped at both 0.30 and 0.34 so that the common
-# structural metals — steels and Inconel near 0.28-0.30, and aluminium,
-# titanium and copper near 0.33-0.35 — all land on a tabulated ratio. Ti-6Al-4V
-# at 0.342 is the case that motivated this: it is the most common metal AM
-# lattice alloy and it fell just outside the original band.
+# Maximum offset for using the nearest tabulated base Poisson ratio.
 POISSON_TOLERANCE = 0.025
 
 # Base Poisson ratios the shipped tables are generated at.
@@ -176,26 +128,11 @@ def unit_cell_occupancy(
     *,
     supersample: int = CELL_SUPERSAMPLE,
 ) -> np.ndarray:
-    """Rasterize one periodic unit cell of ``cell_type`` as partial volumes.
+    """Rasterize one periodic cell into partial-volume voxels.
 
-    ``parameter`` is the family's own thickness control: the requested cell
-    relative density for the TPMS sheets, and the member thickness as a
-    fraction of the cell pitch for the strut families.
-
-    The generators are the ones :mod:`.structures` uses at part scale, called
-    with ``cell_size`` equal to the array size so exactly one period is
-    sampled. That is the point of building the law this way — it describes the
-    geometry PyLCSS goes on to manufacture, not an idealized textbook cell.
-
-    The cell is rasterized ``supersample`` times finer than the returned array
-    and box-averaged down, so each returned voxel carries the fraction of
-    itself the cell occupies. A binary cell would not do: these cells are
-    highly symmetric, so every strut crosses a voxel-centre threshold at the
-    same radius and the achieved density jumps in steps. Measured on a 24-voxel
-    octet cell the binary density leaps from 0.056 straight to 0.107, leaving a
-    hole in the middle of the operating range that no bisection can enter.
-    Partial volumes remove the steps, and :func:`homogenize_cell` already
-    consumes a fractional field as a stiffness scale.
+    The geometry parameter is requested occupancy for TPMS and thickness as
+    a fraction of cell pitch for struts. Supersample the shared geometry and
+    average down so symmetric binary rasterization jumps are reduced.
     """
     from . import structures
 
@@ -306,17 +243,11 @@ def _monotone_log_curve(
     density: np.ndarray,
     values: np.ndarray,
 ) -> tuple[Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]], bool]:
-    """Return an evaluator giving ``(value, d value / d rho)``.
+    """Build a PCHIP evaluator returning values and density derivatives.
 
-    Interpolation happens on log(C) against log(rho). Every one of these
-    constants is close to a power law over any decade of density, so the
-    samples are nearly collinear there — which is what makes a shape-preserving
-    cubic both accurate between samples and safe outside them. Extrapolation is
-    linear in log-log using the end slope, i.e. it continues as the power law
-    the last two samples imply, instead of letting a cubic turn over.
-
-    Falls back to linear-in-rho interpolation if any sample is non-positive,
-    which an auxetic or badly resolved cell can produce for C12.
+    Use log-log interpolation for positive values and raw axes otherwise.
+    Outside sampled densities, extend endpoint slopes in the same coordinates.
+    The second return value states whether logarithmic interpolation is used.
     """
     from scipy.interpolate import PchipInterpolator
 
@@ -452,12 +383,8 @@ class CellMaterialLaw:
         """Return ``(C11, C12, C44)`` for a density field, scaled by ``young``."""
         rho = np.clip(np.asarray(density, dtype=float), 1e-6, 1.0)
         curves = self._curves  # type: ignore[attr-defined]
-        values = [
-            float(young) * curves[name](rho)[0] for name in ("c11", "c12", "c44")
-        ]
-        ratio = float(
-            getattr(self, "_minimum_normal_stability_ratio", 1.0e-4)
-        )
+        values = [float(young) * curves[name](rho)[0] for name in ("c11", "c12", "c44")]
+        ratio = float(getattr(self, "_minimum_normal_stability_ratio", 1.0e-4))
         # C11 >= C12/(1-ratio) is equivalent to
         # (C11-C12)/C11 >= ratio for the positive sampled curves.
         stable_c11 = values[1] / max(1.0 - ratio, 1.0e-6)
@@ -490,9 +417,7 @@ class CellMaterialLaw:
             value, gradient = curves[name](rho)
             values.append(float(young) * value)
             gradients.append(float(young) * gradient * live)
-        ratio = float(
-            getattr(self, "_minimum_normal_stability_ratio", 1.0e-4)
-        )
+        ratio = float(getattr(self, "_minimum_normal_stability_ratio", 1.0e-4))
         scale = max(1.0 - ratio, 1.0e-6)
         stable_c11 = values[1] / scale
         clamped = values[0] < stable_c11
@@ -522,7 +447,10 @@ class CellMaterialLaw:
         denominator = 4.0 * c44 + 3.0 * (c11 - c12)
         shear_reuss = np.where(
             np.abs(denominator) > 1e-30,
-            5.0 * c44 * (c11 - c12) / np.where(np.abs(denominator) > 1e-30, denominator, 1.0),
+            5.0
+            * c44
+            * (c11 - c12)
+            / np.where(np.abs(denominator) > 1e-30, denominator, 1.0),
             0.0,
         )
         shear = 0.5 * (shear_voigt + np.maximum(shear_reuss, 0.0))
@@ -577,9 +505,7 @@ class CellMaterialLaw:
         usable = modulus > 0.0
         if int(np.count_nonzero(usable)) < 2:
             return 0.0, 0.0
-        slope, intercept = np.polyfit(
-            np.log(rho[usable]), np.log(modulus[usable]), 1
-        )
+        slope, intercept = np.polyfit(np.log(rho[usable]), np.log(modulus[usable]), 1)
         return float(np.exp(intercept)), float(slope)
 
     def diagnostics(self) -> dict[str, object]:
@@ -650,11 +576,11 @@ def build_cell_material_law(
     density_grid: tuple[float, ...] = DATABASE_DENSITY_GRID,
     progress: Callable[[str], None] | None = None,
 ) -> CellMaterialLaw:
-    """Homogenize one family across a density sweep and return its law.
+    """Homogenize an eligible family over a density sweep.
 
-    This is the expensive path — one periodic six-load-case solve per sample.
-    It runs offline through ``scripts/build_lattice_material_database.py`` and
-    on demand only when the shipped table does not cover a study.
+    Record achieved densities, geometry parameters, stiffness constants, and
+    symmetry residuals. Append the analytical solid endpoint when needed.
+    This performs six periodic strain solves for each usable sample.
     """
     family = normalize_cell_family(cell_type)
     if family not in HOMOGENIZED_CELL_FAMILIES:
@@ -747,12 +673,10 @@ def cell_material_law(
     resolution: int = DATABASE_RESOLUTION,
     allow_build: bool = True,
 ) -> CellMaterialLaw | None:
-    """Return the homogenized law for a family, or ``None`` if unavailable.
+    """Retrieve a law from memory, bundled data, disk, or a new cell sweep.
 
-    Resolution order: process memory, the shipped table, the on-disk cache,
-    then a fresh homogenization. ``None`` means the family has no law at all
-    (honeycomb, solid) — callers fall back to the isotropic surrogate and
-    must say so in their report.
+    With allow_build=False, return None instead of generating an unavailable
+    law. Ineligible families also return None.
     """
     family = normalize_cell_family(cell_type)
     if family not in HOMOGENIZED_CELL_FAMILIES:
@@ -782,14 +706,12 @@ def cell_material_law(
 
     logger.warning(
         "No tabulated %s cell law for Poisson %.3f at resolution %d. "
-        "Homogenizing it now; this takes about a minute and is then cached.",
+        "Building and caching it now.",
         family,
         float(poisson),
         int(resolution),
     )
-    law = build_cell_material_law(
-        family, poisson=poisson, resolution=resolution
-    )
+    law = build_cell_material_law(family, poisson=poisson, resolution=resolution)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(law.to_dict(), indent=1), encoding="utf-8")
@@ -830,7 +752,9 @@ def _shipped_law(
         return None
     nearest = min(
         candidates,
-        key=lambda payload: abs(float(payload.get("base_poisson", 0.0)) - float(poisson)),
+        key=lambda payload: abs(
+            float(payload.get("base_poisson", 0.0)) - float(poisson)
+        ),
     )
     offset = abs(float(nearest.get("base_poisson", 0.0)) - float(poisson))
     if offset > POISSON_TOLERANCE:

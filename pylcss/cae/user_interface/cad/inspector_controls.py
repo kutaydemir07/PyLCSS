@@ -25,12 +25,17 @@ class ExpressionEdit(QtWidgets.QLineEdit):
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(str(value), parent)
+        self._value_range = None
         self.setMinimumWidth(0)
         self.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Fixed,
         )
         self.editingFinished.connect(self._evaluate)
+
+    def setRange(self, minimum: float, maximum: float) -> None:
+        """Apply numeric bounds to evaluated expressions, as for a spin box."""
+        self._value_range = (float(minimum), float(maximum))
 
     def _evaluate(self) -> None:
         text = self.text()
@@ -41,6 +46,9 @@ class ExpressionEdit(QtWidgets.QLineEdit):
             else:
                 # Without the optional expression parser, accept literals only.
                 val = float(text)
+            if self._value_range is not None:
+                minimum, maximum = self._value_range
+                val = min(max(val, minimum), maximum)
             self.setText(str(val))
             self.value_changed.emit(val)
         except Exception:

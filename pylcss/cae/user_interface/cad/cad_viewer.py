@@ -750,14 +750,11 @@ class CQ3DViewer(
                 self._last_result_data = None
             return
 
-        from .result_fields import available_result_fields
+        from .result_fields import available_result_fields, topopt_view_mode
         self._last_result_data = dict(data)
         fields = available_result_fields(data)
         if fields == ["Default View"]:
             fields = []
-        structure_options = data.get("structure_options")
-        structure_mode = structure_options.get("mode", "solid") if isinstance(structure_options, dict) else getattr(structure_options, "mode", "solid")
-        is_lattice_structure = structure_mode != "solid"
         if not fields:
             self._set_toolbar_widget_visible(self._field_label, False)
             self._set_toolbar_widget_visible(self._field_combo, False)
@@ -767,22 +764,9 @@ class CQ3DViewer(
 
         self._last_result_data = dict(data)
         current = str(data.get("visualization_mode") or fields[0])
-        current = {
-            "Recovered Shape": (
-                "Manufactured Mesh" if is_lattice_structure else "CAD"
-            ),
-            "Recovered Surface (Mesh)": (
-                "Manufactured Mesh" if is_lattice_structure else "CAD"
-            ),
-            "Reconstructed CAD (B-rep)": "CAD",
-            "Voxel Density": "Density",
-        }.get(current, current)
         if data.get("type") == "topopt_voxel":
-            if current == "Surface":
-                current = (
-                    "Manufactured Mesh" if is_lattice_structure else "CAD"
-                )
-            elif "density" in current.lower() or "voxel" in current.lower():
+            current = topopt_view_mode(data, current)
+            if "density" in current.lower() or "voxel" in current.lower():
                 current = "Density"
         if current not in fields:
             current = fields[0]
@@ -815,10 +799,7 @@ class CQ3DViewer(
             return
         if not self._last_result_data:
             return
-        # The workbench owns the live node result and any lazy CAD
-        # reconstruction. Tell it about toolbar changes as well as rendering a
-        # viewer-local copy; otherwise selecting CAD here can only show the
-        # recovered-surface fallback and the result card remains on Density.
+        # Keep the live node and result summary on the same computed view.
         self.result_field_changed.emit(str(field_name))
         payload = dict(self._last_result_data)
         payload["visualization_mode"] = str(field_name)

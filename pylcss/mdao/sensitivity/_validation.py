@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""Runtime validation shared by all sensitivity-analysis methods."""
+"""Runtime validation for Sobol sensitivity analysis."""
 
 from collections.abc import Mapping
 from numbers import Integral
@@ -10,33 +10,22 @@ from typing import Any
 import numpy as np
 from numpy.typing import ArrayLike
 
-from .types import FloatArray, SalibProblem, SensitivityMethod
-
-_METHOD_BY_NAME: dict[str, SensitivityMethod] = {
-    "sobol": "Sobol",
-    "morris": "Morris",
-    "fast": "FAST",
-    "delta": "Delta",
-}
-
-
-def normalize_method(method: str) -> SensitivityMethod:
-    """Return the canonical display name for a supported method."""
-    if not isinstance(method, str) or not method.strip():
-        raise TypeError("Sensitivity method must be a non-empty string.")
-    try:
-        return _METHOD_BY_NAME[method.strip().casefold()]
-    except KeyError as exc:
-        supported = ", ".join(_METHOD_BY_NAME.values())
-        raise ValueError(
-            f"Unsupported sensitivity method {method!r}; choose one of: {supported}."
-        ) from exc
+from .types import FloatArray, SalibProblem
 
 
 def normalize_problem(problem_definition: Mapping[str, Any]) -> SalibProblem:
     """Validate an independent-uniform problem and return SALib's mapping."""
     if not isinstance(problem_definition, Mapping):
         raise TypeError("Problem definition must be a mapping.")
+
+    unsupported = [
+        key for key in ("dists", "groups") if problem_definition.get(key) is not None
+    ]
+    if unsupported:
+        raise ValueError(
+            "Sobol analysis supports independent uniform variables only; "
+            f"unsupported problem settings: {', '.join(unsupported)}."
+        )
 
     try:
         raw_names = problem_definition["names"]
@@ -119,6 +108,21 @@ def positive_int(value: object, name: str, *, minimum: int = 1) -> int:
     return normalized
 
 
+def sobol_sample_size(
+    value: object,
+    *,
+    allow_non_power_of_two: bool = False,
+) -> int:
+    """Validate a base size, requiring powers of two unless explicitly allowed."""
+    size = positive_int(value, "Sobol base sample size", minimum=2)
+    if not allow_non_power_of_two and size & (size - 1):
+        raise ValueError(
+            "Sobol base sample size must be a power of two (2, 4, 8, ...); "
+            "set allow_non_power_of_two=True to use another size."
+        )
+    return size
+
+
 def validate_seed(seed: int | None) -> int | None:
     """Validate a seed supported by NumPy and SALib."""
     if seed is None:
@@ -179,11 +183,7 @@ def validate_samples(
     bounds = np.asarray(problem["bounds"], dtype=float)
     lower = bounds[:, 0]
     upper = bounds[:, 1]
-    tolerance = (
-        np.maximum(1.0, np.maximum(np.abs(lower), np.abs(upper)))
-        * np.finfo(float).eps
-        * 64.0
-    )
+    tolerance = np.maximum(np.abs(lower), np.abs(upper)) * (np.finfo(float).eps * 64.0)
     outside = (values < lower - tolerance) | (values > upper + tolerance)
     if np.any(outside):
         row, column = np.argwhere(outside)[0]
@@ -220,21 +220,9 @@ def validate_response(
     if values.size < 2 or not np.all(np.isfinite(values)):
         raise ValueError("Sensitivity outputs must be finite scalar values.")
 
-    scale = max(1.0, float(np.max(np.abs(values))))
-    if float(np.ptp(values)) <= np.finfo(float).eps * scale * 32.0:
+    if np.all(values == values[0]):
         raise ValueError(
             "The selected output is constant over the sampled design space; "
             "sensitivity indices are undefined."
         )
     return values
-
-
-def validate_fraction(value: float, name: str) -> float:
-    """Validate a finite fraction in the closed interval [0, 1]."""
-    try:
-        fraction = float(value)
-    except (TypeError, ValueError) as exc:
-        raise TypeError(f"{name} must be a number.") from exc
-    if not np.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
-        raise ValueError(f"{name} must be between 0 and 1.")
-    return fraction

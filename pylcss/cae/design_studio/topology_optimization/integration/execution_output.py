@@ -6,18 +6,11 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
-from pylcss.input_values import as_bool
-
-from ..configuration.length_scale import (
-    THIN_MATERIAL_REPORTING_FRACTION,
-    thin_material_fraction,
-)
 from ..geometry.surface_recovery import _recover_voxel_shape
 from ..manufacturing.structures import (
     ManufacturingStructureOptions,
@@ -26,19 +19,11 @@ from ..manufacturing.structures import (
     cell_resolution_warning,
     passive_region_masks,
 )
-from ..manufacturing.member_sizing import (
-    OptimizedMemberPlan,
-)
 from ..optimization.results import TopologyOptVoxelResult
 from ..optimization.voxel_solver import _projection_matched_level
-from ..geometry.lattice_cad import lattice_cad_strategy
 from .boundary_mapping import _bounds_payload
 from .execution_setup import PreparedTopologyStudy
-from .lattice_settings import (
-    lattice_dimension_range_text,
-    lattice_setup_is_guided,
-    resolve_lattice_structure_options,
-)
+from .lattice_settings import resolve_lattice_structure_options
 from .voxelization import (
     _effective_density_cutoff,
     _fractional_cylinder_volume,
@@ -50,12 +35,11 @@ from .voxelization import (
 )
 
 logger = logging.getLogger(__name__)
-CancelCallback = Callable[[], bool]
 
 
 @dataclass(frozen=True)
 class TopologyOutputContext:
-    """Recovered output plus state required for optional validation and CAD."""
+    """Recovered output and state needed for geometry and optimizer checks."""
 
     payload: dict[str, Any]
     manufactured_density: np.ndarray | None
@@ -92,9 +76,7 @@ def _select_recovery_field(
             float(density_cutoff),
             beta=float(result.projection_beta),
             eta=float(
-                result.projection_eta
-                if result.projection_eta is not None
-                else 0.5
+                result.projection_eta if result.projection_eta is not None else 0.5
             ),
         )
     return np.asarray(density, dtype=float), float(density_cutoff)
@@ -129,9 +111,7 @@ def _objective_reduction_metrics(
         )
 
     def reduction(start: float, finish: float) -> float:
-        return 100.0 * (
-            1.0 - finish / max(abs(start), 1.0e-30)
-        )
+        return 100.0 * (1.0 - finish / max(abs(start), 1.0e-30))
 
     comparable = (
         reduction(history[baseline_index], history[-1])
@@ -193,7 +173,6 @@ def build_topology_output(
     design_goal = study.design_goal
     explicit_passive_solid_mask = study.passive_solid_mask
     explicit_passive_void_mask = study.passive_void_mask
-    mc = study.manufacturing
     problem = study.problem
 
     def _selection_type_counts(entries: list[Any]) -> dict[str, int]:
@@ -201,9 +180,7 @@ def build_topology_output(
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
-            kind = str(
-                entry.get("selection_entity_type") or "Unknown"
-            ).title()
+            kind = str(entry.get("selection_entity_type") or "Unknown").title()
             counts[kind] = counts.get(kind, 0) + 1
         return counts
 
@@ -216,15 +193,14 @@ def build_topology_output(
         density=density,
         target_volfrac=problem.volfrac,
     )
-    print_ready = True
-    guided_lattice_density = False
-    visualization_mode = "Density" if str(node.get_property("visualization") or "CAD") == "Density" else "CAD"
-    decimate = 1.0
+    visualization_mode = (
+        "Density"
+        if str(node.get_property("visualization") or "STL Shape") == "Density"
+        else "STL Shape"
+    )
     # Lattice dimensions given in model units win over the voxel-denominated
     # ones, because a voxel is a different physical length on every part.
-    voxel_size = voxel_size_from_bounds(
-        tuple(int(v) for v in density.shape), bounds
-    )
+    voxel_size = voxel_size_from_bounds(tuple(int(v) for v in density.shape), bounds)
     try:
         structure_options = resolve_lattice_structure_options(
             node,
@@ -232,25 +208,11 @@ def build_topology_output(
             bounds,
         )
     except (TypeError, ValueError) as exc:
-        hint = ""
-        if not lattice_setup_is_guided(
-            node.get_property("lattice_settings_mode")
-        ):
-            hint = " " + lattice_dimension_range_text(
-                node.get_property("structure_mode"),
-                voxel_size,
-                cell_size=node.get_property("lattice_cell_size_mm"),
-            )
-        node.set_error(f"Invalid lattice geometry: {exc}{hint}")
+        node.set_error(f"Invalid lattice geometry: {exc}")
         return None
     # The CAD stage needs to know which structure was built: a strut lattice is
     # reconstructed from its centrelines rather than from the isosurface.
     setattr(node, "_last_structure_options", structure_options)
-    if structure_options.mode != "solid":
-        print_ready = True
-    # Guided presents the recovered surface while the final solid CAD body is
-    # being reconstructed. Lattice studies keep this manufactured-mesh view.
-    surface_requested = True
     passive_solid_mask, passive_void_mask = passive_region_masks(
         tuple(int(v) for v in density.shape),
         solid_boxes=bc.solid_boxes,
@@ -261,7 +223,7 @@ def build_topology_output(
     passive_solid_mask |= explicit_passive_solid_mask
     passive_void_mask |= explicit_passive_void_mask
     passive_solid_mask &= ~passive_void_mask
-    member_plan: OptimizedMemberPlan | None = None
+    member_plan = None
     setattr(node, "_last_member_plan", None)
     is_infill_study = callable(getattr(node, "resolve_infill_cell_size", None))
     manufactured_density = None
@@ -287,16 +249,9 @@ def build_topology_output(
         0.5,
         design_domain,
     )
-    # Recover the surface from the filtered density, not the projected one.
-    #
-    # `density` is what the FE solve used and what every reported quantity is
-    # measured on, but the completed Heaviside continuation leaves it nearly
-    # binary. An isosurface through a binary field can only pass between voxel
-    # centres, so marching cubes reproduces the grid terraces — the stair-step
-    # ridges and voxel-scale ripples seen on recovered members. The filtered
-    # field varies smoothly over ~2*rmin voxels and locates the same interface
-    # to sub-voxel accuracy. `recovery_cutoff` is the level on it that encloses
-    # the analyzed material volume, so this changes surface quality, not mass.
+    # Recover the delivered blueprint on its smoother filtered field. The
+    # inverse-projected cutoff describes the corresponding nominal boundary;
+    # robust studies analyze the separate eroded density field.
     recovery_field, recovery_cutoff = _select_recovery_field(
         result,
         density,
@@ -311,14 +266,13 @@ def build_topology_output(
             field,
             bounds,
             cutoff,
-            print_ready=print_ready,
-            decimate_ratio=decimate,
+            print_ready=True,
+            decimate_ratio=1.0,
             solid_boxes=bc.solid_boxes,
             void_boxes=bc.void_boxes,
             solid_cylinders=bc.solid_cylinders,
             void_cylinders=bc.void_cylinders,
             joint_pin_cylinders=bc.joint_pin_cylinders,
-            extrusion_axis=str(getattr(problem.mc, "extrusion", "none") or "none"),
             source_mask=design_domain,
             passive_solid_mask=passive_solid_mask,
             passive_void_mask=passive_void_mask,
@@ -333,9 +287,11 @@ def build_topology_output(
     cache_key = (
         hash(density_view.tobytes()),
         density_view.shape,
+        hash(np.ascontiguousarray(density).tobytes()),
+        tuple(np.asarray(bounds, dtype=float).ravel()),
+        hash(np.ascontiguousarray(design_domain, dtype=bool).tobytes()),
         recovery_cutoff,
         structure_options,
-        "none",
         str(bc.solid_boxes),
         str(bc.void_boxes),
         str(bc.solid_cylinders),
@@ -345,9 +301,7 @@ def build_topology_output(
         hash(np.ascontiguousarray(passive_void_mask).tobytes()),
         None,
     )
-    if not surface_requested:
-        recovered = None
-    elif getattr(node, "_last_recovery_key", None) == cache_key:
+    if getattr(node, "_last_recovery_key", None) == cache_key:
         recovered = node._last_recovered_shape
     else:
         recovered = recover_surface(recovery_field, recovery_cutoff)
@@ -359,9 +313,7 @@ def build_topology_output(
         # field and use it only when it restores the component count actually
         # analyzed by the solver.
         recovered_components = int(
-            (recovered or {}).get("surface_quality", {}).get(
-                "connected_components", 0
-            )
+            (recovered or {}).get("surface_quality", {}).get("connected_components", 0)
             or 0
         )
         recovered_coverage_raw = (recovered or {}).get(
@@ -373,8 +325,7 @@ def build_topology_output(
             else None
         )
         filtered_recovery_used = (
-            result.recovery_density is not None
-            and recovery_field is not density
+            result.recovery_density is not None and recovery_field is not density
         )
         if (
             structure_options.mode == "solid"
@@ -390,9 +341,9 @@ def build_topology_output(
         ):
             projected_recovery = recover_surface(density, density_cutoff)
             projected_components = int(
-                (projected_recovery or {}).get("surface_quality", {}).get(
-                    "connected_components", 0
-                )
+                (projected_recovery or {})
+                .get("surface_quality", {})
+                .get("connected_components", 0)
                 or 0
             )
             projected_coverage_raw = (projected_recovery or {}).get(
@@ -403,12 +354,8 @@ def build_topology_output(
                 if projected_coverage_raw is not None
                 else None
             )
-            filtered_component_error = abs(
-                recovered_components - component_count
-            )
-            projected_component_error = abs(
-                projected_components - component_count
-            )
+            filtered_component_error = abs(recovered_components - component_count)
+            projected_component_error = abs(projected_components - component_count)
             coverage_improved = bool(
                 projected_coverage is not None
                 and (
@@ -434,32 +381,34 @@ def build_topology_output(
     requested_structure_options = structure_options
     resolved_options = (
         recovered.get("resolved_structure_options")
-        if isinstance(recovered, dict) else None
+        if isinstance(recovered, dict)
+        else None
     )
     if isinstance(resolved_options, dict):
         resolved_options = ManufacturingStructureOptions(**resolved_options)
-    if isinstance(resolved_options, ManufacturingStructureOptions) and resolved_options.mode != "solid":
+    if (
+        isinstance(resolved_options, ManufacturingStructureOptions)
+        and resolved_options.mode != "solid"
+    ):
         # Recovery sizes actual walls/struts to the requested mass. Export and
         # analysis-grid previews must use those same dimensions, rather than
         # the unsized initial one-voxel member thickness.
         structure_options = resolved_options
         setattr(node, "_last_structure_options", structure_options)
         manufactured_density = build_manufacturing_field(
-            density, density_cutoff, structure_options,
+            density,
+            density_cutoff,
+            structure_options,
             passive_solid_mask=passive_solid_mask,
-            passive_void_mask=passive_void_mask, member_plan=member_plan,
+            passive_void_mask=passive_void_mask,
+            member_plan=member_plan,
         )
-    if (
-        isinstance(recovered, dict)
-        and recovered.get("recovery_field_fallback")
-    ):
+    if isinstance(recovered, dict) and recovered.get("recovery_field_fallback"):
         recovery_field = density
         recovery_cutoff = density_cutoff
     if isinstance(recovered, dict):
         try:
-            effective_cutoff = float(
-                recovered.get("effective_recovery_cutoff")
-            )
+            effective_cutoff = float(recovered.get("effective_recovery_cutoff"))
             if np.isfinite(effective_cutoff):
                 recovery_cutoff = effective_cutoff
         except (TypeError, ValueError):
@@ -505,9 +454,7 @@ def build_topology_output(
     recovery_grid_manufactured_volume = None
     if manufactured_density is not None and isinstance(recovered, dict):
         try:
-            candidate = float(
-                recovered.get("manufacturing_reference_volume")
-            )
+            candidate = float(recovered.get("manufacturing_reference_volume"))
             if np.isfinite(candidate) and candidate > 0.0:
                 recovery_grid_manufactured_volume = candidate
         except (TypeError, ValueError):
@@ -521,9 +468,7 @@ def build_topology_output(
     )
     manufactured_volume = recovery_reference_volume
     manufactured_material_fraction = (
-        manufactured_volume / source_volume
-        if source_volume > 1e-12
-        else 0.0
+        manufactured_volume / source_volume if source_volume > 1e-12 else 0.0
     )
     (
         objective_reduction_pct,
@@ -532,29 +477,15 @@ def build_topology_output(
     ) = _objective_reduction_metrics(result)
     recovery_volume_delta_pct = (
         100.0 * (recovered_design_volume / recovery_reference_volume - 1.0)
-        if (
-            recovered_design_volume is not None
-            and recovery_reference_volume > 1e-12
-        )
+        if (recovered_design_volume is not None and recovery_reference_volume > 1e-12)
         else None
     )
     voxel_edge_lengths = np.asarray(
         (problem.unitx, problem.unity, problem.unitz),
         dtype=float,
     )
-    extrusion_axis = {
-        "x": 0,
-        "y": 1,
-        "z": 2,
-    }.get(str(problem.mc.extrusion or "none").lower())
-    length_scale_active_axes = [
-        axis for axis in range(3) if axis != extrusion_axis
-    ]
-    if not length_scale_active_axes:
-        length_scale_active_axes = [0, 1, 2]
-    limiting_voxel_edge = float(
-        np.max(voxel_edge_lengths[length_scale_active_axes])
-    )
+    length_scale_active_axes = [0, 1, 2]
+    limiting_voxel_edge = float(np.max(voxel_edge_lengths[length_scale_active_axes]))
 
     def _feature_elements(value: float) -> float | None:
         physical = float(value or 0.0)
@@ -566,7 +497,11 @@ def build_topology_output(
     explicit_void_shapes: list[Any] = []
     for region in getattr(study, "non_design_regions", ()):
         geom = region.get("geometry") if isinstance(region, dict) else region
-        rtype = str(region.get("region_type") or "solid").lower() if isinstance(region, dict) else "solid"
+        rtype = (
+            str(region.get("region_type") or "solid").lower()
+            if isinstance(region, dict)
+            else "solid"
+        )
         if geom is not None:
             if rtype == "void":
                 explicit_void_shapes.append(geom)
@@ -576,6 +511,7 @@ def build_topology_output(
     source_cad_shape = None
     try:
         from ..geometry.non_design import design_domain_shape
+
         source_cad_shape = design_domain_shape(study.source_design_domain)
     except (ValueError, TypeError):
         pass
@@ -589,50 +525,24 @@ def build_topology_output(
         "optimizer_used": result.optimizer_used,
         "formulation_used": result.formulation_used,
         "physical_length_scale": {
-            "requested_minimum_solid_size": 0.0,
-            "requested_minimum_void_size": 0.0,
+            "requested_minimum_solid_size": float(
+                node.get_property("topology_minimum_solid_size_mm") or 0.0
+            ),
+            "requested_minimum_void_size": float(
+                node.get_property("topology_minimum_void_size_mm") or 0.0
+            ),
             "filter_radius": float(problem.rmin),
             "filter_radius_units": (
-                "model units"
-                if problem.filter_radius_is_physical
-                else "voxel units"
+                "model units" if problem.filter_radius_is_physical else "voxel units"
             ),
             "minimum_solid_size": float(problem.minimum_solid_size),
             "minimum_void_size": float(problem.minimum_void_size),
             "minimum_solid_size_elements": _feature_elements(
                 problem.minimum_solid_size
             ),
-            "minimum_void_size_elements": _feature_elements(
-                problem.minimum_void_size
-            ),
-            "voxel_edge_lengths": [
-                float(value) for value in voxel_edge_lengths
-            ],
-            "active_topology_axes": [
-                "XYZ"[axis] for axis in length_scale_active_axes
-            ],
-            "planar_extrusion_reduction": (
-                {
-                    "axis": "XYZ"[
-                        int(getattr(node, "_guided_planar_extrusion_axis"))
-                    ],
-                    "retained_3d_layers": int(
-                        density.shape[
-                            int(getattr(node, "_guided_planar_extrusion_axis"))
-                        ]
-                    ),
-                    "reason": (
-                        "Exact extrusion with through-thickness-invariant "
-                        "supports and in-plane loads"
-                    ),
-                }
-                if getattr(node, "_guided_planar_extrusion_axis", None)
-                is not None
-                else None
-            ),
-            "maximum_member_size": float(
-                problem.mc.max_member_size_physical
-            ),
+            "minimum_void_size_elements": _feature_elements(problem.minimum_void_size),
+            "voxel_edge_lengths": [float(value) for value in voxel_edge_lengths],
+            "active_topology_axes": ["XYZ"[axis] for axis in length_scale_active_axes],
         },
         "load_aggregation": problem.load_aggregation,
         "stress_aggregation": (
@@ -681,8 +591,7 @@ def build_topology_output(
         "beta_history": list(result.beta_history),
         "projection_eta_history": list(result.projection_eta_history),
         "recovered_shape": recovered,
-        "surface_recovery_requested": surface_requested,
-        "extrusion_axis": mc.extrusion,
+        "surface_recovery_requested": True,
         "visualization_mode": visualization_mode,
         "target_vol_frac": problem.volfrac,
         "final_vol_frac": source_material_fraction,
@@ -719,27 +628,7 @@ def build_topology_output(
         ),
         "manufacturing": {
             "structure": structure_options.display_name,
-            "process": str(
-                "Unrestricted"
-            ),
-            "constraints": {
-                "symmetry_planes": str(problem.mc.symmetry or "none"),
-                "extrusion_axis": str(problem.mc.extrusion or "none"),
-                "additive_build_direction": str(
-                    problem.mc.overhang_build_axis or "none"
-                ),
-                "additive_overhang_angle_deg": float(
-                    problem.mc.overhang_angle_deg
-                ),
-                "pull_out_direction": str(
-                    problem.mc.pull_out_axis or "none"
-                ),
-                "maximum_member_size": float(
-                    problem.mc.max_member_size_physical
-                ),
-                "pattern_repeat": int(problem.mc.pattern_repeat),
-                "pattern_axis": str(problem.mc.pattern_axis),
-            },
+            "process": "Unrestricted",
             "boundary_interfaces": {
                 "support_selection_types": support_selection_types,
                 "load_selection_types": load_selection_types,
@@ -750,7 +639,7 @@ def build_topology_output(
                 ),
             },
             "lattice_settings_mode": (
-                ("Guided" if guided_lattice_density else "Manual")
+                "Direct Infill"
                 if structure_options.family is not None
                 else "Not Applicable"
             ),
@@ -803,9 +692,7 @@ def build_topology_output(
                 recovery_grid_manufactured_volume is not None
             ),
             "lattice_sizing": (
-                recovered.get("lattice_sizing")
-                if isinstance(recovered, dict)
-                else None
+                recovered.get("lattice_sizing") if isinstance(recovered, dict) else None
             ),
             # How much of the optimized envelope the built lattice reached, and
             # how many ligaments it took to keep it in one piece. A lattice can
@@ -823,9 +710,13 @@ def build_topology_output(
             "component_voxels": component_voxels,
         },
         "lattice_generation": (
-            {"method": "Direct geometric lattice infill", "cell_family": structure_options.display_name,
-             "independent_validation_required": True}
-            if structure_options.family is not None else None
+            {
+                "method": "Direct geometric lattice infill",
+                "cell_family": structure_options.display_name,
+                "independent_validation_required": True,
+            }
+            if structure_options.family is not None
+            else None
         ),
         "compliance": (
             float(result.compliance_history[-1]) if result.compliance_history else None
@@ -903,7 +794,9 @@ def build_topology_output(
     }
 
     if is_infill_study:
-        _apply_lattice_infill_reporting(node, output, recovered, requested_structure_options)
+        _apply_lattice_infill_reporting(
+            node, output, recovered, requested_structure_options
+        )
 
     return TopologyOutputContext(
         payload=output,
@@ -938,17 +831,11 @@ def _apply_lattice_infill_reporting(
     here by the corresponding measurement on the build that was delivered —
     the same field the recovered surface was contoured from.
     """
-    sizing = (
-        recovered.get("lattice_sizing") if isinstance(recovered, dict) else None
-    )
+    sizing = recovered.get("lattice_sizing") if isinstance(recovered, dict) else None
     connectivity = (
-        recovered.get("lattice_connectivity")
-        if isinstance(recovered, dict)
-        else None
+        recovered.get("lattice_connectivity") if isinstance(recovered, dict) else None
     )
-    surface = (
-        recovered.get("surface_quality") if isinstance(recovered, dict) else None
-    )
+    surface = recovered.get("surface_quality") if isinstance(recovered, dict) else None
     output["study_kind"] = "lattice_infill"
 
     achieved = None
@@ -958,9 +845,9 @@ def _apply_lattice_infill_reporting(
         achieved = float(connectivity["relative_density"])
     if achieved is not None:
         output["final_vol_frac"] = achieved
-    output["target_vol_frac"] = float(
-        structure_options.target_relative_density or 0.0
-    ) or None
+    output["target_vol_frac"] = (
+        float(structure_options.target_relative_density or 0.0) or None
+    )
 
     # The delivered body count. The mesh has already had sub-resolution
     # contouring specks removed, so this is the number of bodies a slicer will
@@ -984,8 +871,10 @@ def _apply_lattice_infill_reporting(
         "cell_fineness": str(node.get_property("infill_fineness") or ""),
         "build_quality": str(node.get_property("infill_build_quality") or ""),
         "skin_thickness": float(
-            node.get_property("infill_skin_thickness_mm") or 0.0
+            structure_options.skin_thickness_voxels
+            * (output.get("manufacturing", {}).get("voxel_size") or 0.0)
         ),
+        "skin_mode": str(node.get_property("infill_skin_mode") or "None"),
         "cell_size_voxels": float(structure_options.cell_size_voxels),
         "member_thickness_model_units": (
             float(sizing.get("member_thickness_model_units"))
@@ -1008,15 +897,11 @@ def _apply_lattice_infill_reporting(
         # pitch and it was grown to keep the delivered density honest. The
         # user asked for a cell size and did not get it, so this travels with
         # the result rather than living only in the log.
-        "pitch_coarsened": bool(
-            getattr(node, "_infill_pitch_coarsened", False)
-        ),
+        "pitch_coarsened": bool(getattr(node, "_infill_pitch_coarsened", False)),
         "requested_cell_size": (
             float(getattr(node, "_requested_infill_cell_size", 0.0)) or None
         ),
-        "cell_size": float(
-            getattr(node, "_resolved_infill_cell_size", 0.0) or 0.0
-        )
+        "cell_size": float(getattr(node, "_resolved_infill_cell_size", 0.0) or 0.0)
         or None,
     }
 
@@ -1024,19 +909,14 @@ def _apply_lattice_infill_reporting(
 def finalize_topology_output(
     node: Any,
     context: TopologyOutputContext,
-    cancel_callback: CancelCallback | None,
-    progress_callback: Any = None,
 ) -> dict[str, Any]:
-    """Run optional validation/CAD conversion and attach release warnings."""
+    """Attach geometry/optimization checks; CAD and FEA are explicit actions."""
     output = context.payload
-    manufactured_density = context.manufactured_density
     structure_options = context.structure_options
     result = context.result
     prepared = context.study
     problem = prepared.problem
     material = prepared.material
-    constraint_list = prepared.constraints
-    load_list = prepared.loads
     is_infill_study = callable(getattr(node, "resolve_infill_cell_size", None))
     warnings_out: list[str] = []
     failed_checks: list[str] = []
@@ -1055,9 +935,7 @@ def finalize_topology_output(
     singular_interface_count = sum(
         int(count)
         for key in ("support_selection_types", "load_selection_types")
-        for kind, count in (
-            boundary_interfaces.get(key, {}) or {}
-        ).items()
+        for kind, count in (boundary_interfaces.get(key, {}) or {}).items()
         if str(kind).title() in {"Edge", "Vertex"}
     )
     if singular_interface_count:
@@ -1068,9 +946,7 @@ def finalize_topology_output(
             "material pad; local stresses are sensitive to mesh resolution. "
             "Select a face if the physical interface acts over an area.",
         )
-    manufactured_components = int(
-        manufacturing.get("meaningful_component_count") or 0
-    )
+    manufactured_components = int(manufacturing.get("meaningful_component_count") or 0)
     source_bodies = int(manufacturing.get("source_body_count") or 0)
     expected_components = max(1, source_bodies)
     if output.get("recovery_field_fallback"):
@@ -1079,14 +955,6 @@ def finalize_topology_output(
             "The smooth filtered recovery field lost an analyzed load path, "
             "so geometry recovery used the connected projected density. "
             "Review surface finish and refine the grid before release.",
-        )
-    if structure_options.mode != "solid" and not is_infill_study:
-        block(
-            "explicit_structure_external_reanalysis_required",
-            "The built-in voxel check does not resolve local lattice/rib "
-            "member bending, joint stress, fatigue, or process defects. "
-            "Validate the explicit manufactured geometry with an appropriate "
-            "beam/solid model before engineering release.",
         )
     if manufactured_components == 0:
         block(
@@ -1102,7 +970,7 @@ def finalize_topology_output(
             f"{manufactured_components} disconnected load-bearing components "
             f"inside {expected_components} source body/bodies. This result is "
             "not verification-ready; enlarge the member/skin, refine the topology "
-            "grid, or revise the preserved interfaces."
+            "grid, or revise the preserved interfaces.",
         )
     # A lattice that reached its mass target while filling only part of its
     # envelope is the failure a relative density cannot express: the Density
@@ -1133,13 +1001,8 @@ def finalize_topology_output(
                 "of the periodic cell: confirm them in re-analysis, or reduce "
                 "the cell pitch so the network closes on its own.",
             )
-    intermediate_fraction = float(
-        output.get("intermediate_density_fraction") or 0.0
-    )
-    if (
-        structure_options.mode == "solid"
-        and intermediate_fraction > 0.10
-    ):
+    intermediate_fraction = float(output.get("intermediate_density_fraction") or 0.0)
+    if structure_options.mode == "solid" and intermediate_fraction > 0.10:
         advise(
             "intermediate_density",
             f"{intermediate_fraction:.1%} of the design domain remains at an "
@@ -1152,8 +1015,7 @@ def finalize_topology_output(
         absolute_delta = abs(float(recovery_delta))
         if absolute_delta > 10.0:
             reference = str(
-                output.get("recovery_volume_reference")
-                or "density-equivalent design"
+                output.get("recovery_volume_reference") or "density-equivalent design"
             )
             block(
                 "recovery_volume_drift",
@@ -1169,7 +1031,10 @@ def finalize_topology_output(
             )
     surface_quality = manufacturing.get("surface_quality") or {}
     if isinstance(surface_quality, dict):
-        if surface_quality.get("is_watertight", surface_quality.get("watertight")) is False:
+        if (
+            surface_quality.get("is_watertight", surface_quality.get("watertight"))
+            is False
+        ):
             # Watertightness fails on either defect, so name whichever is
             # actually present. A mesh can have no open boundary at all and
             # still be unusable because three faces share an edge.
@@ -1186,9 +1051,7 @@ def finalize_topology_output(
                 + (f" ({', '.join(defects)})" if defects else "")
                 + ". Repair or refine it before meshing/export.",
             )
-        recovered_components = int(
-            surface_quality.get("connected_components") or 0
-        )
+        recovered_components = int(surface_quality.get("connected_components") or 0)
         hardware_components = len(
             list((output.get("multibody") or {}).get("assembly_hardware") or [])
         )
@@ -1219,95 +1082,20 @@ def finalize_topology_output(
             # wrong one sends them to install a package they already have. The
             # screening report names which it was.
             scope = str(surface_quality.get("screening_scope") or "").strip()
-            reason = str(surface_quality.get("screening_reason") or (
-                f"screening was incomplete ({scope})"
-                if scope and scope != "full"
-                else "the recovery report did not provide a screening result"
-            ))
+            reason = str(
+                surface_quality.get("screening_reason")
+                or (
+                    f"screening was incomplete ({scope})"
+                    if scope and scope != "full"
+                    else "the recovery report did not provide a screening result"
+                )
+            )
             advise(
                 "self_intersection_not_screened",
                 "The recovered surface was not screened for self-intersection: "
                 f"{reason}. A watertight mesh can still pass through itself; "
                 "check it in the slicer or mesher before release.",
             )
-    # The requested minimum member size and the delivered geometry were both
-    # being computed and neither was ever compared to the other, so a study
-    # could be handed a 4 mm minimum member size, produce a 2 mm web, and pass
-    # every gate. A density filter is a regularization, not a length-scale
-    # constraint, so the only way to know is to measure what came out.
-    #
-    # Reported rather than blocked, deliberately. The probe resolves a member
-    # size to about one voxel and always picks up a small residue from the
-    # rounding of free edges, and with no formulation imposing the length scale
-    # there is nothing for a hard gate to hand back to the user beyond this
-    # number. Stating it with its uncertainty is the honest form of the check.
-    requested_member = 0.0
-    if structure_options.mode == "solid" and requested_member > 0.0:
-        density_field = (
-            manufactured_density
-            if manufactured_density is not None
-            else result.recovery_density
-        )
-        thin = None
-        if density_field is not None:
-            thin = thin_material_fraction(
-                np.asarray(density_field, dtype=float)
-                >= float(result.recovery_cutoff or 0.5),
-                requested_member,
-                (problem.unitx, problem.unity, problem.unitz),
-            )
-        output["requested_minimum_member_size"] = requested_member
-        output["thin_material_fraction"] = (
-            thin.get("fraction") if thin else None
-        )
-        output["thin_material_probe_size"] = (
-            thin.get("probe_size") if thin else None
-        )
-        if thin is None:
-            advise(
-                "minimum_member_size_not_measurable",
-                f"The {requested_member:.3g} mm minimum member size could not "
-                "be checked: it is smaller than this voxel grid can probe. "
-                "Refine the topology grid if the requirement has to be "
-                "verified on the result.",
-            )
-        else:
-            probe = float(thin["probe_size"])
-            fraction = float(thin["fraction"])
-            # A discrete ball only has odd voxel diameters, so an even request
-            # always loses a voxel. That is worth saying when the lost voxel is
-            # a large share of the request -- on a three-voxel feature it is a
-            # quarter of it -- and is noise when the grid is fine enough that
-            # one voxel does not matter.
-            probe_note = (
-                ""
-                if probe >= 0.85 * requested_member
-                else (
-                    f" The grid could only probe this at {probe:.3g} mm, below "
-                    f"the {requested_member:.3g} mm requested, so members "
-                    "between the two sizes are not visible to the check; "
-                    "refine the grid to close that gap."
-                )
-            )
-            if fraction > THIN_MATERIAL_REPORTING_FRACTION:
-                advise(
-                    "minimum_member_size_not_held",
-                    f"{fraction:.1%} of the material sits in members thinner "
-                    f"than {probe:.3g} mm — a ball of that diameter cannot "
-                    "reach it — against a requested minimum member size of "
-                    f"{requested_member:.3g} mm. A density filter regularizes "
-                    "the design but does not impose a minimum length scale, so "
-                    "this measures the result rather than reporting a solver "
-                    "failure. Enlarge the filter radius or the requested size, "
-                    "refine the grid, or accept the thin sections against the "
-                    "process capability." + probe_note,
-                )
-            elif probe_note:
-                advise(
-                    "minimum_member_size_probe_coarse",
-                    f"The delivered geometry holds {probe:.3g} mm."
-                    + probe_note,
-                )
     global_joints = list((output.get("multibody") or {}).get("global_joints") or [])
     jointed_multibody = bool(source_bodies > 1 and global_joints)
     if jointed_multibody:
@@ -1318,7 +1106,7 @@ def finalize_topology_output(
     if not result.converged:
         block(
             "optimizer_not_converged",
-            f"Stopped after {result.n_iter} iterations without convergence."
+            f"Stopped after {result.n_iter} iterations without convergence.",
         )
     if not is_infill_study:
         final_fraction = float(output.get("final_vol_frac") or 0.0)
@@ -1328,7 +1116,7 @@ def finalize_topology_output(
                 "topology_volume_constraint",
                 f"Target volume is not satisfied ({final_fraction:.1%} material "
                 f"> {float(problem.volfrac):.1%} budget). The result is not "
-                "feasible under the requested material and stress constraints."
+                "feasible under the requested material and stress constraints.",
             )
     if (
         result.stress_history
@@ -1339,7 +1127,7 @@ def finalize_topology_output(
             f"The stress P-norm constraint is not satisfied "
             f"({float(result.stress_history[-1]):.3g} MPa > "
             f"{float(problem.yield_stress):.3g} MPa allowable). The "
-            "minimum-mass result is not feasible."
+            "minimum-mass result is not feasible.",
         )
     recovered_payload = output.get("recovered_shape")
     resolution_warning = cell_resolution_warning(
@@ -1388,150 +1176,20 @@ def finalize_topology_output(
         block(
             "load_in_void",
             f"{stranded} load point(s) ended up in near-void material. A "
-            "pull-out or overhang direction that disagrees with where the "
-            "loads act will remove the material under them, and the reported "
-            "compliance is then meaningless. Re-check the manufacturing "
-            "direction against the load positions."
+            "material removal at a load interface invalidates its load path. "
+            "Re-check the selected geometry and preserved interfaces.",
         )
     # FEA is an explicit action on the reconstructed CAD body. A legacy flag
     # must not silently analyse a voxel surrogate after the topology solve.
-    validation_requested = False
     if float(result.min_source_volfrac or 0.0) > float(problem.volfrac) + 1e-6:
         block(
             "passive_material_exceeds_budget",
             "Target volume is below the fixed passive material; final "
             "volume cannot reach the requested fraction unless passive "
-            "solid regions are reduced."
+            "solid regions are reduced.",
         )
-    validation_completed = False
-    if validation_requested and jointed_multibody:
-        output["validation_summary"] = {
-            "status": "not applicable",
-            "reason": (
-                "The built-in voxel validator does not transfer idealized "
-                "topology joints to connector/contact definitions."
-            ),
-        }
-    elif validation_requested:
-        try:
-            validation_payload = output
-            if manufactured_density is not None:
-                validation_payload = dict(output)
-                validation_payload["density"] = manufactured_density
-                validation_payload["density_cutoff"] = 0.5
-            validation = node._run_embedded_validation(
-                validation_payload,
-                material,
-                constraint_list,
-                load_list,
-                cancel_callback=cancel_callback,
-            )
-            if validation is not None:
-                validation_completed = True
-                output["validation"] = validation
-                study = (
-                    validation.get("convergence_study")
-                    if isinstance(validation, dict)
-                    else None
-                )
-                output["validation_summary"] = {
-                    "max_stress": validation.get(
-                        "peak_stress_nodal", validation.get("max_stress_gauss")
-                    ),
-                    "max_displacement": validation.get("peak_displacement"),
-                    "compliance": validation.get("compliance"),
-                    "converged": (
-                        study.get("converged") if isinstance(study, dict) else None
-                    ),
-                }
-                if output["validation_summary"].get("converged") is False:
-                    block(
-                        "mesh_convergence_not_demonstrated",
-                        "The independent CalculiX mesh-convergence study did "
-                        "not converge. Refine the verification model before "
-                        "using the result for release.",
-                    )
-                validated_stress = output["validation_summary"].get("max_stress")
-                allowable = float(
-                    material.get(
-                        "yield_strength",
-                        material.get("yield", 0.0),
-                    )
-                    or 0.0
-                )
-                safety_factor = max(
-                    1.0,
-                    float(
-                        node.get_property("validation_yield_safety_factor")
-                        or 1.0
-                    ),
-                )
-                if allowable > 0.0:
-                    allowable /= safety_factor
-                if (
-                    validated_stress is not None
-                    and allowable > 0.0
-                    and float(validated_stress) > allowable
-                ):
-                    block(
-                        "validated_stress_exceeds_yield",
-                        f"Independent CalculiX validation exceeds the material "
-                        f"allowable ({float(validated_stress):.3g} MPa > "
-                        f"{allowable:.3g} MPa after safety factor "
-                        f"{safety_factor:g}). The manufactured result fails "
-                        "the allowable-stress check."
-                    )
-                displacement_limit = float(
-                    node.get_property("validation_displacement_limit_mm") or 0.0
-                )
-                validated_displacement = output["validation_summary"].get(
-                    "max_displacement"
-                )
-                if (
-                    displacement_limit > 0.0
-                    and validated_displacement is not None
-                    and float(validated_displacement) > displacement_limit
-                ):
-                    block(
-                        "validated_displacement_exceeds_limit",
-                        "Independent CalculiX validation exceeds the specified "
-                        f"displacement limit ({float(validated_displacement):.3g} "
-                        f"mm > {displacement_limit:.3g} mm)."
-                    )
-            else:
-                block(
-                    "validation_missing",
-                    "Validation was requested but did not produce a CalculiX result.",
-                )
-        except Exception as exc:
-            msg = f"Validation skipped/failed: {exc}"
-            logger.warning("TopologyOptVoxelNode: %s", msg)
-            output["validation_error"] = str(exc)
-            block("validation_failed", msg)
-    elif is_infill_study:
-        # Not a failed check. A lattice infill has no solve to validate and
-        # never claimed one, so listing this as a blocking gate would mark
-        # every correct result as failed and leave the user with nothing to
-        # act on. It replaces the reanalysis block above, which says the same
-        # thing in optimizer terms.
-        advise(
-            "infill_is_geometry_only",
-            "This is generated geometry, not an analyzed result: nothing here "
-            "resolves member bending, joint stress, fatigue or process "
-            "defects. Run it through an analysis before using it for anything "
-            "load bearing.",
-        )
-    else:
-        block(
-            "independent_validation_not_run",
-            "Independent analysis of the manufactured geometry was not run. "
-            "The topology result is suitable for concept screening, not "
-            "engineering release.",
-        )
-
-    if (
-        output.get("recovered_shape") is None
-        and output.get("surface_recovery_requested")
+    if output.get("recovered_shape") is None and output.get(
+        "surface_recovery_requested"
     ):
         block(
             "surface_recovery_missing",
@@ -1542,95 +1200,30 @@ def finalize_topology_output(
     # Recovery supplies the manufacturing mesh immediately. CAD is an
     # explicit preview/export operation. Legacy automatic-CAD properties
     # must not start a reconstruction after every solve.
-    mesh_only = lattice_cad_strategy(structure_options) == "isosurface"
-    if mesh_only:
-        output.pop("cad_shape", None)
-        output.pop("shape", None)
-    eager_cad = False
-    if eager_cad:
-        try:
-            cad_payload = dict(output)
-            cad_shape = node._run_embedded_cad_reconstruction(
-                cad_payload, progress_callback=progress_callback, cancel_callback=cancel_callback
-            )
-            if cad_payload.get("cad_preview_mesh") is not None:
-                output["cad_preview_mesh"] = cad_payload["cad_preview_mesh"]
-            output["cad_shape"] = cad_shape
-            output["shape"] = cad_shape
-            output["visualization_mode"] = "CAD"
-            reconstruction_report = dict(
-                getattr(node, "_last_cad_reconstruction_report", {}) or {}
-            )
-            # Validation and mass properties were already evaluated in the
-            # CAD child. Repeating OCC calls here can stall the Qt interpreter.
-            output["cad_reconstruction"] = reconstruction_report | {
-                "method": reconstruction_report.get("method", "Compact cubic spline"),
-                "volume": reconstruction_report.get("cad_volume"),
-            }
-            performance = reconstruction_report.get("mechanical_validation") or {}
-            if performance.get("passed") is False:
-                block("cad_performance_changed", performance.get("reason") or
-                      "Reconstructed CAD failed mechanical performance comparison.")
-            if output["cad_reconstruction"].get("valid") is False:
-                block(
-                    "cad_reconstruction_invalid",
-                    "The reconstructed CAD solid is invalid and must be repaired "
-                    "before export or downstream meshing.",
-                )
-        except Exception as exc:
-            from pylcss.cae.user_interface.cad.cad_background import CadJobCancelled
-            if isinstance(exc, CadJobCancelled):
-                output["cad_reconstruction"] = {"method": "Cancelled", "cancelled": True}
-            else:
-                msg = f"CAD reconstruction failed: {exc}"
-                logger.warning("TopologyOptVoxelNode: %s", msg)
-                output["cad_error"] = str(exc)
-                block("cad_reconstruction_failed", msg)
-            if output.get("recovered_shape") is not None:
-                output["visualization_mode"] = (
-                    "Manufactured Mesh"
-                    if structure_options.mode != "solid"
-                    else "Surface"
-                )
-    elif output.get("recovered_shape") is not None:
+    output.pop("cad_shape", None)
+    output.pop("shape", None)
+    if output.get("recovered_shape") is not None:
         output["cad_reconstruction"] = {
-            "method": "STL surface mesh" if mesh_only else "On demand",
-            "skipped": True, "editable": False if mesh_only else None,
+            "method": "On demand",
+            "skipped": True,
+            "editable": None,
         }
     from ..geometry.lattice_cad import topopt_export_formats
+
     output["export_formats"] = list(topopt_export_formats(structure_options))
 
-    verification_passed = validation_completed and not failed_checks
-    # Compatibility alias for existing graph consumers. This means the
-    # checks configured in this study passed; it is not product certification
-    # or an automatic release decision.
-    output["release_ready"] = verification_passed
-    output["verification_passed"] = verification_passed
-    # An infill has no solve, so it can never reach "verification passed" and
-    # calling every correct result "concept only" says nothing. Report whether
-    # the geometry checks passed, which is the question this node can answer.
-    infill_status = (
-        "geometry built"
-        if not failed_checks
-        else "geometry checks failed"
-    )
     output["quality_gate"] = {
-        "status": (
-            infill_status
-            if is_infill_study
-            else "verification passed"
-            if verification_passed
-            else "concept only"
-        ),
-        "release_ready": verification_passed,
-        "verification_passed": verification_passed,
-        "failed_checks": failed_checks,
-        "advisory_checks": advisory_checks,
+        "base_failed_checks": failed_checks,
+        "base_advisory_checks": advisory_checks,
         "manufactured_component_count": manufactured_components,
         "expected_component_count": expected_components,
-        "independent_validation_completed": validation_completed,
     }
-    prior_warnings = list(output.get("warnings") or [])
-    if prior_warnings or warnings_out:
-        output["warnings"] = prior_warnings + warnings_out
-    return output
+    output["warnings"] = list(output.get("warnings") or []) + warnings_out
+    from ..verification.quality_gate import update_verification_status
+
+    return update_verification_status(
+        output,
+        material=material,
+        safety_factor=node.get_property("validation_yield_safety_factor"),
+        displacement_limit=node.get_property("validation_displacement_limit_mm"),
+    )

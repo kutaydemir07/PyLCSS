@@ -276,13 +276,12 @@ def nodes_matching_geometries(
     if not cad_entities:
         return np.asarray(sorted(set(selected)), dtype=int)
 
-    vector_type: Any = None
     try:
-        from cadquery import Vector
-
-        vector_type = Vector
-    except ImportError:  # pragma: no cover - CadQuery is an app dependency.
-        pass
+        from cadquery import Vector, Vertex
+    except ImportError as exc:  # pragma: no cover - CadQuery is an app dependency.
+        raise SolverBackendError(
+            "CAD geometry selection requires CadQuery for surface-distance checks."
+        ) from exc
 
     for entity in cad_entities:
         candidates: Sequence[int] = range(points.shape[1])
@@ -298,7 +297,15 @@ def nodes_matching_geometries(
             )
             candidates = np.flatnonzero(within_bounds).tolist()
         except Exception:
-            bounds = None
+            pass
+
+        distance = getattr(entity, "distance", None)
+        distance_to = getattr(entity, "distanceTo", None)
+        if not callable(distance) and not callable(distance_to):
+            raise SolverBackendError(
+                "Selected CAD entity does not support surface-distance checks. "
+                "Use a CAD face, stored mesh selection, or coordinate condition."
+            )
 
         for node_index in candidates:
             xyz = (
@@ -306,27 +313,21 @@ def nodes_matching_geometries(
                 float(points[1, node_index]),
                 float(points[2, node_index]),
             )
-            matched = False
-            if vector_type is not None:
-                try:
-                    matched = (
-                        float(entity.distanceTo(vector_type(*xyz))) <= tolerance_value
-                    )
-                except Exception:
-                    matched = False
-            if not matched and bounds is not None:
-                matched = (
-                    bounds.xmin - tolerance_value
-                    <= xyz[0]
-                    <= bounds.xmax + tolerance_value
-                    and bounds.ymin - tolerance_value
-                    <= xyz[1]
-                    <= bounds.ymax + tolerance_value
-                    and bounds.zmin - tolerance_value
-                    <= xyz[2]
-                    <= bounds.zmax + tolerance_value
+            try:
+                separation = float(
+                    distance(Vertex.makeVertex(*xyz))
+                    if callable(distance)
+                    else distance_to(Vector(*xyz))
                 )
-            if matched:
+            except Exception as exc:
+                raise SolverBackendError(
+                    f"Could not measure CAD distance for mesh node {node_index}: {exc}"
+                ) from exc
+            if not math.isfinite(separation):
+                raise SolverBackendError(
+                    "CAD selection returned a non-finite distance."
+                )
+            if separation <= tolerance_value:
                 selected.append(int(node_index))
 
     return np.asarray(sorted(set(selected)), dtype=int)

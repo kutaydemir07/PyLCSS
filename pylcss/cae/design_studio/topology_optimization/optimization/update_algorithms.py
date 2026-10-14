@@ -15,25 +15,8 @@ def optimality_criteria_update(
     volume_fraction: float,
     active_mask: Optional[np.ndarray] = None,
     passive_density: Optional[np.ndarray] = None,
-    maximum_density: float = 1.0,
 ) -> np.ndarray:
-    """Apply the compliance-specific optimality-criteria density update.
-
-    ``maximum_density`` is the largest value a design variable may take. It is
-    1.0 for a solid study, where the variable is a material indicator and
-    saturating it means "solid here".
-
-    A lattice study is the case it exists for. There the variable is not an
-    indicator, it *is* the cell's relative density, and the homogenized law it
-    drives was measured over a finite density range. Leaving the bound at 1.0
-    lets the optimizer push most of the part past the top of that range, where
-    the tabulated tensor is an extrapolation and the manufacturing step has no
-    cell left to build: measured on the bundled studies, 35-71% of the envelope
-    came back above the solid-transition level and the delivered "lattice" was
-    83-90% dense. Capping the variable at the family's own maximum relative
-    density keeps every element inside the law that was actually measured, and
-    makes the delivered relative density the number the optimizer solved for.
-    """
+    """Update active solid densities within the material budget and move limit."""
     active = (
         np.ones_like(x, dtype=bool)
         if active_mask is None
@@ -47,15 +30,10 @@ def optimality_criteria_update(
             updated[~active] = np.asarray(passive_density, dtype=float)[~active]
         return updated
 
-    ceiling = float(np.clip(maximum_density, 1e-2, 1.0))
-    target = float(
-        min(float(volume_fraction), ceiling)
-    ) * float(x_active.size)
+    target = min(float(volume_fraction), 1.0) * float(x_active.size)
     move = 0.2
     lower = np.maximum(1e-3, x_active - move)
-    upper = np.minimum(ceiling, x_active + move)
-    # A restart or an initial design above the new ceiling would otherwise make
-    # `lower > upper` and hand the bisection an empty interval.
+    upper = np.minimum(1.0, x_active + move)
     lower = np.minimum(lower, upper)
 
     def candidate(multiplier: float) -> np.ndarray:
@@ -98,7 +76,7 @@ def restore_active_volume(
     volume_fraction: float,
     passive_density: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """Restore active volume after a non-volume-preserving projection."""
+    """Restore the active material budget of an interpolated starting field."""
     updated = np.asarray(x, dtype=float).copy()
     active = np.asarray(active_mask, dtype=bool)
     if passive_density is not None:
@@ -183,22 +161,8 @@ def volume_budget_from_masks(
         "passive_source_sum": float(passive_source_sum),
         "min_source_volfrac": float(minimum_source_sum / float(source_count)),
         "target_was_clamped": bool(abs(feasible_active_sum - raw_active_sum) > 1e-9),
-        # The passive material alone already meets or exceeds the whole volume
-        # target, so the design variables have no budget left. This is not a
-        # clamped target that still leaves a usable study — it is an infeasible
-        # one, and the distinction matters because the solve does not fail
-        # visibly: the optimizer simply cannot move, converges immediately on a
-        # flat objective, and returns the passive regions as the "result". On
-        # the bundled cold plate that produced a mounting frame and two module
-        # pads standing apart with nothing between them, reported as a
-        # converged design.
+        # Prescribed material and minimum active density exhaust the budget.
         "active_budget_exhausted": bool(
             raw_active_sum <= minimum_active_sum + 1e-9
         ),
     }
-
-
-# Private aliases preserve the established test and extension API.
-_oc_update = optimality_criteria_update
-_restore_active_volume = restore_active_volume
-_volume_budget_from_masks = volume_budget_from_masks

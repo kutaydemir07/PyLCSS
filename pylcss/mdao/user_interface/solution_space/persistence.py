@@ -15,7 +15,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from pylcss.mdao.system_modeling.problem import DesignProblem
+from pylcss.mdao.problem import DesignProblem
 
 
 logger = logging.getLogger(__name__)

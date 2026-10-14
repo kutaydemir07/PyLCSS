@@ -3,9 +3,9 @@
 
 """FreeCAD subprocess integration and BREP document synchronization.
 
-FreeCAD owns a PySide2 application while PyLCSS uses PySide6, so the bridge
-keeps FreeCAD in a separate process and exchanges files instead of embedding
-its Python runtime.
+FreeCAD runs in a separate process so its GUI and Python dependencies remain
+independent of PyLCSS. Geometry and parameters are exchanged through files.
+The export hook uses the modern FreeCAD document and spreadsheet APIs.
 """
 
 from __future__ import annotations
@@ -16,12 +16,9 @@ __all__ = [
     "FCStdWatcher",
     "FreeCadImportedShape",
     "FreeCadLauncher",
-    "collect_param_values_from_node",
     "find_freecad_cmd",
     "find_freecad_executable",
-    "find_freecad_python",
     "freecad_data_dir",
-    "is_freecad_installed",
     "read_brep_from_fcstd",
     "write_parameters_to_fcstd",
 ]
@@ -40,15 +37,9 @@ _LAZY_EXPORTS = {
         "pylcss.cae.design_studio.freecad_bridge.launcher",
         "FreeCadLauncher",
     ),
-    "collect_param_values_from_node": (
-        "pylcss.cae.design_studio.freecad_bridge.param_writer",
-        "collect_param_values_from_node",
-    ),
     "find_freecad_cmd": (_PATHS, "find_freecad_cmd"),
     "find_freecad_executable": (_PATHS, "find_freecad_executable"),
-    "find_freecad_python": (_PATHS, "find_freecad_python"),
     "freecad_data_dir": (_PATHS, "freecad_data_dir"),
-    "is_freecad_installed": (_PATHS, "is_freecad_installed"),
     "read_brep_from_fcstd": (
         "pylcss.cae.design_studio.freecad_bridge.brep_reader",
         "read_brep_from_fcstd",

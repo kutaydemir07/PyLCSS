@@ -1,11 +1,7 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""Finite-element meshing, boundary-condition, and solver nodes.
-
-Topology names remain available here for backward compatibility. New code
-should import them from :mod:`pylcss.cae.design_studio.topology_optimization`.
-"""
+"""Finite-element meshing, boundary-condition, and solver nodes."""
 
 from __future__ import annotations
 
@@ -22,10 +18,6 @@ __all__ = [
     "OCCGeometry",
     "PressureLoadNode",
     "SolverNode",
-    "TopologyOptVoxelNode",
-    "TopologyOptVoxelProblem",
-    "TopologyOptVoxelSolver",
-    "VoxelBC",
     "suppress_output",
 ]
 
@@ -58,22 +50,6 @@ _LAZY_EXPORTS = {
         "PressureLoadNode",
     ),
     "SolverNode": ("pylcss.cae.design_studio.fem.solver", "SolverNode"),
-    "TopologyOptVoxelNode": (
-        "pylcss.cae.design_studio.topology_optimization",
-        "TopologyOptVoxelNode",
-    ),
-    "TopologyOptVoxelProblem": (
-        "pylcss.cae.design_studio.topology_optimization",
-        "TopologyOptVoxelProblem",
-    ),
-    "TopologyOptVoxelSolver": (
-        "pylcss.cae.design_studio.topology_optimization",
-        "TopologyOptVoxelSolver",
-    ),
-    "VoxelBC": (
-        "pylcss.cae.design_studio.topology_optimization",
-        "VoxelBC",
-    ),
     "suppress_output": (
         "pylcss.cae.design_studio.fem._helpers",
         "suppress_output",

@@ -71,11 +71,13 @@ def _validate_indices(
         )
 
 
-def _volume_tolerance(points: FloatArray) -> float:
-    """Return a scale-aware tolerance for six times tetrahedron volume."""
-    diagonal = float(np.linalg.norm(np.ptp(points, axis=0)))
-    scale = max(diagonal, float(np.finfo(float).tiny))
-    return float(128.0 * np.finfo(float).eps * scale**3)
+def _element_tolerance(
+    points: FloatArray, cells: IntArray, *, dimension: int
+) -> FloatArray:
+    """Scale degeneracy checks to each element, independent of distant nodes."""
+    diagonal = np.linalg.norm(np.ptp(points[cells], axis=1), axis=1)
+    scale = np.maximum(diagonal, np.finfo(float).tiny)
+    return 128.0 * np.finfo(float).eps * scale**dimension
 
 
 def mesh_to_tet4(
@@ -107,7 +109,9 @@ def mesh_to_tet4(
         np.cross(v1 - v0, v2 - v0),
         v3 - v0,
     )
-    degenerate = np.abs(signed_six_volume) <= _volume_tolerance(points)
+    degenerate = np.abs(signed_six_volume) <= _element_tolerance(
+        points, cells, dimension=3
+    )
     if np.any(degenerate):
         raise SolverBackendError(
             f"Tetrahedral mesh contains {int(np.count_nonzero(degenerate))} "
@@ -161,7 +165,9 @@ def mesh_to_tet10(
         np.cross(v1 - v0, v2 - v0),
         v3 - v0,
     )
-    degenerate = np.abs(signed_six_volume) <= _volume_tolerance(points)
+    degenerate = np.abs(signed_six_volume) <= _element_tolerance(
+        points, cells[:, :4], dimension=3
+    )
     if np.any(degenerate):
         raise SolverBackendError(
             f"C3D10 mesh contains {int(np.count_nonzero(degenerate))} "
@@ -219,11 +225,7 @@ def mesh_to_shell(
         ),
         axis=1,
     )
-    diagonal = max(
-        float(np.linalg.norm(np.ptp(points, axis=0))),
-        float(np.finfo(float).tiny),
-    )
-    area_tolerance = 128.0 * np.finfo(float).eps * diagonal**2
+    area_tolerance = _element_tolerance(points, triangles, dimension=2)
     keep = twice_area > area_tolerance
     dropped = int(np.count_nonzero(~keep))
     if dropped:

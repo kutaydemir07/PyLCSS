@@ -17,6 +17,14 @@ from .boundary_sampling import sample_boundary
 logger = logging.getLogger(__name__)
 
 
+def _node_slice(lo: float, hi: float, nmax: int) -> slice:
+    """Map fractional bounds to an inclusive slice of analysis nodes."""
+    lo_i, hi_i = sorted((int(round(float(lo) * nmax)), int(round(float(hi) * nmax))))
+    lo_i = max(0, min(nmax, lo_i))
+    hi_i = max(0, min(nmax, hi_i))
+    return slice(lo_i, hi_i + 1)
+
+
 class _SolverAssemblyMixin:
     """Assembly operations shared by the topology solver orchestration."""
 
@@ -46,13 +54,6 @@ class _SolverAssemblyMixin:
                 .tolist()
             )
 
-        def _node_slice(lo: float, hi: float, nmax: int) -> slice:
-            lo_i = int(round(float(lo) * nmax))
-            hi_i = int(round(float(hi) * nmax))
-            lo_i, hi_i = sorted((lo_i, hi_i))
-            lo_i = max(0, min(nmax, lo_i))
-            hi_i = max(0, min(nmax, hi_i))
-            return slice(lo_i, hi_i + 1)
 
         if bc.fixed_left_face_dofs:
             _add_face_dofs(domain.nodes[0, :, :], bc.fixed_left_face_dofs)
@@ -96,14 +97,6 @@ class _SolverAssemblyMixin:
         p = self.problem
         dim = domain.dim
 
-        def _node_slice(lo: float, hi: float, nmax: int) -> slice:
-            lo_i = int(round(float(lo) * nmax))
-            hi_i = int(round(float(hi) * nmax))
-            lo_i, hi_i = sorted((lo_i, hi_i))
-            lo_i = max(0, min(nmax, lo_i))
-            hi_i = max(0, min(nmax, hi_i))
-            return slice(lo_i, hi_i + 1)
-
         for ix_frac, iy_frac, iz_frac, fx, fy, fz in lc.point_forces:
             ix = int(round(ix_frac * p.nelx))
             iy = int(round(iy_frac * p.nely))
@@ -127,19 +120,8 @@ class _SolverAssemblyMixin:
         ) -> None:
             """Apply a total force over a node block with consistent shares.
 
-            ``nodes`` keeps its structured shape, because the share a node takes
-            is decided by how many loaded elements touch it. Integrating a
-            uniform traction against the trilinear shape functions puts t*A/4 on
-            each corner of every loaded element face, so after assembly an
-            interior node carries twice an edge node and four times a corner
-            node, per in-plane axis.
-
-            Splitting the total equally over the selected nodes instead — which
-            is what this did — overloads the perimeter of the loaded region: on
-            a 40x20 element face a corner node took 3.7x and an edge node 1.9x
-            its correct share, while every interior node was 7% light. SIMP
-            answers a load it believes is concentrated at the rim by growing
-            material there, so the artefact ends up in the topology.
+            Structured tributary weights account for the loaded elements
+            touching each node. Normalize the weights to preserve total force.
             """
             block = np.asarray(nodes, dtype=int)
             if block.size == 0:
@@ -237,7 +219,7 @@ class _SolverAssemblyMixin:
                 )
 
         if not cases:
-            legacy_lc = LoadCase(
+            single_case = LoadCase(
                 name="LC1",
                 weight=1.0,
                 point_forces=list(bc.point_forces),
@@ -246,7 +228,7 @@ class _SolverAssemblyMixin:
                 boundary_forces=list(bc.boundary_forces),
             )
             f = np.zeros(ndof)
-            self._apply_load_case_to_force(domain, legacy_lc, f)
+            self._apply_load_case_to_force(domain, single_case, f)
             if np.any(f):
                 cases.append(
                     _StructuralCase(
@@ -499,7 +481,6 @@ class _SolverAssemblyMixin:
         result = matrix.tocsr()
         result.eliminate_zeros()
         return result
-
 
 
     def _assemble_passive_masks(

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .mesh_topology import mesh_topology_report, topology_error
+from .mesh_topology import mesh_topology_report, topology_error, triangulate_quad_faces
 
 
 def _curvature_directions(mesh):
@@ -149,7 +149,7 @@ def validate_quad_layout(source, vertices, quads):
                            mesh_topology_report(vertices, quads))
     if error:
         raise ValueError(error)
-    triangles = np.vstack((quads[:, (0, 1, 2)], quads[:, (0, 2, 3)]))
+    triangles = triangulate_quad_faces(vertices, quads)
     import trimesh
     cage = trimesh.Trimesh(vertices, triangles, process=False)
     def signature(mesh):

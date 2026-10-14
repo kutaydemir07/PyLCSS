@@ -5,18 +5,29 @@
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from pylcss.cae.solver_backends.frd_reader import read_frd
-from pylcss.cae.solver_backends.mesh import mesh_to_tet4, tet10_connectivity
+from pylcss.cae.solver_backends.base import SolverBackendError
+from pylcss.cae.solver_backends.mesh import (
+    load_vector,
+    mesh_to_tet4,
+    tet10_connectivity,
+)
 from pylcss.cae.solver_backends.selection import (
     dict_geometries,
     nodes_matching_condition,
     nodes_matching_geometries,
     tet_face_sets_for_geometries,
+)
+from pylcss.cae.solver_backends.validation import (
+    finite_float,
+    nonnegative_float,
+    positive_float,
 )
 
 
@@ -31,78 +42,70 @@ def _compute_applied_forces(
 ) -> np.ndarray:
     """Compute resultant 3D vector of all external loads applied to the model."""
     applied_force = np.zeros(3, dtype=float)
-    for load in loads or []:
+    for index, load in enumerate(loads or [], start=1):
         if not isinstance(load, dict):
-            continue
+            raise SolverBackendError(f"Load {index} must be a dictionary.")
         ltype = str(load.get("type", "force") or "force").strip().lower()
         if ltype in ("force", "bearing_load", "bearing"):
-            try:
-                vec = load.get("vector")
-                if vec is None:
-                    vec = [
-                        float(load.get("force_x", 0.0)),
-                        float(load.get("force_y", 0.0)),
-                        float(load.get("force_z", 0.0)),
-                    ]
-                v_arr = np.asarray(vec, dtype=float).reshape(-1)
-                if v_arr.size == 3 and np.all(np.isfinite(v_arr)):
-                    applied_force += v_arr
-            except Exception:
-                pass
+            vector = load.get("vector")
+            if vector is None:
+                vector = [load.get(f"force_{axis}", 0.0) for axis in "xyz"]
+            applied_force += load_vector({"vector": vector})
         elif ltype == "gravity":
-            try:
-                rho = 0.0
-                if material:
-                    rho = float(
-                        material.get("rho", material.get("density", 0.0)) or 0.0
-                    )
-                mass = float(total_volume * rho)
-                accel = float(load.get("accel", 9810.0))
-                dir_str = str(load.get("direction", "-Y") or "-Y").strip().upper()
-                dir_map = {
-                    "-X": np.array([-1.0, 0.0, 0.0]),
-                    "+X": np.array([1.0, 0.0, 0.0]),
-                    "-Y": np.array([0.0, -1.0, 0.0]),
-                    "+Y": np.array([0.0, 1.0, 0.0]),
-                    "-Z": np.array([0.0, 0.0, -1.0]),
-                    "+Z": np.array([0.0, 0.0, 1.0]),
-                }
-                dvec = dir_map.get(dir_str, np.array([0.0, -1.0, 0.0]))
-                applied_force += mass * accel * dvec
-            except Exception:
-                pass
-        elif ltype == "pressure":
-            try:
-                pressure_val = float(
-                    load.get("pressure", load.get("magnitude", 0.0)) or 0.0
+            material_values = material or {}
+            rho = positive_float(
+                material_values.get("rho", material_values.get("density", 7.85e-9)),
+                label="Material density",
+            )
+            mass = nonnegative_float(total_volume, label="Mesh volume") * rho
+            accel = nonnegative_float(
+                load.get("accel", 9810.0), label="Gravity acceleration"
+            )
+            direction = str(load.get("direction", "-Y") or "-Y").strip().upper()
+            dir_map = {
+                "-X": (-1.0, 0.0, 0.0),
+                "+X": (1.0, 0.0, 0.0),
+                "-Y": (0.0, -1.0, 0.0),
+                "+Y": (0.0, 1.0, 0.0),
+                "-Z": (0.0, 0.0, -1.0),
+                "+Z": (0.0, 0.0, 1.0),
+            }
+            if direction not in dir_map:
+                raise SolverBackendError(
+                    f"Unsupported gravity direction: {direction!r}."
                 )
-                geoms = dict_geometries(load)
-                if geoms and abs(pressure_val) > 1e-12:
-                    faces = tet_face_sets_for_geometries(mesh, geoms)
-                    if faces:
-                        pts, cells = mesh_to_tet4(mesh, [])
-                        local_faces = ((0, 1, 2), (0, 1, 3), (1, 2, 3), (0, 2, 3))
-                        opp_nodes = (3, 2, 0, 1)
-                        for elem_id, face_id in faces:
-                            cell = cells[elem_id - 1]
-                            f_idx = face_id - 1
-                            tri = cell[list(local_faces[f_idx])]
-                            p0 = pts[:, tri[0]]
-                            p1 = pts[:, tri[1]]
-                            p2 = pts[:, tri[2]]
-                            popp = pts[:, cell[opp_nodes[f_idx]]]
-                            c_face = (p0 + p1 + p2) / 3.0
-                            n_cross = np.cross(p1 - p0, p2 - p0)
-                            area = 0.5 * float(np.linalg.norm(n_cross))
-                            if area > 1e-16:
-                                n_unit = n_cross / np.linalg.norm(n_cross)
-                                if np.dot(n_unit, popp - c_face) < 0.0:
-                                    n_unit = -n_unit
-                                applied_force += pressure_val * area * n_unit
-            except Exception:
-                pass
+            applied_force += mass * accel * np.asarray(dir_map[direction])
+        elif ltype == "pressure":
+            pressure_val = finite_float(
+                load.get("pressure", load.get("magnitude", 0.0)),
+                label=f"Pressure load {index} magnitude",
+            )
+            if abs(pressure_val) <= 1e-12:
+                continue
+            geoms = dict_geometries(load)
+            faces = tet_face_sets_for_geometries(mesh, geoms) if geoms else []
+            if not faces:
+                raise SolverBackendError(
+                    f"Pressure load {index} has no matched external mesh faces."
+                )
+            pts, cells = mesh_to_tet4(mesh, [])
+            local_faces = ((0, 1, 2), (0, 1, 3), (1, 2, 3), (0, 2, 3))
+            opp_nodes = (3, 2, 0, 1)
+            for elem_id, face_id in faces:
+                cell = cells[elem_id - 1]
+                f_idx = face_id - 1
+                tri = cell[list(local_faces[f_idx])]
+                p0, p1, p2 = pts[tri]
+                popp = pts[cell[opp_nodes[f_idx]]]
+                c_face = (p0 + p1 + p2) / 3.0
+                n_cross = np.cross(p1 - p0, p2 - p0)
+                area = 0.5 * float(np.linalg.norm(n_cross))
+                if area > 1e-16:
+                    n_unit = n_cross / np.linalg.norm(n_cross)
+                    if np.dot(n_unit, popp - c_face) < 0.0:
+                        n_unit = -n_unit
+                    applied_force += pressure_val * area * n_unit
     return applied_force
-
 
 
 def _resolve_deformation_scale(
@@ -123,9 +126,9 @@ def _resolve_deformation_scale(
     except (TypeError, ValueError):
         warnings.append(f"Invalid deformation scale {requested!r}; using Auto.")
         return auto_scale
-    if value <= 0.0:
+    if not math.isfinite(value) or value <= 0.0:
         warnings.append(
-            f"Deformation scale must be positive, got {value:g}; using Auto."
+            f"Deformation scale must be finite and positive, got {value:g}; using Auto."
         )
         return auto_scale
     return value
@@ -346,4 +349,3 @@ def _ingest_frd_into_result(
         "frd_file": str(frd_path),
         "frd_steps": parsed.get("steps", []),
     }
-

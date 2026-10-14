@@ -48,6 +48,9 @@ class ExtendedLayout:
     branch_dim_to_coord: IntArray = field(
         default_factory=lambda: np.zeros((0, 0), dtype=int)
     )
+    active_variable_indices: IntArray = field(
+        default_factory=lambda: np.zeros(0, dtype=int)
+    )
 
     def is_trivial(self) -> bool:
         return all(len(branches) == 1 for branches in self.coord_to_branches)
@@ -57,16 +60,23 @@ def build_extended_layout(
     mode_count: int,
     original_dimension_count: int,
     shared_groups_per_dim: SharedGroups,
+    *,
+    active_variable_indices: Optional[IntArray] = None,
 ) -> ExtendedLayout:
     """Assign one coordinate per common group plus separating coordinates."""
     coord_to_branches: list[list[int]] = []
     coord_to_dim: list[int] = []
+    active_indices = (
+        np.arange(original_dimension_count)
+        if active_variable_indices is None
+        else np.asarray(active_variable_indices, dtype=int)
+    )
     branch_dim_to_coord = -np.ones(
-        (mode_count, original_dimension_count),
+        (mode_count, active_indices.size),
         dtype=int,
     )
 
-    for j in range(original_dimension_count):
+    for column, j in enumerate(active_indices):
         covered: set[int] = set()
         for group in shared_groups_per_dim.get(j, []):
             branches = list(group["branches"])
@@ -74,7 +84,7 @@ def build_extended_layout(
             coord_to_branches.append(branches)
             coord_to_dim.append(j)
             for k in branches:
-                branch_dim_to_coord[k, j] = cidx
+                branch_dim_to_coord[k, column] = cidx
                 covered.add(k)
 
         for k in range(mode_count):
@@ -83,7 +93,7 @@ def build_extended_layout(
             cidx = len(coord_to_branches)
             coord_to_branches.append([k])
             coord_to_dim.append(j)
-            branch_dim_to_coord[k, j] = cidx
+            branch_dim_to_coord[k, column] = cidx
 
     return ExtendedLayout(
         mode_count=mode_count,
@@ -92,6 +102,7 @@ def build_extended_layout(
         coord_to_branches=coord_to_branches,
         coord_to_dim=coord_to_dim,
         branch_dim_to_coord=branch_dim_to_coord,
+        active_variable_indices=active_indices,
     )
 
 
@@ -139,6 +150,10 @@ class ExtendedProblemAdapter:
         self.orig_ind_p = np.asarray(original_ind_parameters, dtype=int)
         self.n_total_orig = int(n_total_orig)
         self.orig_ind_dvs = np.setdiff1d(np.arange(self.n_total_orig), self.orig_ind_p)
+        if not np.array_equal(self.orig_ind_dvs, layout.active_variable_indices):
+            raise ValueError(
+                "extended layout must map exactly the active model variables"
+            )
 
     def evaluate_matrix(self, x_full_extended: FloatArray) -> FloatArray:
         coordinate_count = self.layout.coordinate_count
@@ -265,15 +280,19 @@ def project_extended_to_modes(
     """Project refined extended bounds back to one box per retained mode."""
     out: list[BoxSolutionSpace] = []
     for mode_index in range(layout.mode_count):
-        bounds = np.zeros((layout.original_dimension_count, 2), dtype=float)
-        for dimension in range(layout.original_dimension_count):
+        bounds = source_boxes[mode_index].bounds.copy()
+        for column, dimension in enumerate(layout.active_variable_indices):
             bounds[dimension] = extended_bounds[
-                int(layout.branch_dim_to_coord[mode_index, dimension])
+                int(layout.branch_dim_to_coord[mode_index, column])
             ]
 
         box = copy.copy(source_boxes[mode_index])
         box.bounds = bounds
         box.samples = None
         box.volume = 0.0
+        box.good_fraction = 0.0
+        box.good_fraction_lower_bound = 0.0
+        box.validation_successes = 0
+        box.validation_samples = 0
         out.append(box)
     return out

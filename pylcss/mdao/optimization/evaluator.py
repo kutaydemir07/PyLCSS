@@ -25,6 +25,18 @@ LOG_SCALING_RATIO: Final = 1e3
 SCALING_MODES: Final = ("auto", "linear", "log")
 
 
+def constraint_scale(lower: float, upper: float) -> float:
+    """Choose a relative-violation scale without imposing physical-unit cutoffs."""
+    if np.isfinite(lower) and np.isfinite(upper):
+        width = abs(upper - lower)
+        if width > 0.0:
+            return width
+    magnitudes = [
+        abs(bound) for bound in (lower, upper) if np.isfinite(bound) and bound != 0.0
+    ]
+    return min(magnitudes) if magnitudes else 1.0
+
+
 def uses_log_scaling(
     lower: float,
     upper: float,
@@ -47,8 +59,7 @@ def uses_log_scaling(
         return False
     return normalized_mode == "log" or (
         normalized_mode == "auto"
-        and np.log(upper_value) - np.log(lower_value)
-        >= np.log(LOG_SCALING_RATIO)
+        and np.log(upper_value) - np.log(lower_value) >= np.log(LOG_SCALING_RATIO)
     )
 
 
@@ -105,10 +116,6 @@ class ModelEvaluator:
         self.variables = tuple(variables)
         self.objectives = tuple(objectives)
         self.constraints = tuple(constraints)
-        # Compatibility attributes used by existing solver/UI integrations.
-        self.vars = self.variables
-        self.objs = self.objectives
-        self.cons = self.constraints
 
         self.parameters = dict(parameters or {})
         self.scaling = bool(scaling)
@@ -151,16 +158,12 @@ class ModelEvaluator:
             [variable.max_val for variable in self.variables],
             dtype=float,
         )
-        physical_ranges = self._upper - self._lower
-        self._fixed = np.abs(physical_ranges) <= 1e-15
+        self._fixed = self._lower == self._upper
         if self.scaling and self.scaling_mode == "log":
-            invalid_log_bounds = (
-                ~self._fixed
-                & (
-                    ~np.isfinite(self._lower)
-                    | ~np.isfinite(self._upper)
-                    | (self._lower <= 0.0)
-                )
+            invalid_log_bounds = ~self._fixed & (
+                ~np.isfinite(self._lower)
+                | ~np.isfinite(self._upper)
+                | (self._lower <= 0.0)
             )
             if np.any(invalid_log_bounds):
                 names = ", ".join(
@@ -186,12 +189,8 @@ class ModelEvaluator:
         )
         self._coordinate_lower = self._lower.copy()
         self._coordinate_upper = self._upper.copy()
-        self._coordinate_lower[self._log_scaled] = np.log(
-            self._lower[self._log_scaled]
-        )
-        self._coordinate_upper[self._log_scaled] = np.log(
-            self._upper[self._log_scaled]
-        )
+        self._coordinate_lower[self._log_scaled] = np.log(self._lower[self._log_scaled])
+        self._coordinate_upper[self._log_scaled] = np.log(self._upper[self._log_scaled])
         raw_ranges = self._coordinate_upper - self._coordinate_lower
         self._ranges = raw_ranges.copy()
         self._ranges[self._fixed] = 1.0
@@ -201,7 +200,7 @@ class ModelEvaluator:
             raise ValueError("Variable scaling requires finite lower and upper bounds.")
 
         self._constraint_scales = np.asarray(
-            [self._constraint_scale(item) for item in self.constraints],
+            [constraint_scale(item.min_val, item.max_val) for item in self.constraints],
             dtype=float,
         )
         self._solve_lower = np.asarray(
@@ -234,7 +233,11 @@ class ModelEvaluator:
         if not self.constraints or self.constraint_margin == 0.0:
             return
 
-        backoff = self.constraint_margin * self._constraint_scales
+        # Equality targets have no interior to reserve; margins apply to inequalities.
+        equality = self._solve_lower == self._solve_upper
+        backoff = np.where(
+            equality, 0.0, self.constraint_margin * self._constraint_scales
+        )
         finite_lower = np.isfinite(self._solve_lower)
         finite_upper = np.isfinite(self._solve_upper)
         self._solve_lower[finite_lower] += backoff[finite_lower]
@@ -272,9 +275,7 @@ class ModelEvaluator:
             return values.copy()
         physical = values * self._ranges + self._coordinate_lower
         if np.any(self._log_scaled):
-            physical[..., self._log_scaled] = np.exp(
-                physical[..., self._log_scaled]
-            )
+            physical[..., self._log_scaled] = np.exp(physical[..., self._log_scaled])
         physical[..., self._fixed] = self._lower[self._fixed]
         return physical
 
@@ -282,8 +283,7 @@ class ModelEvaluator:
     def log_scaled_variables(self) -> tuple[str, ...]:
         """Names of variables currently represented in logarithmic coordinates."""
         return tuple(
-            self.variables[index].name
-            for index in np.flatnonzero(self._log_scaled)
+            self.variables[index].name for index in np.flatnonzero(self._log_scaled)
         )
 
     def set_feasibility_tolerance(self, value: float) -> None:
@@ -295,21 +295,6 @@ class ModelEvaluator:
 
     def is_feasible(self, violation: float) -> bool:
         return bool(float(violation) <= self.feasibility_tolerance)
-
-    @staticmethod
-    def _constraint_scale(constraint: Constraint) -> float:
-        """Return a characteristic magnitude for relative violations."""
-        lower, upper = constraint.min_val, constraint.max_val
-        if np.isfinite(lower) and np.isfinite(upper):
-            width = abs(upper - lower)
-            if width > 1e-12:
-                return width
-        magnitudes = [
-            abs(bound)
-            for bound in (lower, upper)
-            if np.isfinite(bound) and abs(bound) > 1e-12
-        ]
-        return min(magnitudes) if magnitudes else 1.0
 
     def constraint_solve_bounds(self, index: int) -> tuple[float, float]:
         """Return safety-tightened bounds used to construct constraints."""
@@ -334,7 +319,7 @@ class ModelEvaluator:
                 scale = objective.scale
             else:
                 scale = abs(float(raw_results[objective.name]))
-                if scale < 1e-12:
+                if scale == 0.0:
                     scale = 1.0
             scales.append(scale * self.objective_scale)
         self._objective_scales = np.asarray(scales, dtype=float)
@@ -380,7 +365,7 @@ class ModelEvaluator:
         }
 
     def solve_violation(self, raw_results: Mapping[str, Any]) -> float:
-        """Return maximum relative violation of safety-tightened bounds."""
+        """Return maximum relative violation of the active constraint bounds."""
         if not self.is_valid_result(raw_results):
             return EVALUATION_FAILURE
 
@@ -503,8 +488,8 @@ class ModelEvaluator:
         for index, constraint in enumerate(self.constraints):
             value = float(raw_results[constraint.name])
             raw_violation = max(
-                constraint.min_val - value,
-                value - constraint.max_val,
+                self._solve_lower[index] - value,
+                value - self._solve_upper[index],
                 0.0,
             )
             if raw_violation > 0.0:
@@ -570,6 +555,7 @@ __all__ = [
     "ModelEvaluator",
     "ModelFunction",
     "SCALING_MODES",
+    "constraint_scale",
     "default_initial_value",
     "uses_log_scaling",
 ]

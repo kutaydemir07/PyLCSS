@@ -64,9 +64,15 @@ def trim_box(
     if num_a == 0:
         return candidate_box.copy(), 0.0
 
+    active_dims = weight > 0
+    if not np.any(active_dims):
+        active_dims = np.ones(dim, dtype=bool)
+
     if num_b == 0:
-        widths = candidate_box[:, 1] - candidate_box[:, 0]
-        log_mu = float(np.sum(np.log(np.maximum(weight * widths, 1e-20))))
+        widths = (candidate_box[:, 1] - candidate_box[:, 0])[active_dims]
+        if np.any(widths <= 0.0):
+            return candidate_box.copy(), 0.0
+        log_mu = float(np.sum(np.log(widths)))
         return candidate_box, float(np.exp(log_mu)) if log_mu > -700 else 0.0
 
     samples_a = design_points[:, ind_a]  # (dim, num_a)
@@ -92,13 +98,6 @@ def trim_box(
     range_vec = candidate_box[:, 1] - candidate_box[:, 0]
     eps_vec = np.maximum(range_vec, 1e-12) * 1e-7  # (dim,)
 
-    active_dims = weight > 0
-    if not np.any(active_dims):
-        active_dims = np.ones(dim, dtype=bool)
-
-    best_log_mu = -np.inf
-    best_box = candidate_box.copy()
-
     # For each good sample (anchor), compute the tightest box that keeps the
     # anchor on the feasible side of every bad point, then pick max mu.
     a_exp = samples_a[:, :, np.newaxis]  # (dim, num_a, 1)
@@ -110,6 +109,10 @@ def trim_box(
         weighted_cost_left[:, np.newaxis, :],
         weighted_cost_right[:, np.newaxis, :],
     )
+    # Equal coordinates cannot separate a good anchor from a bad point.
+    can_separate = np.abs(a_exp - b_exp) > eps_vec[:, None, None]
+    costs = np.where(can_separate, costs, np.inf)
+    valid_anchors = np.all(np.any(can_separate, axis=0), axis=1)
 
     best_dims = np.argmin(costs, axis=0)  # (num_a, num_b)
 
@@ -132,8 +135,14 @@ def trim_box(
     new_lb = np.maximum(candidate_box[:, 0:1], max_cut_lower)  # (dim, num_a)
     new_ub = np.minimum(candidate_box[:, 1:2], min_cut_upper)  # (dim, num_a)
 
-    diffs = np.maximum(new_ub - new_lb, 1e-20)
-    log_vols = np.sum(np.log(diffs[active_dims, :]), axis=0)  # (num_a,)
+    diffs = new_ub - new_lb
+    valid_anchors &= np.all(diffs > 0.0, axis=0)
+    log_vols = np.sum(np.log(np.maximum(diffs[active_dims, :], 1e-300)), axis=0)
+    log_vols[~valid_anchors] = -np.inf
+
+    if not valid_anchors.any():
+        widths = candidate_box[:, 1] - candidate_box[:, 0]
+        return candidate_box.copy(), float(np.prod(widths[active_dims]))
 
     best_anchor = int(np.argmax(log_vols))
     best_log_mu = float(log_vols[best_anchor])
@@ -143,26 +152,3 @@ def trim_box(
 
     best_mu = float(np.exp(best_log_mu)) if best_log_mu > -700 else 0.0
     return best_box, best_mu
-
-
-def step_a_vectorized(
-    candidate_box: np.ndarray,
-    design_points: np.ndarray,
-    good_designs: np.ndarray,
-    bad_designs: np.ndarray,
-    dim: int,
-    weight: np.ndarray,
-) -> tuple[np.ndarray, float]:
-    """Backward-compatible Step-A API used by the existing PyLCSS solver."""
-    _ = dim
-    return trim_box(
-        candidate_box,
-        design_points,
-        good_designs,
-        bad_designs,
-        weight,
-    )
-
-
-# Compatibility with the paper-oriented name used before PyLCSS 2.2.
-modification_step_a = trim_box

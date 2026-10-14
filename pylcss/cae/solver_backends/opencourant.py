@@ -17,15 +17,12 @@ from pylcss.cae.solver_backends.opencourant_deck import (
     _build_engine_deck,
     _build_keyword_deck,
 )
-from pylcss.cae.solver_backends.opencourant_impact import _keyword_card
 from pylcss.cae.solver_backends.opencourant_results import (
-    align_animation_frames as _build_animation_frames_with_mesh,
+    align_animation_frames,
     build_existing_deck_result,
     build_generated_crash_result,
     build_generated_fallback_result,
-    compute_time_history as _compute_time_history,
-    read_engine_energy_history as _read_engine_energy_history,
-    wrap_deck_result as _wrap_deck_result,
+    wrap_deck_result,
 )
 from pylcss.cae.solver_backends.opencourant_runtime import (
     read_courant_diagnostics,
@@ -52,14 +49,21 @@ from pylcss.cae.solver_backends.validation import (
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "_compute_time_history",
-    "_build_animation_frames_with_mesh",
-    "_build_engine_deck",
-    "_keyword_card",
-    "_read_engine_energy_history",
     "run_opencourant_crash",
     "run_opencourant_existing_deck",
 ]
+
+
+def _display_scale(value: Any, warnings: list[str] | None = None) -> float:
+    """Use a valid viewer scale without blocking solver execution."""
+    try:
+        return nonnegative_float(value, label="Displacement scale")
+    except SolverBackendError:
+        if warnings is not None:
+            warnings.append(
+                "Invalid display magnification; using 1.0 for visualization."
+            )
+        return 1.0
 
 
 def _model_job_name(deck_path: Path) -> str:
@@ -196,7 +200,8 @@ def run_opencourant_existing_deck(
 ) -> dict[str, Any]:
     """Run Starter and Engine on a user-supplied model deck."""
     timeout_s = config.validated_timeout() if config.run_solver else config.timeout_s
-    disp_scale = positive_float(disp_scale, label="Displacement scale")
+    display_warnings: list[str] = []
+    disp_scale = _display_scale(disp_scale, display_warnings)
     stress_scale_to_mpa = positive_float(
         stress_scale_to_mpa,
         label="Stress conversion scale",
@@ -229,12 +234,10 @@ def run_opencourant_existing_deck(
         config.secondary_executable,
     )
     staged_engine = (
-        stage_file(source_engine, work_dir)
-        if source_engine is not None
-        else None
+        stage_file(source_engine, work_dir) if source_engine is not None else None
     )
     if not config.run_solver:
-        return _deck_only_existing_result(
+        result = _deck_only_existing_result(
             work_dir=work_dir,
             deck_path=staged_deck,
             engine_deck_path=staged_engine,
@@ -243,6 +246,8 @@ def run_opencourant_existing_deck(
             visualization_mode=visualization_mode,
             displacement_scale=disp_scale,
         )
+        result.setdefault("warnings", []).extend(display_warnings)
+        return result
 
     if starter is None:
         raise SolverBackendError(
@@ -291,10 +296,10 @@ def run_opencourant_existing_deck(
         timeout_s=timeout_s,
         end_time=end_time,
     )
-    warnings = list(animation_warnings)
+    warnings = display_warnings + list(animation_warnings)
     _scale_frame_stress(frames, stress_scale_to_mpa)
     if not frames:
-        return _wrap_deck_result(
+        return wrap_deck_result(
             status,
             work_dir,
             staged_deck,
@@ -363,7 +368,7 @@ def _validate_generated_inputs(
         output_dt,
         label="Animation output interval",
     )
-    validated_disp_scale = positive_float(disp_scale, label="Displacement scale")
+    validated_disp_scale = _display_scale(disp_scale)
     validated_mass_dt = nonnegative_float(
         mass_scaling_dt,
         label="Mass-scaling target time step",
@@ -408,7 +413,7 @@ def _import_generated_frames(
         end_time=end_time,
     )
     warnings.extend(animation_warnings)
-    frames = _build_animation_frames_with_mesh(mesh, raw_frames)
+    frames = align_animation_frames(mesh, raw_frames)
     if frames:
         maximum_displacement = max(
             (
@@ -457,6 +462,7 @@ def run_opencourant_crash(
     force_cfc: int = 600,
 ) -> dict[str, Any]:
     """Generate a crash deck, optionally solve it, and import animations."""
+    submitted_disp_scale = disp_scale
     (
         constraints,
         impact,
@@ -495,6 +501,7 @@ def run_opencourant_crash(
     acceleration_cfc = int(acceleration_cfc)
     force_cfc = int(force_cfc)
     warnings: list[str] = []
+    _display_scale(submitted_disp_scale, warnings)
     job_name = config.validated_job_name(default="pylcss_opencourant")
     work_dir = make_work_dir("pylcss_opencourant_", config.work_dir)
     deck_path = work_dir / f"{job_name}.k"

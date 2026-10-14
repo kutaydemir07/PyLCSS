@@ -11,22 +11,67 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import numpy as np
+from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import KFold
 
 from .contracts import ProgressCallback
 from .metrics import as_target_matrix, validate_training_data
 
 logger = logging.getLogger(__name__)
 
-try:
-    from sklearn.inspection import (
-        permutation_importance as sklearn_permutation_importance,
-    )
-    from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-    from sklearn.model_selection import KFold
+COMPARISON_MODEL_NAMES = (
+    "Kriging (Matern 5/2 ARD)",
+    "PLS + Kriging",
+    "RBF (Thin-plate spline)",
+    "Sparse polynomial response surface",
+    "SVR (RBF kernel)",
+)
 
-    SKLEARN_AVAILABLE = True
-except ImportError:
-    SKLEARN_AVAILABLE = False
+
+class SurrogateWorkflowRegressor(RegressorMixin, BaseEstimator):
+    """Fit the configured GUI workflow afresh inside each validation fold."""
+
+    def __init__(self, config: Mapping[str, Any]) -> None:
+        self.config = config
+
+    def fit(self, X: np.ndarray, y: np.ndarray) -> SurrogateWorkflowRegressor:
+        from .training import SurrogateTrainer
+
+        self.model_, self.metrics_ = SurrogateTrainer().train_model(X, y, self.config)
+        return self
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        if not hasattr(self, "model_"):
+            raise RuntimeError("Workflow must be fitted before predict.")
+        return self.model_.predict(X)
+
+
+def create_evaluation_model(
+    model_type: str, config: Mapping[str, Any] | None = None
+) -> Any:
+    """Create the selected workflow or a named Auto Mode component."""
+    from .mdao_algorithms import (
+        MdaoKPLSRegressor,
+        MdaoKrigingRegressor,
+        MdaoPolynomialRegressor,
+        MdaoRBFRegressor,
+        MdaoSVRRegressor,
+    )
+
+    if model_type in {"Auto Mode", "Your Own Architecture (Deep Learning)"}:
+        return SurrogateWorkflowRegressor({**(config or {}), "model_type": model_type})
+    factories = {
+        COMPARISON_MODEL_NAMES[0]: lambda: MdaoKrigingRegressor(n_restarts=4),
+        COMPARISON_MODEL_NAMES[1]: lambda: MdaoKPLSRegressor(n_comp=3, n_restarts=3),
+        COMPARISON_MODEL_NAMES[2]: MdaoRBFRegressor,
+        COMPARISON_MODEL_NAMES[3]: MdaoPolynomialRegressor,
+        COMPARISON_MODEL_NAMES[4]: MdaoSVRRegressor,
+    }
+    try:
+        return factories[model_type]()
+    except KeyError:
+        raise ValueError(f"Unknown evaluation model {model_type!r}.") from None
 
 
 @dataclass
@@ -82,11 +127,6 @@ class CVResult:
         return result
 
 
-def _require_sklearn() -> None:
-    if not SKLEARN_AVAILABLE:
-        raise ImportError("scikit-learn is required for surrogate validation.")
-
-
 def _fit_target(y: np.ndarray) -> np.ndarray:
     """Use sklearn's conventional 1-D target for a single output."""
     return y.ravel() if y.shape[1] == 1 else y
@@ -124,7 +164,6 @@ class CrossValidator:
     """K-fold and leave-one-out validation for sklearn-compatible estimators."""
 
     def __init__(self, *, random_state: int = 42) -> None:
-        _require_sklearn()
         self.random_state = int(random_state)
 
     def kfold_cv(
@@ -246,7 +285,6 @@ class FeatureImportanceAnalyzer:
         n_repeats: int = 10,
     ) -> dict[str, Any]:
         """Compute held-out permutation importance using aggregate R²."""
-        _require_sklearn()
         if n_repeats < 1:
             raise ValueError("n_repeats must be at least 1.")
         features, targets = validate_training_data(X, y, minimum_samples=2)
@@ -254,16 +292,26 @@ class FeatureImportanceAnalyzer:
             features.shape[1],
             feature_names,
         )
-        result = sklearn_permutation_importance(
-            model,
-            features,
-            _fit_target(targets),
-            n_repeats=n_repeats,
-            random_state=42,
-            scoring="r2",
-        )
-        means = np.asarray(result.importances_mean, dtype=np.float64)
-        standard_deviations = np.asarray(result.importances_std, dtype=np.float64)
+
+        def score(values: np.ndarray) -> float:
+            predicted = _prediction_matrix(
+                model.predict(values),
+                samples=len(values),
+                outputs=targets.shape[1],
+            )
+            return float(r2_score(targets, predicted, multioutput="uniform_average"))
+
+        baseline = score(features)
+        rng = np.random.default_rng(42)
+        permutations = [rng.permutation(len(features)) for _ in range(n_repeats)]
+        importances = np.empty((features.shape[1], n_repeats))
+        for column in range(features.shape[1]):
+            shuffled = features.copy()
+            for repeat, permutation in enumerate(permutations):
+                shuffled[:, column] = features[permutation, column]
+                importances[column, repeat] = baseline - score(shuffled)
+        means = importances.mean(axis=1)
+        standard_deviations = importances.std(axis=1)
         ranking = np.argsort(-means)
         return {
             "feature_names": names,
@@ -299,7 +347,6 @@ class ModelComparator:
     """Compare model factories on identical folds and rank successful runs."""
 
     def __init__(self, *, random_state: int = 42) -> None:
-        _require_sklearn()
         self.random_state = int(random_state)
 
     def compare_models(
@@ -353,9 +400,11 @@ class ModelComparator:
 
 
 __all__ = [
-    "SKLEARN_AVAILABLE",
+    "COMPARISON_MODEL_NAMES",
     "CVResult",
     "CrossValidator",
     "FeatureImportanceAnalyzer",
     "ModelComparator",
+    "SurrogateWorkflowRegressor",
+    "create_evaluation_model",
 ]

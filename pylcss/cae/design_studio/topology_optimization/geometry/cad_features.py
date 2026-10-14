@@ -723,6 +723,20 @@ def _collect_passive_tools(
     return solid_tools, cut_tools, hardware_tools
 
 
+def _box_domain_contains_shape(shape: Any, domain: Any) -> bool:
+    """Prove containment using conservative CAD bounds for a solid box only."""
+    if len(domain.Solids()) != 1 or any(face.geomType() != "PLANE" for face in domain.Faces()):
+        return False
+    domain_box, body_box = domain.BoundingBox(), shape.BoundingBox()
+    box_volume = domain_box.xlen * domain_box.ylen * domain_box.zlen
+    if abs(abs(domain.Volume(tol=1e-7)) - box_volume) > max(1e-7, box_volume * 1e-8):
+        return False
+    tolerance = max(1e-7, max(domain_box.xlen, domain_box.ylen, domain_box.zlen) * 1e-8)
+    return all(getattr(body_box, axis + "min") >= getattr(domain_box, axis + "min") - tolerance
+               and getattr(body_box, axis + "max") <= getattr(domain_box, axis + "max") + tolerance
+               for axis in "xyz")
+
+
 def _apply_passive_regions_to_step(
     shape: Any,
     payload: Any,
@@ -742,10 +756,25 @@ def _apply_passive_regions_to_step(
     )
     requested_solid_tools = list(solid_tools)
     source_domain = _coerce_to_solid(payload.get('source_cad_shape')) if isinstance(payload,dict) else None
+    validation_cut_tools = list(cut_tools)
     if source_domain is not None:
         # Match source bores and outer surfaces before adding face-coincident
         # protected layers, so both operands share the analytic boundaries.
-        result = _boolean_or_raise(result, source_domain, operation='common')
+        # A contained body already satisfies a box domain. Avoid intersecting
+        # coincident fitted faces when conservative bounds prove this exactly.
+        # Domains with bores or concavities still require the actual Boolean.
+        if not _box_domain_contains_shape(result, source_domain):
+            result = _boolean_or_raise(result, source_domain, operation='common')
+        # A bore already excluded by the source CAD needs no further cut.
+        # Re-cutting coincident cylinder walls can create microscopic strips
+        # that pass solid checks but cannot be tessellated reliably.
+        needed_cuts = []
+        for tool in cut_tools:
+            overlap = _native_boolean(source_domain, tool, 'common')
+            overlap_volume = sum(abs(float(solid.Volume(tol=1e-7))) for solid in overlap.Solids())
+            if not overlap.isValid() or overlap_volume > max(1e-8,abs(float(tool.Volume(tol=1e-7)))*1e-8):
+                needed_cuts.append(tool)
+        cut_tools = needed_cuts
 
     # First remove the bores from the reconstructed body. This also removes the
     # recovered-mesh copy of a joint pin, allowing the exact analytic pin to
@@ -811,31 +840,17 @@ def _apply_passive_regions_to_step(
         missing_volume = abs(float(missing.Volume(tol=1e-4)))
         if missing_volume > max(1e-7, expected_volume * 1e-6):
             raise RuntimeError('Reconstructed CAD did not retain the complete non-design material')
-    for tool in cut_tools:
+    for tool in validation_cut_tools:
         intrusion = _native_boolean(material_result, tool, 'common')
-        if abs(float(intrusion.Volume(tol=1e-4))) > max(1e-7, abs(float(tool.Volume(tol=1e-4)))*1e-6):
+        intrusion_volume = sum(abs(float(solid.Volume(tol=1e-7))) for solid in intrusion.Solids())
+        if not intrusion.isValid() or intrusion_volume > max(1e-7, abs(float(tool.Volume(tol=1e-4)))*1e-6):
             raise RuntimeError('Reconstructed CAD intruded into a protected bore or void')
-    if source_domain is not None:
+    if source_domain is not None and not _box_domain_contains_shape(material_result, source_domain):
         outside = _native_boolean(material_result, source_domain, 'cut')
         if abs(float(outside.Volume(tol=1e-4))) > max(1e-7, abs(float(material_result.Volume(tol=1e-4)))*1e-6):
-            # Coincident split planes can make an OCC diagnostic cut return
-            # the entire contained body. For an axis-aligned solid box, exact
-            # bounding containment independently proves domain containment.
-            # This proof cannot apply to a domain with bores or concavities.
-            domain_box, body_box = source_domain.BoundingBox(), material_result.BoundingBox()
-            box_volume = domain_box.xlen*domain_box.ylen*domain_box.zlen
-            is_box = (len(source_domain.Solids()) == 1
-                      and all(face.geomType() == 'PLANE' for face in source_domain.Faces())
-                      and abs(abs(source_domain.Volume(tol=1e-7))-box_volume) <= max(1e-7,box_volume*1e-8))
-            tolerance = max(1e-7,max(domain_box.xlen,domain_box.ylen,domain_box.zlen)*1e-8)
-            contained = all(getattr(body_box,axis+'min') >= getattr(domain_box,axis+'min')-tolerance
-                            and getattr(body_box,axis+'max') <= getattr(domain_box,axis+'max')+tolerance
-                            for axis in 'xyz')
-            if not (is_box and contained):
-                raise RuntimeError(f'Reconstructed material extends outside the source CAD domain '
-                    f'({abs(float(outside.Volume(tol=1e-4))):.6g} model-volume units, '
-                    f'{len(outside.Solids())} solids, {len(outside.Faces())} faces)')
-            logger.info('Verified box-domain containment by exact CAD bounds after an ambiguous diagnostic cut.')
+            raise RuntimeError(f'Reconstructed material extends outside the source CAD domain '
+                f'({abs(float(outside.Volume(tol=1e-4))):.6g} model-volume units, '
+                f'{len(outside.Solids())} solids, {len(outside.Faces())} faces)')
     return result
 
 

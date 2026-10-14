@@ -212,8 +212,6 @@ class ProductFamilyWorker(QtCore.QThread):
         dsu,
         search_lower,
         search_upper,
-        reqU,
-        reqL,
         parameters,
         solver_type,
     ) -> None:
@@ -224,8 +222,6 @@ class ProductFamilyWorker(QtCore.QThread):
         self.dsu = dsu
         self.search_lower = search_lower
         self.search_upper = search_upper
-        self.reqU = reqU
-        self.reqL = reqL
         self.parameters = parameters
         self.solver_type = solver_type
         self._stop_requested = False
@@ -257,8 +253,6 @@ class ProductFamilyWorker(QtCore.QThread):
                 self.dsu,
                 self.search_lower,
                 self.search_upper,
-                self.reqU,
-                self.reqL,
                 self.parameters,
                 self.solver_type,
                 progress_callback=progress_callback,

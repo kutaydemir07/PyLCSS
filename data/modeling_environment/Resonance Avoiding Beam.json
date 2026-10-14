@@ -2,46 +2,48 @@
   "_copyright": "Copyright (c) 2026 Kutay Demir.",
   "_license": "Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.",
   "_title": "Resonance-Avoiding Beam — Disconnected Frequency Bands",
-  "_purpose": "Find robust beam dimensions that keep natural frequencies away from an operating excitation band while controlling mass.",
-  "_fidelity": "Euler-Bernoulli analytical benchmark. Thick-beam effects, joints, damping, material scatter, and full modal FEA require downstream verification.",
+  "_purpose": "Find beam-dimension solution boxes that satisfy static stress and deflection limits while placing the first bending natural frequency outside the 60 Hz to 120 Hz excitation band.",
+  "_fidelity": "Euler-Bernoulli analytical cantilever benchmark with E = 210 GPa, density = 7850 kg/m^3, and a 200 N tip proof load. The saved equations include 1e-12 numerical offsets in the second moment of area and cross-section area. Thick-beam effects, joints, damping, material scatter, and full modal FEA require downstream verification.",
   "_visual_target": "Inspect disjoint solution boxes separating low-frequency sub-resonance and high-frequency supra-resonance regimes.",
-  "_engineering_decision": "Select rectangular beam cross-section (height, width) and span length that place fundamental bending natural frequencies safely outside a critical motor operating excitation band (45 Hz to 65 Hz) while minimizing structural mass.",
-  "_baseline": "Beam height = 45.0 mm, beam width = 25.0 mm, beam length = 800.0 mm, resulting in fundamental frequency = 78.5 Hz (+20.8% margin above excitation band) and mass = 2.43 kg.",
+  "_engineering_decision": "Select rectangular beam height, width, and cantilever span that satisfy sigma <= 250 MPa, delta <= 10 mm, and f1 <= 60 Hz or f1 >= 120 Hz. The graph has no mass output or optimization objective; use it to explore feasible regions.",
+  "_baseline": "At h = 45.0 mm, b = 25.0 mm, and L = 0.8 m, the saved equations give f1 = 58.740894 Hz, sigma = 18.962863 MPa, delta = 0.856172 mm, and signed resonance constraint f_n = -1.259106 Hz. This point is feasible and lies 2.10% below the 60 Hz band edge. The independently calculated solid beam mass is 7.065 kg; mass is not a graph output.",
   "_design_variables": [
-    "Beam height: 30.0 to 60.0 mm",
-    "Beam width: 15.0 to 35.0 mm",
-    "Beam span length: 600.0 to 1000.0 mm"
+    "Beam height h: 5.0 to 50.0 mm",
+    "Beam width b: 10.0 to 100.0 mm",
+    "Beam span length L: 0.3 to 1.0 m"
   ],
   "_load_cases": [
-    "Dynamic harmonic excitation band between 45.0 Hz and 65.0 Hz under clamped-free cantilever boundary conditions"
+    "A 200 N static tip proof load for stress and deflection under clamped-free cantilever boundary conditions.",
+    "First bending natural-frequency exclusion from the open interval (60 Hz, 120 Hz). The analytical model does not calculate a forced harmonic response."
   ],
   "_requirements": [
     {
       "name": "Resonance Avoidance Margin",
-      "requirement": "Fundamental natural frequency must lie outside [45 Hz, 65 Hz] with >= 15% clearance (f1 < 38.25 Hz or f1 > 74.75 Hz)."
+      "requirement": "The graph output f_n = min(f1 - 60 Hz, 120 Hz - f1) must be <= 0 Hz. Thus f1 <= 60 Hz or f1 >= 120 Hz is feasible; no extra clearance percentage is imposed. f_n is a signed exclusion constraint, not the natural frequency."
     },
     {
       "name": "Max Bending Stress",
-      "requirement": "Static peak bending stress <= 150.0 MPa under 1.0 kN tip proof load."
+      "requirement": "Static peak bending stress sigma must be between 0 Pa and 250000000 Pa under the 200 N tip proof load."
     },
     {
       "name": "Tip Deflection",
-      "requirement": "Static tip deflection <= 3.0 mm under proof load."
+      "requirement": "Static tip deflection delta must be between 0 m and 0.01 m under the 200 N tip proof load."
     }
   ],
   "_deliverables": [
     "Multimodal feasible solution boxes isolating low-frequency and high-frequency design branches",
-    "Frequency-mass trade space mapping",
+    "Static stress, tip-deflection, and signed frequency-exclusion response maps",
     "Recommended candidate beam geometry and verification modal parameters"
   ],
   "_workflow": [
     "Discover the feasible regions above and below the forbidden frequency band.",
     "Retain separate multimodal boxes rather than bridging the resonance gap.",
-    "Select a mode using mass and manufacturing-robustness criteria."
+    "Compare the feasible branches using interval widths and verified static responses. Add an explicit mass output and objective if mass optimization is required."
   ],
   "_acceptance_criteria": [
-    "No retained box intersects the forbidden excitation band.",
-    "Frequency separation includes the declared uncertainty margin.",
+    "Fresh validation samples satisfy sigma <= 250 MPa, delta <= 10 mm, and f_n <= 0 Hz.",
+    "Retain separate boxes across the forbidden frequency interval. Finite sampling does not prove that every point in a box is feasible.",
+    "Add explicit frequency clearance or material-uncertainty inputs if they are required; the saved graph does not impose them.",
     "Selected corners are checked with a modal finite-element model."
   ],
   "product_name": "Resonance Avoiding Beam",

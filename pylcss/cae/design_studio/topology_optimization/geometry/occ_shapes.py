@@ -74,6 +74,37 @@ def _assert_valid_occ_shape(shape: Any, *, label: str = "STEP body") -> None:
         logger.debug("BRepCheck_Analyzer unavailable or failed; skipped validation")
 
 
+def _assess_brep_self_intersections(shape: Any) -> dict[str, Any]:
+    """Check geometric intersections that a closed, valid shell can still hide."""
+    from OCP.BOPAlgo import BOPAlgo_ArgumentAnalyzer, BOPAlgo_SelfIntersect
+
+    analyzer = BOPAlgo_ArgumentAnalyzer()
+    analyzer.SetShape1(shape.wrapped)
+    analyzer.SelfInterMode = True
+    analyzer.StopOnFirstFaulty = False
+    analyzer.Perform()
+    faces = shape.Faces()
+    failed_faces: set[int] = set()
+    unmapped_faults = 0
+    for fault in analyzer.GetCheckResult():
+        if fault.GetCheckStatus() != BOPAlgo_SelfIntersect:
+            continue
+        for faulty_shape in fault.GetFaultyShapes1():
+            mapped = False
+            for index, face in enumerate(faces):
+                if any(part.wrapped.IsSame(faulty_shape)
+                       for part in (face, *face.Edges(), *face.Vertices())):
+                    failed_faces.add(index)
+                    mapped = True
+            unmapped_faults += not mapped
+    return {
+        "method": "OpenCASCADE Boolean argument self-intersection analysis",
+        "passed": not analyzer.HasFaulty(),
+        "failed_face_indices": sorted(failed_faces),
+        "unmapped_fault_count": unmapped_faults,
+    }
+
+
 def _unify_same_domain_shape(shape: Any, merge_angle_deg: float = 0.0) -> Any:
     """Merge same-domain faces after sewing and analytic feature booleans."""
     if not merge_angle_deg or float(merge_angle_deg) <= 0.0:

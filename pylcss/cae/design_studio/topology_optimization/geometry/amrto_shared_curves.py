@@ -82,7 +82,50 @@ def _polyline_curve(points, parameters):
     return BSpline(knots, controls, 3)
 
 
-def _fit_curve(points, tolerance, *, preserve_polyline=False):
+def simplify_shared_curve(curve, points, tolerance, *, bounds=None, maximum_attempts=64):
+    """Remove boundary knots once per shared chain under the source error budget.
+
+    Both incident charts subsequently receive the same curve. Endpoints and
+    protected polylines stay exact; patch-level compression still freezes borders.
+    """
+    lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
+    parameters = np.r_[0., np.cumsum(lengths)] / lengths.sum()
+    attempts = removed = 0
+    current = curve
+    while attempts < maximum_attempts:
+        changed = False
+        for knot in np.unique(current.t[current.k + 1:-current.k - 1]):
+            if attempts >= maximum_attempts:
+                break
+            attempts += 1
+            knots = np.delete(current.t, np.flatnonzero(current.t == knot)[0])
+            count = len(knots) - current.k - 1
+            insertion = BSpline(knots, np.eye(count), current.k).insert_knot(float(knot)).c
+            # Constrain the endpoints, not just the sampled residual.
+            controls = np.zeros((count, 3))
+            controls[[0, -1]] = current.c[[0, -1]]
+            right = current.c - insertion[:, [0, -1]] @ controls[[0, -1]]
+            controls[1:-1] = lstsq(insertion[:, 1:-1], right, lapack_driver='gelsy')[0]
+            if bounds is not None and (np.any(controls < bounds[0]) or np.any(controls > bounds[1])):
+                continue
+            candidate = BSpline(knots, controls, current.k)
+            sites = np.unique(np.r_[parameters, current.t, knots,
+                                    np.linspace(0., 1., max(40, 5 * len(points))),
+                                    np.linspace(0., 1., max(80, 8 * len(points)))])
+            source = np.column_stack([np.interp(sites, parameters, points[:, axis]) for axis in range(3)])
+            distance = max(float(np.linalg.norm(candidate(sites) - source, axis=1).max()),
+                           float(_curve_distance_to_polyline(candidate(sites), points).max()))
+            if distance <= tolerance:
+                current = candidate
+                removed += 1
+                changed = True
+        if not changed:
+            break
+    return current, {'removed_knot_count': removed, 'attempts': attempts,
+                     'boundary_simplified_jointly': True, 'control_points': len(current.c)}
+
+
+def _fit_curve(points, tolerance, *, preserve_polyline=False, bounds=None):
     lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
     if (lengths <= 0).any():
         raise ValueError("Shared boundary chain has zero-length edges")
@@ -92,7 +135,7 @@ def _fit_curve(points, tolerance, *, preserve_polyline=False):
         curve = _polyline_curve(points, parameters)
         return curve, {"maximum_sampled_error": 0.0, "control_points": len(curve.c),
                        "smooth_interior_knots": False, "exact_protected_chain": True,
-                       "reason": "Protected source crease retained by exact polyline degree elevation"}
+                       "reason": "Protected source boundary retained by exact polyline degree elevation"}
     sample_t = np.unique(np.r_[parameters, np.linspace(0, 1, max(40, 5 * len(points)))])
     samples = np.column_stack([np.interp(sample_t, parameters, points[:, i]) for i in range(3)])
     best = None
@@ -106,14 +149,19 @@ def _fit_curve(points, tolerance, *, preserve_polyline=False):
         controls[0], controls[-1] = points[0], points[-1]
         residual = samples - basis[:, [0, -1]] @ controls[[0, -1]]
         controls[1:-1] = lstsq(basis[:, 1:-1], residual, lapack_driver="gelsy")[0]
+        if bounds is not None:
+            controls = np.clip(controls, bounds[0], bounds[1])
         curve = BSpline(knots, controls, 3)
         dense_t = np.linspace(0, 1, max(80, 8 * len(points)))
         distance = max(float(np.linalg.norm(curve(sample_t) - samples, axis=1).max()),
                        float(_curve_distance_to_polyline(curve(dense_t), points).max()))
         best = (curve, distance)
         if distance <= tolerance:
-            return curve, {"maximum_sampled_error": distance, "control_points": count,
-                           "smooth_interior_knots": True}
+            curve, reduction = simplify_shared_curve(curve, points, tolerance, bounds=bounds)
+            distance = max(float(np.linalg.norm(curve(sample_t) - samples, axis=1).max()),
+                           float(_curve_distance_to_polyline(curve(dense_t), points).max()))
+            return curve, {"maximum_sampled_error": distance, "control_points": len(curve.c),
+                           "smooth_interior_knots": True, 'shared_curve_reduction': reduction}
     # True sharp turns cannot always be approximated within tolerance by a small
     # smooth curve. Preserve their polyline instead of rounding material away.
     curve = _polyline_curve(points, parameters)
@@ -163,12 +211,17 @@ def reparameterize_shared_curve(curve, chord_parameters, native_parameters, tole
                     "added_control_count": len(result.c) - len(curve.c)}
 
 
-def prepare_shared_boundary_curves(layouts, tolerance):
+def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None):
     """Fit seams once; retain protected source creases and junctions exactly."""
     def key(point):
         return tuple(map(float, point))
     protected_edges = {tuple(sorted((key(edge[0]), key(edge[1]))))
                        for layout in layouts for edge in getattr(layout, "protected_source_crease_edges", ())}
+    protected_edges.update(
+        tuple(sorted((key(layout.vertices[a]), key(layout.vertices[b]))))
+        for layout in layouts if getattr(layout, "require_exact_boundaries", False)
+        for path in layout.boundary_paths for a, b in zip(path, path[1:])
+    )
     anchors, graph, owners = set(), defaultdict(set), defaultdict(set)
     for owner, layout in enumerate(layouts):
         for path in layout.boundary_paths:
@@ -215,7 +268,7 @@ def prepare_shared_boundary_curves(layouts, tolerance):
                 if identifier not in cache:
                     protected = any(tuple(sorted((a, b))) in protected_edges
                                     for a, b in zip(identifier, identifier[1:]))
-                    curve, report = _fit_curve(canonical, tolerance, preserve_polyline=protected)
+                    curve, report = _fit_curve(canonical, tolerance, preserve_polyline=protected, bounds=bounds)
                     cache[identifier] = curve
                     reports.append(report)
                 curve = cache[identifier]

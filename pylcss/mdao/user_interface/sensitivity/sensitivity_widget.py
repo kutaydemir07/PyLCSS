@@ -28,6 +28,7 @@ from pylcss.user_interface.common.ui_kit import (
     SegmentedControl,
     secondary_button,
 )
+from .plotting import second_order_matrix
 from .workers import EvalTimeWorker, OutputRefreshWorker, SensitivityWorker
 
 logger = logging.getLogger(__name__)
@@ -121,13 +122,6 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         steps_layout.setSpacing(8)
         scroll.setWidget(steps)
         config_layout.addWidget(scroll, 1)
-
-        # Legacy attributes preserved for backwards compatibility with project serialization
-        self.combo_method = QtWidgets.QComboBox()
-        self.combo_method.addItem("Sobol")
-        self.combo_method.setVisible(False)
-        self.lbl_method_desc = QtWidgets.QLabel()
-        self.lbl_method_desc.setVisible(False)
 
         # 1. Outputs
         self.sec_outputs = CollapsibleSection("1  Outputs")
@@ -236,18 +230,6 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         self.sec_advanced.body_layout.addLayout(l_adv)
         self.sec_advanced.set_expanded(False)
         steps_layout.addWidget(self.sec_advanced)
-
-        # Legacy widgets kept hidden for save/load compatibility
-        self.spin_trajectories = QtWidgets.QSpinBox()
-        self.spin_trajectories.setValue(20)
-        self.spin_trajectories.setVisible(False)
-        self.lbl_trajectories = QtWidgets.QLabel()
-        self.lbl_trajectories.setVisible(False)
-        self.spin_morris_levels = QtWidgets.QSpinBox()
-        self.spin_morris_levels.setValue(4)
-        self.spin_morris_levels.setVisible(False)
-        self.lbl_morris_levels = QtWidgets.QLabel()
-        self.lbl_morris_levels.setVisible(False)
 
         self.spin_samples.valueChanged.connect(self._on_samples_changed)
         self.chk_second_order.toggled.connect(self._on_s2_toggled)
@@ -380,13 +362,9 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         has_s2 = bool(
             self.current_results
             and self.current_results.get("calc_second_order", False)
-            and self.current_results.get("s2_matrix") is not None
+            and self.current_results.get("second_order") is not None
         )
         self.heatmap_widget.setVisible(self.chk_second_order.isChecked() and has_s2)
-
-    def _on_method_changed(self, method: str = "Sobol"):
-        """Backward compatibility hook."""
-        self._update_estimate()
 
     def _on_batch_toggled(self, checked: bool):
         self.seg_outputs.set_index(1 if checked else 0)
@@ -692,7 +670,6 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
             problem,
             output_name,
             n_samples,
-            method="Sobol",
             calc_second_order=calc_second_order,
             random_seed=random_seed,
             batch=batch,
@@ -886,19 +863,22 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         if not self.current_results or not self.current_results.get("calc_second_order", False):
             return
 
-        s2_matrix = self.current_results.get("s2_matrix", None)
-        if s2_matrix is None:
+        second_order = self.current_results.get("second_order")
+        if second_order is None:
             return
 
-        s2 = np.array(s2_matrix, dtype=float)
-        s2 = np.where(np.isnan(s2), 0, s2)
+        s2 = second_order_matrix(second_order)
         variables = list(self.current_results.get("variable_names", []))
         order = self._display_order()  # same ranking as the bar chart
         if len(order) == s2.shape[0]:
             s2 = s2[np.ix_(order, order)]
             variables = [variables[i] for i in order]
 
-        img = pg.ImageItem(s2.T)
+        finite = s2[np.isfinite(s2)]
+        levels = (float(finite.min()), float(finite.max())) if finite.size else (0.0, 1.0)
+        if levels[0] == levels[1]:
+            levels = (levels[0] - 0.5, levels[1] + 0.5)
+        img = pg.ImageItem(s2.T, levels=levels)
         cmap = pg.colormap.get("CET-D1")
         if cmap is not None:
             img.setLookupTable(cmap.getLookupTable(nPts=256))
@@ -910,6 +890,9 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         ax_bottom.setTicks([ticks])
         ax_left.setTicks([ticks])
         self.heatmap_widget.setTitle("Pairwise Interactions (S2)")
+        self.heatmap_widget.setToolTip(
+            "Blank cells have no estimate; they do not indicate zero interaction."
+        )
 
     def update_table(self):
         """Show numeric Sobol indices sorted by total-order index (ST)."""
@@ -1073,11 +1056,8 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         from pylcss.io_manager.project_io import atomic_json_dump
 
         data = {
-            "method": "Sobol",
             "output_name": self.combo_outputs.currentText(),
             "n_samples": self.spin_samples.value(),
-            "n_trajectories": self.spin_trajectories.value(),
-            "morris_levels": self.spin_morris_levels.value(),
             "calc_second_order": self.chk_second_order.isChecked(),
             "random_seed": self.spin_seed.value(),
             "batch": self.chk_batch.isChecked(),
@@ -1092,11 +1072,8 @@ class SensitivityAnalysisWidget(QtWidgets.QWidget):
         if not os.path.exists(path):
             return
         data = load_json_object(path)
-        self.combo_method.setCurrentText(data.get("method", "Sobol"))
         self.combo_outputs.setCurrentText(data.get("output_name", ""))
         self.spin_samples.setValue(data.get("n_samples", 1024))
-        self.spin_trajectories.setValue(data.get("n_trajectories", 20))
-        self.spin_morris_levels.setValue(data.get("morris_levels", 4))
         self.chk_second_order.setChecked(data.get("calc_second_order", False))
         self.spin_seed.setValue(data.get("random_seed", 42))
         self.chk_batch.setChecked(data.get("batch", False))

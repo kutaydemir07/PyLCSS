@@ -24,33 +24,9 @@ from skfem import Mesh, MeshTet2
 from pylcss.cae.design_studio.core.base_node import CadQueryNode
 from pylcss.cae.design_studio.fem._helpers import suppress_output, OCCGeometry
 from pylcss.cae.design_studio.fem.quality import attach_mesh_quality
+from pylcss.cae.solver_backends.selection import normalize_geometries
 
 logger = logging.getLogger(__name__)
-
-
-def migrate_removed_mesher_properties(session_data: object) -> bool:
-    """Drop retired backend controls before older projects are deserialized."""
-    if not isinstance(session_data, dict):
-        return False
-    nodes = session_data.get("nodes")
-    if not isinstance(nodes, dict):
-        return False
-
-    changed = False
-    retired = ("mesher", "gmsh_algorithm", "curvature_elements")
-    for node_data in nodes.values():
-        if not isinstance(node_data, dict):
-            continue
-        if not str(node_data.get("type_", "")).endswith(".MeshNode"):
-            continue
-        custom = node_data.get("custom")
-        if not isinstance(custom, dict):
-            continue
-        for name in retired:
-            if name in custom:
-                custom.pop(name)
-                changed = True
-    return changed
 
 
 def _selected_cad_face_indices(
@@ -61,9 +37,7 @@ def _selected_cad_face_indices(
     if selection is None:
         return []
     if isinstance(selection, dict):
-        selected = list(selection.get("faces") or [])
-        if not selected and selection.get("face") is not None:
-            selected = [selection["face"]]
+        selected = normalize_geometries(selection)
     elif hasattr(selection, "vals"):
         selected = list(selection.vals())
     else:
@@ -94,31 +68,15 @@ def _selected_cad_face_indices(
     return sorted(set(indices))
 
 
-def _selected_cad_entities(
-    shape: object,
-    selection: object | None,
-) -> tuple[int | None, list[object]]:
-    """Return ``(dimension, selected entities)`` for a CAD refinement payload."""
+def _selection_dimension(selection: object | None) -> int | None:
+    """Return the geometric dimension declared by a CAD selection."""
     if selection is None:
-        return None, []
+        return None
     entity_type = "Face"
     if isinstance(selection, dict):
         entity_type = str(selection.get("entity_type") or "Face").title()
-        selected = list(selection.get("entities") or [])
-        if not selected:
-            selected = list(selection.get("faces") or [])
-        if not selected and selection.get("entity") is not None:
-            selected = [selection["entity"]]
-        if not selected and selection.get("face") is not None:
-            selected = [selection["face"]]
-    elif hasattr(selection, "vals"):
-        selected = list(selection.vals())
-    else:
-        selected = [selection]
     dimensions = {"Vertex": 0, "Edge": 1, "Face": 2}
-    return dimensions.get(entity_type, 2), [
-        item for item in selected if item is not None and not isinstance(item, dict)
-    ]
+    return dimensions.get(entity_type, 2)
 
 
 class _ShellSurfaceMesh:
@@ -156,7 +114,7 @@ class MeshNode(CadQueryNode):
         super().__init__()
         self.add_input("shape", color=(100, 255, 100))
         self.add_input("element_size", color=(180, 180, 0))
-        # NEW: Local refinement inputs
+        # Local refinement inputs
         self.add_input(
             "refinement_faces", color=(255, 100, 100)
         )  # List of faces for refinement
@@ -337,27 +295,33 @@ class MeshNode(CadQueryNode):
         # Resolve element size input with fallback to property
         size = self.get_input_value("element_size", "element_size")
 
-        # NEW: Get refinement parameters
         refinement_faces = self.get_input_value("refinement_faces", None)
-        refinement_size = self.get_input_value("refinement_size", "refinement_size")
         try:
             size = float(size)
-            refinement_size = float(refinement_size)
         except (TypeError, ValueError):
-            self.set_error("Element and refinement sizes must be numeric.")
+            self.set_error("Element size must be numeric.")
             return None
 
         if not np.isfinite(size) or size <= 0.0:
             self.set_error("Element size must be a finite value greater than zero.")
             return None
-        if not np.isfinite(refinement_size) or refinement_size <= 0.0:
-            self.set_error("Refinement size must be a finite value greater than zero.")
-            return None
-        if refinement_faces is not None and refinement_size >= size:
-            self.set_error(
-                "Local refinement size must be smaller than the global element size."
-            )
-            return None
+        refinement_size = None
+        if refinement_faces is not None:
+            try:
+                refinement_size = float(
+                    self.get_input_value("refinement_size", "refinement_size")
+                )
+            except (TypeError, ValueError):
+                self.set_error("Refinement size must be numeric.")
+                return None
+            if not np.isfinite(refinement_size) or refinement_size <= 0.0:
+                self.set_error("Refinement size must be a finite value greater than zero.")
+                return None
+            if refinement_size >= size:
+                self.set_error(
+                    "Local refinement size must be smaller than the global element size."
+                )
+                return None
         if not shape:
             self.set_error("Connect a CAD solid to the mesh node's shape input.")
             return None
@@ -409,7 +373,7 @@ class MeshNode(CadQueryNode):
             msh_path = step_path.replace(".step", ".msh")
 
             try:
-                # 1. Export CadQuery shape to STEP
+                # Export CadQuery shape to STEP.
                 if hasattr(shape, "val"):
                     shape.val().exportStep(step_path)
                 else:
@@ -433,9 +397,7 @@ class MeshNode(CadQueryNode):
                     geo = OCCGeometry(step_path)
 
                     if refinement_faces is not None:
-                        dimension, _ = _selected_cad_entities(
-                            shape, refinement_faces
-                        )
+                        dimension = _selection_dimension(refinement_faces)
                         if dimension != 2:
                             raise ValueError(
                                 "Netgen local refinement accepts CAD faces only."
@@ -462,7 +424,7 @@ class MeshNode(CadQueryNode):
                         ng_mesh = geo.GenerateMesh(maxh=size)
                     ng_mesh.Export(msh_path, "Gmsh2 Format")
 
-                # 5. Load into skfem (Tet) or meshio + ShellSurfaceMesh wrapper (Shell)
+                # Read the volume mesh or wrap the surface mesh.
                 if is_shell:
                     import meshio
 

@@ -5,16 +5,16 @@
 
 from __future__ import annotations
 
-import ast
+from collections import Counter
 import keyword
 import re
+import symtable
 import textwrap
 from typing import Any
 
 import networkx as nx
 
-from .types import InputSpec
-from .units import UnitError, conversion_parameters, is_specified_unit
+from .units import UnitError, conversion_expression
 
 INPUT_NODE = "com.pfd.input"
 OUTPUT_NODE = "com.pfd.output"
@@ -23,13 +23,9 @@ BLOCK_NODE = "com.pfd.custom_block"
 RESERVED_NAMES = {
     "BASE_DIR",
     "cad",
-    "inputs",
     "joblib",
     "np",
     "os",
-    "outputs",
-    "results",
-    "sys",
 }
 
 
@@ -50,12 +46,13 @@ def block_function_source(
         require_identifier(port.name(), f"output port on {block.name()!r}")
         for port in block.output_ports()
     ]
-    duplicates = set(input_names) & set(output_names)
-    if duplicates:
-        raise GraphCompilationError(
-            f"Block {block.name()!r} reuses names as both inputs and outputs: "
-            f"{', '.join(sorted(duplicates))}."
-        )
+    for direction, names in (("input", input_names), ("output", output_names)):
+        duplicates = sorted(name for name, count in Counter(names).items() if count > 1)
+        if duplicates:
+            raise GraphCompilationError(
+                f"Block {block.name()!r} has duplicate {direction} ports: "
+                f"{', '.join(duplicates)}."
+            )
 
     lines = [f"def {function_name}({', '.join(input_names)}):"]
     if surrogate_name is not None:
@@ -66,62 +63,24 @@ def block_function_source(
         lines.extend(_surrogate_body(surrogate_name, input_names, output_names))
     else:
         user_code = block_code(block)
-        _require_assigned_outputs(block, user_code, output_names)
-        lines.extend(textwrap.indent(user_code, "    ").splitlines())
+        lines.extend(textwrap.indent(user_code or "pass", "    ").splitlines())
         if output_names:
             lines.append(f"    return {', '.join(output_names)}")
         else:
             lines.append("    return None")
+    try:
+        compile("\n".join(lines), f"<block {block.name()}>", "exec")
+    except SyntaxError as exc:
+        raise GraphCompilationError(
+            f"Invalid code in {block.name()!r}, line {exc.lineno}: {exc.msg}."
+        ) from exc
     lines.append("")
     return lines
 
 
-def wrapper_source(
-    function_name: str,
-    core_name: str,
-    inputs: list[InputSpec],
-) -> list[str]:
-    names = [item["name"] for item in inputs]
-    arguments = ", ".join(names)
-    indexed_arguments = ", ".join(f"_row_{name}" for name in names)
-    lines = [
-        "",
-        f"def {function_name}({arguments}):",
-        "    try:",
-        f"        return {core_name}({arguments})",
-        "    except Exception as _vector_error:",
-        f"        _input_values = [{arguments}]",
-        "        _lengths = [",
-        "            len(value) for value in _input_values if np.ndim(value) > 0",
-        "        ]",
-        "        if not _lengths:",
-        "            raise",
-        "        if len(set(_lengths)) != 1:",
-        "            raise ValueError(",
-        "                f'Vectorized inputs have inconsistent lengths: {_lengths}'",
-        "            ) from _vector_error",
-        "        _results = {}",
-        "        for _index in range(_lengths[0]):",
-    ]
-    for name in names:
-        lines.append(
-            f"            _row_{name} = "
-            f"{name}[_index] if np.ndim({name}) > 0 else {name}"
-        )
-    lines.extend(
-        [
-            f"            _point = {core_name}({indexed_arguments})",
-            "            for _key, _value in _point.items():",
-            "                _results.setdefault(_key, []).append(_value)",
-            "        return {",
-            "            key: np.asarray(values) for key, values in _results.items()",
-            "        }",
-        ]
-    )
-    return lines
+def connection_graph(nodes: list[Any]) -> nx.DiGraph:
+    """Represent graph connections and reject invalid node references."""
 
-
-def topological_nodes(nodes: list[Any]) -> list[Any]:
     graph = nx.DiGraph()
     node_by_id = {node.id: node for node in nodes}
     if len(node_by_id) != len(nodes):
@@ -130,7 +89,17 @@ def topological_nodes(nodes: list[Any]) -> list[Any]:
     for node in nodes:
         for port in node.output_ports():
             for connected in port.connected_ports():
+                if connected.node().id not in node_by_id:
+                    raise GraphCompilationError(
+                        "A connection references a missing node."
+                    )
                 graph.add_edge(node.id, connected.node().id)
+    return graph
+
+
+def topological_nodes(nodes: list[Any]) -> list[Any]:
+    graph = connection_graph(nodes)
+    node_by_id = {node.id: node for node in nodes}
     try:
         return [node_by_id[node_id] for node_id in nx.topological_sort(graph)]
     except nx.NetworkXUnfeasible as exc:
@@ -153,20 +122,10 @@ def connected_value(
 
     source_unit = property_value(source_node, "unit", "-")
     target_unit = property_value(target_node, "unit", "-")
-    if (
-        is_specified_unit(source_unit)
-        and is_specified_unit(target_unit)
-        and source_unit != target_unit
-    ):
-        try:
-            scale, offset = conversion_parameters(source_unit, target_unit)
-        except UnitError as exc:
-            raise GraphCompilationError(str(exc)) from exc
-        if offset:
-            expression = f"(({expression}) * {scale!r} + {offset!r})"
-        elif scale != 1:
-            expression = f"(({expression}) * {scale!r})"
-    return expression
+    try:
+        return conversion_expression(expression, source_unit, target_unit)
+    except UnitError as exc:
+        raise GraphCompilationError(str(exc)) from exc
 
 
 def single_source(port: Any, node: Any) -> Any:
@@ -288,29 +247,56 @@ def _surrogate_body(
     return lines
 
 
-def _require_assigned_outputs(
-    block: Any,
-    source: str,
-    output_names: list[str],
-) -> None:
-    if not output_names:
-        return
-    try:
-        tree = ast.parse(source or "pass")
-    except SyntaxError as exc:
-        raise GraphCompilationError(
-            f"Invalid code in {block.name()!r}, line {exc.lineno}: {exc.msg}."
-        ) from exc
-    assigned = {
-        node.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+def unbound_outputs(block: Any) -> list[str]:
+    """Find obviously unbound outputs without rejecting dynamic Python code."""
+
+    source = "\n".join(block_function_source(block, "_check_block", None))
+    symbols = symtable.symtable(source, "<block>", "exec").get_children()[0]
+    bound = {
+        symbol.get_name()
+        for symbol in symbols.get_symbols()
+        if symbol.is_assigned() or symbol.is_imported() or symbol.is_parameter()
     }
-    missing = sorted(set(output_names) - assigned)
-    if missing:
+    return sorted({port.name() for port in block.output_ports()} - bound)
+
+
+def surrogate_path(block: Any) -> str | None:
+    if not as_bool(property_value(block, "use_surrogate", False)):
+        return None
+    path = property_value(block, "surrogate_model_path")
+    if not isinstance(path, str) or not path.strip():
         raise GraphCompilationError(
-            f"Block {block.name()!r} never assigns output(s): {', '.join(missing)}."
+            f"Block {block.name()!r} enables a surrogate but has no model path."
         )
+    return path
+
+
+def emit_surrogate_loaders(
+    lines: list[str], blocks: list[Any], *, exclude: set[str] | None = None
+) -> dict[str, str]:
+    """Emit shared runtime loading calls for enabled surrogate blocks."""
+
+    selected = [
+        (block, surrogate_path(block))
+        for block in blocks
+        if is_node(block, BLOCK_NODE) and block.id not in (exclude or set())
+    ]
+    selected = [(block, path) for block, path in selected if path is not None]
+    if not selected:
+        return {}
+    lines.extend(
+        [
+            "from pylcss.mdao.system_modeling.model import load_surrogate",
+            "",
+        ]
+    )
+    names = {}
+    for block, path in selected:
+        name = f"_surrogate_{safe_node_id(block.id)}"
+        lines.append(f"{name} = load_surrogate({path!r}, BASE_DIR)")
+        names[block.id] = name
+    lines.append("")
+    return names
 
 
 __all__ = [
@@ -324,6 +310,8 @@ __all__ = [
     "block_code",
     "block_function_source",
     "connected_value",
+    "connection_graph",
+    "emit_surrogate_loaders",
     "is_node",
     "only_port",
     "plot_color",
@@ -331,6 +319,7 @@ __all__ = [
     "require_identifier",
     "safe_node_id",
     "single_source",
+    "surrogate_path",
     "topological_nodes",
-    "wrapper_source",
+    "unbound_outputs",
 ]

@@ -1,35 +1,23 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""Safe, deterministic sampling of generated system-model functions."""
+"""Deterministic sampling of trusted generated system-model functions."""
 
 from __future__ import annotations
 
-import importlib.util
 import logging
 import traceback
-import uuid
 from collections.abc import Callable, Mapping, Sequence
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.stats import qmc
 
 from .contracts import ProgressCallback, SpyPort, StopFlag
+from pylcss.mdao.system_modeling.model import load_source_function
 
 logger = logging.getLogger(__name__)
-
-try:
-    from scipy.stats import qmc
-
-    QMC_AVAILABLE = True
-except ImportError:
-    QMC_AVAILABLE = False
-
-# Kept as compatibility probes for clients that displayed these flags.
-JOBLIB_AVAILABLE = importlib.util.find_spec("joblib") is not None
-DILL_AVAILABLE = importlib.util.find_spec("dill") is not None
 
 SpyFunction = Callable[..., tuple[Mapping[str, Any], Mapping[str, Any]]]
 PortLike = SpyPort | str
@@ -73,30 +61,6 @@ def _validate_bounds(
     return lower, upper
 
 
-def _compile_spy_model(source: str) -> SpyFunction:
-    if not isinstance(source, str) or not source.strip():
-        raise ValueError("spy_code must be a non-empty string.")
-    module_name = f"_pylcss_spy_{uuid.uuid4().hex}"
-    namespace: dict[str, Any] = {
-        "__builtins__": __builtins__,
-        "__file__": str(Path.cwd() / f"{module_name}.py"),
-        "__name__": module_name,
-        "__package__": None,
-    }
-    try:
-        compiled = compile(source, f"<{module_name}>", "exec")
-        exec(compiled, namespace)
-    except Exception as exc:
-        logger.error("Generated spy-model code could not be compiled.", exc_info=True)
-        logger.debug("Generated spy-model source:\n%s", source)
-        raise RuntimeError(f"Failed to compile spy model: {exc}") from exc
-
-    function = namespace.get("spy_model")
-    if not callable(function):
-        raise RuntimeError("Generated code must define a callable named 'spy_model'.")
-    return function
-
-
 def _sample_bounds(
     lower: NDArray[np.float64],
     upper: NDArray[np.float64],
@@ -104,11 +68,14 @@ def _sample_bounds(
     count: int,
     random_state: int,
 ) -> NDArray[np.float64]:
-    if QMC_AVAILABLE:
-        unit = qmc.LatinHypercube(d=lower.size, seed=random_state).random(n=count)
-        return np.asarray(qmc.scale(unit, lower, upper), dtype=np.float64)
-    rng = np.random.default_rng(random_state)
-    return lower + rng.random((count, lower.size)) * (upper - lower)
+    varying = upper > lower
+    samples = np.tile(lower, (count, 1))
+    if varying.any():
+        unit = qmc.LatinHypercube(d=int(varying.sum()), seed=random_state).random(
+            n=count
+        )
+        samples[:, varying] = qmc.scale(unit, lower[varying], upper[varying])
+    return samples
 
 
 def _evaluate_sample(
@@ -163,7 +130,7 @@ def evaluate_spy_points(
             "per spy-model input."
         )
 
-    spy_model = _compile_spy_model(spy_code)
+    spy_model = load_source_function(spy_code, "spy_model")
     valid_X: list[NDArray[np.float64]] = []
     valid_y: list[NDArray[np.float64]] = []
     failures: list[str] = []
@@ -189,8 +156,7 @@ def evaluate_spy_points(
         if callback:
             callback(
                 int(100 * (index + 1) / max(1, total)),
-                f"Evaluated {index + 1}/{total} candidates "
-                f"({len(failures)} failed)...",
+                f"Evaluated {index + 1}/{total} candidates ({len(failures)} failed)...",
             )
 
     features = (
@@ -217,6 +183,7 @@ def generate_spy_data(
     random_state: int = 42,
     callback: ProgressCallback | None = None,
     stop_flag: StopFlag | None = None,
+    max_consecutive_failures: int | None = None,
 ) -> tuple[
     NDArray[np.float64],
     NDArray[np.float64],
@@ -230,6 +197,8 @@ def generate_spy_data(
         raise ValueError("num_samples must be at least 1.")
     if test_samples < 0:
         raise ValueError("test_samples cannot be negative.")
+    if max_consecutive_failures is not None and max_consecutive_failures < 1:
+        raise ValueError("max_consecutive_failures must be positive or None.")
 
     input_names = _port_names(spy_inputs, kind="Input")
     output_names = _port_names(spy_outputs, kind="Output")
@@ -241,7 +210,7 @@ def generate_spy_data(
 
     if callback:
         callback(0, "Compiling generated model...")
-    spy_model = _compile_spy_model(spy_code)
+    spy_model = load_source_function(spy_code, "spy_model")
     requested = num_samples + test_samples
     samples = _sample_bounds(
         lower,
@@ -255,7 +224,6 @@ def generate_spy_data(
     valid_X: list[NDArray[np.float64]] = []
     valid_y: list[NDArray[np.float64]] = []
     consecutive_failures = 0
-    max_consecutive_failures = 10
     last_error = ""
 
     # Generated engineering graphs frequently call non-thread-safe CAD/solver
@@ -276,7 +244,10 @@ def generate_spy_data(
             last_error = f"{exc}\n{traceback.format_exc()}"
             logger.warning("Sample %d failed: %s", index, exc)
             logger.debug("Sample %d traceback:\n%s", index, last_error)
-            if consecutive_failures >= max_consecutive_failures:
+            if (
+                max_consecutive_failures is not None
+                and consecutive_failures >= max_consecutive_failures
+            ):
                 raise RuntimeError(
                     "Data generation stopped after "
                     f"{max_consecutive_failures} consecutive failures. "
@@ -327,9 +298,6 @@ def generate_spy_data(
 
 
 __all__ = [
-    "DILL_AVAILABLE",
-    "JOBLIB_AVAILABLE",
-    "QMC_AVAILABLE",
     "evaluate_spy_points",
     "generate_spy_data",
 ]

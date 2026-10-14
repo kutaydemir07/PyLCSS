@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from os import PathLike
 from typing import Any
 
@@ -14,74 +15,44 @@ FORMAT_VERSION = 1
 
 
 def save_systems(
-    manager: Any,
+    systems: Sequence[dict[str, Any]],
     path: str | PathLike[str],
+    *,
+    product_name: str = "Product",
 ) -> None:
-    """Atomically serialize every graph owned by *manager*."""
+    """Validate and atomically save serialized graph records."""
 
-    product_name = manager.product_name.text().strip() or "Product"
-    systems = []
-    for index, system in enumerate(manager.systems):
-        name = system.get("name")
-        graph = system.get("graph")
-        if not isinstance(name, str) or not name.strip() or graph is None:
-            raise ValueError(f"System {index} is incomplete and cannot be saved.")
-        systems.append(
-            {
-                "name": name.strip(),
-                "graph": graph.serialize_session(),
-            }
-        )
-    atomic_json_dump(
-        {
-            "_copyright": "Copyright (c) 2026 Kutay Demir.",
-            "_license": (
-                "Licensed under the PolyForm Shield License 1.0.0. "
-                "See LICENSE file for details."
-            ),
-            "format_version": FORMAT_VERSION,
-            "product_name": product_name,
-            "systems": systems,
-        },
-        path,
-    )
+    document = {
+        "_copyright": "Copyright (c) 2026 Kutay Demir.",
+        "_license": (
+            "Licensed under the PolyForm Shield License 1.0.0. "
+            "See LICENSE file for details."
+        ),
+        "format_version": FORMAT_VERSION,
+        "product_name": product_name,
+        "systems": list(systems),
+    }
+    document["systems"] = _validate_document(document)
+    document["product_name"] = product_name.strip() or "Product"
+    atomic_json_dump(document, path)
 
 
 def load_systems(
-    manager: Any,
     path: str | PathLike[str],
-) -> None:
-    """Deserialize all graphs, committing them only after every graph succeeds."""
+) -> tuple[str, list[dict[str, Any]]]:
+    """Load a validated document without creating or touching widgets."""
 
     data = load_json_object(path, required_keys=("systems",))
     records = _validate_document(data)
-    prepared: list[tuple[str, Any]] = []
-    try:
-        for record in records:
-            graph = manager.create_graph()
-            try:
-                graph.deserialize_session(record["graph"])
-                manager.prepare_loaded_graph(graph)
-            except Exception:
-                graph.widget.deleteLater()
-                raise
-            prepared.append((record["name"], graph))
-    except Exception:
-        for _name, graph in prepared:
-            graph.widget.deleteLater()
-        raise
-
-    manager.replace_systems(prepared)
     product_name = data.get("product_name", "Product")
-    manager.product_name.setText(product_name.strip() or "Product")
+    return product_name.strip() or "Product", records
 
 
 def _validate_document(data: dict[str, Any]) -> list[dict[str, Any]]:
     version = data.get("format_version", 1)
     if version != FORMAT_VERSION:
         raise ValueError(
-            f"Unsupported system-model format {version!r}; "
-            f"expected {FORMAT_VERSION}."
+            f"Unsupported system-model format {version!r}; expected {FORMAT_VERSION}."
         )
     product_name = data.get("product_name", "Product")
     if not isinstance(product_name, str):

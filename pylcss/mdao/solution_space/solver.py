@@ -14,8 +14,8 @@ from typing import Optional
 
 import numpy as np
 
-from ..optimization.solvers.backends import (
-    run_goal_attainment_slsqp,
+from ..numerics import (
+    run_constrained_slsqp,
     solve_with_nevergrad,
 )
 from .box_optimization import optimize_box
@@ -26,8 +26,10 @@ from .contracts import (
     SampleBatch,
     StopCallback,
 )
-from .discovery.feasibility import FeasibilityProblem
-from .sampling import sample_box
+from .coordinates import VariableLayout
+from .feasibility import FeasibilityProblem
+from .samples import empty_samples, merge_samples
+from .sampling import evaluate_designs, sample_box_batch
 
 logger = logging.getLogger(__name__)
 
@@ -59,13 +61,16 @@ class SolutionSpaceSolver:
         self.reqU = np.asarray(reqU, dtype=float)
         self.reqL = np.asarray(reqL, dtype=float)
         self._validate_problem_bounds()
-        self.parameters = self._process_parameters(parameters)
-        self.ind_parameters = np.where(~np.isnan(self.parameters[0, :]))[0]
+        self.layout = VariableLayout.from_bounds(
+            self.original_dsl, self.original_dsu, parameters
+        )
+        self.parameters = self.layout.parameters
+        self.ind_parameters = self.layout.parameter_indices
         self.solver_type = solver_type
         self.include_objectives = include_objectives
 
         self.original_dim = len(self.original_dsl)
-        self.active_mask = np.isnan(self.parameters[0, :])
+        self.active_mask = self.layout.active_mask
         self.dsl = self.original_dsl[self.active_mask]
         self.dsu = self.original_dsu[self.active_mask]
         self.search_lower = self.original_search_lower[self.active_mask]
@@ -85,7 +90,6 @@ class SolutionSpaceSolver:
 
         self.dv_norm_l = self.dsl.copy()
         self.dv_norm = self.dsu - self.dsl
-        self.dv_norm[self.dv_norm == 0] = 1.0
 
         self.search_lower_norm = (self.search_lower - self.dv_norm_l) / self.dv_norm
         self.search_upper_norm = (self.search_upper - self.dv_norm_l) / self.dv_norm
@@ -104,6 +108,7 @@ class SolutionSpaceSolver:
         self.objective_indices = []
         self.objective_weights = []
         self._process_objectives()
+        self._selected_feasible_point_solver()
 
     def _validate_problem_bounds(self) -> None:
         arrays = (
@@ -141,41 +146,6 @@ class SolutionSpaceSolver:
         if np.any(self.reqL > self.reqU):
             raise ValueError("requirement bounds contain an inverted interval")
 
-    def _process_parameters(
-        self,
-        parameters: Optional[FloatArray],
-    ) -> FloatArray:
-        original_dim = len(self.original_dsl)
-        if parameters is None or np.asarray(parameters).size == 0:
-            processed = np.full((2, original_dim), np.nan)
-        else:
-            processed = np.asarray(parameters, dtype=float).copy()
-            if processed.shape != (2, original_dim):
-                raise ValueError(
-                    f"Parameters array must have shape (2, {original_dim}), "
-                    f"got {processed.shape}"
-                )
-            partial_nan = np.isnan(processed[0]) != np.isnan(processed[1])
-            if np.any(partial_nan):
-                raise ValueError(
-                    "each variable must have either two parameter bounds or two NaN values"
-                )
-            parameter_mask = ~np.isnan(processed[0])
-            if np.any(~np.isfinite(processed[:, parameter_mask])):
-                raise ValueError("parameter bounds must be finite")
-            if np.any(processed[0, parameter_mask] > processed[1, parameter_mask]):
-                raise ValueError("parameter bounds contain an inverted interval")
-
-        fixed_mask = np.isclose(self.original_dsl, self.original_dsu)
-        if np.any(fixed_mask):
-            processed[:, fixed_mask] = np.vstack(
-                (
-                    self.original_dsl[fixed_mask],
-                    self.original_dsu[fixed_mask],
-                )
-            )
-        return processed
-
     def _process_objectives(self):
         for i, qoi in enumerate(getattr(self.problem, "quantities_of_interest", [])):
             if qoi.get("minimize", False) or qoi.get("maximize", False):
@@ -204,13 +174,15 @@ class SolutionSpaceSolver:
         if x0 is None:
             return self._empty_result(start_time)
 
-        x0_physical = self._denormalize(x0.reshape(-1, 1)).ravel()
+        x0_physical = self.layout.expand_points(self._denormalize(x0.reshape(-1, 1)))[
+            :, 0
+        ]
         phase_result = optimize_box(
             problem=self.problem,
             x0=x0_physical,
             init_bounds=None,
-            dsl=self.dsl,
-            dsu=self.dsu,
+            dsl=self.original_dsl,
+            dsu=self.original_dsu,
             reqL=self.reqL,
             reqU=self.reqU,
             parameters=self.parameters,
@@ -228,26 +200,24 @@ class SolutionSpaceSolver:
             label="Solution space",
         )
 
-        dvbox = (phase_result.bounds - self.dv_norm_l[:, None]) / self.dv_norm[:, None]
+        dvbox = (
+            phase_result.bounds[self.active_mask] - self.dv_norm_l[:, None]
+        ) / self.dv_norm[:, None]
         return self._finalize_result(
             dvbox,
             initial_samples,
             start_time,
             extra_point=x0,
-            success=phase_result.target_reached,
+            success=phase_result.target_reached and not phase_result.cancelled,
         )
 
     def _find_feasible_point(self, stop_callback=None):
-        if self.dim <= 0:
-            logger.warning(
-                "No active design variables available for solution-space solve"
-            )
-            return None, self._empty_samples()
-
-        init_box = np.column_stack((self.search_lower_norm, self.search_upper_norm))
-        points_a, m, points_b, dv_sample, violation_idx, y_sample = sample_box(
+        if stop_callback and stop_callback():
+            return None, empty_samples(self.original_dim, len(self.reqL))
+        initial_box = np.column_stack((self.search_lower_norm, self.search_upper_norm))
+        points, samples = sample_box_batch(
             self.problem,
-            init_box,
+            initial_box,
             self.parameters,
             self.reqL,
             self.reqU,
@@ -255,44 +225,32 @@ class SolutionSpaceSolver:
             self.dv_norm_l,
             self.ind_parameters,
             self.initial_sample_size,
-            self.dim,
         )
-
-        initial_samples = self._sample_dict(
-            dv_sample,
-            points_a,
-            points_b,
-            violation_idx,
-            y_sample,
-        )
-
-        logger.info("Initial Monte Carlo found %d feasible points", m)
-        if m > 0:
-            ind_a = np.where(points_a)[0]
-            x0 = dv_sample[:, ind_a[-1]]
-            if not (self.include_objectives and self.objective_indices):
-                return x0, initial_samples
-            x_start = x0
+        good = np.flatnonzero(samples["is_good"])
+        logger.info("Initial LHS found %d feasible points", good.size)
+        if good.size:
+            anchor = points[:, good[-1]]
+            if self.dim == 0 or not (
+                self.include_objectives and self.objective_indices
+            ):
+                return anchor, samples
+            start = anchor
         else:
-            x_start = (
-                dv_sample[:, -1]
-                if dv_sample.shape[1]
-                else (self.search_lower_norm + self.search_upper_norm) / 2.0
-            )
-
+            if self.dim == 0:
+                return None, samples
+            start = points[:, -1]
         if stop_callback and stop_callback():
-            self._stop = True
-            return None, initial_samples
-
-        solver = self._selected_feasible_point_solver()
-        x_optimized = solver(x_start, stop_callback=stop_callback)
-        return x_optimized, initial_samples
+            return None, samples
+        optimized = self._selected_feasible_point_solver()(
+            start, stop_callback=stop_callback
+        )
+        return optimized, samples
 
     def _selected_feasible_point_solver(self):
         solver_type = str(self.solver_type).lower()
-        if solver_type in {"goal_attainment", "slsqp", "pymoo"}:
+        if solver_type in {"goal_attainment", "slsqp"}:
             return self._solve_goal_attainment
-        if solver_type in {"nevergrad", "ng"}:
+        if solver_type == "nevergrad":
             return self._solve_with_nevergrad
         raise ValueError(
             "Unknown solver_type: "
@@ -308,7 +266,7 @@ class SolutionSpaceSolver:
         *,
         success: bool,
     ) -> SolverResult:
-        points_a, _m, points_b, dv_sample, violation_idx, y_sample = sample_box(
+        _, final_samples = sample_box_batch(
             self.problem,
             dvbox,
             self.parameters,
@@ -318,98 +276,20 @@ class SolutionSpaceSolver:
             self.dv_norm_l,
             self.ind_parameters,
             self.final_sample_size,
-            self.dim,
         )
-
-        final_samples = self._sample_dict(
-            dv_sample,
-            points_a,
-            points_b,
-            violation_idx,
-            y_sample,
-        )
+        batches = [initial_samples, final_samples]
         if extra_point is not None:
-            self._append_extra_point(final_samples, extra_point)
-
-        samples = self._merge_samples(initial_samples, final_samples)
-        active_box = self._denormalize_box(dvbox)
-        full_box = self._full_box(active_box)
-
-        return full_box, int(success), time.time() - start_time, samples
-
-    def _sample_dict(self, dv_sample, points_a, points_b, violation_idx, y_sample):
-        points = self._full_points(self._denormalize(dv_sample))
-        return {
-            "points": points,
-            "is_good": np.asarray(points_a, dtype=bool),
-            "is_bad": np.asarray(points_b, dtype=bool),
-            "violation_idx": np.asarray(violation_idx, dtype=int),
-            "qoi_values": np.asarray(y_sample, dtype=float),
-        }
-
-    def _empty_samples(self) -> SampleBatch:
-        return {
-            "points": np.zeros((self.original_dim, 0)),
-            "is_good": np.array([], dtype=bool),
-            "is_bad": np.array([], dtype=bool),
-            "violation_idx": np.array([], dtype=int),
-            "qoi_values": np.zeros((len(self.reqL), 0)),
-        }
-
-    def _merge_samples(self, first, second):
-        if first is None:
-            first = self._empty_samples()
-        return {
-            "points": np.hstack((first["points"], second["points"])),
-            "is_good": np.concatenate((first["is_good"], second["is_good"])),
-            "is_bad": np.concatenate((first["is_bad"], second["is_bad"])),
-            "violation_idx": np.concatenate(
-                (first["violation_idx"], second["violation_idx"])
-            ),
-            "qoi_values": np.hstack((first["qoi_values"], second["qoi_values"])),
-        }
-
-    def _append_extra_point(self, samples, x_norm):
-        x_active = self._denormalize(x_norm.reshape(-1, 1))
-        x_full = self._full_points(x_active)
-        y_val = np.asarray(self.problem.evaluate_matrix(x_full), dtype=float)
-
-        upper_slack = self.reqU.reshape(-1, 1) - y_val
-        lower_slack = y_val - self.reqL.reshape(-1, 1)
-        upper_slack[np.isinf(self.reqU), :] = np.inf
-        lower_slack[np.isinf(self.reqL), :] = np.inf
-        slack = np.vstack((upper_slack, lower_slack))
-        min_slack = np.min(slack, axis=0)
-        is_good = min_slack >= -1e-12
-        violation_idx = np.argmin(slack, axis=0)
-
-        samples["points"] = np.hstack((samples["points"], x_full))
-        samples["is_good"] = np.append(samples["is_good"], is_good)
-        samples["is_bad"] = np.append(samples["is_bad"], ~is_good)
-        samples["violation_idx"] = np.append(samples["violation_idx"], violation_idx)
-        samples["qoi_values"] = np.hstack((samples["qoi_values"], y_val))
-
-    def _full_points(self, active_points):
-        active_points = np.asarray(active_points, dtype=float)
-        if active_points.ndim == 1:
-            active_points = active_points.reshape(-1, 1)
-        full = np.zeros((self.original_dim, active_points.shape[1]))
-        full[self.active_mask] = active_points
-        inactive = ~self.active_mask
-        if np.any(inactive):
-            values = self.parameters[0].copy()
-            values[np.isnan(values)] = self.original_dsl[np.isnan(values)]
-            full[inactive] = values[inactive].reshape(-1, 1)
-        return full
-
-    def _full_box(self, active_box):
-        full = np.zeros((self.original_dim, 2))
-        full[self.active_mask] = active_box
-        inactive = ~self.active_mask
-        if np.any(inactive):
-            full[inactive, 0] = self.parameters[0, inactive]
-            full[inactive, 1] = self.parameters[1, inactive]
-        return full
+            anchor_samples, _ = evaluate_designs(
+                self.problem,
+                self._denormalize(extra_point.reshape(-1, 1)),
+                self.parameters,
+                self.ind_parameters,
+                self.reqL,
+                self.reqU,
+            )
+            batches.append(anchor_samples)
+        full_box = self.layout.expand_bounds(self._denormalize_box(dvbox))
+        return full_box, int(success), time.time() - start_time, merge_samples(batches)
 
     def _denormalize(self, dv_norm_samples):
         return dv_norm_samples * self.dv_norm.reshape(-1, 1) + self.dv_norm_l.reshape(
@@ -447,7 +327,7 @@ class SolutionSpaceSolver:
             self.search_lower_norm,
             self.search_upper_norm,
         )
-        x = run_goal_attainment_slsqp(
+        x = run_constrained_slsqp(
             feas_prob.compute_design_objective,
             feas_prob.compute_constraints_normalized,
             x_start,
@@ -492,7 +372,7 @@ class SolutionSpaceSolver:
             np.zeros((self.original_dim, 2)),
             0,
             time.time() - start_time,
-            self._empty_samples(),
+            empty_samples(self.original_dim, len(self.reqL)),
         )
 
 

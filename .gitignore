@@ -78,6 +78,9 @@ data_freecad/
 dist/
 build/
 
+# Local documentation
+/docs/
+
 # External solver binaries (CalculiX, OpenCourant) fetched by
 # scripts/install_solvers.py — large, platform-specific, and reproducible
 # via the script, so don't commit them or the auto-generated path config.

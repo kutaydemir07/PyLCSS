@@ -1,25 +1,7 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-"""Launch FreeCAD as a subprocess from inside PyLCSS.
-
-In-process embedding is intentionally out of scope: FreeCAD owns its own
-QApplication (still PySide2 in 1.x), PyLCSS owns its own (PySide6), and
-the two cannot coexist in one Python process.  ``QProcess`` keeps us
-honest -- the user gets the full real FreeCAD UI, side-by-side with
-PyLCSS.
-
-What this launcher adds on top of plain ``QProcess.startDetached``:
-
-  - **Auto-locates the FreeCAD executable** via
-    :func:`pylcss.cae.design_studio.freecad_bridge.paths.find_freecad_executable`.
-  - **Injects a start-up macro** that registers a post-save hook in
-    FreeCAD so every save inside the GUI also writes a ``<file>.brep``
-    and a ``<file>.fcmeta.json`` sidecar PyLCSS reads back.
-  - **Manages one-process-per-node** so opening the same node twice
-    re-focuses the already-running FreeCAD instance instead of spawning
-    a second one (which would race on the .FCStd file).
-"""
+"""Launch FreeCAD with an export hook and track one GUI process per document."""
 
 from __future__ import annotations
 
@@ -35,9 +17,8 @@ from PySide6.QtCore import QObject, QProcess, Signal
 
 from pylcss.cae.design_studio.freecad_bridge.mod_installer import install_pylcss_mod
 from pylcss.cae.design_studio.freecad_bridge.paths import (
-    find_freecad_cmd,
+    freecad_console_command,
     find_freecad_executable,
-    freecad_data_dir,
 )
 from pylcss.process_utils import headless_subprocess_kwargs
 
@@ -51,7 +32,7 @@ _RUNNING: Dict[str, QProcess] = {}
 
 
 class FreeCadLauncher(QObject):
-    """Spawn / re-focus a FreeCAD subprocess for a specific ``.FCStd`` file.
+    """Spawn or reuse a tracked FreeCAD process for a specific ``.FCStd`` file.
 
     Signals
     -------
@@ -84,38 +65,23 @@ class FreeCadLauncher(QObject):
             self._exe = find_freecad_executable()
         return bool(self._exe)
 
-    def fcstd_path_for(self, node_id: str) -> Path:
-        """Return the canonical .FCStd path for a PyLCSS node.
-
-        Stable across sessions -- the file lives under ``data_freecad/``
-        and is keyed by a sanitised node id so the parameter editor and the
-        viewer can both find it without consulting node state.
-        """
-        safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in node_id)
-        return freecad_data_dir() / f"{safe_id}.FCStd"
-
-    def open(self, fcstd_path: Path | str, startup_macro: Optional[Path | str] = None) -> bool:
+    def open(self, fcstd_path: Path | str) -> bool:
         """Launch FreeCAD on ``fcstd_path``.  Returns True on a clean spawn.
 
-        If the path doesn't exist FreeCAD creates a new empty document
-        with that name on its first save.  If FreeCAD is already running
-        on this file (from a previous click) we re-emit ``process_started``
-        without spawning a second instance.
-
-        The auto-export observer is installed into FreeCAD's user
-        Mod/PyLCSS/InitGui.py directory the first time we run, NOT passed
-        as a CLI argument.  FreeCAD 1.x doesn't auto-execute .FCMacro
-        positional args reliably, so the Mod path is the canonical hook.
-        ``startup_macro`` is therefore ignored unless explicitly given.
+        Missing documents are seeded through the console runner. An existing
+        tracked process is reused without bringing its window to the foreground.
+        The export observer is loaded by the installed FreeCAD Mod.
         """
         # Make sure the Mod-based observer is installed before we spawn
         # FreeCAD -- safe to call every time, the installer only rewrites
         # when contents change.
         install_pylcss_mod()
         if not self.is_available():
-            msg = ("FreeCAD executable not found. Run "
-                   "`python scripts/install_solvers.py --only freecad`, "
-                   "or set PYLCSS_FREECAD_EXE.")
+            msg = (
+                "FreeCAD executable not found. Run "
+                "`python scripts/install_solvers.py --only freecad`, "
+                "or set PYLCSS_FREECAD_EXE."
+            )
             logger.error(msg)
             self.error_occurred.emit(str(fcstd_path), msg)
             return False
@@ -125,7 +91,9 @@ class FreeCadLauncher(QObject):
 
         existing = _RUNNING.get(key)
         if existing is not None and existing.state() != QProcess.NotRunning:
-            logger.info("FreeCAD already running on %s; re-emitting started signal.", key)
+            logger.info(
+                "FreeCAD already running on %s; re-emitting started signal.", key
+            )
             self.process_started.emit(key)
             return True
 
@@ -149,12 +117,7 @@ class FreeCadLauncher(QObject):
 
         # Only the .FCStd as a positional arg now -- the observer is
         # auto-loaded by the Mod/PyLCSS/InitGui.py we installed above.
-        args: list[str] = [str(fcstd_path)]
-        if startup_macro:
-            # Power-user override: still pass an explicit macro path if a
-            # caller forced one. FreeCAD's behaviour here is unreliable
-            # (see open() docstring) but we honour it for advanced uses.
-            args.insert(0, str(Path(startup_macro).resolve()))
+        args: list[str] = [str(fcstd_path)] if fcstd_path.exists() else []
         proc.setArguments(args)
 
         proc.finished.connect(lambda code, _status, k=key: self._on_finished(k, code))
@@ -221,19 +184,9 @@ class FreeCadLauncher(QObject):
 
 
 def _seed_empty_fcstd(target: Path) -> bool:
-    """Create a valid empty ``.FCStd`` at ``target`` so the GUI can open it.
-
-    FreeCAD's GUI refuses to open a path that doesn't exist (it logs
-    ``File '...' does not exist!``).  We can't fabricate a .FCStd by
-    hand (it's a ZIP archive with a specific internal schema), so we
-    shell out to FreeCADCmd's headless mode for ~1-2 s to make one.
-
-    Returns True on success.  False means FreeCADCmd wasn't available or
-    the headless run failed; the GUI launcher then opens FreeCAD with
-    no file and the user has to Save As to the right path manually.
-    """
+    """Create a valid empty document through FreeCAD's console runner."""
     target.parent.mkdir(parents=True, exist_ok=True)
-    cmd = find_freecad_cmd()
+    cmd = freecad_console_command()
     if not cmd:
         return False
 
@@ -243,8 +196,8 @@ def _seed_empty_fcstd(target: Path) -> bool:
     script = (
         "import FreeCAD\n"
         "import sys\n"
-        f"doc = FreeCAD.newDocument({_py_str(target.stem)})\n"
-        f"doc.saveAs({_py_str(str(target))})\n"
+        f"doc = FreeCAD.newDocument({target.stem!r})\n"
+        f"doc.saveAs({str(target)!r})\n"
         "FreeCAD.closeDocument(doc.Name)\n"
         "sys.exit(0)\n"
     )
@@ -256,15 +209,19 @@ def _seed_empty_fcstd(target: Path) -> bool:
             fh.write(script)
             script_handle = fh.name
         proc = subprocess.run(
-            [cmd, script_handle],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            [*cmd, script_handle],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
             **headless_subprocess_kwargs(),
         )
         if proc.returncode != 0 or not target.exists():
             logger.warning(
                 "FreeCADCmd seed failed (rc=%s): %s",
-                proc.returncode, (proc.stderr or proc.stdout or "").strip()[:300],
+                proc.returncode,
+                (proc.stderr or proc.stdout or "").strip()[:300],
             )
             return False
         return True
@@ -277,12 +234,6 @@ def _seed_empty_fcstd(target: Path) -> bool:
                 os.unlink(script_handle)
             except OSError:
                 pass
-
-
-def _py_str(s: str) -> str:
-    """Embed a Python string literal safely. ``repr`` already escapes
-    backslashes, so a Windows path round-trips unchanged."""
-    return repr(s)
 
 
 def _qprocess_error_text(err: QProcess.ProcessError) -> str:

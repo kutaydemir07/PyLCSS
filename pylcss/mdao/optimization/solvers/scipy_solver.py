@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -13,31 +12,9 @@ from numpy.typing import ArrayLike
 from scipy.optimize import minimize
 
 from ..evaluator import ModelEvaluator
+from ..methods import SCIPY_METHODS
 from ..models import FloatArray, OptimizationResult
-from .base import BaseSolver, StepCallback
-
-SCIPY_LOCAL_METHODS = ("SLSQP",)
-
-
-@dataclass
-class _Candidate:
-    solver_x: FloatArray
-    objective: float
-    outputs: dict[str, Any]
-    violation: float
-    feasibility_tolerance: float
-
-    @property
-    def feasible(self) -> bool:
-        return self.violation <= self.feasibility_tolerance
-
-    @property
-    def rank(self) -> tuple[int, float, float]:
-        return (
-            0 if self.feasible else 1,
-            0.0 if self.feasible else self.violation,
-            self.objective,
-        )
+from .base import BaseSolver, Candidate, StepCallback, build_constraints
 
 
 class ScipySolver(BaseSolver):
@@ -50,10 +27,10 @@ class ScipySolver(BaseSolver):
         callback: StepCallback | None = None,
     ) -> OptimizationResult:
         method = str(self.settings.get("method", "SLSQP"))
-        if method not in SCIPY_LOCAL_METHODS:
+        if method not in SCIPY_METHODS:
             raise ValueError(
                 f"Unsupported local solver {method!r}. Supported methods: "
-                + ", ".join(SCIPY_LOCAL_METHODS)
+                + ", ".join(SCIPY_METHODS)
                 + "."
             )
 
@@ -63,8 +40,8 @@ class ScipySolver(BaseSolver):
         # Freeze automatic objective scales at the documented initial design
         # before a numerical backend requests derivatives.
         evaluator.evaluate(solver_x0)
-        constraints = _build_constraints(evaluator)
-        if all(np.isclose(lower, upper) for lower, upper in bounds):
+        constraints = build_constraints(evaluator)
+        if all(lower == upper for lower, upper in bounds):
             _, raw_results, violation = evaluator.evaluate(solver_x0)
             if not evaluator.is_valid_result(raw_results):
                 return _invalid_result(
@@ -72,7 +49,7 @@ class ScipySolver(BaseSolver):
                     solver_x0,
                     "The fixed design could not be evaluated.",
                 )
-            candidate = _Candidate(
+            candidate = Candidate(
                 solver_x=solver_x0,
                 objective=evaluator.normalized_objective(raw_results),
                 outputs=dict(raw_results),
@@ -83,11 +60,11 @@ class ScipySolver(BaseSolver):
                 evaluator,
                 candidate,
                 message="All design variables are fixed.",
-                success=candidate.feasible,
-                converged=True,
+                success=(not self.stop_requested and candidate.feasible),
+                converged=not self.stop_requested,
             )
 
-        best: _Candidate | None = None
+        best: Candidate | None = None
 
         def objective_function(x: ArrayLike) -> float:
             nonlocal best
@@ -99,7 +76,7 @@ class ScipySolver(BaseSolver):
                 return penalized_cost
 
             objective = evaluator.normalized_objective(raw_results)
-            candidate = _Candidate(
+            candidate = Candidate(
                 solver_x=np.asarray(x, dtype=float).copy(),
                 objective=objective,
                 outputs=dict(raw_results),
@@ -141,12 +118,12 @@ class ScipySolver(BaseSolver):
         except Exception as exc:
             failure_message = f"Solver failed with {type(exc).__name__}: {exc}"
 
-        final: _Candidate | None = None
+        final: Candidate | None = None
         backend_x = getattr(backend_result, "x", None)
         if backend_x is not None:
             _, raw_results, violation = evaluator.evaluate(backend_x)
             if evaluator.is_valid_result(raw_results):
-                final = _Candidate(
+                final = Candidate(
                     solver_x=np.asarray(backend_x, dtype=float).copy(),
                     objective=evaluator.normalized_objective(raw_results),
                     outputs=dict(raw_results),
@@ -187,64 +164,22 @@ def _solver_coordinates(
     if evaluator.scaling:
         initial = evaluator.to_normalized(initial_physical)
         bounds = [
-            (0.0, 0.0)
-            if abs(variable.max_val - variable.min_val) < 1e-12
-            else (0.0, 1.0)
-            for variable in evaluator.vars
+            (0.0, 0.0) if variable.min_val == variable.max_val else (0.0, 1.0)
+            for variable in evaluator.variables
         ]
     else:
         initial = initial_physical.copy()
-        bounds = [(variable.min_val, variable.max_val) for variable in evaluator.vars]
+        bounds = [
+            (variable.min_val, variable.max_val) for variable in evaluator.variables
+        ]
     for index, (lower, upper) in enumerate(bounds):
         initial[index] = np.clip(initial[index], lower, upper)
     return initial, bounds
 
 
-def _build_constraints(
-    evaluator: ModelEvaluator,
-) -> list[Any]:
-    constraints: list[Any] = []
-    residual = _constraint_residual_function(evaluator)
-
-    residual_count = sum(
-        int(np.isfinite(evaluator.constraint_solve_bounds(index)[0]))
-        + int(np.isfinite(evaluator.constraint_solve_bounds(index)[1]))
-        for index in range(len(evaluator.cons))
-    )
-    if residual_count:
-        constraints.append({"type": "ineq", "fun": residual})
-    return constraints
-
-
-def _constraint_residual_function(
-    evaluator: ModelEvaluator,
-):
-    def residuals(x: ArrayLike) -> FloatArray:
-        _, raw_results, _ = evaluator.evaluate(x)
-        result: list[float] = []
-        valid = evaluator.is_valid_result(raw_results)
-        for index, constraint in enumerate(evaluator.cons):
-            lower, upper = evaluator.constraint_solve_bounds(index)
-            scale = evaluator.constraint_solver_scale(index)
-            if not valid:
-                if np.isfinite(lower):
-                    result.append(-1e15)
-                if np.isfinite(upper):
-                    result.append(-1e15)
-                continue
-            value = float(raw_results[constraint.name])
-            if np.isfinite(lower):
-                result.append((value - lower) / scale)
-            if np.isfinite(upper):
-                result.append((upper - value) / scale)
-        return np.asarray(result, dtype=float)
-
-    return residuals
-
-
 def _candidate_result(
     evaluator: ModelEvaluator,
-    candidate: _Candidate,
+    candidate: Candidate,
     *,
     message: str,
     success: bool,
@@ -255,11 +190,11 @@ def _candidate_result(
         cost=evaluator.displayed_objective(candidate.outputs),
         objectives={
             objective.name: candidate.outputs[objective.name]
-            for objective in evaluator.objs
+            for objective in evaluator.objectives
         },
         constraints={
             constraint.name: candidate.outputs[constraint.name]
-            for constraint in evaluator.cons
+            for constraint in evaluator.constraints
         },
         max_violation=candidate.violation,
         message=message,
@@ -295,4 +230,4 @@ def _backend_message(result: Any, fallback: str) -> str:
     return str(getattr(result, "message", fallback))
 
 
-__all__ = ["SCIPY_LOCAL_METHODS", "ScipySolver"]
+__all__ = ["ScipySolver"]

@@ -1,10 +1,11 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 
-import math
+from PySide6 import QtCore, QtWidgets
 
-from PySide6 import QtWidgets, QtCore
-from pylcss.config import optimization_config, SOLVER_DESCRIPTIONS
+from pylcss.config import SOLVER_DESCRIPTIONS, optimization_config
+from pylcss.mdao.optimization.configuration import validate_algorithm_settings
+from pylcss.mdao.optimization.methods import SCIPY_METHODS
 
 
 class OptimizationSettingsDialog(QtWidgets.QDialog):
@@ -164,13 +165,11 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
         self._set_visible(self.nsga_widgets, False)
         self._set_visible(self.ms_widgets, False)
 
-        scipy_methods = ("SLSQP",)
-
         # General fields are shown only for the solvers that actually
         # consume them, so the dialog never lists a parameter that does
         # nothing for the selected algorithm.
         uses_maxiter = method != "NSGA-II"  # NSGA-II uses Generations instead
-        uses_tol = method in scipy_methods or method == "Multi-Start"
+        uses_tol = method in SCIPY_METHODS or method == "Multi-Start"
 
         maxiter_label = {
             "Nevergrad": "Evaluation Budget:",
@@ -182,9 +181,12 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
 
         self._set_visible([self.edit_maxiter], uses_maxiter)
         self._set_visible([self.edit_tol], uses_tol)
-        # Variable scaling applies to every solver. Objective scaling is defined
-        # per objective in the main table so mixed engineering units stay sound.
-        self._set_visible([self.chk_scaling, self.combo_scaling_mode], True)
+        # NSGA-II always operates on the unit box; its coordinate mode still applies.
+        self._set_visible([self.chk_scaling], method != "NSGA-II")
+        self._set_visible([self.combo_scaling_mode], True)
+        self.combo_scaling_mode.setEnabled(
+            method == "NSGA-II" or self.chk_scaling.isChecked()
+        )
         self._set_visible(
             [self.edit_seed],
             method in ("Nevergrad", "NSGA-II", "Multi-Start"),
@@ -255,7 +257,7 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
                 optimization_config.DEFAULT_MAX_ITERATIONS,
             ),
             "tol": to_f(self.edit_tol.text(), 1e-6),
-            "scaling": self.chk_scaling.isChecked(),
+            "scaling": self.current_method == "NSGA-II" or self.chk_scaling.isChecked(),
             "scaling_mode": self.combo_scaling_mode.currentData(),
             "constraint_margin": to_f(self.edit_con_margin.text(), 0.0),
             "seed": to_i(self.edit_seed.text(), 42),
@@ -275,56 +277,14 @@ class OptimizationSettingsDialog(QtWidgets.QDialog):
         }
 
     def accept(self):
-        """Reject unsafe or nonsensical settings before starting a worker."""
-        settings = self.get_settings()
-        errors = []
-
-        if settings["maxiter"] < 1:
-            errors.append("Iteration/evaluation budget must be at least 1.")
-        if (
-            not math.isfinite(settings["tol"])
-            or settings["tol"] <= 0
-        ):
-            errors.append(
-                "Termination tolerance must be positive."
+        """Validate only controls consumed by the selected algorithm."""
+        try:
+            validate_algorithm_settings(
+                {**self.get_settings(), "method": self.current_method}
             )
-        if (
-            not math.isfinite(settings["constraint_margin"])
-            or not 0 <= settings["constraint_margin"] < 1
-        ):
-            errors.append("Constraint safety margin must be in [0, 1).")
-
-        if self.current_method == "NSGA-II":
-            if settings["nsga_popsize"] < 4:
-                errors.append("NSGA-II population size must be at least 4.")
-            if settings["nsga_generations"] < 1:
-                errors.append("NSGA-II generations must be at least 1.")
-            if (
-                not math.isfinite(settings["nsga_crossover_prob"])
-                or not 0 <= settings["nsga_crossover_prob"] <= 1
-            ):
-                errors.append("Crossover probability must be between 0 and 1.")
-            mutation = settings["nsga_mutation_prob"]
-            if mutation is not None and (
-                not math.isfinite(mutation) or not 0 <= mutation <= 1
-            ):
-                errors.append("Mutation probability must be between 0 and 1.")
-            if (
-                not math.isfinite(settings["nsga_eta_c"])
-                or not math.isfinite(settings["nsga_eta_m"])
-                or settings["nsga_eta_c"] <= 0
-                or settings["nsga_eta_m"] <= 0
-            ):
-                errors.append("NSGA-II distribution indices must be greater than zero.")
-
-        if self.current_method == "Multi-Start" and settings["ms_n_starts"] < 1:
-            errors.append("Number of starts must be at least 1.")
-
-        if errors:
+        except (ValueError, TypeError, OverflowError) as exc:
             QtWidgets.QMessageBox.warning(
-                self,
-                "Invalid Optimization Settings",
-                "\n".join(errors),
+                self, "Invalid Optimization Settings", str(exc)
             )
             return
         super().accept()

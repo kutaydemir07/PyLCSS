@@ -348,8 +348,10 @@ def lattice_cad_strategy(options: Any) -> str:
 def topopt_export_formats(options: Any) -> tuple[str, ...]:
     """Only offer CAD when the chosen structure has a supported CAD model."""
     has_preserved_solids = False
+    generated = False
     if isinstance(options, dict) and options.get('type') == 'topopt_voxel':
         result = options
+        generated = bool(result.get('generated_lattice'))
         recovered = result.get('recovered_shape') or {}
         options = recovered.get('resolved_structure_options') or result.get('structure_options')
         fit = (result.get('generated_lattice') or {}).get('fit') or {}
@@ -359,6 +361,9 @@ def topopt_export_formats(options: Any) -> tuple[str, ...]:
         solid_mask = result.get('passive_solid_mask')
         has_preserved_solids = solid_mask is not None and bool(np.any(solid_mask))
         regions = result.get('passive_regions') or {}
+        has_preserved_solids |= any(bool(regions.get(key)) for key in (
+            'solid_boxes', 'solid_cylinders', 'explicit_solid_shapes', 'joint_pin_cylinders',
+        ))
         if lattice_cad_strategy(options) == 'beam' and has_preserved_solids and not any(regions.get(key) for key in (
             'solid_boxes', 'solid_cylinders', 'explicit_solid_shapes',
         )):
@@ -366,14 +371,15 @@ def topopt_export_formats(options: Any) -> tuple[str, ...]:
             return ('STL',)
     kind = lattice_cad_strategy(options)
     if kind == 'isosurface':
-        return ('STL',)
+        return ('STL', 'STEP')
     if kind == 'beam':
         skin = options.get('skin_thickness_voxels', 0.0) if isinstance(options, dict) else getattr(options, 'skin_thickness_voxels', 0.0)
         if float(skin or 0.0) > 0.0:
             # Analytic beam/3MF exports describe members, not the skin. Never
             # silently discard that material from the user's closed body.
             return ('STL',)
-        return ('STEP', 'STL') if has_preserved_solids else ('STEP', 'STL', '3MF')
+        formats = ('STEP', 'STL') if has_preserved_solids else ('STEP', 'STL', '3MF')
+        return ('STL',) + tuple(fmt for fmt in formats if fmt != 'STL') if generated else formats
     return ('STEP', 'STL')
 
 
@@ -511,9 +517,9 @@ def beam_lattice_solid(
     *,
     node_balls: bool = True,
     fuse: bool = False,
-    maximum_fused_solids: int | None = None,
     fuzzy_value: float = 0.0,
     return_report: bool = False,
+    **legacy_options,
 ) -> Any:
     """Build an exact analytic B-rep body from the centrelines.
 
@@ -522,13 +528,14 @@ def beam_lattice_solid(
     than the voxel count. Building the solids is the fast part and is always
     exact.
 
-    ``fuse`` requests a Boolean union with validity checks. The legacy
-    ``maximum_fused_solids`` argument is ignored; there is no solid-count cap. A failed
-    requested union raises an error. The default
+    ``fuse`` requests a Boolean union with validity checks. A failed
+    requested union raises an error. Retired limits issue a deprecation warning. The default
     compound retains overlapping member solids and reports their volume sum;
     its junctions do not have guaranteed G1 continuity.
     """
     import cadquery as cq
+    from ._compat import warn_retired_options
+    warn_retired_options(legacy_options, operation='Beam lattice CAD')
     from OCP.BRep import BRep_Builder
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeSphere
     from OCP.gp import gp_Pnt

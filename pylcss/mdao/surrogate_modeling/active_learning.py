@@ -60,7 +60,9 @@ class ActiveLearningConfig:
         if self.batch_size < 1:
             raise ValueError("batch_size must be at least 1.")
         if self.n_candidates < self.batch_size:
-            raise ValueError("n_candidates must be greater than or equal to batch_size.")
+            raise ValueError(
+                "n_candidates must be greater than or equal to batch_size."
+            )
         if self.n_candidates < self.n_rounds * self.batch_size:
             raise ValueError(
                 "The fixed candidate pool must contain at least "
@@ -69,7 +71,9 @@ class ActiveLearningConfig:
         if not 0.0 <= self.explore_floor <= 1.0:
             raise ValueError("explore_floor must be between 0 and 1.")
         if not 0.0 <= self.min_dist <= 1.0:
-            raise ValueError("min_dist must be between 0 and 1 in unit-space coordinates.")
+            raise ValueError(
+                "min_dist must be between 0 and 1 in unit-space coordinates."
+            )
         if self.gp_restarts < 0:
             raise ValueError("gp_restarts cannot be negative.")
 
@@ -176,9 +180,11 @@ def normalize_to_unit(
         )
     lower = bounds_arr[:, 0]
     span = bounds_arr[:, 1] - lower
-    if np.any(~np.isfinite(bounds_arr)) or np.any(span <= 0.0):
-        raise ValueError("Every active-learning bound must be finite with upper > lower.")
-    return (arr - lower) / span
+    if np.any(~np.isfinite(bounds_arr)) or np.any(span < 0.0):
+        raise ValueError(
+            "Every active-learning bound must be finite with upper >= lower."
+        )
+    return np.divide(arr - lower, span, out=np.zeros_like(arr), where=span > 0)
 
 
 def latin_hypercube_pool(
@@ -194,11 +200,19 @@ def latin_hypercube_pool(
     if n_candidates < 1:
         raise ValueError("n_candidates must be positive.")
     lower, upper = bounds_arr[:, 0], bounds_arr[:, 1]
-    if np.any(~np.isfinite(bounds_arr)) or np.any(upper <= lower):
-        raise ValueError("Every active-learning bound must be finite with upper > lower.")
-    sampler = qmc.LatinHypercube(d=len(bounds_arr), seed=random_state)
-    unit = sampler.random(n_candidates)
-    return qmc.scale(unit, lower, upper), unit
+    if np.any(~np.isfinite(bounds_arr)) or np.any(upper < lower):
+        raise ValueError(
+            "Every active-learning bound must be finite with upper >= lower."
+        )
+    varying = upper > lower
+    if not varying.any():
+        raise ValueError("Active learning needs at least one varying input.")
+    sampler = qmc.LatinHypercube(d=int(varying.sum()), seed=random_state)
+    unit = np.zeros((n_candidates, len(bounds_arr)))
+    unit[:, varying] = sampler.random(n_candidates)
+    points = np.tile(lower, (n_candidates, 1))
+    points[:, varying] = qmc.scale(unit[:, varying], lower[varying], upper[varying])
+    return points, unit
 
 
 def committee_scores(
@@ -221,7 +235,9 @@ def committee_scores(
         _aggregate_outputs(_as_2d(gp_mean) - _as_2d(rf_mean))
     )
     if std.shape != disagreement.shape:
-        raise ValueError("GP uncertainty and committee disagreement shapes do not match.")
+        raise ValueError(
+            "GP uncertainty and committee disagreement shapes do not match."
+        )
     return std * (explore_floor + (1.0 - explore_floor) * disagreement)
 
 
@@ -242,11 +258,17 @@ def _committee_predictions(
     if len(X_train) != len(y_2d):
         raise ValueError("X_train and y_train must contain the same number of rows.")
     if X_train.shape[1] != X_pool.shape[1]:
-        raise ValueError("Training and candidate points must have the same feature count.")
+        raise ValueError(
+            "Training and candidate points must have the same feature count."
+        )
     if len(X_train) < 2:
-        raise ActiveLearningError("At least two training samples are required for committee acquisition.")
+        raise ActiveLearningError(
+            "At least two training samples are required for committee acquisition."
+        )
     if not np.all(np.isfinite(X_train)) or not np.all(np.isfinite(y_2d)):
-        raise ActiveLearningError("Committee training data contains NaN or infinite values.")
+        raise ActiveLearningError(
+            "Committee training data contains NaN or infinite values."
+        )
 
     x_scaler = StandardScaler()
     y_scaler = StandardScaler()
@@ -255,11 +277,9 @@ def _committee_predictions(
     y_scaled = y_scaler.fit_transform(y_2d)
     y_fit = y_scaled.ravel() if y_scaled.shape[1] == 1 else y_scaled
 
-    kernel = (
-        ConstantKernel(1.0, (1e-3, 1e3))
-        * Matern(length_scale=1.0, length_scale_bounds=(1e-2, 1e2), nu=2.5)
-        + WhiteKernel(noise_level=1e-4, noise_level_bounds=(1e-8, 1e-1))
-    )
+    kernel = ConstantKernel(1.0, (1e-3, 1e3)) * Matern(
+        length_scale=1.0, length_scale_bounds=(1e-2, 1e2), nu=2.5
+    ) + WhiteKernel(noise_level=1e-4, noise_level_bounds=(1e-8, 1e-1))
     gp = GaussianProcessRegressor(
         kernel=kernel,
         normalize_y=False,
@@ -277,7 +297,9 @@ def _committee_predictions(
         gp_mean, gp_std = gp.predict(pool_scaled, return_std=True)
         rf_mean = rf.predict(pool_scaled)
     except Exception as exc:  # sklearn raises several numerical exception types
-        raise ActiveLearningError(f"GP–RF acquisition committee could not be fitted: {exc}") from exc
+        raise ActiveLearningError(
+            f"GP–RF acquisition committee could not be fitted: {exc}"
+        ) from exc
 
     return _as_2d(gp_mean), _as_2d(gp_std), _as_2d(rf_mean)
 
@@ -332,9 +354,7 @@ def acquisition_scores(
             gp_mean, _gp_std, rf_mean = _committee_predictions(
                 X_train, y_train, X_pool, random_state, gp_restarts
             )
-            disagreement = _normalize_vector(
-                _aggregate_outputs(gp_mean - rf_mean)
-            )
+            disagreement = _normalize_vector(_aggregate_outputs(gp_mean - rf_mean))
             return AcquisitionResult(
                 disagreement,
                 "GP–RF disagreement fallback",
@@ -378,7 +398,9 @@ def diverse_top_k(
         idx = int(idx)
         if taken[idx]:
             continue
-        if all(np.linalg.norm(pool_unit[idx] - pool_unit[j]) >= min_dist for j in picked):
+        if all(
+            np.linalg.norm(pool_unit[idx] - pool_unit[j]) >= min_dist for j in picked
+        ):
             picked.append(idx)
         if len(picked) == k:
             break
@@ -409,7 +431,9 @@ class ActiveLearningSelector:
         primary_model: Any = None,
     ) -> BatchSelection:
         if self.round_index >= self.config.n_rounds:
-            raise ActiveLearningError("All configured active-learning rounds are complete.")
+            raise ActiveLearningError(
+                "All configured active-learning rounds are complete."
+            )
         available = int(np.count_nonzero(~self.taken))
         if available < self.config.batch_size:
             raise ActiveLearningError(
@@ -450,7 +474,9 @@ class ActiveLearningSelector:
             if extras:
                 indices = np.concatenate([indices, np.asarray(extras, dtype=int)])
         if len(indices) != self.config.batch_size:
-            raise ActiveLearningError("Unable to fill the requested active-learning batch.")
+            raise ActiveLearningError(
+                "Unable to fill the requested active-learning batch."
+            )
 
         self.taken[indices] = True
         self.round_index += 1

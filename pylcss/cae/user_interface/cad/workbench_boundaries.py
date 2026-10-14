@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 
 import numpy as np
+from pylcss.cae.solver_backends.selection import normalize_geometries
 
 
 from .boundary_visuals import direction_from_label
@@ -149,18 +150,7 @@ class WorkbenchBoundaryMixin:
                             upstream = conn_port.node()
                             upstream_result = getattr(upstream, "_last_result", None)
                             if isinstance(upstream_result, dict):
-                                sel_faces = (
-                                    upstream_result.get("entities")
-                                    or upstream_result.get("faces")
-                                    or []
-                                )
-                                faces.extend([f for f in sel_faces if f is not None])
-                                if not faces:
-                                    entity = upstream_result.get(
-                                        "entity"
-                                    ) or upstream_result.get("face")
-                                    if entity is not None:
-                                        faces.append(entity)
+                                faces.extend(normalize_geometries(upstream_result))
                 except Exception:
                     logger.debug("Optional UI operation failed.", exc_info=True)
 
@@ -600,17 +590,7 @@ class WorkbenchBoundaryMixin:
                         or node.get_property("entity_type")
                         or "Face"
                     ).title()
-                    faces = [
-                        entity
-                        for entity in (
-                            result.get("entities") or result.get("faces") or []
-                        )
-                        if entity is not None
-                    ]
-                    if not faces:
-                        entity = result.get("entity") or result.get("face")
-                        if entity is not None:
-                            faces = [entity]
+                    faces = normalize_geometries(result)
                 if faces:
                     selections = [
                         {

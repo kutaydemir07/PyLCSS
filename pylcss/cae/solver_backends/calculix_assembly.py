@@ -132,11 +132,7 @@ def _external_tet_faces(mesh: Any) -> list[tuple[int, int]]:
         for face_index, local_nodes in enumerate(local_faces, start=1):
             key = tuple(sorted(int(value) for value in cell[local_nodes]))
             owners.setdefault(key, []).append((element_index, face_index))
-    return [
-        owner[0]
-        for owner in owners.values()
-        if len(owner) == 1
-    ]
+    return [owner[0] for owner in owners.values() if len(owner) == 1]
 
 
 def _bbox_gap(first: PartLayout, second: PartLayout) -> float:
@@ -175,9 +171,7 @@ def _build_connections(
             raise SolverBackendError(
                 f"Component {part.name!r} has no external tetrahedron faces."
             )
-        surface_lines.append(
-            f"*SURFACE, NAME={part.surface_name}, TYPE=ELEMENT"
-        )
+        surface_lines.append(f"*SURFACE, NAME={part.surface_name}, TYPE=ELEMENT")
         surface_lines.extend(
             f"{part.element_start + local_element + 1}, S{face_id}"
             for local_element, face_id in faces
@@ -287,9 +281,7 @@ def _build_assembly_sets_and_step(
                 )
         for dof in fixed_dofs:
             value = 0.0 if values is None else float(values[dof])
-            boundary_lines.append(
-                f"{set_name}, {dof + 1}, {dof + 1}, {value:.12g}"
-            )
+            boundary_lines.append(f"{set_name}, {dof + 1}, {dof + 1}, {value:.12g}")
 
     if boundary_lines:
         step_lines.append("*BOUNDARY")
@@ -448,9 +440,7 @@ def prepare_calculix_assembly(
     try:
         tolerance = float(connection_tolerance_mm)
     except (TypeError, ValueError) as exc:
-        raise SolverBackendError(
-            "Connection tolerance must be numeric."
-        ) from exc
+        raise SolverBackendError("Connection tolerance must be numeric.") from exc
     if not math.isfinite(tolerance) or tolerance <= 0.0:
         raise SolverBackendError(
             "Connection tolerance must be finite and greater than zero."
@@ -497,8 +487,12 @@ def prepare_calculix_assembly(
                 "order (all Tet or all Tet10)."
             )
         token = _safe_token(name, index)
+        base_token = token
+        collision = 0
         while token in tokens:
-            token = f"{token}_{index}"[:48]
+            collision += 1
+            suffix = f"_{index}_{collision}"
+            token = base_token[: 48 - len(suffix)] + suffix
         tokens.add(token)
         names.add(name.casefold())
         point_blocks.append(points.T)
@@ -545,13 +539,9 @@ def prepare_calculix_assembly(
         "*NODE",
     ]
     for node_id, xyz in enumerate(combined.p.T, start=1):
-        lines.append(
-            f"{node_id}, {xyz[0]:.12g}, {xyz[1]:.12g}, {xyz[2]:.12g}"
-        )
+        lines.append(f"{node_id}, {xyz[0]:.12g}, {xyz[1]:.12g}, {xyz[2]:.12g}")
     for part, cells in zip(layouts, cell_blocks):
-        lines.append(
-            f"*ELEMENT, TYPE={element_type}, ELSET={part.element_set}"
-        )
+        lines.append(f"*ELEMENT, TYPE={element_type}, ELSET={part.element_set}")
         for local_index, connectivity in enumerate(cells.T, start=1):
             element_id = part.element_start + local_index
             node_ids = ", ".join(str(int(value) + 1) for value in connectivity)
@@ -590,11 +580,7 @@ def assembly_result_summary(
     element_volumes = np.asarray(result.get("element_volumes", []), dtype=float)
     nodal_force = np.asarray(result.get("nodal_force", []), dtype=float)
     constrained = np.asarray(prepared.constrained_node_ids, dtype=int)
-    if (
-        nodal_force.ndim == 2
-        and nodal_force.shape[1] >= 3
-        and constrained.size
-    ):
+    if nodal_force.ndim == 2 and nodal_force.shape[1] >= 3 and constrained.size:
         reaction_force = np.sum(nodal_force[constrained, :3], axis=0)
     else:
         reaction_force = np.zeros(3, dtype=float)

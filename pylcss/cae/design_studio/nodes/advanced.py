@@ -52,6 +52,27 @@ def _resolve_data_path(filepath: str, project_dir: str | None = None) -> str:
     return filepath
 
 
+def _import_file(node):
+    node.clear_error()
+    incoming = resolve_any_input(node.get_input("file"))
+    if isinstance(incoming, dict):
+        incoming = incoming.get("file") or incoming.get("path")
+    filepath = _resolve_data_path(
+        str(incoming or node.get_property("filepath") or ""),
+        getattr(node, "_project_dir", None),
+    )
+    if not filepath or not os.path.isfile(filepath):
+        node.set_error("No valid file path")
+        return None
+    try:
+        from pylcss.io_manager.cad_io import CADImporter
+        result = CADImporter.import_file(filepath)
+        return result
+    except Exception as e:
+        node.set_error(str(e))
+        return None
+
+
 class ImportStepNode(CadQueryNode):
     """Import a STEP, IGES, or OpenCascade BREP file as geometry."""
 
@@ -66,24 +87,7 @@ class ImportStepNode(CadQueryNode):
         self.set_color(100, 160, 100)
 
     def run(self, **kwargs):
-        self.clear_error()
-        incoming = resolve_any_input(self.get_input("file"))
-        if isinstance(incoming, dict):
-            incoming = incoming.get("file") or incoming.get("path")
-        filepath = _resolve_data_path(
-            str(incoming or self.get_property("filepath") or ""),
-            getattr(self, "_project_dir", None),
-        )
-        if not filepath or not os.path.isfile(filepath):
-            self.set_error("No valid file path")
-            return None
-        try:
-            from pylcss.io_manager.cad_io import CADImporter
-            result = CADImporter.import_file(filepath)
-            return result
-        except Exception as e:
-            self.set_error(str(e))
-            return None
+        return _import_file(self)
 
 
 class ImportStlNode(CadQueryNode):
@@ -100,26 +104,7 @@ class ImportStlNode(CadQueryNode):
         self.set_color(100, 160, 100)
 
     def run(self, **kwargs):
-        self.clear_error()
-        incoming = resolve_any_input(self.get_input("file"))
-        if isinstance(incoming, dict):
-            incoming = incoming.get("file") or incoming.get("path")
-        filepath = _resolve_data_path(
-            str(incoming or self.get_property("filepath") or ""),
-            getattr(self, "_project_dir", None),
-        )
-        if not filepath or not os.path.isfile(filepath):
-            self.set_error("No valid file path")
-            return None
-        try:
-            from pylcss.io_manager.cad_io import CADImporter
-            result = CADImporter.import_file(filepath)
-            return result
-        except Exception as e:
-            self.set_error(str(e))
-            return None
-
-
+        return _import_file(self)
 
 
 class MathExpressionNode(CadQueryNode):
@@ -245,8 +230,6 @@ class SurfaceAreaNode(CadQueryNode):
             from OCP.BRepGProp import BRepGProp
 
             shape = resolve_shape_input(self.get_input("shape"))
-            if shape is None:
-                shape = resolve_shape_input(self.get_input("shape_in"))
             if shape is None:
                 self.set_error("No input shape")
                 return None

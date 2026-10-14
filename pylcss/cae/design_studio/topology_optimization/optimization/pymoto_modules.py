@@ -7,24 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..manufacturing.constraints import (
-    _BUILD_AXIS_MAP,
-    _PATTERN_AXIS_PLANE,
-    _apply_extrusion,
-    _apply_symmetry,
-)
-from .pymoto_runtime import PyMotoDomain, import_pymoto
-
-
-def _density_3d_to_flat(
-    x_3d: np.ndarray,
-    domain: PyMotoDomain,
-) -> np.ndarray:
-    """Inverse of `_density_grid_from_state` — write a (nelx,nely,nelz) grid back
-    into a flat element vector using pyMOTO's `domain.elements` mapping."""
-    flat = np.empty(domain.nel, dtype=float)
-    flat[domain.elements] = np.asarray(x_3d, dtype=float)
-    return flat
+from .pymoto_runtime import import_pymoto
 
 
 def _make_passive_clamp_module() -> type[object]:
@@ -109,9 +92,8 @@ def _make_heaviside_module() -> type[object]:
     """Build the smooth-Heaviside projection pyMOTO Module class.
 
     Three-field SIMP (Sigmund/Wang/Lazarov 2011): physical density =
-    H_β(filtered density), with β stepped from ~1 → ~32 by the iteration
-    loop. β is a *mutable attribute* so the loop can update it between
-    `net.response()` calls without rebuilding the network.
+    H_β(filtered density). The loop increases the mutable β toward its
+    configured maximum between responses without rebuilding the network.
     """
     pym = import_pymoto()
 
@@ -152,13 +134,8 @@ def _make_heaviside_module() -> type[object]:
 def _make_simp_module() -> type[object]:
     """Build the modified-SIMP interpolation with a mutable exponent.
 
-    ``property = minimum + (full - minimum) * rho^p``. Written as a module
-    rather than a `pym.MathExpression` with the exponent baked into its string
-    so the iteration loop can run p-continuation: p enters at 1, where the
-    compliance problem is convex and has a unique solution, and is raised
-    toward the study's penalization in steps. Starting at the target exponent
-    instead lets the very first descent direction commit the topology, and that
-    commitment is what continuation exists to avoid.
+    ``property = minimum + (full - minimum) * rho^p``. The mutable exponent
+    lets the iteration loop gradually penalize intermediate densities.
     """
     pym = import_pymoto()
 
@@ -190,227 +167,6 @@ def _make_simp_module() -> type[object]:
             return [np.asarray(dy, dtype=float) * derivative]
 
     return _SimpInterpolation
-
-
-def _make_linear_grid_projection_module(
-    domain: PyMotoDomain,
-    *,
-    symmetry: str = "none",
-    extrusion: str = "none",
-) -> type[object]:
-    """Build the exact-adjoint symmetry/extrusion density mapping."""
-    pym = import_pymoto()
-
-    class _LinearGridProjection(pym.Module):
-        def __call__(self, x: object) -> np.ndarray:
-            grid = np.asarray(x, dtype=float)[domain.elements]
-            grid = _apply_symmetry(grid, symmetry)
-            grid = _apply_extrusion(grid, extrusion)
-            return _density_3d_to_flat(grid, domain)
-
-        def _sensitivity(self, dy: object) -> list[np.ndarray]:
-            # Mirror averaging and axis averaging are orthogonal projections:
-            # their transpose is the same operation.
-            grid = np.asarray(dy, dtype=float)[domain.elements]
-            grid = _apply_extrusion(grid, extrusion)
-            grid = _apply_symmetry(grid, symmetry)
-            return [_density_3d_to_flat(grid, domain)]
-
-    return _LinearGridProjection
-
-
-def _make_pull_out_module(
-    domain: PyMotoDomain,
-    pull_axis: str,
-) -> type[object]:
-    """Build a running-minimum pull-out mapping with a valid subgradient."""
-    pym = import_pymoto()
-    key = str(pull_axis or "none").lower()
-    axis_step = _BUILD_AXIS_MAP.get(key)
-
-    class _PullOutProjection(pym.Module):
-        def __call__(self, x: object) -> np.ndarray:
-            grid = np.asarray(x, dtype=float)[domain.elements]
-            if axis_step is None or grid.shape[axis_step[0]] < 2:
-                self._source_indices = None
-                return np.asarray(x, dtype=float).copy()
-
-            axis, step = axis_step
-            work = np.moveaxis(grid, axis, 0)
-            if step < 0:
-                work = work[::-1]
-            flat = work.reshape(work.shape[0], -1)
-            out = np.empty_like(flat)
-            argmin = np.empty(flat.shape, dtype=np.int64)
-            out[0] = flat[0]
-            argmin[0] = 0
-            for layer in range(1, flat.shape[0]):
-                take_new = flat[layer] < out[layer - 1]
-                out[layer] = np.where(take_new, flat[layer], out[layer - 1])
-                argmin[layer] = np.where(take_new, layer, argmin[layer - 1])
-            self._source_indices = argmin
-            projected = out.reshape(work.shape)
-            if step < 0:
-                projected = projected[::-1]
-            projected = np.moveaxis(projected, 0, axis)
-            return _density_3d_to_flat(projected, domain)
-
-        def _sensitivity(self, dy: object) -> list[np.ndarray]:
-            if self._source_indices is None or axis_step is None:
-                return [np.asarray(dy, dtype=float).copy()]
-            axis, step = axis_step
-            grad = np.asarray(dy, dtype=float)[domain.elements]
-            work = np.moveaxis(grad, axis, 0)
-            if step < 0:
-                work = work[::-1]
-            flat_grad = work.reshape(work.shape[0], -1)
-            flat_out = np.zeros_like(flat_grad)
-            columns = np.broadcast_to(
-                np.arange(flat_grad.shape[1], dtype=np.int64),
-                flat_grad.shape,
-            )
-            np.add.at(
-                flat_out,
-                (self._source_indices.ravel(), columns.ravel()),
-                flat_grad.ravel(),
-            )
-            output = flat_out.reshape(work.shape)
-            if step < 0:
-                output = output[::-1]
-            output = np.moveaxis(output, 0, axis)
-            return [_density_3d_to_flat(output, domain)]
-
-    return _PullOutProjection
-
-
-def _make_max_member_module(
-    domain: PyMotoDomain,
-    radius_voxels: float,
-    threshold: float,
-) -> type[object]:
-    """Build the local-density cap and its analytic transpose sensitivity."""
-    pym = import_pymoto()
-    from scipy.ndimage import uniform_filter
-
-    size = max(3, int(round(2.0 * float(radius_voxels) + 1.0)))
-    limit = float(threshold)
-
-    class _MaximumMemberProjection(pym.Module):
-        def __call__(self, x: object) -> np.ndarray:
-            grid = np.asarray(x, dtype=float)[domain.elements]
-            local = uniform_filter(grid, size=size, mode="constant", cval=0.0)
-            active = local > limit
-            scale = np.ones_like(local)
-            scale[active] = limit / local[active]
-            self._grid = grid
-            self._local = local
-            self._scale = scale
-            self._active = active
-            return _density_3d_to_flat(grid * scale, domain)
-
-        def _sensitivity(self, dy: object) -> list[np.ndarray]:
-            grad = np.asarray(dy, dtype=float)[domain.elements]
-            dscale = np.zeros_like(self._local)
-            dscale[self._active] = -limit / self._local[self._active] ** 2
-            through_average = uniform_filter(
-                grad * self._grid * dscale,
-                size=size,
-                mode="constant",
-                cval=0.0,
-            )
-            dx = grad * self._scale + through_average
-            return [_density_3d_to_flat(dx, domain)]
-
-    return _MaximumMemberProjection
-
-
-def _rotation_operator(
-    shape: tuple[int, int, int],
-    axes: tuple[int, int],
-    angle_degrees: float,
-) -> object:
-    """Sparse bilinear rotation matching ``reshape=False`` about grid centre."""
-    from scipy.sparse import coo_matrix
-
-    coords = np.indices(shape, dtype=float)
-    first, second = axes
-    angle = np.deg2rad(float(angle_degrees))
-    rotation = np.array(
-        [[np.cos(angle), np.sin(angle)], [-np.sin(angle), np.cos(angle)]],
-        dtype=float,
-    )
-    output_plane = np.vstack(
-        [coords[first].ravel(), coords[second].ravel()]
-    )
-    centre = 0.5 * (np.asarray([shape[first], shape[second]], dtype=float) - 1.0)
-    input_plane = rotation @ (output_plane - centre[:, None]) + centre[:, None]
-
-    lower = np.floor(input_plane).astype(np.int64)
-    fraction = input_plane - lower
-    output_rows = np.arange(int(np.prod(shape)), dtype=np.int64)
-    base_indices = [coords[i].ravel().astype(np.int64) for i in range(3)]
-    rows: list[np.ndarray] = []
-    cols: list[np.ndarray] = []
-    data: list[np.ndarray] = []
-    for da in (0, 1):
-        for db in (0, 1):
-            source = list(base_indices)
-            source[first] = lower[0] + da
-            source[second] = lower[1] + db
-            valid = (
-                (source[first] >= 0)
-                & (source[first] < shape[first])
-                & (source[second] >= 0)
-                & (source[second] < shape[second])
-            )
-            weight = (
-                (fraction[0] if da else 1.0 - fraction[0])
-                * (fraction[1] if db else 1.0 - fraction[1])
-            )
-            if np.any(valid):
-                source_tuple = tuple(index[valid] for index in source)
-                rows.append(output_rows[valid])
-                cols.append(np.ravel_multi_index(source_tuple, shape))
-                data.append(weight[valid])
-    return coo_matrix(
-        (np.concatenate(data), (np.concatenate(rows), np.concatenate(cols))),
-        shape=(int(np.prod(shape)), int(np.prod(shape))),
-    ).tocsr()
-
-
-def _make_pattern_repeat_module(
-    domain: PyMotoDomain,
-    n_fold: int,
-    axis: str,
-) -> type[object]:
-    """Build an N-fold rotation average with an exact sparse transpose."""
-    pym = import_pymoto()
-    from scipy.sparse import eye
-
-    shape = (int(domain.nelx), int(domain.nely), int(domain.nelz))
-    plane = _PATTERN_AXIS_PLANE[str(axis or "y").lower()]
-    count = max(1, int(n_fold))
-    operator = eye(int(np.prod(shape)), format="csr")
-    for index in range(1, count):
-        operator = operator + _rotation_operator(
-            shape,
-            plane,
-            360.0 * float(index) / float(count),
-        )
-    operator = operator * (1.0 / float(count))
-
-    class _PatternRepeatProjection(pym.Module):
-        def __call__(self, x: object) -> np.ndarray:
-            grid = np.asarray(x, dtype=float)[domain.elements]
-            output = np.asarray(operator @ grid.ravel()).reshape(shape)
-            return _density_3d_to_flat(output, domain)
-
-        def _sensitivity(self, dy: object) -> list[np.ndarray]:
-            grid = np.asarray(dy, dtype=float)[domain.elements]
-            output = np.asarray(operator.T @ grid.ravel()).reshape(shape)
-            return [_density_3d_to_flat(output, domain)]
-
-    return _PatternRepeatProjection
 
 
 def _make_sparse_to_csc_module() -> type[object]:
@@ -446,8 +202,6 @@ def _make_sparse_to_csc_module() -> type[object]:
             return [derivative]
 
     return _SparseToCSC
-
-
 
 
 # Quadratic-form matrix for von Mises stress in 3-D Voigt notation.

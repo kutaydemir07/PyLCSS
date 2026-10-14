@@ -67,17 +67,6 @@ class ProductFamilyMixin:
             lower_bounds = np.array(lower_bounds)
             upper_bounds = np.array(upper_bounds)
 
-            # QoIs (base requirements)
-            reqL = []
-            reqU = []
-
-            for i in range(self.qoi_table.rowCount()):
-                reqL.append(self._safe_get_float(self.qoi_table.item(i, 2), -1e9))
-                reqU.append(self._safe_get_float(self.qoi_table.item(i, 3), 1e9))
-
-            reqL = np.array(reqL)
-            reqU = np.array(reqU)
-
             # Other params
             weight = np.ones(len(dsl))
             parameters = None
@@ -100,8 +89,6 @@ class ProductFamilyMixin:
                 dsu,
                 lower_bounds,
                 upper_bounds,
-                reqU,
-                reqL,
                 parameters,
                 solver_type,
             )
@@ -171,11 +158,21 @@ class ProductFamilyMixin:
             if communality is not None and i < len(communality):
                 comm_text = f"{float(communality[i]):.2f}"
             for col, text in enumerate((dv["name"], width_text, share_text, comm_text)):
-                self.family_summary_table.setItem(i, col, QtWidgets.QTableWidgetItem(text))
+                self.family_summary_table.setItem(
+                    i, col, QtWidgets.QTableWidgetItem(text)
+                )
 
         self.family_summary_table.setVisible(bool(dvs))
-        variant_count = len([k for k in results if k not in ("Platform", "Platform_Infeasible", "Communality")])
-        has_platform = platform is not None and not results.get("Platform_Infeasible", False)
+        variant_count = len(
+            [
+                k
+                for k in results
+                if k not in ("Platform", "Platform_Infeasible", "Communality")
+            ]
+        )
+        has_platform = platform is not None and not results.get(
+            "Platform_Infeasible", False
+        )
         platform_status = "Available" if has_platform else "None"
         self.lbl_family_summary.setText(
             f"Variants: {variant_count} · Common platform: {platform_status}"

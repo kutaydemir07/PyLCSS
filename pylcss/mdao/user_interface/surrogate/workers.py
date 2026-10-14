@@ -5,22 +5,23 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping, Sequence
-from pathlib import Path
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
 from PySide6 import QtCore
 
-from pylcss.mdao.surrogate_modeling.training_engine import SurrogateTrainer
+from pylcss.mdao.surrogate_modeling.training import SurrogateTrainer
 from pylcss.mdao.surrogate_modeling.active_learning import (
     ActiveLearningConfig,
     ActiveLearningSelector,
 )
 from pylcss.mdao.surrogate_modeling.validation import (
+    COMPARISON_MODEL_NAMES,
     CrossValidator,
     FeatureImportanceAnalyzer,
     ModelComparator,
+    create_evaluation_model,
 )
 
 __all__ = [
@@ -28,39 +29,10 @@ __all__ = [
     "DataGenerationWorker",
     "EvaluationWorker",
     "ModelTrainingWorker",
-    "TrainingWorker",
     "create_evaluation_model",
 ]
 
 logger = logging.getLogger(__name__)
-
-SpyFunction = Callable[
-    ...,
-    tuple[Mapping[str, Any], Mapping[str, Any]],
-]
-
-
-def create_evaluation_model(model_type: str) -> Any:
-    """Create an unfitted MDAO surrogate estimator without accessing GUI state."""
-    from pylcss.mdao.surrogate_modeling.mdao_algorithms import (
-        MdaoKPLSRegressor,
-        MdaoKrigingRegressor,
-        MdaoRBFRegressor,
-        MdaoSparsePCERegressor,
-        MdaoSVRRegressor,
-    )
-
-    if "KPLS" in model_type:
-        return MdaoKPLSRegressor(n_comp=3, n_restarts=3)
-    if "RBF" in model_type:
-        return MdaoRBFRegressor(kernel="thin_plate_spline", smoothing=1e-4, degree=1)
-    if "PCE" in model_type or "Chaos" in model_type:
-        return MdaoSparsePCERegressor(degree=2, alpha=0.01)
-    if "SVR" in model_type:
-        return MdaoSVRRegressor(C=10.0, epsilon=0.05)
-    # Default for Auto Mode, Kriging, and general evaluation
-    return MdaoKrigingRegressor(kernel_type="matern52", n_restarts=4)
-
 
 class _EvaluationCancelled(RuntimeError):
     pass
@@ -82,6 +54,7 @@ class EvaluationWorker(QtCore.QThread):
         y: np.ndarray,
         n_folds: int = 5,
         model_type: str = "",
+        config: Mapping[str, Any] | None = None,
         model: Any = None,
         feature_names: Sequence[str] | None = None,
         parent: QtCore.QObject | None = None,
@@ -92,6 +65,7 @@ class EvaluationWorker(QtCore.QThread):
         self.y = np.asarray(y).copy()
         self.n_folds = int(n_folds)
         self.model_type = str(model_type)
+        self.config = dict(config or {})
         self.model = model
         self.feature_names = list(feature_names or [])
         self._stop_requested = False
@@ -109,7 +83,7 @@ class EvaluationWorker(QtCore.QThread):
         try:
             if self.operation == "cross_validation":
                 result = CrossValidator().kfold_cv(
-                    lambda: create_evaluation_model(self.model_type),
+                    lambda: create_evaluation_model(self.model_type, self.config),
                     self.X,
                     self.y,
                     n_folds=self.n_folds,
@@ -117,16 +91,9 @@ class EvaluationWorker(QtCore.QThread):
                     callback=self._progress,
                 )
             elif self.operation == "compare_models":
-                names = (
-                    "Ordinary Kriging (Matern 5/2 ARD)",
-                    "KPLS (Kriging with Partial Least Squares)",
-                    "RBF (Polyharmonic Thin-Plate Spline)",
-                    "Sparse PCE (Legendre Chaos Expansion)",
-                    "Anisotropic epsilon-SVR",
-                )
                 factories = {
                     name: (lambda selected=name: create_evaluation_model(selected))
-                    for name in names
+                    for name in COMPARISON_MODEL_NAMES
                 }
                 result = ModelComparator().compare_models(
                     factories,
@@ -179,6 +146,7 @@ class DataGenerationWorker(QtCore.QThread):
         input_bounds: Sequence[tuple[float, float]],
         samples: int,
         parent: QtCore.QObject | None = None,
+        *, max_consecutive_failures: int | None = None,
     ) -> None:
         super().__init__(parent)
         self.spy_code = spy_code
@@ -186,6 +154,7 @@ class DataGenerationWorker(QtCore.QThread):
         self.spy_outputs = list(spy_outputs)
         self.input_bounds = list(input_bounds)
         self.samples = int(samples)
+        self.max_consecutive_failures = max_consecutive_failures
         self.trainer = SurrogateTrainer()
 
     def run(self) -> None:
@@ -201,6 +170,7 @@ class DataGenerationWorker(QtCore.QThread):
                     message,
                 ),
                 stop_flag=self.isInterruptionRequested,
+                max_consecutive_failures=self.max_consecutive_failures,
             )
             train_X, train_y, test_X, test_y, _, _ = arrays
         except Exception as exc:
@@ -257,67 +227,6 @@ class ModelTrainingWorker(QtCore.QThread):
             self.done_sig.emit(model, metrics, None)
 
 
-class TrainingWorker(QtCore.QThread):
-    """Generate a small debug data set and train one surrogate model."""
-
-    progress_sig = QtCore.Signal(int, str)
-    loss_sig = QtCore.Signal(dict)
-    done_sig = QtCore.Signal(object, object, object)
-
-    def __init__(
-        self,
-        spy_code: str,
-        spy_inputs: Sequence[Any],
-        spy_outputs: Sequence[Any],
-        input_bounds: Sequence[tuple[float, float]],
-        samples: int,
-        config: Mapping[str, Any],
-        parent: QtCore.QObject | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.spy_code = spy_code
-        self.spy_inputs = list(spy_inputs)
-        self.spy_outputs = list(spy_outputs)
-        self.input_bounds = list(input_bounds)
-        self.samples = int(samples)
-        self.config = dict(config)
-        self.trainer = SurrogateTrainer()
-        self.stop_flag = False
-
-    def run(self) -> None:
-        try:
-            self.progress_sig.emit(0, "Generating debug data...")
-            train_X, train_y, test_X, test_y, _, _ = self.trainer.generate_data(
-                self.spy_code,
-                self.spy_inputs,
-                self.spy_outputs,
-                self.input_bounds,
-                self.samples,
-                callback=None,
-                stop_flag=lambda: self.stop_flag,
-            )
-            if self.stop_flag:
-                raise RuntimeError("Surrogate training was cancelled.")
-
-            self.progress_sig.emit(20, "Training debug model...")
-            model, metrics = self.trainer.train_model(
-                train_X,
-                train_y,
-                self.config,
-                test_X,
-                test_y,
-                callback=lambda progress, message: self.progress_sig.emit(
-                    20 + int(progress * 0.8),
-                    message,
-                ),
-                stop_flag=lambda: self.stop_flag,
-                loss_callback=lambda data: self.loss_sig.emit(data),
-            )
-        except Exception as exc:
-            logger.exception("Debug surrogate training failed.")
-            self.done_sig.emit(None, None, str(exc))
-        else:
-            self.done_sig.emit(model, metrics, None)
 
 
 class AdaptiveTrainingWorker(QtCore.QThread):
@@ -364,7 +273,6 @@ class AdaptiveTrainingWorker(QtCore.QThread):
             self.test_y = self.test_y.reshape(-1)
         self.config = dict(config)
         self.stop_flag = False
-        self.random_state = int(self.config.get("random_state", 42))
 
     def run(self) -> None:
         try:
@@ -486,92 +394,13 @@ class AdaptiveTrainingWorker(QtCore.QThread):
             )
         if not np.isfinite(self.bounds).all():
             raise ValueError("Adaptive-training bounds contain NaN or infinity.")
-        if np.any(self.bounds[:, 0] >= self.bounds[:, 1]):
-            raise ValueError("Adaptive-training bounds must satisfy lower < upper.")
+        if np.any(self.bounds[:, 0] > self.bounds[:, 1]):
+            raise ValueError("Adaptive-training bounds must satisfy lower <= upper.")
         if len(self.X) != len(self.y):
             raise ValueError("Adaptive-training feature/target lengths differ.")
         if not self.spy_outputs:
             raise ValueError("The generated spy model exposes no outputs.")
 
-    def _candidate_points(
-        self,
-        round_index: int,
-        *,
-        count: int,
-    ) -> np.ndarray:
-        lower = self.bounds[:, 0]
-        upper = self.bounds[:, 1]
-        try:
-            from scipy.stats import qmc
-        except ImportError:
-            rng = np.random.default_rng(self.random_state + round_index)
-            return lower + rng.random((count, len(lower))) * (upper - lower)
-
-        sampler = qmc.LatinHypercube(
-            d=len(lower),
-            seed=self.random_state + round_index,
-        )
-        return np.asarray(
-            qmc.scale(sampler.random(count), lower, upper),
-            dtype=float,
-        )
-
-    def _evaluate_points(
-        self,
-        spy_model: SpyFunction,
-        samples: np.ndarray,
-    ) -> np.ndarray:
-        results: list[np.ndarray] = []
-        for index, sample in enumerate(samples):
-            self._raise_if_cancelled()
-            try:
-                _, output_mapping = spy_model(*sample)
-                values = np.asarray(
-                    [
-                        output_mapping[f"output_{output_index}"]
-                        for output_index in range(len(self.spy_outputs))
-                    ],
-                    dtype=float,
-                )
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Generated system model failed at adaptive sample "
-                    f"{index + 1}/{len(samples)}: {exc}"
-                ) from exc
-            if values.shape != (len(self.spy_outputs),):
-                raise RuntimeError(
-                    "Every adaptive spy-model output must be one scalar value."
-                )
-            if not np.isfinite(values).all():
-                raise RuntimeError(
-                    "The generated system model returned NaN or infinity "
-                    f"at adaptive sample {index + 1}/{len(samples)}."
-                )
-            results.append(values)
-
-        array = np.vstack(results)
-        return array.reshape(-1) if len(self.spy_outputs) == 1 else array
-
     def _raise_if_cancelled(self) -> None:
         if self.stop_flag or self.isInterruptionRequested():
             raise RuntimeError("Adaptive surrogate training was cancelled.")
-
-
-def _compile_spy_model(source: str) -> SpyFunction:
-    """Compile trusted graph-generated source once for adaptive evaluation."""
-    namespace: dict[str, Any] = {
-        "__builtins__": __builtins__,
-        "__file__": str(Path.cwd() / "_pylcss_adaptive_spy.py"),
-        "__name__": "_pylcss_adaptive_spy",
-        "__package__": None,
-    }
-    try:
-        exec(compile(source, "<adaptive spy model>", "exec"), namespace)
-    except Exception as exc:
-        raise RuntimeError(f"Could not compile the generated spy model: {exc}") from exc
-    function = namespace.get("spy_model")
-    if not callable(function):
-        raise RuntimeError(
-            "Generated adaptive source must define a callable 'spy_model'."
-        )
-    return function

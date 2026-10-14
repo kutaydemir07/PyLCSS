@@ -2,23 +2,14 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 """FEM boundary condition nodes — constraints, forces, and pressure loads."""
 import numpy as np
-import logging
 from pylcss.cae.design_studio.core.base_node import CadQueryNode
-
-logger = logging.getLogger(__name__)
+from pylcss.cae.solver_backends.selection import normalize_geometries
 
 
 def _target_face_objects(target_wp):
     """Normalize geometry-selection payloads from Select Geometry nodes."""
-    if isinstance(target_wp, dict):
-        entities = target_wp.get('entities') or target_wp.get('faces')
-        if entities:
-            return [entity for entity in entities if entity is not None]
-        if target_wp.get('mesh_selection') or target_wp.get('node_ids') is not None:
-            return [target_wp]
-        entity = target_wp.get('entity') or target_wp.get('face')
-        return [entity] if entity is not None else []
-    return target_wp.vals() if hasattr(target_wp, 'vals') else []
+    value = target_wp.vals() if hasattr(target_wp, 'vals') else target_wp
+    return normalize_geometries(value)
 
 
 def _selection_center(item):
@@ -58,6 +49,43 @@ def _selection_bbox(item):
         }
     except Exception:
         return None
+
+
+def _pressure_load_payload(mesh, selection, magnitude, direction):
+    """Build the surface traction shared by both pressure node interfaces."""
+    if selection is None:
+        raise ValueError("Connect a selected target face to the pressure load.")
+    if (
+        isinstance(selection, dict)
+        and str(selection.get('entity_type') or 'Face').title() != 'Face'
+    ):
+        raise ValueError(
+            "Pressure is a surface traction and requires a face selection; "
+            "an edge or vertex has no loaded area."
+        )
+    try:
+        pressure = float(magnitude)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Pressure magnitude must be numeric.") from exc
+    if not np.isfinite(pressure) or pressure <= 0.0:
+        raise ValueError("Pressure magnitude must be a finite value greater than zero.")
+    faces = _target_face_objects(selection)
+    if not faces:
+        raise ValueError("No faces found in target face input")
+    # CalculiX pressure is positive in compression and negative in tension.
+    sign = 1.0 if direction == 'Inward' else -1.0
+    return {
+        'type': 'pressure',
+        'mesh': mesh,
+        'geometries': faces,
+        'geometry': faces[0],
+        'pressure': pressure * sign,
+        'viz': {
+            'load_type': 'Pressure',
+            'bbox': _selection_bbox(faces[0]),
+            'color': '#ff00ff',
+        },
+    }
 
 
 class ConstraintNode(CadQueryNode):
@@ -104,68 +132,43 @@ class ConstraintNode(CadQueryNode):
         self.clear_error()
         mesh = self.get_input_value('mesh', None)
         target_wp = self.get_input_value('target_face', None)
-        constraint_type = self.get_property('constraint_type')
+        constraint_type = self.get_property('constraint_type') or 'Fixed'
         fallback_condition = self.get_property('condition')
-        if constraint_type == 'Pinned (Fixed for solids)':
-            constraint_type = 'Pinned'
-
-
-        # Get displacement values
-        try:
-            disp_x = float(self.get_property('displacement_x'))
-            disp_y = float(self.get_property('displacement_y'))
-            disp_z = float(self.get_property('displacement_z'))
-        except (TypeError, ValueError):
-            self.set_error("Prescribed displacement values must be numeric.")
-            return None
-        if not np.all(np.isfinite([disp_x, disp_y, disp_z])):
-            self.set_error("Prescribed displacement values must be finite.")
-            return None
-
-        # Map constraint type to DOF constraints
-        disp_enabled = [
-            as_bool(self.get_property('displacement_x_enabled')),
-            as_bool(self.get_property('displacement_y_enabled')),
-            as_bool(self.get_property('displacement_z_enabled')),
-        ]
-        prescribed_dofs = [idx for idx, enabled in enumerate(disp_enabled) if enabled]
-        if constraint_type == 'Displacement' and not prescribed_dofs:
-            self.set_error("Enable at least one displacement axis (UX, UY, or UZ).")
-            return None
-
-        # 'fixed_dofs' indicates which DOFs (0=x, 1=y, 2=z) are fixed
-        # NOTE on 'Pinned': for 3-D solid elements there are no rotational DOFs —
-        # rotation is captured through relative translations of adjacent nodes.  A
-        # Pinned BC therefore constrains the same three translational DOFs as Fixed.
-        # The practical difference only matters in beam/shell formulations.
-        constraint_mapping = {
-            'Fixed':      {'fixed_dofs': [0, 1, 2], 'displacement': None},
-            'Roller X':   {'fixed_dofs': [0],        'displacement': None},  # Normal-X blocked
-            'Roller Y':   {'fixed_dofs': [1],        'displacement': None},  # Normal-Y blocked
-            'Roller Z':   {'fixed_dofs': [2],        'displacement': None},  # Normal-Z blocked
-            'Block X Translation': {'fixed_dofs': [0], 'displacement': None},
-            'Block Y Translation': {'fixed_dofs': [1], 'displacement': None},
-            'Block Z Translation': {'fixed_dofs': [2], 'displacement': None},
-            'Pinned':     {'fixed_dofs': [0, 1, 2],  'displacement': None},  # = Fixed for solids
-            'Symmetry X': {'fixed_dofs': [0],        'displacement': None},  # No motion in X
-            'Symmetry Y': {'fixed_dofs': [1],        'displacement': None},  # No motion in Y
-            'Symmetry Z': {'fixed_dofs': [2],        'displacement': None},  # No motion in Z
-            'Displacement': {'fixed_dofs': prescribed_dofs, 'displacement': [disp_x, disp_y, disp_z]},
+        # Translational degrees of freedom: 0=X, 1=Y, 2=Z.
+        blocked_axes = {
+            'Fixed': [0, 1, 2],
+            'Block X Translation': [0],
+            'Block Y Translation': [1],
+            'Block Z Translation': [2],
         }
-        # Colour coding used by the viewer for pre-solve BC overlay:
-        #   Fixed / Pinned → blue    Roller → cyan    Symmetry → green
-        #   Displacement   → orange
-        _viz_color_map = {
-            'Fixed': '#2979FF',      'Pinned': '#2979FF',
-            'Roller X': '#00E5FF',   'Roller Y': '#00E5FF',   'Roller Z': '#00E5FF',
-            'Block X Translation': '#00E5FF',
-            'Block Y Translation': '#00E5FF',
-            'Block Z Translation': '#00E5FF',
-            'Symmetry X': '#00E676', 'Symmetry Y': '#00E676', 'Symmetry Z': '#00E676',
-            'Displacement': '#FF9100',
-        }
-        constraint_info = constraint_mapping.get(constraint_type, constraint_mapping['Fixed'])
-        viz_color = _viz_color_map.get(constraint_type, '#2979FF')
+        displacement = None
+        if constraint_type == 'Displacement':
+            fixed_dofs = [
+                idx for idx, axis in enumerate('xyz')
+                if as_bool(self.get_property(f'displacement_{axis}_enabled'))
+            ]
+            if not fixed_dofs:
+                self.set_error("Enable at least one displacement axis (UX, UY, or UZ).")
+                return None
+            displacement = [0.0, 0.0, 0.0]
+            try:
+                for idx in fixed_dofs:
+                    displacement[idx] = float(
+                        self.get_property(f'displacement_{"xyz"[idx]}')
+                    )
+            except (TypeError, ValueError):
+                self.set_error("Prescribed displacement values must be numeric.")
+                return None
+            if not np.all(np.isfinite(displacement)):
+                self.set_error("Prescribed displacement values must be finite.")
+                return None
+            viz_color = '#FF9100'
+        elif constraint_type in blocked_axes:
+            fixed_dofs = blocked_axes[constraint_type]
+            viz_color = '#2979FF' if constraint_type == 'Fixed' else '#00E5FF'
+        else:
+            self.set_error(f"Unknown support type: {constraint_type}.")
+            return None
 
         # If no face input provided, use fallback string condition
         if target_wp is None:
@@ -176,8 +179,8 @@ class ConstraintNode(CadQueryNode):
                 'type': constraint_type.lower().replace(' ', '_'),
                 'mesh': mesh,
                 'condition': fallback_condition,
-                'fixed_dofs': constraint_info['fixed_dofs'],
-                'displacement': constraint_info['displacement'],
+                'fixed_dofs': fixed_dofs,
+                'displacement': displacement,
                 # No geometry — viewer cannot draw pre-solve overlay for string conditions
                 'viz': None,
             }
@@ -208,14 +211,14 @@ class ConstraintNode(CadQueryNode):
                 'type': constraint_type.lower().replace(' ', '_'),
                 'mesh': mesh,
                 'geometries': face_objs,  # Pass the list of faces
-                'fixed_dofs': constraint_info['fixed_dofs'],
-                'displacement': constraint_info['displacement'],
+                'fixed_dofs': fixed_dofs,
+                'displacement': displacement,
                 # Pre-solve viewer overlay metadata
                 'viz': {
                     'constraint_type': constraint_type,
                     'color': viz_color,
-                    'fixed_dofs': list(constraint_info['fixed_dofs']),
-                    'displacement': constraint_info['displacement'],
+                    'fixed_dofs': list(fixed_dofs),
+                    'displacement': displacement,
                     'faces': viz_faces,
                 },
             }
@@ -264,10 +267,6 @@ class LoadNode(CadQueryNode):
         self.create_property('pressure', 1.0, widget_type='float')
         self.create_property('direction', 'Inward', widget_type='combo',
                              items=['Inward', 'Outward'])
-        # Hidden compatibility fields. Moment loads were never implemented.
-        self.create_property('moment_x', 0.0, widget_type='float')
-        self.create_property('moment_y', 0.0, widget_type='float')
-        self.create_property('moment_z', 0.0, widget_type='float')
         # Gravity parameters
         self.create_property('gravity_accel', 9810.0, widget_type='float')
         self.create_property('gravity_direction', '-Y', widget_type='combo',
@@ -308,47 +307,20 @@ class LoadNode(CadQueryNode):
 
         # ── Pressure load: surface traction on selected face ───────────────────
         if load_type == 'Pressure':
-            if target_wp is None:
-                self.set_error("Connect a selected target face to the pressure load.")
-                return None
-            if (
-                isinstance(target_wp, dict)
-                and str(target_wp.get('entity_type') or 'Face').title() != 'Face'
-            ):
-                self.set_error(
-                    "Pressure is a surface traction and requires a face selection; "
-                    "an edge or vertex has no loaded area."
-                )
-                return None
-            pressure = self.get_input_value('pressure', 'pressure')
             try:
-                pressure = float(pressure)
-            except (TypeError, ValueError):
-                self.set_error("Pressure magnitude must be numeric.")
+                result = _pressure_load_payload(
+                    mesh, target_wp,
+                    self.get_input_value('pressure', 'pressure'),
+                    self.get_property('direction'),
+                )
+            except ValueError as exc:
+                self.set_error(str(exc))
                 return None
-            if not np.isfinite(pressure) or pressure <= 0.0:
-                self.set_error("Pressure magnitude must be a finite value greater than zero.")
+            except Exception as exc:
+                self.set_error(f"Pressure load setup failed: {exc}")
                 return None
-            face_objs = _target_face_objects(target_wp)
-            if not face_objs:
-                self.set_error("No faces found in target face input")
-                return None
-            direction = self.get_property('direction')
-            sign = 1.0 if direction == 'Inward' else -1.0
-            return {
-                'type': 'pressure',
-                'mesh': mesh,
-                'geometries': face_objs,
-                'geometry': face_objs[0],
-                'pressure': pressure * sign,
-                'weight': case_weight,
-                'name': case_name,
-                'viz': {
-                    'load_type': 'Pressure',
-                    'bbox': _selection_bbox(face_objs[0]),
-                    'color': '#ff00ff',
-                },
-            }
+            result.update(weight=case_weight, name=case_name)
+            return result
 
         # ── Bearing Load: cosine compressive contact on cylindrical hole ───────
         if load_type == 'Bearing Load':
@@ -491,56 +463,15 @@ class PressureLoadNode(CadQueryNode):
         self.clear_error()
         mesh = self.get_input_value('mesh', None)
         target_wp = self.get_input_value('target_face', None)
-        pressure = self.get_input_value('pressure', 'pressure')
-
-        if target_wp is None:
-            self.set_error("Connect a selected target face to the pressure-load node.")
-            return None
-        if (
-            isinstance(target_wp, dict)
-            and str(target_wp.get('entity_type') or 'Face').title() != 'Face'
-        ):
-            self.set_error(
-                "Pressure is a surface traction and requires a face selection; "
-                "an edge or vertex has no loaded area."
+        try:
+            return _pressure_load_payload(
+                mesh, target_wp,
+                self.get_input_value('pressure', 'pressure'),
+                self.get_property('direction'),
             )
+        except ValueError as exc:
+            self.set_error(str(exc))
             return None
-        try:
-            pressure = float(pressure)
-        except (TypeError, ValueError):
-            self.set_error("Pressure magnitude must be numeric.")
-            return None
-        if not np.isfinite(pressure) or pressure <= 0.0:
-            self.set_error("Pressure magnitude must be a finite value greater than zero.")
-            return None
-
-        try:
-            # Extract the face geometry
-            face_objs = _target_face_objects(target_wp)
-
-            if not face_objs:
-                self.set_error("No faces found in target face input")
-                return None
-
-            # CalculiX *DLOAD P is positive in compression (opposite the
-            # element's outward surface normal); negative pressure is tension.
-            # Therefore Inward is positive and Outward is negative.
-            direction = self.get_property('direction')
-            sign = 1.0 if direction == 'Inward' else -1.0
-
-            return {
-                'type': 'pressure',
-                'mesh': mesh,
-                'geometries': face_objs,   # all selected faces (may be multiple)
-                'geometry': face_objs[0],  # kept for backward compatibility
-                'pressure': pressure * sign,
-                'viz': {
-                    'load_type': 'Pressure',
-                    'bbox': _selection_bbox(face_objs[0]),
-                    'color': '#ff00ff'
-                }
-            }
-
-        except Exception as e:
-            self.set_error(f"Pressure load setup failed: {e}")
+        except Exception as exc:
+            self.set_error(f"Pressure load setup failed: {exc}")
             return None

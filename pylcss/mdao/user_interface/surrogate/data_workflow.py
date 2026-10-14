@@ -10,7 +10,7 @@ import os
 import numpy as np
 from PySide6 import QtWidgets
 
-from pylcss.mdao.system_modeling.compiler import GraphBuilder
+from pylcss.mdao.system_modeling.spy_compiler import build_spy_model
 
 from .workers import (
     DataGenerationWorker,
@@ -116,11 +116,8 @@ class SurrogateDataMixin:
             graph = self.modeling_widget.current_graph
             nodes = graph.all_nodes()
             input_nodes = [n for n in nodes if n.type_.startswith("com.pfd.input")]
-            output_nodes = [n for n in nodes if n.type_.startswith("com.pfd.output")]
-
-            builder = GraphBuilder(graph)
-            spy_code, spy_inputs, spy_outputs = builder.build_spy_model(
-                nodes, input_nodes, output_nodes, target_node.id, "spy_model"
+            spy_code, spy_inputs, spy_outputs = build_spy_model(
+                nodes, input_nodes, target_node.id, "spy_model"
             )
 
             input_bounds = []
@@ -140,13 +137,17 @@ class SurrogateDataMixin:
             return
 
         self.gen_worker = DataGenerationWorker(
-            spy_code, spy_inputs, spy_outputs, input_bounds, samples
+            spy_code, spy_inputs, spy_outputs, input_bounds, samples,
+            max_consecutive_failures=self.spin_failure_limit.value() or None,
         )
         self.gen_worker.progress_sig.connect(self.update_progress)
         self.gen_worker.done_sig.connect(self.generation_finished)
         self.gen_worker.start()
+        self.btn_stop.setEnabled(True)
 
     def generation_finished(self, data, error):
+        self.btn_stop.setEnabled(False)
+        self.btn_stop.setText("Stop Training")
         self.btn_generate.setEnabled(True)
         if error:
             QtWidgets.QMessageBox.critical(self, "Generation Failed", error)
@@ -224,128 +225,11 @@ class SurrogateDataMixin:
                 # Store node ID in user data
                 self.combo_nodes.addItem(f"{node.name()} ({node.id})", node)
 
-    def update_hyperparams(self, index: int) -> None:
-        # Map algorithm display name -> hyperparam stack page index.
-        # Falls back to the combo index for legacy ordering.
+    def update_hyperparams(self, _index: int) -> None:
         algo = self.combo_algo.currentText()
-        page = self._algo_to_page.get(algo, index)
-        self.stack_params.setCurrentIndex(page)
-
-        # Geometric backbones drive the CAD pipeline themselves; they don't
-        # need pre-generated tabular data, so the Train button can be enabled
-        # immediately once a CAD file + target node are configured.
-        if algo in ("Geom-DeepONet", "GINO"):
-            if hasattr(self, "btn_train"):
-                self.btn_train.setEnabled(True)
-            if hasattr(self, "btn_adaptive"):
-                self.btn_adaptive.setEnabled(False)  # adaptive uses tabular spy data only
-            self._set_geom_visibility(algo)
-        else:
-            # Restore standard rule: enabled only if data is ready.
-            ready = hasattr(self, "X_train") and self.X_train is not None
-            if hasattr(self, "btn_train"):
-                self.btn_train.setEnabled(ready)
-            if hasattr(self, "btn_adaptive"):
-                self.btn_adaptive.setEnabled(ready)
-
-    def _set_geom_visibility(self, algo: str) -> None:
-        """Show only the architecture rows that apply to the selected
-        geometric backbone, so the user doesn't see knobs that get ignored."""
-        is_donet = algo == "Geom-DeepONet"
-        is_gino = algo == "GINO"
-
-        # QFormLayout.setRowVisible requires Qt 6.4+; PySide6 6.10 has it.
-        # Fall back to per-widget setVisible() if the form-layout API isn't
-        # available (older Qt) so this stays robust.
-        donet_widgets = [
-            (self._lbl_donet_latent, self.spin_donet_latent),
-            (self._lbl_donet_trunk, self.spin_donet_trunk),
-        ]
-        gino_widgets = [
-            (self._lbl_gino_channels, self.spin_gino_channels),
-            (self._lbl_gino_grid, self.spin_gino_grid),
-            (self._lbl_gino_modes, self.spin_gino_modes),
-        ]
-        for lbl, w in donet_widgets:
-            lbl.setVisible(is_donet)
-            w.setVisible(is_donet)
-        for lbl, w in gino_widgets:
-            lbl.setVisible(is_gino)
-            w.setVisible(is_gino)
-
-    def _browse_cad_path(self) -> None:
-        fname, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self,
-            "Select CAD Graph File",
-            "",
-            "CAD Graph (*.cad *.json);;All Files (*)",
-        )
-        if fname:
-            self.txt_cad_path.setText(fname)
-
-    def _refresh_field_choices(self, solver_kind: str) -> None:
-        if not hasattr(self, "combo_field"):
-            return
-        prev = self.combo_field.currentText().strip()
-        choices = self._FIELD_CHOICES_BY_SOLVER.get(
-            solver_kind,
-            ["von_mises", "displacement"],
-        )
-        self.combo_field.blockSignals(True)
-        self.combo_field.clear()
-        self.combo_field.addItems(choices)
-        # Preserve the user's previous choice if it still makes sense, else
-        # default to the first option for the new solver.
-        if prev in choices:
-            self.combo_field.setCurrentText(prev)
-        else:
-            self.combo_field.setCurrentIndex(0)
-        self.combo_field.blockSignals(False)
-
-    def _collect_input_bounds_for_target(
-        self,
-    ) -> tuple[list[tuple[float, float]], list[str]]:
-        """Return (bounds, names) from the currently selected target node's
-        spy-model context. Mirrors what start_generation extracts so geometric
-        backbones share the same parameter setup with tabular ones."""
-        idx = self.combo_nodes.currentIndex()
-        if idx < 0:
-            raise RuntimeError("No target node selected.")
-        self.combo_nodes.itemData(idx)
-        graph = self.modeling_widget.current_graph
-        nodes = graph.all_nodes()
-        input_nodes = [n for n in nodes if n.type_.startswith("com.pfd.input")]
-        [n for n in nodes if n.type_.startswith("com.pfd.output")]
-
-        # For geometric surrogates we need (parameter_name -> bounds) pairs
-        # that match the CAD graph's exposed inputs -- these are the global
-        # input nodes, NOT the target node's input ports (which can be
-        # intermediates).  Pull both name + range straight from input_nodes
-        # so the dict keys we pass to cad.runtime.fea(**params) line up with
-        # the CAD graph's exposed input parameters.
-        bounds: list[tuple[float, float]] = []
-        names: list[str] = []
-        for inp_node in input_nodes:
-            if inp_node.has_property("input_props"):
-                props = inp_node.get_property("input_props")
-                lo = float(props.get("min", "0.0"))
-                hi = float(props.get("max", "10.0"))
-            else:
-                lo = float(inp_node.get_property("min"))
-                hi = float(inp_node.get_property("max"))
-            bounds.append((lo, hi))
-            # Prefer the variable name property (what the CAD graph keys off)
-            # then fall back to the node's display name.
-            var_name = (
-                inp_node.get_property("var_name")
-                if inp_node.has_property("var_name")
-                else None
-            )
-            names.append(str(var_name or inp_node.name()))
-
-        if not names:
-            raise RuntimeError(
-                "No global input nodes found in the system graph; "
-                "geometric surrogates need at least one parametric input."
-            )
-        return bounds, names
+        self.stack_params.setCurrentIndex(self._algo_to_page[algo])
+        ready = self.X_train is not None
+        if hasattr(self, "btn_train"):
+            self.btn_train.setEnabled(ready)
+        if hasattr(self, "btn_adaptive"):
+            self.btn_adaptive.setEnabled(ready)

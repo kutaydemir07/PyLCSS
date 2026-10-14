@@ -7,7 +7,8 @@ from __future__ import annotations
 import numpy as np
 from PySide6 import QtCore, QtWidgets
 
-from pylcss.mdao.system_modeling.compiler import GraphBuilder
+from pylcss.mdao.system_modeling.model import load_source_function
+from pylcss.mdao.system_modeling.spy_compiler import build_spy_model
 
 __all__ = ["NodeTrainingWorker", "train_selected_node_surrogate"]
 
@@ -24,20 +25,16 @@ class NodeTrainingWorker(QtCore.QThread):
 
     def __init__(
         self,
-        graph_builder,
         nodes,
         input_nodes,
-        output_nodes,
         target_node,
         num_samples=1000,
         test_size=0.2,
         random_state=42,
     ):
         super().__init__()
-        self.graph_builder = graph_builder
         self.nodes = nodes
         self.input_nodes = input_nodes
-        self.output_nodes = output_nodes
         self.target_node = target_node
         self.num_samples = num_samples
         self.test_size = test_size
@@ -69,22 +66,16 @@ class NodeTrainingWorker(QtCore.QThread):
             self.progress_updated.emit(0, "Generating spy model code...")
 
             # Build spy model to capture training data
-            spy_code, spy_inputs, spy_outputs = self.graph_builder.build_spy_model(
+            spy_code, spy_inputs, spy_outputs = build_spy_model(
                 self.nodes,
                 self.input_nodes,
-                self.output_nodes,
                 self.target_node.id,
                 "spy_model",
             )
 
             self.progress_updated.emit(10, "Compiling spy model...")
 
-            # --- FIX START ---
-            # Use a single dictionary for both globals and locals so functions can see each other
-            exec_context = {"np": np}
-            exec(spy_code, exec_context, exec_context)
-            spy_func = exec_context["spy_model"]
-            # --- FIX END ---
+            spy_func = load_source_function(spy_code, "spy_model")
 
             self._raise_if_cancelled()
             self.progress_updated.emit(
@@ -108,13 +99,13 @@ class NodeTrainingWorker(QtCore.QThread):
                 input_bounds.append((min_val, max_val))
 
             # Sample input space
-            np.random.seed(self.random_state)
+            rng = np.random.default_rng(self.random_state)
             for i in range(self.num_samples):
                 self._raise_if_cancelled()
                 # Generate random input sample within bounds
                 sample_inputs = []
                 for min_val, max_val in input_bounds:
-                    sample_inputs.append(np.random.uniform(min_val, max_val))
+                    sample_inputs.append(rng.uniform(min_val, max_val))
 
                 # Execute spy model to get corresponding outputs
                 inputs_dict, outputs_dict = spy_func(*sample_inputs)
@@ -280,14 +271,7 @@ def train_selected_node_surrogate(modeling_widget, num_samples=1000):
     # Get graph data
     all_nodes = modeling_widget.current_graph.all_nodes()
     input_nodes = [n for n in all_nodes if n.type_.startswith("com.pfd.input")]
-    output_nodes = [n for n in all_nodes if n.type_.startswith("com.pfd.output")]
-
-    # Pass the current_graph to GraphBuilder
-    graph_builder = GraphBuilder(modeling_widget.current_graph)
-
-    worker = NodeTrainingWorker(
-        graph_builder, all_nodes, input_nodes, output_nodes, target_node, num_samples
-    )
+    worker = NodeTrainingWorker(all_nodes, input_nodes, target_node, num_samples)
 
     # Create progress dialog
     progress_dialog = QtWidgets.QProgressDialog(

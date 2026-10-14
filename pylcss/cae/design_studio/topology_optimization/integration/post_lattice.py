@@ -112,9 +112,9 @@ def prepare_lattice_field(result: dict[str, Any], settings: dict[str, Any]):
     maximum = float(values["post_lattice_max_density"])
     if (
         not np.isfinite([minimum, maximum]).all()
-        or not 0.02 <= minimum < maximum <= 0.80
+        or not 0.02 <= minimum <= maximum <= 0.80
     ):
-        raise ValueError("Cell densities require 2% <= minimum < maximum <= 80%.")
+        raise ValueError("Cell densities require 2% <= minimum <= maximum <= 80%.")
     lengths = [
         float(values[key])
         for key in (
@@ -195,9 +195,14 @@ def generate_post_topopt_lattice(
         include_manufacturing_field=True,
         cubic_lattice_grid=True,
         max_recovery_voxels=MAX_POST_LATTICE_VOXELS,
+        raise_errors=True,
+        progress_stage_callback=stage,
         passive_solid_mask=solid,
         passive_void_mask=void,
         structure_options=options,
+        explicit_solid_shapes=regions.get("explicit_solid_shapes") or (),
+        explicit_void_shapes=regions.get("explicit_void_shapes") or (),
+        source_cad_shape=source.get("source_cad_shape"),
         **{
             key: regions.get(key) or ()
             for key in (
@@ -238,6 +243,8 @@ def generate_post_topopt_lattice(
         "lattice_optimization",
         "manufactured_density",
         "manufacturing",
+        "_beam_lattice_surface",
+        "_cad_preview",
     ):
         output.pop(key, None)
     output.update(
@@ -254,7 +261,7 @@ def generate_post_topopt_lattice(
         passive_void_mask=void,
         structure_options=options,
         requested_structure_options=options,
-        visualization_mode="CAD",
+        visualization_mode="Lattice",
         export_formats=list(topopt_export_formats(options)),
         release_ready=False,
         verification_passed=False,
