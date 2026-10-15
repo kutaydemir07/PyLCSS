@@ -580,6 +580,32 @@ def hybrid_parameterization(
     return coordinates
 
 
+def parameterize_paper_layout(layout: QuadLayout, config=None, *,
+                              scaffold_executable: Path | str | None = None) -> np.ndarray:
+    """AMRTO Step 4, without application-specific compression admission.
+
+    Section 2.6.1 first retains a rectangular native Scaffold-Map domain;
+    otherwise Algorithm 1 maps the same layout to the unit square. Neither
+    branch subdivides a layout or retries surface fitting. Internal harmonic
+    iterations are the paper's numerical solve, not CAD reconstruction passes.
+    """
+    coordinates = hybrid_parameterization(
+        layout, scaffold_executable=scaffold_executable,
+        maximum_iterations=getattr(config, "scaffold_max_iter", 50),
+        relative_energy_tolerance=getattr(config, "scaffold_relative_energy_tolerance", 1e-4),
+        rectangle_tolerance=getattr(config, "scaffold_rectangle_tolerance", 1e-6),
+        timeout_s=getattr(config, "scaffold_timeout_s", 60.0),
+        harmonic_method="iterative_geodesic",
+        harmonic_max_iter=getattr(config, "harmonic_max_iter", 10000),
+        harmonic_energy_threshold=getattr(config, "harmonic_energy_threshold", 1e-10),
+        harmonic_residual_threshold=getattr(config, "harmonic_residual_threshold", 1e-8),
+        harmonic_edge_counts=False, require_native=True, minimum_area_ratio=0.0,
+    )
+    layout.parameterization_report.update(paper_stage_4=True,
+                                         area_compression_admission_guard_applied=False)
+    return coordinates
+
+
 def compute_boundary_edge_lengths(layout: QuadLayout) -> Tuple[float, float, float, float]:
     """Calculate the lengths of the 4 boundary edges d1, d2, d3, d4 (Section 2.6.2)."""
     verts = layout.vertices

@@ -74,6 +74,21 @@ def _recover_voxel_shape(
 
     try:
         LAST_LATTICE_SIZING.clear()
+        source_geometry = kwargs.get("source_lattice_geometry")
+        if structure_options is not None and structure_options.mode != "solid" and source_geometry is not None:
+            from .geometry_lattice import recover_geometry_lattice
+            geometry_options = dict(kwargs)
+            geometry_options.pop("source_lattice_geometry", None)
+            recovered = recover_geometry_lattice(
+                density, bounds, cutoff, structure_options, source_geometry=source_geometry,
+                passive_solid_mask=passive_solid_mask, passive_void_mask=passive_void_mask,
+                solid_boxes=solid_boxes, void_boxes=void_boxes,
+                solid_cylinders=solid_cylinders, void_cylinders=void_cylinders,
+                joint_pin_cylinders=joint_pin_cylinders, member_plan=member_plan,
+                **geometry_options,
+            )
+            LAST_LATTICE_SIZING.update(recovered.get("lattice_sizing", {}))
+            return recovered
         # Graph-joint pins are separate assembly hardware. Recover the design
         # body and its bores first, then add the pins after all void constraints.
         hardware_cylinders = joint_pin_cylinders

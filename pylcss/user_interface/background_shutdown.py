@@ -15,6 +15,8 @@ from pylcss.process_utils import headless_subprocess_kwargs
 logger = logging.getLogger(__name__)
 _closing_windows = []
 _stopping_threads = []
+_detached_widget_threads = []
+_widget_cleanup_timer = None
 
 
 def _running_threads(window):
@@ -39,6 +41,10 @@ def _retain_and_stop(window, threads):
     window.setAttribute(QtCore.Qt.WA_DeleteOnClose, False)
     if window not in _closing_windows:
         _closing_windows.append(window)
+    _stop_threads(threads)
+
+
+def _stop_threads(threads):
     for thread in threads:
         if thread in _stopping_threads:
             continue
@@ -57,6 +63,41 @@ def _retain_and_stop(window, threads):
                     break
         except Exception:
             logger.debug("Background worker cancellation failed", exc_info=True)
+
+
+def stop_widget_workers(widget):
+    """Cancel workers before a replaceable widget destroys its Qt children.
+
+    Keep detached QThreads alive until they finish. Application shutdown's
+    bounded cleanup handles any native process still stopping at exit.
+    """
+    threads = _running_threads(widget)
+    for thread in threads:
+        thread.setParent(None)
+        if thread not in _detached_widget_threads:
+            _detached_widget_threads.append(thread)
+    _stop_threads(threads)
+    if threads:
+        global _widget_cleanup_timer
+        if _widget_cleanup_timer is None:
+            _widget_cleanup_timer = QtCore.QTimer(QtCore.QCoreApplication.instance())
+            _widget_cleanup_timer.setInterval(100)
+            _widget_cleanup_timer.timeout.connect(_release_stopped_widget_workers)
+        _widget_cleanup_timer.start()
+
+
+def _release_stopped_widget_workers():
+    # Signals are blocked during close, including QThread.finished. Reap only
+    # after the native thread actually ends, without waiting on the GUI thread.
+    for thread in list(_detached_widget_threads):
+        if thread.isRunning():
+            continue
+        _detached_widget_threads.remove(thread)
+        if thread in _stopping_threads:
+            _stopping_threads.remove(thread)
+        thread.deleteLater()
+    if not _detached_widget_threads and _widget_cleanup_timer is not None:
+        _widget_cleanup_timer.stop()
 
 
 def prepare_application_quit():

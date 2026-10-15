@@ -94,8 +94,8 @@ def _new_failure_checkpoint_directory() -> Path:
     return root / "PyLCSS" / "cad_failures" / f"{stamp}_{uuid4().hex[:12]}"
 
 
-def _persist_cad_failure_diagnostics(folder, directory, arguments, reason, returncode):
-    """Retain portable diagnostics, never the private job pickle or native shapes."""
+def _persist_cad_failure_diagnostics(folder, directory, arguments, reason, returncode, *, operation='brep'):
+    """Retain portable diagnostics without executable private job pickles."""
     folder, directory = Path(folder), Path(directory)
     try:
         folder.mkdir(parents=True, exist_ok=True)
@@ -104,11 +104,24 @@ def _persist_cad_failure_diagnostics(folder, directory, arguments, reason, retur
             if source.is_file():
                 shutil.copyfile(source, folder / name)
         (folder / "failure.json").write_text(json.dumps({
-            "operation": "brep", "error": reason, "worker_returncode": returncode,
+            "operation": operation, "error": reason, "worker_returncode": returncode,
             "saved_at_utc": datetime.now(timezone.utc).isoformat(),
         }, indent=2), encoding="utf-8")
     except OSError:
         logger.warning("Could not retain CAD worker diagnostics in %s", folder, exc_info=True)
+
+    if operation in {'step', 'step_shape', 'fea', 'lattice', 'lattice_display'}:
+        try:
+            # Private job inputs disappear at cleanup. Preserve their portable
+            # CAD bodies and any rejected STEP transfer for reproduction.
+            for source in directory.glob('shape_*.brep'):
+                shutil.copyfile(source, folder / ('input_' + source.name))
+            if operation in {'step', 'step_shape'}:
+                rejected = Path(arguments[1])
+                if rejected.is_file() and rejected.stat().st_size:
+                    shutil.copyfile(rejected, folder / 'failed_export.step')
+        except (OSError, TypeError, IndexError):
+            logger.warning('Could not retain failed CAD geometry in %s', folder, exc_info=True)
 
     # A numerical source mesh makes even failures before the AMRTO checkpoint
     # reproducible, without retaining executable pickle input or OCC caches.
@@ -162,18 +175,20 @@ def _terminate_cad_process(process):
 
 def run_cad_job(operation: str, *arguments, timeout_seconds: float | None = None,
                 progress_callback=None, cancel_callback=None):
-    if operation not in {"brep", "step", "step_shape", "mesh", "surface_layout", "worker_environment"}:
+    if operation not in {"brep", "step", "step_shape", "mesh", "surface_layout", "display_mesh", "fea", "lattice", "lattice_display", "worker_environment"}:
         raise ValueError(f"Unsupported CAD background operation: {operation}")
     failure_checkpoint = None
     if operation == "brep":
         # The AMRTO worker writes fitted geometry only when a fit is rejected.
-        # Successful previews never create this directory or export stage files.
+        # Successful builds never create this directory or export stage files.
         payload, destination, *optional = arguments
         strategy = optional[0] if optional else "auto"
         options = dict(optional[1] or {}) if len(optional) > 1 else {}
         failure_checkpoint = Path(options.get("failure_checkpoint_dir") or _new_failure_checkpoint_directory()).resolve()
         options["failure_checkpoint_dir"] = str(failure_checkpoint)
         arguments = (payload, destination, strategy, options)
+    elif operation in {'step', 'step_shape', 'fea', 'lattice', 'lattice_display'}:
+        failure_checkpoint = _new_failure_checkpoint_directory().resolve()
     with _cad_job_directory("pylcss_cad_job_") as directory:
         job = Path(directory) / "job.pkl"
         result = Path(directory) / "result.pkl"
@@ -230,28 +245,39 @@ def run_cad_job(operation: str, *arguments, timeout_seconds: float | None = None
             else:
                 reason = next((line.strip() for line in reversed(details.splitlines()) if line.strip()),
                               f"Worker exited with code {process.returncode}")
+                if operation in {'fea', 'lattice', 'lattice_display'} and process.returncode:
+                    label = {'fea': 'CAD analysis', 'lattice': 'Lattice generation',
+                             'lattice_display': 'Lattice display'}[operation]
+                    reason = f"{label} worker exited with code {process.returncode}: {reason}"
             if failure_checkpoint is not None:
                 saved = _persist_cad_failure_diagnostics(
-                    failure_checkpoint, directory, arguments, reason, process.returncode)
+                    failure_checkpoint, directory, arguments, reason, process.returncode, operation=operation)
                 if saved is not None and str(saved) not in reason:
                     reason += f"\nDiagnostics saved to: {saved}"
             logger.error("CAD %s worker diagnostics:\n%s", operation, details)
-            raise CadJobFailed(f"CAD job failed: {reason}", details)
+            label = {'fea': 'CAD analysis', 'lattice': 'Lattice generation',
+                     'lattice_display': 'Lattice display'}.get(operation, 'CAD job')
+            raise CadJobFailed(f"{label} failed: {reason}", details)
         with result.open("rb") as stream:
             return pickle.load(stream)
 
 
 def reconstruct_cad_in_background(payload, *, reconstruction_strategy="auto",
-                                  progress_callback=None, cancel_callback=None, **options):
-    """Return the native body, report and display mesh from one isolated build."""
+                                  progress_callback=None, cancel_callback=None,
+                                  preview_only=False, **options):
+    """Return the native body, report and display mesh from one isolated build.
+
+    ``preview_only`` is retained for old callers; viewing and export now share
+    the same AMRTO construction.
+    """
     import cadquery as cq
     # These are viewer/analysis caches, never inputs to reconstruction. In
     # particular, transferring an old CAD body would serialize OCC geometry
     # in the parent for no benefit.
     payload = {key: value for key, value in payload.items()
                if key not in {"shape", "cad_shape", "cad_preview_mesh", "design_domain", "validation"}}
-    with _cad_job_directory("pylcss_cad_preview_") as directory:
-        path = Path(directory) / "preview.brep"
+    with _cad_job_directory("pylcss_cad_build_") as directory:
+        path = Path(directory) / "cad.brep"
         report = run_cad_job("brep", payload, str(path), reconstruction_strategy, options,
                              progress_callback=progress_callback, cancel_callback=cancel_callback)
         preview_mesh = report.pop("_preview_mesh", None)
@@ -274,16 +300,31 @@ def main():
     else:
         from .execution_workers import (
             _external_write_cad_brep, _external_write_cad_step,
-            _external_write_cad_mesh, _write_step_shape,
+            _external_write_cad_mesh, _write_step_shape, _external_prepare_cad_display,
         )
         functions = {"brep": _external_write_cad_brep, "step": _external_write_cad_step,
-                     "step_shape": _write_step_shape, "mesh": _external_write_cad_mesh}
+                     "step_shape": _write_step_shape, "mesh": _external_write_cad_mesh,
+                     "display_mesh": _external_prepare_cad_display}
+        if operation == 'lattice':
+            from .execution_workers import _external_generate_lattice
+            functions['lattice'] = _external_generate_lattice
+        if operation == 'lattice_display':
+            from .execution_workers import _external_prepare_lattice_display
+            functions['lattice_display'] = _external_prepare_lattice_display
         if operation == 'surface_layout':
             from pylcss.cae.design_studio.topology_optimization.geometry.amrto_surface import prepare_amrto_surface
             functions['surface_layout'] = prepare_amrto_surface
+        if operation == 'fea':
+            from pylcss.cae.design_studio.topology_optimization.verification.fea_analysis import run_topopt_fea
+            def isolated_fea(result, material, supports, loads, options, *, progress_callback):
+                def analysis_progress(stage):
+                    progress_callback({'stage': stage}, None, 0, 0)
+                return run_topopt_fea(result, material, supports, loads,
+                                      progress_callback=analysis_progress, **options)
+            functions['fea'] = isolated_fea
         if operation not in functions:
             raise ValueError(f"Unsupported CAD background operation: {operation}")
-        if operation in {"brep", "surface_layout"}:
+        if operation in {"brep", "surface_layout", "fea", "lattice", "lattice_display"}:
             def progress_callback(payload, _density, step, total):
                 path = job.parent / "progress.json"
                 temporary = path.with_suffix(".tmp")

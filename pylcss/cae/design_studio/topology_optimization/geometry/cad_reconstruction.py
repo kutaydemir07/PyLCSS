@@ -12,21 +12,16 @@ from typing import Any
 
 import cadquery as cq
 import numpy as np
-import trimesh
 
 from .cad_config import CadReconstructionConfig, CAD_RECONSTRUCTION_REVISION
 from ._compat import warn_retired_options
-from .cad_diagnostics import (_export_stage_mesh, _export_cad_animation_mesh,
-                              assess_sampled_mesh_deviation)
+from .cad_diagnostics import _export_cad_animation_mesh
 from .cad_features import (_payload_bounds, _apply_passive_regions_to_step,
                            _attach_passive_regions_to_lattice)
-from .cad_mesh_repair import _extract_recovered_mesh, _extract_supplied_quad_mesh, _effective_tolerance
-from .spline_recovery import (SurfaceFitError, build_quad_cage, fit_patches, patch_mesh,
-                         assemble_solid, _shell_signature)
+from .cad_mesh_repair import _extract_recovered_mesh
+from .spline_recovery import SurfaceFitError
 from .lattice_cad import (beam_lattice_from_member_plan, beam_lattice_from_structure,
                           beam_lattice_solid, lattice_cad_strategy, topopt_export_formats)
-from .mesh_topology import triangulate_quad_faces
-from .mesh_surface import preprocess_and_repair_mesh
 from .occ_shapes import _unify_same_domain_shape
 from .step_export import verify_step_roundtrip, assert_unchanged_surface_geometry, export_cad_model
 
@@ -112,13 +107,13 @@ def reconstruct_topopt_cad(
     void_axial_margin=0.02, void_radial_margin=0., return_report=False,
     structure_options=None, member_plan=None, export_steps_dir=None, failure_checkpoint_dir=None,
     reconstruction_config: CadReconstructionConfig | None = None,
-    progress_callback=None, quad_layout=None, mechanical_validation=None, amrto_config=None, **legacy_options,
+    progress_callback=None, quad_layout=None, mechanical_validation=None, amrto_config=None,
+    preview_only=False, **legacy_options,
 ):
-    """Return a verified STEP-ready Workplane and optional acceptance report.
+    """Return AMRTO CAD with solid integration, or analytic beam lattice CAD.
 
-    Beam families use analytic cylinders/cones. Continuum
-    boundaries use compact cubic patches with shared boundaries. Each patch is
-    fitted locally; compatible patches are grouped into native spline faces.
+    Continuum boundaries use the five paper stages, common seam constraints
+    and the original non-design CAD interfaces. Each patch is fitted once.
     Historical optional keyword arguments are accepted for saved callers;
     they cannot reactivate a removed reconstruction engine.
     """
@@ -161,6 +156,30 @@ def reconstruct_topopt_cad(
               'configuration': asdict(config)}
     if strategy in {'beam', 'beam_fused'} and kind != 'beam':
         raise ValueError('Analytic beam export requires a strut lattice family')
+    if kind != 'beam' or strategy not in {'auto', 'beam', 'beam_fused'}:
+        # Viewing and export share the five-stage fit and the same downstream
+        # stitching/exact-interface integration. No second fitting loop.
+        from .amrto_reconstruction import reconstruct_topopt_cad as reconstruct_amrto
+        from .amrto_surface import cached_surface_layout
+        amrto_payload = dict(payload)
+        cache = cached_surface_layout(payload)
+        if isinstance(cache, dict) and cache.get('reports', {}).get('quadrangulation', {}).get('paper_pipeline'):
+            amrto_payload['amrto_cached_quadrangulation'] = {
+                'vertices': cache['vertices'], 'quads': cache['quads'],
+                'report': {**cache['reports']['quadrangulation'],
+                           'source_geometry_sha256': cache['source_geometry_sha256'],
+                           'requested_settings': cache['requested_settings']}}
+        paper_model, paper_report = reconstruct_amrto(
+            amrto_payload, reconstruction_strategy='amrto',
+            sew_tolerance=sew_tolerance, relative_sew_tolerance=relative_sew_tolerance,
+            crease_angle_deg=crease_angle_deg, max_faces=max_faces,
+            repair_mesh=repair_mesh, return_report=True, amrto_config=amrto_config,
+            maximum_volume_delta=maximum_volume_delta,
+            maximum_relative_deviation=maximum_relative_deviation,
+            void_axial_margin=void_axial_margin, void_radial_margin=void_radial_margin,
+            export_steps_dir=folder, progress_callback=progress_callback)
+        paper_report['requested_strategy'] = strategy
+        return (paper_model, paper_report) if return_report else paper_model
 
     if kind == 'beam' and strategy in {'auto', 'beam', 'beam_fused'}:
         progress('Building analytic lattice members')
@@ -180,162 +199,6 @@ def reconstruct_topopt_cad(
         report.update(beam_report, beam_lattice=lattice.diagnostics(), passive_features=passive)
         report['volume_semantics'] = ('Sum of member solids; overlapping joints are counted repeatedly'
                                     if not beam_report['fused'] else 'Boolean union material volume')
-    else:
-        progress('Preparing recovered boundary')
-        recovered = _extract_recovered_mesh(payload)
-        if recovered is None:
-            supplied = _extract_supplied_quad_mesh(payload)
-            if supplied is not None:
-                supplied_vertices, supplied_quads = supplied
-                recovered = (supplied_vertices, triangulate_quad_faces(supplied_vertices, supplied_quads))
-        if recovered is None:
-            from .surface_recovery import _recover_voxel_shape
-            from .recovery_payload import surface_recovery_constraints
-            field = payload.get('recovery_density')
-            if field is None:
-                field = payload.get('density')
-            if field is None:
-                raise SmoothCadUnavailable('No recovered boundary or voxel density was supplied')
-            boundary = _recover_voxel_shape(np.asarray(field), _payload_bounds(payload),
-                                            float(payload.get('recovery_cutoff') or payload.get('density_cutoff') or .5),
-                                            structure_options=options, member_plan=plan,
-                                            extrusion_axis=payload.get('extrusion_axis') or 'none',
-                                            **surface_recovery_constraints(payload))
-            if boundary is None:
-                raise SmoothCadUnavailable('Voxel recovery did not produce a boundary')
-            recovered = _extract_recovered_mesh(boundary)
-        vertices, faces = recovered
-        if not np.isfinite(vertices).all() or np.any(faces < 0) or np.any(faces >= len(vertices)):
-            raise ValueError('Recovered boundary has invalid coordinates or triangle indices')
-        if repair_mesh:
-            vertices, faces = preprocess_and_repair_mesh(vertices, faces, laplacian_iters=0)
-        source = trimesh.Trimesh(vertices, faces, process=False)
-        if not source.is_watertight or not source.is_winding_consistent or source.volume <= 0:
-            raise SmoothCadUnavailable('Recovered material boundary must be closed with outward material orientation')
-        diagonal = float(np.linalg.norm(source.extents))
-        sew = _effective_tolerance(vertices, sew_tolerance, relative_sew_tolerance)
-        fit_limit = max(float(fit_tolerance), float(relative_fit_tolerance) * diagonal)
-        deviation_limit = float(maximum_relative_deviation) * diagonal
-        stages['surface_recovery'] = {'vertex_count': len(vertices), 'triangle_count': len(faces),
-                                      'material_volume': float(source.volume)}
-        if folder:
-            _export_stage_mesh(folder, 'recovered_boundary', [('source', vertices, faces)])
-        failures = []
-        shape = None
-        if (strategy == 'auto' and quad_layout is None and payload.get('quad_layout') is None
-                and not payload.get('amrto_layouts_dir') and 'amrto_quad_mesh' not in payload):
-            from .analytic_recovery import recover_analytic_solid
-            progress('Recovering analytic planes and curved primitives')
-            analytic = recover_analytic_solid(source, fit_tolerance=fit_limit,
-                                               deviation_limit=deviation_limit,
-                                               maximum_volume_delta=maximum_volume_delta,
-                                               validation_samples=config.validation_samples)
-            if analytic is not None:
-                shape, recognition = analytic
-                stages['analytic_surface_recovery'] = recognition
-                report.update(method='Recovered analytic surfaces', smooth=True, editable=True,
-                              relative_volume_delta=recognition['relative_volume_delta'],
-                              sampled_surface_deviation=recognition['deviation'],
-                              attempts=1, rejected_attempts=[])
-        signature = _shell_signature(source)
-        genus = sum(max(0, 1-chi/2) for chi, _ in signature)
-        initial_target = max(config.target_triangles, int(48*genus), 32*len(signature))
-        stages['surface_recovery'].update(boundary_shell_count=len(signature), total_genus=genus)
-        quad_layout = quad_layout if quad_layout is not None else payload.get('quad_layout')
-        if shape is None and strategy in {'auto', 'amrto', 'tpms'} and quad_layout is None:
-            from .amrto_reconstruction import reconstruct_topopt_cad as reconstruct_amrto
-            amrto_payload = dict(payload)
-            amrto_payload['recovered_shape'] = {'vertices': vertices, 'faces': faces}
-            from .amrto_surface import cached_surface_layout
-            cache = cached_surface_layout(payload)
-            if isinstance(cache, dict):
-                amrto_payload['amrto_cached_quadrangulation'] = {
-                    'vertices': cache['vertices'], 'quads': cache['quads'],
-                    'report': {**cache['reports']['quadrangulation'],
-                               'source_geometry_sha256': cache['source_geometry_sha256'],
-                               'requested_settings': cache['requested_settings']}}
-            workplane, amrto_report = reconstruct_amrto(
-                amrto_payload, reconstruction_strategy='amrto',
-                sew_tolerance=sew, relative_sew_tolerance=0.,
-                fit_tolerance=min(fit_limit, .25*deviation_limit) if deviation_limit else fit_limit,
-                relative_fit_tolerance=0., crease_angle_deg=None,
-                maximum_volume_delta=maximum_volume_delta,
-                maximum_relative_deviation=maximum_relative_deviation,
-                max_faces=max_faces, merge_angle_deg=merge_angle_deg,
-                repair_mesh=False, return_report=True, amrto_config=amrto_config,
-                export_steps_dir=folder, failure_checkpoint_dir=failure_checkpoint_dir,
-                progress_callback=progress_callback)
-            shape = workplane.val()
-            report.update(amrto_report, requested_strategy=strategy, backend='in-process',
-                          revision=CAD_RECONSTRUCTION_REVISION, smooth=True, editable=True)
-            stages['amrto'] = amrto_report['stages']
-        stages['attempts'] = []
-        attempt = 0
-        target = min(initial_target, len(source.faces))
-        while shape is None:
-            attempt_start = perf_counter()
-            refinement_factor = 2.
-            attempt_report = {'number': attempt+1, 'target_triangles': target}
-            stages['attempts'].append(attempt_report)
-            progress('Creating CAD surfaces')
-            try:
-                cage_vertices, quads, cage_report = build_quad_cage(
-                    source, target, config.crease_angle_deg,
-                    quad_layout=quad_layout)
-                poles, fit_report = fit_patches(source, cage_vertices, quads, config)
-                sampled_vertices, sampled_faces = patch_mesh(poles)
-                deviation = assess_sampled_mesh_deviation(vertices, faces, sampled_vertices,
-                                                         sampled_faces, samples=config.validation_samples)
-                if deviation_limit and deviation['maximum_distance'] > deviation_limit:
-                    refinement_factor = max(2., 1.2*deviation['maximum_distance']/deviation_limit)
-                    raise SurfaceFitError(f'Sampled geometric deviation {deviation["maximum_distance"]:.6g} '
-                                          f'exceeds {deviation_limit:.6g}')
-                if fit_limit and deviation['rms_distance'] > fit_limit:
-                    refinement_factor = max(2., 1.2*deviation['rms_distance']/fit_limit)
-                    raise SurfaceFitError(f'Sampled RMS distance exceeds {fit_limit:.6g}')
-                if _shell_signature(trimesh.Trimesh(sampled_vertices, sampled_faces, process=True)) != signature:
-                    raise SurfaceFitError('Fitted tessellation changed boundary-shell topology')
-                shape, assembly = assemble_solid(
-                    poles, sew, quads=quads, crease_edges=cage_report['crease_edges'])
-                delta = abs(shape.Volume(tol=1e-6)-source.volume)/source.volume
-                if maximum_volume_delta and delta > maximum_volume_delta:
-                    raise SurfaceFitError(f'Fitting changed material volume by {delta:.1%}')
-                report.update(assembly, method='Compact cubic spline',
-                              smooth=True,
-                              editable=True, relative_volume_delta=float(delta),
-                              sampled_surface_deviation=deviation, continuity=fit_report,
-                              attempts=attempt+1, rejected_attempts=list(failures))
-                stages.update(quad_cage=cage_report, spline_fit=fit_report)
-                if folder:
-                    _export_stage_mesh(folder, 'quad_cage', [('cage', cage_vertices, quads)])
-                    _export_stage_mesh(folder, 'fitted_surface', [('splines', sampled_vertices, sampled_faces)])
-                attempt_report.update(accepted=True, patch_count=len(quads),
-                                      elapsed_seconds=perf_counter()-attempt_start)
-                break
-            except SurfaceFitError as error:
-                shape = None
-                attempt_report.update(accepted=False, reason=str(error),
-                                      elapsed_seconds=perf_counter()-attempt_start)
-                failures.append(f'Attempt {attempt+1}: {error}')
-                if quad_layout is not None or target >= len(source.faces):
-                    break
-                # Refine to the source's resolution, never to a fixed face or
-                # retry limit. All fits remain independent local solves.
-                target = min(len(source.faces), int(np.ceil(target*refinement_factor)))
-                attempt += 1
-        if shape is None:
-            if folder:
-                report.update(valid=False, rejected_attempts=failures,
-                              elapsed_seconds=perf_counter() - start)
-                (folder / 'cad_stage_reports.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
-            detail = stages['attempts'][-1].get('reason', 'No valid solid was produced')
-            raise SmoothCadUnavailable('CAD conversion could not preserve the recovered surface: '
-                                       + detail + '. The recovered mesh remains available for STL export.')
-        if 'amrto' not in stages:
-            shape = _apply_passive_regions_to_step(shape, payload,
-                                               void_axial_margin=void_axial_margin,
-                                               void_radial_margin=void_radial_margin)
-        report['continuity_scope'] = 'Exact shared boundaries; tangent continuity is not imposed'
     progress('Checking the recovered CAD solid')
     if merge_angle_deg and 'amrto' not in stages:
         shape = _unify_same_domain_shape(shape, merge_angle_deg=merge_angle_deg)

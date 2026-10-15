@@ -131,6 +131,8 @@ def repair_surface_orientation(
     maximum_training_sites=40_000,
     maximum_constraint_sites=50_000,
     maximum_verification_sites=150_000,
+    reference_layout=None,
+    box_bounds=None,
 ):
     """Return ``(accepted_copy, report)`` or ``(None, rejection_report)``.
 
@@ -144,6 +146,7 @@ def repair_surface_orientation(
     from .amrto_nurbs_fitting import _surface_map_residual
 
     deadline = started + maximum_seconds
+    reference = layout if reference_layout is None else reference_layout
     report = {
         "method": "Frozen canonical borders with source signed-area constrained interior LS",
         "paper_algorithm": False,
@@ -189,6 +192,9 @@ def repair_surface_orientation(
     if time.monotonic() > deadline:
         return reject("time_limit", "resource_limit")
     try:
+        if (not np.array_equal(reference.parameter_coords, layout.parameter_coords)
+                or not np.array_equal(reference.triangles, layout.triangles)):
+            return reject('reference_chart_mismatch')
         baseline = np.asarray(surface.ctrlpts2d, dtype=float)
         nu, nv = baseline.shape[:2]
         if nu * nv > min(maximum_control_points, 4096):
@@ -232,10 +238,10 @@ def repair_surface_orientation(
             return reject("time_limit", "resource_limit")
         candidate = deepcopy(surface)
         report["baseline_position_maximum_error"] = _surface_map_residual(
-            layout, surface, grid_size=73
+            reference, surface, grid_size=73
         )
         report["baseline_orientation"] = assess_fit_orientation(
-            layout, surface, maximum_sites=maximum_verification_sites
+            reference, surface, maximum_sites=maximum_verification_sites
         )
         if time.monotonic() > deadline:
             return reject("time_limit", "resource_limit")
@@ -269,17 +275,27 @@ def repair_surface_orientation(
         boundary[[0, -1], :], boundary[:, [0, -1]] = True, True
         known = np.repeat(boundary.ravel(), 3)
         interior, original = ~known, baseline.ravel().copy()
+        lower_box = upper_box = None
+        if box_bounds is not None:
+            limits = np.asarray(box_bounds, dtype=float)
+            if limits.shape != (2, 3) or not np.isfinite(limits).all() or np.any(limits[0] >= limits[1]):
+                return reject('invalid_source_box')
+            lower_box = np.broadcast_to(limits[0], baseline.shape).ravel()[interior]
+            upper_box = np.broadcast_to(limits[1], baseline.shape).ravel()[interior]
+            report['source_box_interior_constraints'] = True
         rhs = values - matrix[:, known] @ original[known]
         matrix = matrix[:, interior]
         normal, target = (matrix.T @ matrix).tocsc(), matrix.T @ rhs
         x = spsolve(normal + sparse.eye(normal.shape[0], format="csc") * 1e-12, target)
+        if lower_box is not None:
+            x = np.clip(x, lower_box, upper_box)
         report["training_site_count"] = len(training)
         for outer in range(maximum_iterations):
             if time.monotonic() > deadline:
                 return reject("time_limit", "resource_limit")
             if len(query) > maximum_constraint_sites:
                 return reject("constraint_site_limit", "resource_limit")
-            jac = _source_jacobians(layout, query, deadline)
+            jac = _source_jacobians(reference, query, deadline)
             normals = np.cross(jac[:, 0], jac[:, 1])
             area = np.linalg.norm(normals, axis=1)
             normals /= area[:, None]
@@ -304,6 +320,10 @@ def repair_surface_orientation(
             )
             constraint = sparse.diags(1 / scale) @ constraint
             lower /= scale
+            if lower_box is not None:
+                identity = sparse.eye(len(x), format='csr')
+                constraint = sparse.vstack((constraint, identity, -identity), format='csr')
+                lower = np.r_[lower, lower_box, -upper_box]
             rho, proximity = 100.0, 0.001
             solve = factorized(
                 normal
@@ -323,6 +343,10 @@ def repair_surface_orientation(
                     break
                 if time.monotonic() > deadline:
                     return reject("time_limit", "resource_limit")
+            if lower_box is not None:
+                # Remove solver roundoff at a stock plane before independent
+                # orientation/position verification; never clamp afterward.
+                x = np.clip(x, lower_box, upper_box)
             controls[interior] = x
             candidate.set_ctrlpts(controls.reshape(-1, 3).tolist(), nu, nv)
             checks, failures = [], []
@@ -330,7 +354,7 @@ def repair_surface_orientation(
                 if time.monotonic() > deadline:
                     return reject("time_limit", "resource_limit")
                 checked = assess_fit_orientation(
-                    layout,
+                    reference,
                     candidate,
                     uniform_samples=129,
                     knot_probe_fraction=fraction,
@@ -351,7 +375,7 @@ def repair_surface_orientation(
                         if "inverted_source_orientation" in site["reasons"]
                     ]
                 )
-            error = _surface_map_residual(layout, candidate, grid_size=73)
+            error = _surface_map_residual(reference, candidate, grid_size=73)
             report["final_position_maximum_error"] = error
             report["iterations"].append(
                 {

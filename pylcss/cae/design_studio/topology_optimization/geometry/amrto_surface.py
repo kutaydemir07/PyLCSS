@@ -7,14 +7,12 @@ import hashlib
 import numpy as np
 
 from .amrto_common import AMRTOConfig
-from .amrto_quadrangulation import quadrangulate_mesh
-from .amrto_layout_partition import divide_sparse_quad_layouts
+from .amrto_quadrangulation import quadrangulate_paper_mesh
+from .amrto_layout_partition import divide_paper_sparse_quad_layouts
 from .cad_mesh_repair import _extract_recovered_mesh
-from .cad_diagnostics import assess_sampled_mesh_deviation
 from .mesh_topology import triangulate_quad_faces
-from .quad_layout import validate_quad_layout
 
-SURFACE_LAYOUT_REVISION = 2
+SURFACE_LAYOUT_REVISION = 3
 
 
 def geometry_fingerprint(vertices, faces):
@@ -102,7 +100,7 @@ def add_source_groups(result, vertices, faces):
 def prepare_amrto_surface(payload, *, progress_callback=None, target_faces=None,
                           crease_deg=0., maximum_relative_deviation=.01,
                           maximum_volume_delta=.05):
-    """Prepare native quads and validated layouts, recording grouping provenance."""
+    """Prepare the same paper Steps 2 and 3 used by Build CAD."""
     import trimesh
     recovered = _extract_recovered_mesh(payload)
     if recovered is None:
@@ -111,15 +109,13 @@ def prepare_amrto_surface(payload, *, progress_callback=None, target_faces=None,
     source = trimesh.Trimesh(vertices, faces, process=False)
     if not source.is_watertight or not source.is_winding_consistent or source.volume <= 0:
         raise ValueError('The recovered topology surface must be closed and outward oriented')
-    requested = int(target_faces or min(AMRTOConfig().target_quad_faces, max(300, len(faces)//4)))
+    requested = int(AMRTOConfig().target_quad_faces if target_faces is None else target_faces)
     if requested < 1 or not np.isfinite(crease_deg) or not 0 <= crease_deg <= 180:
         raise ValueError('Quad target must be positive and crease angle must be between 0 and 180')
     if any(not np.isfinite(value) or value < 0
            for value in (maximum_relative_deviation, maximum_volume_delta)):
         raise ValueError('Surface deviation and volume limits must be finite and nonnegative')
-    settings = {'target_faces': requested, 'crease_deg': float(crease_deg),
-                'maximum_relative_deviation': float(maximum_relative_deviation),
-                'maximum_volume_delta': float(maximum_volume_delta)}
+    settings = {'target_faces': requested, 'crease_deg': float(crease_deg), 'paper_pipeline': True}
     cache = cached_surface_layout(payload, requested_settings=settings)
     if cache is not None:
         return cache
@@ -127,22 +123,16 @@ def prepare_amrto_surface(payload, *, progress_callback=None, target_faces=None,
         if progress_callback:
             progress_callback({'type': 'topopt_progress', 'status_only': True,
                                'stage': stage}, None, 0, 0)
-    def validate(candidate_vertices, candidate_faces):
-        report = assess_sampled_mesh_deviation(vertices, faces, candidate_vertices, candidate_faces,
-                                              samples=1000)
-        report['requested_maximum_relative_deviation'] = .5*maximum_relative_deviation
-        report['passed'] = report['maximum_relative_distance'] <= .5*maximum_relative_deviation
-        return report
     progress('Creating quad surface')
-    quad_vertices, quads, quad_report = quadrangulate_mesh(
-        vertices, faces, target_faces=requested, crease_deg=crease_deg,
-        triangle_surface_validator=validate, require_native=True,
-        maximum_volume_delta=maximum_volume_delta)
-    validate_quad_layout(source, quad_vertices, quads)
+    quad_vertices, quads, quad_report = quadrangulate_paper_mesh(
+        vertices, faces, target_faces=requested, crease_deg=crease_deg)
+    fingerprint = geometry_fingerprint(vertices, faces)
+    quad_report.update(paper_pipeline=True, source_geometry_sha256=fingerprint,
+                       requested_settings=settings)
     progress('Grouping surface regions')
-    layouts, group_report = divide_sparse_quad_layouts(quad_vertices, quads, target_patch_size=50)
+    layouts, group_report = divide_paper_sparse_quad_layouts(quad_vertices, quads)
     result = layout_display_data(quad_vertices, quads, layouts,
                                  reports={'quadrangulation': quad_report, 'grouping': group_report})
-    result['source_geometry_sha256'] = geometry_fingerprint(vertices, faces)
+    result['source_geometry_sha256'] = fingerprint
     result['requested_settings'] = settings
     return add_source_groups(result, vertices, faces)

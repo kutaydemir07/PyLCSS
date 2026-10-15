@@ -211,7 +211,8 @@ def reparameterize_shared_curve(curve, chord_parameters, native_parameters, tole
                     "added_control_count": len(result.c) - len(curve.c)}
 
 
-def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None):
+def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None, blocked_junction_positions=(),
+                                   certify_stock_hull=False):
     """Fit seams once; retain protected source creases and junctions exactly."""
     def key(point):
         return tuple(map(float, point))
@@ -248,11 +249,11 @@ def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None):
             cosine = float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
             if cosine > -np.cos(np.deg2rad(30)):
                 anchors.add(vertex)
-    cache, reports, native_reports = {}, [], []
+    if certify_stock_hull and bounds is None:
+        raise ValueError('Strict canonical-chain stock certification requires supplied source box bounds')
+    cache, reports, native_reports, stock_reports = {}, [], [], []
+    records, record_indices, side_specs = [], {}, []
     for layout in layouts:
-        sides = []
-        retained_native = getattr(layout, "parameterization_report", {}).get("branch") == "scaffold_rectangle"
-        layout_native_reports = []
         for side, path in enumerate(layout.boundary_paths):
             cuts = [i for i, vertex in enumerate(path) if key(layout.vertices[vertex]) in anchors]
             chain_points = [layout.vertices[path[left:right + 1]] for left, right in zip(cuts, cuts[1:])]
@@ -260,7 +261,7 @@ def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None):
             total = sum(lengths)
             if total <= 0:
                 raise ValueError("Shared boundary side has zero length")
-            side_knots, side_controls, offset = [], [], 0.0
+            pieces = []
             for points, length in zip(chain_points, lengths):
                 reverse = key(points[-1]) < key(points[0])
                 canonical = points[::-1] if reverse else points
@@ -269,21 +270,39 @@ def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None):
                     protected = any(tuple(sorted((a, b))) in protected_edges
                                     for a, b in zip(identifier, identifier[1:]))
                     curve, report = _fit_curve(canonical, tolerance, preserve_polyline=protected, bounds=bounds)
+                    if certify_stock_hull:
+                        from .amrto_shared_stock import project_canonical_chain
+                        curve, stock = project_canonical_chain(curve, canonical, bounds, tolerance)
+                        stock_reports.append(stock)
+                        report['canonical_chain_stock_certificate'] = stock
                     cache[identifier] = curve
                     reports.append(report)
-                curve = cache[identifier]
-                knots = 1 - curve.t[::-1] if reverse else curve.t
-                controls = curve.c[::-1] if reverse else curve.c
-                scaled = offset + knots * length / total
-                if not side_controls:
-                    side_knots = scaled.tolist()
-                    side_controls = controls.tolist()
-                else:
-                    side_knots = side_knots[:-4] + [offset] * 3 + scaled[4:].tolist()
-                    side_controls.extend(controls[1:].tolist())
-                offset += length / total
-            side_knots[-4:] = [1.0] * 4
-            side_curve = BSpline(np.asarray(side_knots), np.asarray(side_controls), 3)
+                    record_indices[identifier] = len(records)
+                    records.append({"points": canonical.copy(), "length": float(length),
+                                    "protected": protected or not report["smooth_interior_knots"],
+                                    "baseline": curve, "baseline_report": report})
+                pieces.append((record_indices[identifier], reverse))
+            side_specs.append(pieces)
+
+    # Couple ordinary through-junction tangents once for the whole shared
+    # graph. Protected or failed components retain the original C0 curves.
+    # Do this before native UV changes, whose exact geometry-preserving
+    # reparameterization remains necessary for retained native rectangles.
+    from .amrto_shared_network import fit_shared_boundary_network
+    side_curves, network_report = fit_shared_boundary_network(
+        records, side_specs, tolerance, bounds=bounds, blocked_junction_positions=blocked_junction_positions)
+    if certify_stock_hull and network_report['active_component_count']:
+        raise ValueError('Strict canonical-chain certificate requires the fixed-junction boundary policy')
+    side_index = 0
+    for layout in layouts:
+        sides = []
+        influencing_positions = set()
+        retained_native = getattr(layout, "parameterization_report", {}).get("branch") == "scaffold_rectangle"
+        layout_native_reports = []
+        for side, path in enumerate(layout.boundary_paths):
+            side_curve = side_curves[side_index]
+            influencing_positions.update(network_report["active_junction_positions_by_side"][side_index])
+            side_index += 1
             if retained_native:
                 chord = np.r_[0., np.cumsum(np.linalg.norm(np.diff(layout.vertices[path], axis=0), axis=1))]
                 chord /= chord[-1]
@@ -296,7 +315,12 @@ def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None):
                 layout_native_reports.append(native_report)
                 native_reports.append(native_report)
             sides.append(side_curve)
+            if certify_stock_hull:
+                from .amrto_shared_stock import control_hull_in_box
+                if not control_hull_in_box(side_curve.c, bounds)['accepted']:
+                    raise ValueError('Composed shared side escaped its certified canonical-chain stock hull')
         layout.boundary_splines = sides
+        layout._active_shared_network_junction_positions = tuple(sorted(influencing_positions))
         layout.shared_boundary_parameterization_report = {
             "retained_native_uv": retained_native, "sides": layout_native_reports}
     return {"method": "Common cubic B-spline graph chains with fixed junctions",
@@ -305,8 +329,22 @@ def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None):
                                                    for r in reports),
             "exact_protected_chain_count": sum(r.get("exact_protected_chain", False) for r in reports),
             "protected_source_crease_edge_count": len(protected_edges),
-            "maximum_sampled_chain_error": max((r["maximum_sampled_error"] for r in reports), default=0),
+            "maximum_sampled_chain_error": max(
+                max((r["maximum_sampled_error"] for r in reports), default=0),
+                network_report["maximum_sampled_chain_source_error"],
+                network_report["maximum_final_composed_side_source_error"]),
             "native_reparameterized_side_count": sum(r["applied"] for r in native_reports),
             "native_added_boundary_control_count": sum(r.get("added_control_count", 0) for r in native_reports),
             "native_boundary_parameterization_extension": bool(native_reports),
+            "joint_boundary_network": network_report,
+            "canonical_chain_stock_certificate": {
+                'enabled': bool(certify_stock_hull), 'chain_count': len(stock_reports),
+                'all_composed_boundary_paths_certified': bool(certify_stock_hull),
+                'projection_before_side_composition': bool(certify_stock_hull),
+                'changed_chain_count': sum(row['changed_pole_count'] > 0 for row in stock_reports),
+                'changed_pole_count': sum(row['changed_pole_count'] for row in stock_reports),
+                'maximum_complete_source_curve_error_bound': max(
+                    (row['complete_source_curve_error_bound'] for row in stock_reports), default=0.0),
+                'chains': stock_reports,
+            },
             "tolerance": float(tolerance), "paper_multiresolution": False}

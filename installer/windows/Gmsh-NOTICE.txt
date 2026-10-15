@@ -1,0 +1,19 @@
+Gmsh 4.15.2
+Copyright (C) 1997-2026 Christophe Geuzaine and Jean-Francois Remacle.
+https://gmsh.info/
+
+The unmodified standalone Gmsh executable is a separate external tool under
+GNU GPL version 2 or later, with the exception stated in its LICENSE.txt.
+PyLCSS invokes it as a separate process using ordinary STEP, GEO and MSH
+files. PyLCSS does not import or link the Gmsh SDK or Python library.
+
+The distribution preserves upstream LICENSE.txt, CREDITS.txt and README.txt.
+The complete corresponding upstream source is included at:
+  external_solvers/gmsh/source/gmsh-4.15.2-source.tgz
+Upstream source:
+  https://gmsh.info/src/gmsh-4.15.2-source.tgz
+SHA-256:
+  be3f66f225d27ba9fa014f07e83169285da8a051b0e8ab7103d88066b39bdd3e
+
+Gmsh is provided without warranty. Its license and recipient rights remain
+independent of the PyLCSS application license.

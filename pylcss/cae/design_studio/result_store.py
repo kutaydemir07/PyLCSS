@@ -153,6 +153,33 @@ def _write_dataset(parent: Any, name: str, value: np.ndarray, kind: str) -> None
     dataset.attrs["_kind"] = kind
 
 
+def _portable_lattice_archive(result: dict[str, Any], source: Any) -> Any:
+    """Persist protected triangle boundaries without changing live CAD refs."""
+    if not result.get("generated_lattice") or not isinstance(source, dict):
+        return source
+    recovered = result.get("recovered_shape")
+    preserved = recovered.get("preserved_lattice_geometry") if isinstance(recovered, dict) else None
+    if not isinstance(preserved, dict):
+        return source
+    regions = dict(source.get("passive_regions") or {})
+    changed = False
+    for key in ("explicit_solid_shapes", "explicit_void_shapes"):
+        shapes = preserved.get(key)
+        if not isinstance(shapes, (list, tuple)) or not all(
+            isinstance(shape, dict) and "vertices" in shape and "faces" in shape
+            for shape in shapes
+        ):
+            continue
+        # Fresh containers avoid the serializer's runtime-reference deduplication
+        # when these portable meshes also occur in the generated result itself.
+        # Their numerical arrays are shared here, then stored normally by HDF5.
+        regions[key] = [dict(shape) for shape in shapes]
+        changed = True
+    if not changed:
+        return source
+    return {**source, "passive_regions": regions}
+
+
 def _write_value(
     parent: Any,
     key: str,
@@ -244,6 +271,8 @@ def _write_value(
             child_key = str(child_key)
             if child_key in _SKIPPED_RUNTIME_KEYS:
                 continue
+            if child_key == "topology_source":
+                child_value = _portable_lattice_archive(value, child_value)
             try:
                 _write_value(
                     group,

@@ -260,6 +260,45 @@ foreach ($notice in $reconstructionManifest.notices) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $notice) -Destination $reconstructionStage
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "reconstruction-tools.json") -Destination $reconstructionStage
+
+# The CAD mesher is an unmodified external command-line program. Ship its
+# license, credits and complete corresponding source beside the executable.
+$gmshManifestPath = Join-Path $PSScriptRoot "gmsh-tools.json"
+$gmshManifest = Get-Content -LiteralPath $gmshManifestPath -Raw | ConvertFrom-Json
+$gmshStage = Join-Path $appStage "external_solvers\gmsh"
+New-Item -ItemType Directory -Path $gmshStage -Force | Out-Null
+$gmshArchiveCache = Join-Path $cacheRoot $gmshManifest.binary_archive.file
+Get-VerifiedDownload -Uri $gmshManifest.binary_archive.url `
+    -Destination $gmshArchiveCache -Sha256 $gmshManifest.binary_archive.sha256
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$gmshArchive = [System.IO.Compression.ZipFile]::OpenRead($gmshArchiveCache)
+try {
+    foreach ($artifact in $gmshManifest.files) {
+        $entry = $gmshArchive.GetEntry($gmshManifest.archive_prefix + $artifact.file)
+        if ($null -eq $entry) { throw "Missing Gmsh archive entry: $($artifact.file)" }
+        $target = Join-Path $gmshStage $artifact.file
+        Assert-ChildPath -Parent $gmshStage -Candidate $target
+        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
+        if ((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -ne $artifact.sha256) {
+            throw "Gmsh component checksum mismatch: $target"
+        }
+    }
+} finally {
+    $gmshArchive.Dispose()
+}
+$gmshSourceCache = Join-Path $cacheRoot $gmshManifest.source_archive.file
+Get-VerifiedDownload -Uri $gmshManifest.source_archive.url `
+    -Destination $gmshSourceCache -Sha256 $gmshManifest.source_archive.sha256
+$gmshSourceStage = Join-Path $gmshStage "source"
+New-Item -ItemType Directory -Path $gmshSourceStage -Force | Out-Null
+Copy-Item -LiteralPath $gmshSourceCache -Destination $gmshSourceStage
+Copy-Item -LiteralPath $gmshManifestPath -Destination $gmshStage
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Gmsh-NOTICE.txt") -Destination $gmshStage
+$gmshLicenseStage = Join-Path $bundledLicenseStage "Gmsh-4.15.2"
+New-Item -ItemType Directory -Path $gmshLicenseStage -Force | Out-Null
+foreach ($notice in @("LICENSE.txt", "CREDITS.txt", "Gmsh-NOTICE.txt")) {
+    Copy-Item -LiteralPath (Join-Path $gmshStage $notice) -Destination $gmshLicenseStage
+}
 New-Item -ItemType Directory -Path $scriptStage -Force | Out-Null
 foreach ($scriptName in @(
     "install_solvers.py",

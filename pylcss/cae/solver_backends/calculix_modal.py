@@ -21,6 +21,7 @@ from pylcss.cae.solver_backends.calculix import (
     resolve_calculix_executable,
 )
 from pylcss.cae.solver_backends.calculix_results import _resolve_deformation_scale
+from pylcss.cae.solver_backends.calculix_runtime import calculix_thread_environment
 from pylcss.cae.solver_backends.execution import make_work_dir, run_process, tail
 from pylcss.cae.solver_backends.frd_reader import _parse_data_record
 from pylcss.cae.solver_backends.mesh import (
@@ -307,6 +308,7 @@ def run_calculix_modal(
     mode_shapes: dict[int, np.ndarray] = {}
     mode_displacements_flat: dict[int, np.ndarray] = {}
     solver_elapsed_s: float | None = None
+    solver_threads: int | None = None
 
     if config.run_solver:
         if executable is None:
@@ -315,12 +317,15 @@ def run_calculix_modal(
                 "or run scripts/install_solvers.py."
             )
         exe_dir = str(Path(executable).resolve().parent)
+        thread_env = calculix_thread_environment(warnings)
+        solver_threads = int(thread_env["OMP_NUM_THREADS"])
         started = time.perf_counter()
         proc = run_process(
             [executable, job_name],
             cwd=work_dir,
             timeout_s=timeout_s,
             extra_path_dirs=(exe_dir,),
+            extra_env=thread_env,
             cancel_callback=config.cancel_callback,
         )
         solver_elapsed_s = time.perf_counter() - started
@@ -399,6 +404,7 @@ def run_calculix_modal(
         "work_dir": str(work_dir),
         "solver_executable": executable,
         "solver_elapsed_s": solver_elapsed_s,
+        "solver_threads": solver_threads,
         "num_modes": len(modes),
         "modes": modes,
         "frequencies_hz": [m["frequency_hz"] for m in modes],

@@ -6,9 +6,7 @@ import logging
 
 from PySide6 import QtCore
 
-from pylcss.cae.design_studio.topology_optimization.verification.fea_analysis import (
-    run_topopt_fea,
-)
+from .cad_background import run_cad_job
 
 
 class TopOptFeaWorker(QtCore.QThread):
@@ -38,14 +36,17 @@ class TopOptFeaWorker(QtCore.QThread):
 
     def run(self):
         try:
-            analysis = run_topopt_fea(
+            # Netgen/OCC can hold the GIL or crash natively on malformed
+            # surfaces. Keep meshing and the solver out of the GUI process.
+            analysis = run_cad_job(
+                'fea',
                 self.result,
                 self.material,
                 self.supports,
                 self.loads,
-                quality=self.quality,
-                mesh_options=self.mesh_options,
-                progress_callback=self.analysis_progress.emit,
+                {'quality': self.quality, 'mesh_options': self.mesh_options},
+                progress_callback=lambda payload, _density, _step, _total:
+                    self.analysis_progress.emit(str(payload.get('stage', 'CAD FEA'))),
                 cancel_callback=self.isInterruptionRequested,
             )
             if self.isInterruptionRequested() or analysis is None:

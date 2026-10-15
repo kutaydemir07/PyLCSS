@@ -23,6 +23,61 @@ logger = logging.getLogger(__name__)
 _NODAL_STRESS_DISPLAY_PERCENTILE = 99.5
 
 
+def _topopt_cad_display_mesh(data, shape):
+    """Return a prepared native-face display mesh without meshing geometry."""
+    mesh = data.get("cad_preview_mesh")
+    if not isinstance(mesh, dict):
+        return None
+    try:
+        vertices = np.asarray(mesh["vertices"])
+        faces = np.asarray(mesh["faces"])
+        ranges = np.asarray(mesh["face_ranges"])
+        body = shape.val() if hasattr(shape, "val") else shape
+        face_count = len(body.Faces())
+        if (
+            vertices.ndim != 2 or vertices.shape[1] != 3 or not len(vertices)
+            or faces.ndim != 2 or faces.shape[1] != 3 or not len(faces)
+            or ranges.shape != (face_count, 4) or not face_count
+            or not np.all(np.isfinite(vertices))
+            or not np.issubdtype(faces.dtype, np.integer)
+            or not np.issubdtype(ranges.dtype, np.integer)
+            or np.min(faces) < 0 or np.max(faces) >= len(vertices)
+            or ranges[0, 0] != 0 or ranges[0, 2] != 0
+            or ranges[-1, 1] != len(vertices) or ranges[-1, 3] != len(faces)
+            or np.any(ranges[:, 1] < ranges[:, 0])
+            or np.any(ranges[:, 3] < ranges[:, 2])
+            or np.any(ranges[1:, 0] != ranges[:-1, 1])
+            or np.any(ranges[1:, 2] != ranges[:-1, 3])
+        ):
+            return None
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+    return mesh
+
+
+def _topopt_lattice_display_mesh(data):
+    """Validate bounded prepared arrays without running native geometry filters."""
+    from pylcss.cae.design_studio.topology_optimization.geometry.lattice_display import MAX_LATTICE_DISPLAY_FACES
+    mesh = data.get('lattice_preview_mesh')
+    if not isinstance(mesh, dict):
+        return None
+    try:
+        vertices, faces = np.asarray(mesh['vertices']), np.asarray(mesh['faces'])
+        normals = np.asarray(mesh['point_normals'])
+        if (vertices.ndim != 2 or vertices.shape[1:] != (3,) or not len(vertices)
+                or faces.ndim != 2 or faces.shape[1:] != (3,)
+                or not 0 < len(faces) <= MAX_LATTICE_DISPLAY_FACES
+                or len(vertices) > 3 * len(faces)
+                or normals.shape != vertices.shape
+                or not np.isfinite(vertices).all() or not np.isfinite(normals).all()
+                or not np.issubdtype(faces.dtype, np.integer)
+                or faces.min() < 0 or faces.max() >= len(vertices)):
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    return mesh
+
+
 def _stress_display_range(values, stress_location=""):
     """Return a useful contour range without hiding the reported raw peak.
 
@@ -851,12 +906,152 @@ class SimulationRenderingMixin:
         self._face_polydata_list = []
         self._pickable_surface_dataset = None
 
+    def _prepare_topopt_cad_display(self, result, shape, *, force=False):
+        """Prepare a restored CAD body's missing mesh away from the Qt thread."""
+        from .execution_workers import TopOptCadDisplayWorker
+
+        jobs = getattr(self, "_topopt_cad_display_jobs", None)
+        if jobs is None:
+            jobs = self._topopt_cad_display_jobs = {}
+        key = id(shape)
+        if key in jobs or (result.get("_cad_display_error") and not force):
+            return
+        result.pop("_cad_display_error", None)
+        worker = TopOptCadDisplayWorker(shape, parent=self)
+        jobs[key] = worker
+        window = self.window()
+        window = getattr(window, "cad_widget", window)
+        status = window.statusBar() if callable(getattr(window, "statusBar", None)) else None
+
+        def _display_hint(message, *, retry=False):
+            from PySide6 import QtWidgets
+
+            panel = getattr(window, "properties", None)
+            node_result = getattr(getattr(panel, "current_node", None), "_last_result", None)
+            if node_result is not result:
+                return
+            props = getattr(panel, "props_widget", None)
+            if props is None:
+                return
+            button = props.findChild(QtWidgets.QPushButton, "TopOptBuildCad")
+            if button is not None:
+                button.setText("Retry CAD display" if retry else "Build CAD")
+                button.setEnabled(retry)
+                button.setToolTip(message)
+            hint = props.findChild(QtWidgets.QLabel, "TopOptCadHint")
+            if hint is not None:
+                hint.setText(message)
+
+        if status is not None:
+            status.showMessage("Preparing CAD display in the background...")
+        _display_hint("Preparing CAD display in the background.")
+
+        def _finish(mesh):
+            if getattr(self, '_viewer_closed', False):
+                return
+            # A completed display job must not replace a newer reconstructed body.
+            current_shape = result.get("cad_shape")
+            if current_shape is None:
+                current_shape = result.get("shape")
+            if current_shape is not shape:
+                return
+            result["cad_preview_mesh"] = mesh
+            if _topopt_cad_display_mesh(result, shape) is None:
+                _fail("The prepared CAD display mesh does not match the CAD faces.")
+                return
+            result.pop("_cad_display_error", None)
+            _display_hint("CAD is ready. Select CAD above to view it or export as STEP.")
+            if getattr(self, "_topopt_cad_display_result", None) is result:
+                self.render_simulation(self._topopt_cad_display_view)
+                if status is not None:
+                    status.showMessage("CAD display ready", 12000)
+
+        def _fail(message):
+            if getattr(self, '_viewer_closed', False):
+                return
+            current_shape = result.get("cad_shape")
+            if current_shape is None:
+                current_shape = result.get("shape")
+            if current_shape is not shape:
+                return
+            result["_cad_display_error"] = str(message)
+            logger.error("Could not prepare CAD display: %s", message)
+            _display_hint("CAD is built, but its display failed. Retry CAD display to prepare its mesh again.", retry=True)
+            if getattr(self, "_topopt_cad_display_result", None) is result and status is not None:
+                status.showMessage("CAD display failed; Build CAD retries the display. " + str(message), 15000)
+
+        def _cleanup():
+            if jobs.get(key) is worker:
+                jobs.pop(key, None)
+
+        worker.display_finished.connect(_finish)
+        worker.display_error.connect(_fail)
+        worker.finished.connect(_cleanup)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _prepare_topopt_lattice_display(self, result, recovered, *, force=False):
+        """Prepare an older lattice cache without touching its export surface."""
+        from .execution_workers import TopOptLatticeDisplayWorker
+        jobs = getattr(self, '_topopt_lattice_display_jobs', None)
+        if jobs is None:
+            jobs = self._topopt_lattice_display_jobs = {}
+        key = id(recovered)
+        if key in jobs or (result.get('_lattice_display_error') and not force):
+            return
+        result.pop('_lattice_display_error', None)
+        worker = TopOptLatticeDisplayWorker(recovered, parent=self)
+        jobs[key] = worker
+        window = self.window()
+        window = getattr(window, 'cad_widget', window)
+        status = window.statusBar() if callable(getattr(window, 'statusBar', None)) else None
+        if status is not None:
+            status.showMessage('Preparing lattice display in the background...')
+
+        def completed(mesh):
+            if getattr(self, '_viewer_closed', False):
+                return
+            if result.get('recovered_shape') is not recovered:
+                return
+            result['lattice_preview_mesh'] = mesh
+            if _topopt_lattice_display_mesh(result) is None:
+                failed('The prepared lattice display arrays are invalid')
+                return
+            result.pop('_lattice_display_error', None)
+            if getattr(self, '_topopt_lattice_display_result', None) is result:
+                self.render_simulation(self._topopt_lattice_display_view)
+                if status is not None:
+                    status.showMessage('Lattice display ready', 12000)
+
+        def failed(message):
+            if getattr(self, '_viewer_closed', False):
+                return
+            if result.get('recovered_shape') is not recovered:
+                return
+            result['_lattice_display_error'] = str(message)
+            logger.error('Could not prepare lattice display: %s', message)
+            if getattr(self, '_topopt_lattice_display_result', None) is result and status is not None:
+                status.showMessage('Lattice is ready for export; display could not be prepared. ' + str(message), 15000)
+
+        def cleanup():
+            if jobs.get(key) is worker:
+                jobs.pop(key, None)
+
+        worker.display_finished.connect(completed)
+        worker.display_error.connect(failed)
+        worker.finished.connect(cleanup)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
     def render_simulation(self, data, is_sub_render: bool = False):
         """
         Render simulation results (Mesh, FEA Result, or list of FEA components/meshes).
         """
         if data is None:
             return
+        if not is_sub_render:
+            self._topopt_cad_display_result = None
+            self._topopt_lattice_display_result = None
         if getattr(self, "_crash_frames", None) and not (
             isinstance(data, dict) and data.get("type") in {"crash", "crash_frame"}
         ):
@@ -881,8 +1076,16 @@ class SimulationRenderingMixin:
         if isinstance(data, dict) and data.get("type") == "topopt_voxel":
             from .result_fields import topopt_view_mode, topopt_view_result
             mode = topopt_view_mode(data, data.get("visualization_mode") or "STL Shape")
-            data = dict(topopt_view_result(data, mode))
+            source_result = topopt_view_result(data, mode)
+            if mode == "CAD":
+                self._topopt_cad_display_view = data
+            if source_result.get('generated_lattice'):
+                self._topopt_lattice_display_result = source_result
+                self._topopt_lattice_display_view = data
+            data = dict(source_result)
             data["visualization_mode"] = mode
+            if mode == "CAD":
+                self._topopt_cad_display_result = source_result
             for prefix in ("FEA Solid ", "FEA Lattice "):
                 if mode.startswith(prefix):
                     data["visualization_mode"] = "FEA " + mode[len(prefix):]
@@ -968,19 +1171,23 @@ class SimulationRenderingMixin:
                         reconstruction_method == "smooth freeform"
                         or reconstruction_method in {"compact cubic spline", "compact tpms spline", "recovered analytic surfaces", "amrto pipeline (ren et al., 2025)"}
                     )
-                    cad_preview = data.get("cad_preview_mesh")
-                    # Retain native face ownership even when displaying the
-                    # worker's cached tessellation. Selecting a CAD face must
-                    # select its whole region, rather than a display triangle.
-                    self.render_shape(
-                        cad_shape,
-                        initial_edge_visibility=(False if smooth_reconstruction else None),
-                        smooth_across_faces=smooth_reconstruction,
-                        display_mesh=cad_preview,
-                    )
-                    self._render_topopt_joint_overlays(data)
-                    self._request_render()
-                    return
+                    cad_preview = _topopt_cad_display_mesh(data, cad_shape)
+                    if cad_preview is None:
+                        # Reopened projects can contain native CAD without its
+                        # display cache. Never mesh that body on the Qt thread.
+                        self._prepare_topopt_cad_display(source_result, cad_shape)
+                    else:
+                        # Keep native face ownership when showing the worker's
+                        # cached tessellation, including whole-face picking.
+                        self.render_shape(
+                            cad_shape,
+                            initial_edge_visibility=(False if smooth_reconstruction else None),
+                            smooth_across_faces=smooth_reconstruction,
+                            display_mesh=cad_preview,
+                        )
+                        self._render_topopt_joint_overlays(data)
+                        self._request_render()
+                        return
             validation = data.get("validation")
             if requested_mode in validation_modes and isinstance(validation, dict):
                 validation_payload = dict(validation)
@@ -1007,6 +1214,14 @@ class SimulationRenderingMixin:
             }
         ):
             rec = data.get("recovered_shape")
+            prepared_lattice = None
+            if data.get('generated_lattice') and isinstance(rec, dict):
+                prepared_lattice = _topopt_lattice_display_mesh(data)
+                if prepared_lattice is None:
+                    original = getattr(self, '_topopt_lattice_display_result', None)
+                    self._prepare_topopt_lattice_display(original if original is not None else data, rec)
+                    return
+                rec = prepared_lattice
             if rec and "vertices" in rec and "faces" in rec:
                 poly_data = build_surface_polydata(rec["vertices"], rec["faces"])
             else:
@@ -1020,29 +1235,36 @@ class SimulationRenderingMixin:
                     or data.get("visualization_mode") in {"STL Shape", "Lattice"}
                     or data.get("generated_lattice")
                 )
-                from pylcss.cae.design_studio.topology_optimization.geometry.amrto_surface import cached_surface_layout
-                layout = cached_surface_layout(data)
+                layout = None
+                if prepared_lattice is None:
+                    from pylcss.cae.design_studio.topology_optimization.geometry.amrto_surface import cached_surface_layout
+                    layout = cached_surface_layout(data)
                 if isinstance(layout, dict) and len(layout.get('source_group_ids', ())) == poly_data.GetNumberOfCells():
                     from vtk.util.numpy_support import numpy_to_vtk
                     groups = numpy_to_vtk(np.asarray(layout['source_group_ids'], dtype=np.int32), deep=True)
                     groups.SetName('SurfaceGroup')
                     poly_data.GetCellData().AddArray(groups)
-                normals = vtk.vtkPolyDataNormals()
-                normals.SetInputData(poly_data)
-                normals.ConsistencyOn()
-                # Recovery already supplies the material boundary winding.
-                # Inward shells bound pores; orienting each shell outwards
-                # turns those voids into solid regions during section capping.
-                normals.AutoOrientNormalsOff()
-                if cad_surface_preview:
-                    normals.SplittingOn()
-                    normals.SetFeatureAngle(50.0)
-                else:
-                    normals.SplittingOff()
-                    normals.SetFeatureAngle(80.0)
-
                 mapper = vtk.vtkPolyDataMapper()
-                mapper.SetInputConnection(normals.GetOutputPort())
+                if prepared_lattice is not None:
+                    from vtk.util.numpy_support import numpy_to_vtk
+                    poly_data.GetPointData().SetNormals(numpy_to_vtk(
+                        np.asarray(prepared_lattice['point_normals'], dtype=np.float32), deep=True))
+                    mapper.SetInputData(poly_data)
+                else:
+                    normals = vtk.vtkPolyDataNormals()
+                    normals.SetInputData(poly_data)
+                    normals.ConsistencyOn()
+                    # Recovery already supplies the material boundary winding.
+                    # Inward shells bound pores; orienting each shell outwards
+                    # turns those voids into solid regions during section capping.
+                    normals.AutoOrientNormalsOff()
+                    if cad_surface_preview:
+                        normals.SplittingOn()
+                        normals.SetFeatureAngle(50.0)
+                    else:
+                        normals.SplittingOff()
+                        normals.SetFeatureAngle(80.0)
+                    mapper.SetInputConnection(normals.GetOutputPort())
 
                 actor = vtk.vtkActor()
                 actor.SetMapper(mapper)
@@ -1063,7 +1285,13 @@ class SimulationRenderingMixin:
 
                 self._pickable_surface_dataset = vtk.vtkPolyData()
                 self._pickable_surface_dataset.DeepCopy(poly_data)
-                self._configure_mesh_face_picking_from_surface(self._pickable_surface_dataset)
+                if prepared_lattice is None:
+                    self._configure_mesh_face_picking_from_surface(self._pickable_surface_dataset)
+                else:
+                    # LOD triangle ids do not identify the full manufacturing
+                    # boundary. Avoid regrouping them or attaching CAD loads.
+                    self._configure_mesh_face_picking_from_surface(None)
+                    self._mesh_picking_too_dense = True
 
                 # Update scalar bar to be empty for geometry view
                 self._update_scalar_bar("", 0, 1, None)

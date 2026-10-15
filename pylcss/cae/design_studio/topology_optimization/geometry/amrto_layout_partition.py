@@ -1122,6 +1122,169 @@ def _load_indexed_gmcg_layouts(path: Path, vertices: np.ndarray, quads: np.ndarr
     }
 
 
+class PaperLayoutError(ValueError):
+    """A native paper layout could not be consumed without changing method."""
+
+    def __init__(self, message: str, report: dict):
+        super().__init__(message)
+        self.report = report
+
+
+def _paper_layout_from_graph_patch(vertices, patch):
+    """Consume the GMCG sides verbatim, with only a winding reversal allowed."""
+    patch_quads = np.asarray(patch["quads"], dtype=np.int64)
+    if (patch_quads.ndim != 2 or patch_quads.shape[1] != 4 or not len(patch_quads)
+            or patch_quads.min() < 0 or patch_quads.max() >= len(vertices)):
+        raise ValueError("GMCG exported invalid global quad indices")
+    used, triangles, quads = triangulate_quads_clean(vertices, patch_quads)
+    layout = QuadLayout(int(patch["patch"]), vertices[used].copy(), triangles, quads=quads)
+    layout.source_vertex_indices = used
+    loop = _boundary_loop(triangles, len(used))
+    local_ids = {int(source): index for index, source in enumerate(used)}
+    paths = [[local_ids[int(source)] for source in side] for side in patch["sides"]]
+    if (len(paths) != 4 or any(len(side) < 2 for side in paths)
+            or len({side[0] for side in paths}) != 4
+            or any(paths[index][-1] != paths[(index + 1) % 4][0] for index in range(4))):
+        raise ValueError("GMCG did not provide four connected graph sides")
+    boundary = Counter(tuple(sorted(edge)) for edge in zip(loop, loop[1:] + loop[:1]))
+    graph_edges = Counter(tuple(sorted(edge)) for side in paths for edge in zip(side, side[1:]))
+    if graph_edges != boundary:
+        raise ValueError("GMCG graph sides do not cover the complete layout boundary")
+    if (paths[0][0], paths[0][1]) not in set(zip(loop, loop[1:] + loop[:1])):
+        paths = [list(reversed(side)) for side in reversed(paths)]
+    layout.boundary_paths = paths
+    layout.corner_indices = [side[0] for side in paths]
+    return layout
+
+
+def _paper_D1_layouts(vertices, patch):
+    """Cut a cylindrical chart at a geodesic seam; its ends supply four corners.
+
+    Unlike geometric corner reselection or PCA clustering, these corners are
+    exactly the two copies of the two Appendix D1 seam endpoints. Complex cuts
+    that do not supply four corners remain an explicit unsupported case.
+    """
+    patch_quads = np.asarray(patch["quads"], dtype=np.int64)
+    parts, report = repair_quad_patch_to_disks(vertices, patch_quads)
+    if not report.get("paper_D1_executed") or not report.get("paper_D1_validated"):
+        raise ValueError("The native chart requires further GMCG division; Appendix D1 did not produce disks")
+    cut_endpoints = {int(path[index]) for cut in report["geodesic_cuts"]
+                     for path in [cut["source_vertex_path"]] for index in (0, -1)}
+    native_corners = {int(side[0]) for side in patch["sides"] if len(side)}
+    layouts = []
+    for part in parts:
+        used, triangles, quads = triangulate_quads_clean(part.vertices, part.quads)
+        layout = QuadLayout(int(patch["patch"]), part.vertices[used].copy(), triangles, quads=quads)
+        layout.source_vertex_indices = part.source_vertex_indices[used]
+        loop = _boundary_loop(triangles, len(used))
+        corners = [vertex for vertex in loop if int(layout.source_vertex_indices[vertex]) in cut_endpoints]
+        if len(corners) != 4:
+            corners = [vertex for vertex in loop if int(layout.source_vertex_indices[vertex]) in native_corners]
+        if len(corners) != 4:
+            raise ValueError("Appendix D1 chart does not have four seam/graph corners; further native GMCG division is required")
+        start = loop.index(corners[0])
+        loop = loop[start:] + loop[:start]
+        corners = [vertex for vertex in loop if vertex in set(corners)]
+        positions = [loop.index(vertex) for vertex in corners]
+        layout.boundary_paths = [loop[positions[index]:positions[index + 1] + 1]
+                                 if index < 3 else loop[positions[index]:] + [loop[0]]
+                                 for index in range(4)]
+        layout.corner_indices = corners
+        layout.source_face_indices = part.source_face_indices.tolist()
+        layout.appendix_D1_report = report
+        layouts.append(layout)
+    return layouts, report
+
+
+def _load_paper_indexed_gmcg_layouts(path: Path, vertices, quads):
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("vertex_count") != len(vertices) or data.get("face_count") != len(quads):
+        raise ValueError("GMCG changed the input mesh size")
+    source_faces = defaultdict(deque)
+    for face_id, quad in enumerate(quads):
+        source_faces[tuple(sorted(map(int, quad)))].append(face_id)
+    layouts, D1_reports = [], []
+    for patch in data["patches"]:
+        global_quads = np.asarray(patch["quads"], dtype=np.int64)
+        patch_face_ids = []
+        for quad in global_quads:
+            key = tuple(sorted(map(int, quad)))
+            if not source_faces[key]:
+                raise ValueError("GMCG duplicated or invented a source quad")
+            patch_face_ids.append(source_faces[key].popleft())
+        try:
+            pieces = [_paper_layout_from_graph_patch(vertices, patch)]
+            pieces[0].source_face_indices = patch_face_ids
+        except (ValueError, KeyError) as graph_error:
+            try:
+                pieces, D1_report = _paper_D1_layouts(vertices, patch)
+            except ValueError as error:
+                raise PaperLayoutError(
+                    f"AMRTO Step 3 native patch {patch['patch']} cannot be processed by Appendix D1: {error}",
+                    {"step": 3, "paper_stage_3": False, "native_patch": patch["patch"],
+                     "graph_error": str(graph_error), "appendix_D1_error": str(error)}) from error
+            for piece in pieces:
+                piece.source_face_indices = [patch_face_ids[index] for index in piece.source_face_indices]
+            D1_reports.append({"patch": patch["patch"], **D1_report})
+        layouts.extend(_apply_D4(piece) for piece in pieces)
+    covered = _validate_source_quad_coverage(layouts, vertices, quads)
+    for layout_id, layout in enumerate(layouts):
+        layout.layout_id = layout_id
+    return layouts, {"step": 3, "source": "Generalized Motorcycle Graph (headless)",
+                     "paper_stage_3": True, "paper_section": "2.5 and Appendix D",
+                     "layout_count": len(layouts), "gmcg_patch_count": len(data["patches"]),
+                     "input_quad_count": len(quads), "covered_quad_count": covered,
+                     "boundary_source": "Native graph sides; Appendix D1 seam endpoints where required",
+                     "appendix_D1": D1_reports, "parameterization_repairs": [],
+                     "coverage_validation": "Every source quad occurs exactly once; source coordinates unchanged",
+                     **_appendix_report(layouts)}
+
+
+def divide_paper_sparse_quad_layouts(vertices, quads, layout_folder=None, *, gmcg_executable=None):
+    """Paper Step 3 with no distortion preflight, clustering or fit-driven cuts."""
+    vertices, quads = np.asarray(vertices, dtype=float), np.asarray(quads, dtype=np.int64)
+    if layout_folder:
+        layouts = load_sparse_quad_layouts(layout_folder)
+        if not layouts:
+            raise ValueError(f"No sparse quadrilateral layouts found in {layout_folder}")
+        for layout in layouts:
+            _match_layout_to_source(layout, vertices)
+        covered = _validate_source_quad_coverage(layouts, vertices, quads)
+        return layouts, {"step": 3, "source": str(layout_folder), "layout_count": len(layouts),
+                         "covered_quad_count": covered, "paper_stage_3": False,
+                         "method_provenance": "User-supplied layouts; generation method not verified",
+                         "parameterization_repairs": [], **_appendix_report(layouts)}
+    executable = Path(gmcg_executable) if gmcg_executable else get_gmcg_headless_executable()
+    if executable is None or not executable.is_file():
+        raise PaperLayoutError("AMRTO Step 3 requires the native GMCG headless executable",
+                               {"step": 3, "paper_stage_3": False, "native_execution_count": 0})
+    with tempfile.TemporaryDirectory(prefix="pylcss_amrto_step3_") as folder:
+        root = Path(folder)
+        source = root / "source.obj"
+        with source.open("w", encoding="ascii") as stream:
+            for vertex in vertices:
+                stream.write("v " + " ".join(f"{float(value):.17g}" for value in vertex) + "\n")
+            for quad in quads:
+                stream.write("f " + " ".join(str(int(index) + 1) for index in quad) + "\n")
+        try:
+            subprocess.run([str(executable), str(source), str(root / "layouts")],
+                           check=True, capture_output=True, timeout=180,
+                           **headless_subprocess_kwargs())
+            layouts, report = _load_paper_indexed_gmcg_layouts(
+                root / "layouts" / "quad_patch_indices.json", vertices, quads)
+        except PaperLayoutError:
+            raise
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+            details = getattr(error, "stderr", b"") or b""
+            if isinstance(details, bytes):
+                details = details.decode("utf-8", errors="replace")
+            raise PaperLayoutError("AMRTO native GMCG execution failed: " + str(error),
+                                   {"step": 3, "paper_stage_3": False, "native_execution_count": 1,
+                                    "failure": str(error), "native_error": details[-2000:]}) from error
+    report.update(native_execution_count=1, executable=str(executable))
+    return layouts, report
+
+
 def subdivide_fitting_layouts(layouts: List[QuadLayout], failed_ids: set[int]) -> Tuple[List[QuadLayout], list[dict]]:
     """Refine only failed fits, preserving every original quad and vertex ID."""
     result, repairs = [], []
@@ -1154,7 +1317,7 @@ def subdivide_fitting_layouts(layouts: List[QuadLayout], failed_ids: set[int]) -
 
 
 def _repair_parameterizable_layouts(layouts: List[QuadLayout], target_patch_size: int):
-    """Repair collapsed square maps; defer distortion to the selected stage-4 map."""
+    """Repair collapsed or compressed square maps before spline fitting."""
     from .amrto_parameterization import discrete_harmonic_mapping
 
     result, repairs = [], []
@@ -1169,7 +1332,7 @@ def _repair_parameterizable_layouts(layouts: List[QuadLayout], target_patch_size
             D4_failure = None
         source_ids = np.asarray(getattr(layout, "source_vertex_indices", np.arange(len(layout.vertices))), dtype=np.int64)
         try:
-            discrete_harmonic_mapping(layout, validate_area_compression=False)
+            discrete_harmonic_mapping(layout)
             result.append(layout)
             if layout is not original_layout:
                 repairs.append({"patch": layout.layout_id,
@@ -1183,7 +1346,7 @@ def _repair_parameterizable_layouts(layouts: List[QuadLayout], target_patch_size
         try:
             extract_layout_boundary_and_corners(layout)
             layout = _apply_D4(layout)
-            discrete_harmonic_mapping(layout, validate_area_compression=False)
+            discrete_harmonic_mapping(layout)
             result.append(layout)
             repairs.append({"patch": layout.layout_id, "reason": original_error,
                             "method": "Geometric square corners with Appendix D4 interior-vertex treatment",
@@ -1204,7 +1367,7 @@ def _repair_parameterizable_layouts(layouts: List[QuadLayout], target_patch_size
                     lay_d.source_vertex_indices = source_ids[u_d]
                     extract_layout_boundary_and_corners(lay_d)
                     lay_d = _apply_D4(lay_d)
-                    discrete_harmonic_mapping(lay_d, validate_area_compression=False)
+                    discrete_harmonic_mapping(lay_d)
                     validated.append(lay_d)
                 except Exception:
                     validated = []
@@ -1230,7 +1393,7 @@ def _repair_parameterizable_layouts(layouts: List[QuadLayout], target_patch_size
             for piece in pieces:
                 _inherit_layout_correspondence(piece, parent)
                 try:
-                    discrete_harmonic_mapping(piece, validate_area_compression=False)
+                    discrete_harmonic_mapping(piece)
                     validated.append(piece)
                     continue
                 except ValueError:

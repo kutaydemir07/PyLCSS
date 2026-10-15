@@ -33,6 +33,37 @@ def topology_source(result: dict[str, Any]) -> dict[str, Any]:
     return result.get("topology_source") or result
 
 
+def lattice_base_geometry(source: dict[str, Any]):
+    """Use the completed solid geometry, never re-threshold its analysis grid."""
+    seen = set()
+    for key in ("cad_shape", "shape"):
+        body = source.get(key)
+        if body is None or id(body) in seen:
+            continue
+        seen.add(id(body))
+        # Independent AMRTO patches are useful for display/export, but cannot
+        # trim lattice cells. An open CAD result must not hide a closed STL.
+        candidate = body.val() if callable(getattr(body, "val", None)) else body
+        try:
+            if candidate.Solids() and candidate.isValid():
+                return body, {"kind": "CAD", "name": "Optimized CAD body"}
+        except (AttributeError, RuntimeError, ValueError):
+            continue
+    surface = source.get("recovered_shape")
+    if (
+        isinstance(surface, dict)
+        and surface.get("vertices") is not None
+        and surface.get("faces") is not None
+        and len(surface["vertices"])
+        and len(surface["faces"])
+    ):
+        return surface, {"kind": "STL", "name": "Recovered STL surface"}
+    raise ValueError(
+        "Generate a closed STL surface or build a solid CAD body before generating a lattice. "
+        "The completed geometry is required to trim the cells."
+    )
+
+
 def _copy_containers(value):
     """Give the archived solve independent containers for sidecar persistence."""
     if isinstance(value, dict):
@@ -44,7 +75,21 @@ def _copy_containers(value):
     return value
 
 
-def prepare_lattice_field(result: dict[str, Any], settings: dict[str, Any]):
+def lattice_design_mask(geometry, shape, bounds):
+    """Measure the completed geometry on the sizing grid, independently of SIMP."""
+    from ..geometry.geometry_lattice import geometry_triangle_mesh, mesh_signed_distance_grid
+
+    lower, upper = map(lambda value: np.asarray(value, dtype=float), bounds)
+    spacing = (upper - lower) / np.asarray(shape)
+    axes = tuple(
+        lower[axis] + (np.arange(size) + .5) * spacing[axis]
+        for axis, size in enumerate(shape)
+    )
+    mesh = geometry_triangle_mesh(geometry, float(np.min(spacing)) * .05)
+    return mesh_signed_distance_grid(mesh, axes) > 0.
+
+
+def prepare_lattice_field(result: dict[str, Any], settings: dict[str, Any], *, base_geometry=None):
     """Separate the optimized envelope from cell density and printable floors.
 
     A converged SIMP field is almost binary. Using its near-one values as cell
@@ -75,12 +120,9 @@ def prepare_lattice_field(result: dict[str, Any], settings: dict[str, Any]):
         raise ValueError("The TopOpt result needs valid physical bounds.")
     bounds = (lower, upper)
     cutoff = float(source.get("recovery_cutoff") or source.get("density_cutoff") or 0.3)
-    envelope = field >= cutoff
-    domain = source.get("design_domain")
-    if domain is not None:
-        if np.shape(domain) != field.shape:
-            raise ValueError("The design-domain mask does not match the solved grid.")
-        envelope &= np.asarray(domain, dtype=bool)
+    if base_geometry is None:
+        base_geometry, _ = lattice_base_geometry(source)
+    envelope = lattice_design_mask(base_geometry, field.shape, bounds)
     solid = np.zeros(field.shape, dtype=bool)
     void = np.zeros(field.shape, dtype=bool)
     for key, mask in (("passive_solid_mask", solid), ("passive_void_mask", void)):
@@ -126,7 +168,7 @@ def prepare_lattice_field(result: dict[str, Any], settings: dict[str, Any]):
     if not np.isfinite(lengths).all() or min(lengths) < 0:
         raise ValueError("Lattice dimensions must be finite and non-negative.")
     design_region = envelope & ~solid
-    cell, member, skin, solid_features, fit_report = fit_lattice_dimensions(
+    cell, member, skin, _solid_features, fit_report = fit_lattice_dimensions(
         design_region,
         bounds,
         family,
@@ -136,7 +178,6 @@ def prepare_lattice_field(result: dict[str, Any], settings: dict[str, Any]):
     )
     fit_report["non_design_solid_voxels"] = int(np.count_nonzero(solid))
     values["_fit_report"] = fit_report
-    solid |= solid_features
     options = ManufacturingStructureOptions(
         mode=family.key,
         cell_size_voxels=cell,
@@ -181,10 +222,11 @@ def generate_post_topopt_lattice(
             progress_callback({"status_only": True, "stage": label}, None, 0, 0)
 
     stage("Mapping optimized density to lattice thickness")
+    base_geometry, base_report = lattice_base_geometry(topology_source(result))
     source, values, field, bounds, cutoff, envelope, solid, void, options = (
-        prepare_lattice_field(result, settings)
+        prepare_lattice_field(result, settings, base_geometry=base_geometry)
     )
-    stage("Generating lattice cells and recovering the surface")
+    stage("Generating lattice cells inside the " + base_report["name"])
     regions = dict(source.get("passive_regions") or {})
     regions['void_cylinders'] = list(regions.get('void_cylinders') or ()) + source_bore_cylinders(source)
     recovered = _recover_voxel_shape(
@@ -203,6 +245,7 @@ def generate_post_topopt_lattice(
         explicit_solid_shapes=regions.get("explicit_solid_shapes") or (),
         explicit_void_shapes=regions.get("explicit_void_shapes") or (),
         source_cad_shape=source.get("source_cad_shape"),
+        source_lattice_geometry=base_geometry,
         **{
             key: regions.get(key) or ()
             for key in (
@@ -227,12 +270,17 @@ def generate_post_topopt_lattice(
     resolved = recovered.get("resolved_structure_options")
     if isinstance(resolved, dict):
         options = replace(options, **resolved)
+    saved_regions = dict(source.get("passive_regions") or {})
+    saved_regions.update(recovered.get("preserved_lattice_geometry") or {})
+    archived_source = _copy_containers(source)
     output = dict(source)
     # Invalidate all geometry-dependent analysis and CAD results.
     for key in (
         "cad_shape",
         "shape",
         "cad_preview_mesh",
+        "lattice_preview_mesh",
+        "_lattice_display_error",
         "cad_reconstruction",
         "cad_error",
         "validation",
@@ -248,8 +296,10 @@ def generate_post_topopt_lattice(
     ):
         output.pop(key, None)
     output.update(
-        topology_source=_copy_containers(source),
+        topology_source=archived_source,
         study_kind="post_topopt_lattice",
+        source_lattice_geometry=recovered.get("source_lattice_geometry", base_geometry),
+        passive_regions=saved_regions,
         recovered_shape=recovered,
         recovery_density=field,
         recovery_cutoff=cutoff,
@@ -272,6 +322,7 @@ def generate_post_topopt_lattice(
             "independent_validation_completed": False,
         },
         generated_lattice={
+            "base_geometry": base_report,
             "settings": {
                 key: value
                 for key, value in values.items()
@@ -281,7 +332,7 @@ def generate_post_topopt_lattice(
             "cell_family": options.display_name,
             "cell_size_mm": options.cell_size_voxels
             * voxel_size_from_bounds(field.shape, bounds),
-            "method": "Smoothed TopOpt density mapped to local cell thickness",
+            "method": "CAD/STL-clipped cells with density mapped to local thickness",
             "independent_validation_required": True,
             "lattice_sizing": recovered.get("lattice_sizing") or {},
         },

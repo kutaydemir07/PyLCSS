@@ -203,8 +203,19 @@ def _run_stage(
     job_name: str,
     stage: str,
     failure_subject: str,
+    thread_count: int | None = None,
 ) -> str:
     extra_paths, extra_environment = _runtime_environment(executable)
+    if thread_count is not None:
+        # Keep the OpenMP/BLAS runtimes aligned with the requested SMP width.
+        # A machine-wide OMP_NUM_THREADS must not expand this solver's pool.
+        extra_environment.update(
+            {
+                "OMP_NUM_THREADS": str(thread_count),
+                "MKL_NUM_THREADS": str(thread_count),
+                "OPENBLAS_NUM_THREADS": str(thread_count),
+            }
+        )
     started_at = time.monotonic()
     logger.info("OpenCourant %s: launching %s", stage, input_path.name)
     process = run_process(
@@ -262,6 +273,7 @@ def run_starter(
         job_name=job_name,
         stage="Starter",
         failure_subject=" on the user-supplied deck" if user_supplied else "",
+        thread_count=1,
     )
 
 
@@ -273,20 +285,19 @@ def run_starter(
 #     1 thread 4.3 s | 2 threads 2.9 s | 4 threads 2.5 s
 #     8 threads 3.7 s | 16 threads 7.6 s | 22 threads 24.7 s
 #
-# Using every logical CPU was 10x slower than the 4-thread optimum, so the
-# thread count is derived from model size instead.  800 elements/thread puts
-# that model at its measured optimum while still opening up the full machine
-# for models large enough to amortise the synchronisation.
+# The 26,520-shell example also ran its first 2 ms in 11.7 s with four
+# threads versus 15.9 s with 22. Keep the element-based rule for tiny models,
+# with a conservative ceiling until an operator explicitly tunes their model.
 _MIN_ELEMENTS_PER_SMP_THREAD = 800
+_DEFAULT_MAX_SMP_THREADS = 4
 
 
 def _engine_thread_count(element_count: int | None) -> int:
     """Choose an SMP width that keeps enough work on each thread.
 
-    ``PYLCSS_OPENCOURANT_THREADS`` overrides the heuristic for operators who
-    have profiled their own models.  ``element_count`` of ``None`` means the
-    model size is unknown (a user-supplied deck), in which case
-    the full machine is used rather than second-guessing a large model.
+    Default to at most four threads, including for user-supplied decks with
+    unknown model size. ``PYLCSS_OPENCOURANT_THREADS`` overrides this limit
+    for operators who have profiled their own models.
     """
     logical_cpus = max(1, os.cpu_count() or 1)
     override = str(os.environ.get("PYLCSS_OPENCOURANT_THREADS") or "").strip()
@@ -303,10 +314,11 @@ def _engine_thread_count(element_count: int | None) -> int:
             logger.warning(
                 "Ignoring PYLCSS_OPENCOURANT_THREADS=%d; must be >= 1.", requested
             )
+    default_limit = min(logical_cpus, _DEFAULT_MAX_SMP_THREADS)
     if element_count is None or element_count <= 0:
-        return logical_cpus
+        return default_limit
     affordable = int(element_count) // _MIN_ELEMENTS_PER_SMP_THREAD
-    return max(1, min(logical_cpus, affordable))
+    return max(1, min(default_limit, affordable))
 
 
 def run_engine(
@@ -339,4 +351,5 @@ def run_engine(
         job_name=job_name,
         stage="Engine",
         failure_subject=" on the user-supplied deck" if user_supplied else "",
+        thread_count=thread_count,
     )

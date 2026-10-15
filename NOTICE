@@ -195,3 +195,14 @@ and reverse-engineering rights.
 
 This notice supports attribution and compliance review; it is not legal advice.
 Distributors remain responsible for the exact artifacts they ship.
+
+## External Gmsh CAD mesher
+
+The Windows distribution includes the unmodified standalone Gmsh 4.15.2
+command-line executable, invoked as a separate process using STEP/GEO/MSH
+files. PyLCSS does not import or link the Gmsh SDK or Python library.
+Gmsh is copyright (C) 1997-2026 Christophe Geuzaine and Jean-Francois Remacle
+and licensed under GNU GPL version 2 or later with its upstream exception.
+Upstream license, credits and the complete corresponding source archive are
+preserved under `external_solvers/gmsh`; see `Gmsh-NOTICE.txt` there and the
+matching notices under `THIRD_PARTY_LICENSES/bundled/Gmsh-4.15.2`.

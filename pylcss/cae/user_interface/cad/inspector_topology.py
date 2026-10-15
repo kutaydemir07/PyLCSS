@@ -596,7 +596,7 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         visualization.setToolTip(
             "Density: solved voxel field\n"
             "STL Shape: recovered solid surface mesh\n"
-            "CAD: completed CAD body\n"
+            "CAD: fitted CAD surfaces\n"
             "FEA: completed independent analysis\n"
             "Lattice: generated cells with preserved solid regions"
         )
@@ -604,9 +604,10 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
 
         # A recovered surface is useful while reconstruction runs, but is not
         # evidence that an editable CAD body has been built.
+        from pylcss.cae.design_studio.topology_optimization.geometry.cad_config import cached_cad_shape
         has_cad_body = bool(
             isinstance(last_result, dict)
-            and (last_result.get("cad_shape") is not None or last_result.get("shape") is not None)
+            and cached_cad_shape(last_result, "auto") is not None
         )
         if has_recovered_surface:
             triangle_count = len(last_result["recovered_shape"]["faces"])
@@ -623,11 +624,12 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         supports_cad = "STEP" in self._topopt_available_formats(node)
         cad_worker = getattr(self, "_topopt_cad_preview_worker", None)
         building_cad = cad_worker is not None and cad_worker.isRunning()
-        build_cad = QtWidgets.QPushButton("Build CAD")
+        display_failed = bool(has_cad_body and last_result.get("_cad_display_error"))
+        build_cad = QtWidgets.QPushButton("Retry CAD display" if display_failed else "Build CAD")
         build_cad.setObjectName("TopOptBuildCad")
         build_cad.setEnabled(
             supports_cad and (has_recovered_surface or has_density)
-            and not has_cad_body and not building_cad
+            and (not has_cad_body or display_failed) and not building_cad
         )
         build_cad.clicked.connect(lambda _checked=False: self._preview_topopt_cad(node))
         if not (is_lattice_structure and not supports_cad):
@@ -638,12 +640,14 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             cad_hint = "Lattice mesh is ready. Export as STL."
         elif building_cad:
             cad_hint = "Building CAD in the background."
+        elif display_failed:
+            cad_hint = "CAD is built, but its display failed. Retry CAD display to prepare its mesh again."
         elif has_cad_body:
             cad_hint = "CAD is ready. Select CAD above to view it or export as STEP."
         elif not (has_recovered_surface or has_density):
             cad_hint = "Run TopOpt first, then use Build CAD to create the CAD body."
         else:
-            cad_hint = "Build CAD creates a CAD body from the solved result for STEP export."
+            cad_hint = "Build CAD creates the AMRTO CAD body for viewing and STEP export."
         build_cad.setToolTip(cad_hint)
         cad_hint_label = QtWidgets.QLabel(cad_hint)
         cad_hint_label.setObjectName("TopOptCadHint")
@@ -662,15 +666,18 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             if face_count is None:
                 face_count = cad_report.get("cad_face_count")
             count_label = f", {int(face_count)} faces" if face_count is not None else ""
-            cad_status = QtWidgets.QLabel(
-                f"{method_name}{count_label}"
-            )
+            cad_status = QtWidgets.QLabel(f"{method_name}{count_label}")
             cad_status.setWordWrap(True)
-            if cad_report.get("error"):
-                cad_status.setToolTip(str(cad_report["error"]))
+            notes = [str(cad_report["error"])] if cad_report.get("error") else []
+            warnings = cad_report.get("warnings") or ()
+            if isinstance(warnings, str):
+                warnings = [warnings]
+            notes.extend(str(warning) for warning in warnings if warning)
+            if notes:
+                cad_status.setToolTip("\n".join(notes))
             cad_status.setStyleSheet(
                 "color:#66d17a; font-size:10px;"
-                if cad_report.get("editable") is True
+                if cad_report.get("valid") is True and not warnings
                 else "color:#ffb74d; font-size:10px;"
             )
             view_layout.addRow("CAD:", cad_status)
@@ -768,19 +775,17 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             widget = number(prop, 0.0, 0.0, 1e6, decimals=4, suffix=" mm")
             widget.setSpecialValueText("Auto fit" if prop == "post_lattice_cell_size_mm" else "Automatic")
             if prop == "post_lattice_skin_thickness_mm":
-                from pylcss.cae.design_studio.topology_optimization.manufacturing import family_for
-                def _skin_label(value, field=widget):
-                    family = family_for(value)
-                    field.setSpecialValueText("None" if family and family.is_strut else "Automatic")
-                _skin_label(selector.currentText())
-                selector.currentTextChanged.connect(_skin_label)
+                widget.setSpecialValueText("None")
+                widget.setToolTip(
+                    "Zero adds no boundary skin. A positive thickness adds the "
+                    "requested skin inside the CAD/STL boundary."
+                )
             if prop == "post_lattice_cell_size_mm":
                 widget.setToolTip(
-                    "Auto fit measures local thickness only in design material, "
-                    "excluding non-design pads. It aims for two cells across the "
-                    "remaining core, subject to printable thickness and build resolution. "
-                    "Features too small for a complete cell stay solid. "
-                    "A positive value sets a fixed pitch; boundary cells are trimmed."
+                    "Auto fit sizes cells in design material, excluding non-design "
+                    "pads, while honoring wall/strut thickness. All design features "
+                    "receive lattice cells, trimmed to the optimized CAD/STL boundary. "
+                    "A positive value sets a fixed pitch."
                 )
             layout.addRow(label, widget)
         for prop, label, default in (
@@ -795,39 +800,50 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             widget.valueChanged.connect(lambda value, name=prop: self.update_property(name, value / 100.0))
             layout.addRow(label, widget)
         result = getattr(node, "_last_result", None)
+        from pylcss.cae.design_studio.topology_optimization.integration.post_lattice import topology_source
+        source = topology_source(result) if isinstance(result, dict) else {}
+        recovered = source.get("recovered_shape")
+        has_cad_base = source.get("cad_shape") is not None or source.get("shape") is not None
+        has_stl_base = bool(
+            isinstance(recovered, dict)
+            and recovered.get("vertices") is not None
+            and recovered.get("faces") is not None
+            and len(recovered["vertices"])
+            and len(recovered["faces"])
+        )
         active = getattr(self, "_topopt_lattice_worker", None)
         running = active is not None and active.isRunning()
         button = QtWidgets.QPushButton("Generate Lattice")
-        button.setEnabled(isinstance(result, dict) and result.get("density") is not None and not running)
+        button.setEnabled(
+            (source.get("density") is not None or source.get("recovery_density") is not None)
+            and (has_cad_base or has_stl_base) and not running
+        )
         button.clicked.connect(lambda _checked=False: self._generate_topopt_lattice(node))
         layout.addRow(button)
         mesh_note = QtWidgets.QLabel(
-            "Creates a surface mesh for STL. Non-design regions remain solid. "
-            "STEP is optional for supported strut lattices."
+            "Fills all design material inside the optimized CAD/STL boundary with "
+            "lattice. Explicit non-design regions remain solid. Boundary skin is "
+            "added only for a positive thickness. Creates a surface mesh for STL."
         )
         mesh_note.setWordWrap(True)
         layout.addRow(mesh_note)
+        if not has_cad_base and not has_stl_base:
+            base_hint = QtWidgets.QLabel("Build an optimized CAD body or recover its STL surface before generating lattice.")
+            base_hint.setWordWrap(True)
+            layout.addRow("Base:", base_hint)
+        elif not (isinstance(result, dict) and result.get("generated_lattice")):
+            layout.addRow("Base:", QtWidgets.QLabel("Optimized CAD body" if has_cad_base else "Recovered STL surface"))
         if isinstance(result, dict) and result.get("generated_lattice"):
             report = result["generated_lattice"]
             label = QtWidgets.QLabel(f"{report['cell_family']} · {report['cell_size_mm']:.3g} mm cells")
             label.setWordWrap(True)
             layout.addRow("Generated:", label)
-            fit = report.get("fit") or {}
-            if fit:
-                fit_label = QtWidgets.QLabel(
-                    f"{fit.get('mode', 'Fixed pitch')} · "
-                    f"{100 * float(fit.get('solid_feature_fraction') or 0):.1f}% "
-                    "solid"
-                )
-                fit_label.setWordWrap(True)
-                fit_label.setToolTip(
-                    "Non-design regions remain solid. This percentage reports "
-                    "additional design features kept solid because printable cells "
-                    "cannot fit. Boundary cells are trimmed to the envelope."
-                )
-                if fit.get("mode") == "Manual" and fit.get("manual_unfit_fraction"):
-                    fit_label.setText(f"Manual · {100 * float(fit['manual_unfit_fraction']):.1f}% incomplete cells")
-                layout.addRow("Cell Fit:", fit_label)
+            base = report.get("base_geometry") or {}
+            if base:
+                base_label = QtWidgets.QLabel(str(base.get("name") or base.get("kind") or "CAD/STL"))
+                base_label.setWordWrap(True)
+                base_label.setToolTip("Lattice cells are trimmed to this physical geometry. Density controls local thickness.")
+                layout.addRow("Base:", base_label)
             restore = QtWidgets.QPushButton("Show Solid TopOpt Result")
             restore.setEnabled(not running)
             restore.clicked.connect(lambda _checked=False: self._restore_topopt_solid(node))
@@ -912,9 +928,19 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
 
         def completed(output):
             # A solve or project switch may have replaced this result meanwhile.
-            outcome["message"] = "Lattice mesh is ready. Export as STL."
+            display_error = output.get("_lattice_display_error")
+            outcome["message"] = (
+                "Lattice mesh is ready for STL export. Preview unavailable."
+                if display_error else "Lattice mesh is ready. Export as STL."
+            )
             if getattr(node, "_last_result", None) is result:
                 self._show_post_topopt_result(node, output)
+                if display_error:
+                    QtWidgets.QMessageBox.warning(
+                        self, "Lattice Preview",
+                        "The lattice mesh was generated and remains available for STL export. "
+                        "Its preview could not be prepared:\n\n" + str(display_error),
+                    )
 
         def failed(message):
             outcome["message"] = "Lattice generation failed."
@@ -1245,7 +1271,7 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         window._execute_graph(nodes=window._upstream_closure(node))
 
     def _topopt_cad_settings(self, node, result):
-        """Collect reconstruction settings shared by preview and export."""
+        """Collect reconstruction settings shared by the CAD view and export."""
         passive_regions = result.get("passive_regions")
         if not isinstance(passive_regions, dict) and hasattr(node, "_build_bc"):
             try:
@@ -1277,7 +1303,7 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         }
 
     def _preview_topopt_cad(self, node):
-        """Build, cache, and display the actual STEP-ready TopOpt B-rep."""
+        """Build and display the AMRTO CAD body used by STEP export."""
         if "STEP" not in self._topopt_available_formats(node):
             return
         window = self.window()
@@ -1289,6 +1315,23 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             return
 
         result = getattr(node, "_last_result", None)
+        from pylcss.cae.design_studio.topology_optimization.geometry.cad_config import cached_cad_shape
+        from .viewer_simulation import _topopt_cad_display_mesh
+
+        cached_shape = cached_cad_shape(result, "auto") if isinstance(result, dict) else None
+        viewer = getattr(window, "viewer", None)
+        if (
+            cached_shape is not None
+            and _topopt_cad_display_mesh(result, cached_shape) is None
+            and viewer is not None
+        ):
+            # Reusing an existing body requires no boundary-condition or source
+            # geometry queries, only a display cache prepared in the worker.
+            result["visualization_mode"] = "CAD"
+            node.set_property("visualization", "CAD")
+            viewer._prepare_topopt_cad_display(result, cached_shape, force=True)
+            viewer.render_simulation(result)
+            return
         if not isinstance(result, dict) or (
             result.get("recovered_shape") is None and result.get("density") is None
         ):
@@ -1382,8 +1425,10 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
                 f", {int(face_count)} faces" if face_count is not None else ""
             )
             if hasattr(window, "statusBar") and window.statusBar():
+                state = ("CAD surfaces ready; solid construction incomplete"
+                         if report.get("is_solid") is False else "CAD ready")
                 window.statusBar().showMessage(
-                    f"CAD ready{count_text}",
+                    f"{state}{count_text}",
                     12000,
                 )
             QtCore.QTimer.singleShot(0, _refresh_cad_inspector)

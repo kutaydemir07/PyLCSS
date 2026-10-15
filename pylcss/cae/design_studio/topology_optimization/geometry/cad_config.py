@@ -5,18 +5,24 @@ from dataclasses import dataclass
 import math
 
 
-CAD_RECONSTRUCTION_REVISION = 11
+CAD_RECONSTRUCTION_REVISION = 21
 
 
 def cached_cad_shape(payload, strategy):
-    """Reuse only a verified body from this reconstruction revision/method."""
+    """Reuse the current construction without confusing topology with QA."""
     from .lattice_cad import topopt_export_formats
     if 'STEP' not in topopt_export_formats(payload):
         return None
     report = payload.get('cad_reconstruction')
     if (not isinstance(report, dict) or report.get('backend') != 'in-process'
             or report.get('revision') != CAD_RECONSTRUCTION_REVISION
-            or report.get('requested_strategy') != strategy or not report.get('valid')):
+            or report.get('requested_strategy') != strategy
+            or report.get('preview_only') or report.get('validation_status') == 'unverified'):
+        return None
+    if report.get('paper_pipeline'):
+        if not report.get('cad_face_count') or not report.get('display_ready'):
+            return None
+    elif not report.get('valid') or report.get('export_ready') is False:
         return None
     return payload.get('cad_shape') or payload.get('shape')
 

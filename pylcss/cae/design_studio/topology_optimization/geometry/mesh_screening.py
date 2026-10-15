@@ -8,7 +8,8 @@ import numpy as np
 from ._compat import warn_retired_options
 
 
-def _intersecting_triangles(first: np.ndarray, second: np.ndarray, tolerance: float) -> np.ndarray:
+def _intersecting_triangles(first: np.ndarray, second: np.ndarray, tolerance: float,
+                            *, include_boundary_contacts: bool = True) -> np.ndarray:
     """Separating-axis test, including axes needed for coplanar triangles."""
     edges_a = np.roll(first, -1, axis=1) - first
     edges_b = np.roll(second, -1, axis=1) - second
@@ -29,10 +30,33 @@ def _intersecting_triangles(first: np.ndarray, second: np.ndarray, tolerance: fl
     projection_b = np.einsum("nvc,nac->nav", second - origin, axes)
     separated = ((projection_a.max(axis=2) < projection_b.min(axis=2) - tolerance)
                  | (projection_b.max(axis=2) < projection_a.min(axis=2) - tolerance)) & valid
-    return ~np.any(separated, axis=1)
+    hits = ~np.any(separated, axis=1)
+    if include_boundary_contacts:
+        return hits
+    # Independently tessellated trimmed faces can meet at a T-junction without
+    # sharing a mesh vertex. Merely touching there is not a surface crossing.
+    unit_a = np.divide(normal_a, np.linalg.norm(normal_a, axis=1)[:, None],
+                       out=np.zeros_like(normal_a), where=np.linalg.norm(normal_a, axis=1)[:, None] > 0)
+    unit_b = np.divide(normal_b, np.linalg.norm(normal_b, axis=1)[:, None],
+                       out=np.zeros_like(normal_b), where=np.linalg.norm(normal_b, axis=1)[:, None] > 0)
+    distance_b = np.einsum('nvc,nc->nv', second - first[:, :1], unit_a)
+    distance_a = np.einsum('nvc,nc->nv', first - second[:, :1], unit_b)
+    coplanar = ((np.abs(distance_a).max(axis=1) <= tolerance)
+                & (np.abs(distance_b).max(axis=1) <= tolerance))
+    crosses_planes = ((distance_a.min(axis=1) < -tolerance)
+                       & (distance_a.max(axis=1) > tolerance)
+                       & (distance_b.min(axis=1) < -tolerance)
+                       & (distance_b.max(axis=1) > tolerance))
+    # Coplanar overlaps must have positive extent along every in-plane SAT
+    # axis. Plane normals are intentionally excluded from this area test.
+    in_plane_overlap = (np.minimum(projection_a[:, -6:].max(axis=2), projection_b[:, -6:].max(axis=2))
+                        - np.maximum(projection_a[:, -6:].min(axis=2), projection_b[:, -6:].min(axis=2)))
+    positive_coplanar_area = np.all((in_plane_overlap > tolerance) | ~valid[:, -6:], axis=1)
+    return hits & ((coplanar & positive_coplanar_area) | (~coplanar & crosses_planes))
 
 
 def screen_mesh_intersections(vertices: np.ndarray, faces: np.ndarray,
+                              *, include_boundary_contacts: bool = True,
                               **legacy_limits) -> dict:
     """Check all spatially overlapping, topologically non-adjacent faces.
 
@@ -43,6 +67,7 @@ def screen_mesh_intersections(vertices: np.ndarray, faces: np.ndarray,
     warn_retired_options(legacy_limits, operation='Mesh intersection screening')
     report = {"self_intersecting_faces": None, "screening_scope": "not_run",
               "screening_method": "Non-adjacent triangle separating-axis test",
+              "boundary_contacts_included": bool(include_boundary_contacts),
               "screened_candidate_pairs": 0}
     vertices, faces = np.asarray(vertices, dtype=float), np.asarray(faces, dtype=np.int64)
     if not len(faces):
@@ -77,7 +102,8 @@ def screen_mesh_intersections(vertices: np.ndarray, faces: np.ndarray,
         report['screened_candidate_pairs'] += len(left)
         for start in range(0, len(left), 4096):
             a, b = left[start:start+4096], right[start:start+4096]
-            hits = _intersecting_triangles(triangles[a], triangles[b], tolerance)
+            hits = _intersecting_triangles(triangles[a], triangles[b], tolerance,
+                                           include_boundary_contacts=include_boundary_contacts)
             intersected.update(a[hits].tolist())
             intersected.update(b[hits].tolist())
 

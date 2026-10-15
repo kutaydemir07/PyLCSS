@@ -25,6 +25,9 @@ def topopt_fea_unavailable_reason(result):
         return "STL lattice"
     if result.get("cad_shape") is None and result.get("shape") is None:
         return "Build CAD"
+    report = result.get("cad_reconstruction") or {}
+    if report.get("paper_pipeline") and report.get("is_solid") is False:
+        return "CAD surfaces need stitching into a solid"
     return ""
 
 
@@ -125,6 +128,7 @@ def run_topopt_fea(
                     "n_elements": int(mesh.t.shape[1]),
                     "maximum_element_size": size / (2**level),
                     "minimum_element_size": level_minimum,
+                    "cad_meshing": getattr(mesh, "cad_meshing_report", {"backend": "Netgen"}),
                     "compliance": analysis.get("compliance"),
                     "peak_von_mises": analysis.get(
                         "peak_stress_nodal", analysis.get("max_stress_gauss")

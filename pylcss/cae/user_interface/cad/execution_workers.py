@@ -16,7 +16,10 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "GraphExecutionWorker",
+    "TopOptCadDisplayWorker",
     "TopOptCadPreviewWorker",
+    "TopOptLatticeDisplayWorker",
+    "TopOptLatticeWorker",
     "TopOptMeshExportWorker",
     "TopOptStepExportWorker",
 ]
@@ -103,7 +106,7 @@ STEP_SCHEMA = "AP242DIS"
 STEP_UNIT = "MM"
 
 
-def _write_step_shape(shape, path, product_name):
+def _write_step_shape(shape, path, product_name, require_solid=True):
     """Write STEP with declared units, schema and part name, and verify it.
 
     CadQuery's exporter sets only the pcurve and precision statics, so
@@ -145,7 +148,8 @@ def _write_step_shape(shape, path, product_name):
         for key, value in settings.items():
             Interface_Static.SetCVal_s(key, value)
         from pylcss.cae.design_studio.topology_optimization.geometry.step_export import export_cad_model
-        export_cad_model(solid, export_path=path, product_name=name)
+        export_cad_model(solid, export_path=path, product_name=name,
+                         require_solid=require_solid)
     finally:
         for key, value in previous.items():
             Interface_Static.SetCVal_s(key, value)
@@ -162,26 +166,36 @@ def _external_write_cad_step(
         reconstruct_topopt_cad,
     )
 
-    shape = reconstruct_topopt_cad(
+    shape, report = reconstruct_topopt_cad(
         payload,
         source_geometry="Recovered Shape",
         reconstruction_strategy=str(reconstruction_strategy or "auto"),
         sew_tolerance=1e-4,
+        return_report=True,
     )
     # The name comes from the caller's destination, not from ``path``: the
     # export writes to a temporary beside it and commits atomically, so
     # ``path`` here is ".bracket_a8f31c.step".
-    return _write_step_shape(shape, path, product_name)
+    return _write_step_shape(shape, path, product_name, require_solid=True)
 
 
 def _external_write_cad_brep(payload, path, reconstruction_strategy="auto",
                              reconstruction_options=None, *, progress_callback=None):
-    """Build preview CAD in a process so OCC cannot stall the Qt event loop."""
+    """Build the CAD body shared by viewing and export in an isolated process."""
+    return _external_build_cad_brep(
+        payload, path, reconstruction_strategy, reconstruction_options,
+        progress_callback=progress_callback,
+    )
+
+
+def _external_build_cad_brep(payload, path, reconstruction_strategy,
+                            reconstruction_options, *, progress_callback):
     from pylcss.cae.design_studio.topology_optimization.geometry.cad_reconstruction import (
         reconstruct_topopt_cad,
     )
 
     options = dict(reconstruction_options or {})
+    options.pop("preview_only", None)
     options.update(source_geometry="Recovered Shape",
                    reconstruction_strategy=str(reconstruction_strategy or "auto"),
                    return_report=True, progress_callback=progress_callback)
@@ -190,14 +204,8 @@ def _external_write_cad_brep(payload, path, reconstruction_strategy="auto",
     if progress_callback:
         progress_callback({"type": "topopt_progress", "status_only": True,
                            "stage": "CAD reconstruction — Preparing display mesh"}, None, 0, 0)
-    from pylcss.cae.design_studio.topology_optimization.geometry.cad_tessellation import (
-        tessellate_cad_absolute,
-    )
     body = shape.val() if hasattr(shape, "val") else shape
-    box = body.BoundingBox()
-    tolerance = max(float(np.linalg.norm([box.xlen, box.ylen, box.zlen])) * 1e-3, 1e-7)
-    vertices, faces, face_ranges = tessellate_cad_absolute(body, tolerance, .3, return_face_ranges=True)
-    report["_preview_mesh"] = {"vertices": vertices, "faces": faces, "face_ranges": face_ranges}
+    report["_preview_mesh"] = _external_prepare_cad_display(body)
     report["worker_pid"] = os.getpid()
     # Keep the transfer small: the prepared display mesh travels separately,
     # and importing BREP must not reimport OCC's triangulation as well.
@@ -207,6 +215,18 @@ def _external_write_cad_brep(payload, path, reconstruction_strategy="auto",
                             TopTools_FormatVersion_VERSION_1):
         raise RuntimeError("Could not transfer the reconstructed CAD body")
     return report
+
+
+def _external_prepare_cad_display(shape):
+    """Prepare native bounds and tessellation only in the isolated CAD process."""
+    from pylcss.cae.design_studio.topology_optimization.geometry.cad_tessellation import (
+        tessellate_cad_absolute,
+    )
+    body = shape.val() if hasattr(shape, "val") else shape
+    box = body.BoundingBox()
+    tolerance = max(float(np.linalg.norm([box.xlen, box.ylen, box.zlen])) * 1e-3, 1e-7)
+    vertices, faces, face_ranges = tessellate_cad_absolute(body, tolerance, .3, return_face_ranges=True)
+    return {"vertices": vertices, "faces": faces, "face_ranges": face_ranges}
 
 
 #: Chordal deviation as a fraction of the body's bounding-box diagonal. The
@@ -328,6 +348,94 @@ def _topopt_cad_payload(
     return payload
 
 
+_LATTICE_INPUT_REFERENCE = "__pylcss_lattice_input_reference__"
+
+
+def _lattice_native_reference_paths(value, path=(), references=None):
+    """Identify inherited CAD objects without transferring them back to Qt."""
+    import cadquery as cq
+    references = {} if references is None else references
+    if isinstance(value, (cq.Shape, cq.Workplane)):
+        references.setdefault(id(value), path)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _lattice_native_reference_paths(item, path + (key,), references)
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _lattice_native_reference_paths(item, path + (index,), references)
+    return references
+
+
+def _encode_lattice_references(value, references):
+    import cadquery as cq
+    if isinstance(value, (cq.Shape, cq.Workplane)):
+        if id(value) not in references:
+            raise RuntimeError("Lattice generation returned an unexpected native CAD object")
+        return {_LATTICE_INPUT_REFERENCE: references[id(value)]}
+    if isinstance(value, dict):
+        return {key: _encode_lattice_references(item, references) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_encode_lattice_references(item, references) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_encode_lattice_references(item, references) for item in value)
+    return value
+
+
+def _decode_lattice_references(value, source):
+    if isinstance(value, dict):
+        if set(value) == {_LATTICE_INPUT_REFERENCE}:
+            original = source
+            for key in value[_LATTICE_INPUT_REFERENCE]:
+                original = original[key]
+            return original
+        return {key: _decode_lattice_references(item, source) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_decode_lattice_references(item, source) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_decode_lattice_references(item, source) for item in value)
+    return value
+
+
+def _external_generate_lattice(result, settings, *, progress_callback=None):
+    """Generate physical cells in the isolated process; return a data delta."""
+    from pylcss.cae.design_studio.topology_optimization.integration.post_lattice import (
+        generate_post_topopt_lattice, topology_source,
+    )
+    source = topology_source(result)
+    output = generate_post_topopt_lattice(result, settings, progress_callback=progress_callback)
+    # Retain the application's original CAD context. Reimporting an unchanged
+    # fitted body through OCC's binary pickle is unnecessary and can fail.
+    updates = {key: value for key, value in output.items()
+               if key != "topology_source" and (key not in source or value is not source[key])}
+    return {
+        "updates": _encode_lattice_references(updates, _lattice_native_reference_paths(source)),
+        "removed_keys": tuple(key for key in source if key not in output),
+        "worker_pid": os.getpid(),
+    }
+
+
+def _external_prepare_lattice_display(recovered, *, progress_callback=None):
+    from pylcss.cae.design_studio.topology_optimization.geometry.lattice_display import prepare_lattice_display
+    if progress_callback:
+        progress_callback({'status_only': True, 'stage': 'Preparing lattice display'}, None, 0, 0)
+    return prepare_lattice_display(recovered)
+
+
+def _restore_lattice_output(result, transfer):
+    from pylcss.cae.design_studio.topology_optimization.integration.post_lattice import (
+        _copy_containers, topology_source,
+    )
+    source = topology_source(result)
+    output = dict(source)
+    for key in transfer["removed_keys"]:
+        output.pop(key, None)
+    output.update(_decode_lattice_references(transfer["updates"], source))
+    archived = _copy_containers(source)
+    output["topology_source"] = archived
+    output["generated_lattice"]["worker_pid"] = transfer["worker_pid"]
+    return output
+
+
 class TopOptLatticeWorker(QtCore.QThread):
     """Generate cells from a saved solve while the inspector stays responsive."""
 
@@ -342,18 +450,94 @@ class TopOptLatticeWorker(QtCore.QThread):
         self.settings = dict(settings)
 
     def run(self):
-        from pylcss.cae.design_studio.topology_optimization.integration.post_lattice import generate_post_topopt_lattice
+        from .cad_background import CadJobCancelled, run_cad_job
         try:
-            output = generate_post_topopt_lattice(
-                self.result, self.settings, cancel_callback=self.isInterruptionRequested,
+            if self.isInterruptionRequested():
+                raise CadJobCancelled("Lattice generation cancelled")
+            transfer = run_cad_job(
+                "lattice", self.result, self.settings, cancel_callback=self.isInterruptionRequested,
                 progress_callback=self.lattice_progress.emit,
             )
+            if self.isInterruptionRequested():
+                raise CadJobCancelled("Lattice generation cancelled")
+            output = _restore_lattice_output(self.result, transfer)
+            try:
+                output['lattice_preview_mesh'] = run_cad_job(
+                    "lattice_display", output['recovered_shape'],
+                    cancel_callback=self.isInterruptionRequested,
+                    progress_callback=self.lattice_progress.emit,
+                )
+            except CadJobCancelled:
+                raise
+            except Exception as exc:
+                # A display failure must not erase a completed export surface.
+                output['_lattice_display_error'] = str(exc)
+                logger.exception('Could not prepare lattice display')
+            if self.isInterruptionRequested():
+                raise CadJobCancelled("Lattice generation cancelled")
             self.lattice_finished.emit(output)
-        except InterruptedError:
+        except (InterruptedError, CadJobCancelled):
             self.lattice_cancelled.emit()
         except Exception as exc:
             logger.exception("TopOpt lattice generation failed")
             self.lattice_error.emit(str(exc))
+
+
+class TopOptLatticeDisplayWorker(QtCore.QThread):
+    """Prepare a saved lattice's missing display cache outside Qt/native state."""
+
+    display_finished = QtCore.Signal(object)
+    display_error = QtCore.Signal(str)
+    display_cancelled = QtCore.Signal()
+
+    def __init__(self, recovered, *, parent=None):
+        super().__init__(parent)
+        self.recovered = recovered
+
+    def run(self):
+        from .cad_background import CadJobCancelled, run_cad_job
+        try:
+            if self.isInterruptionRequested():
+                raise CadJobCancelled('Lattice display cancelled')
+            display = run_cad_job('lattice_display', self.recovered,
+                                  cancel_callback=self.isInterruptionRequested)
+            if self.isInterruptionRequested():
+                raise CadJobCancelled('Lattice display cancelled')
+            self.display_finished.emit(display)
+        except CadJobCancelled:
+            self.display_cancelled.emit()
+        except Exception as exc:
+            self.display_error.emit(str(exc))
+
+
+class TopOptCadDisplayWorker(QtCore.QThread):
+    """Restore a missing display cache without rebuilding or meshing on Qt."""
+
+    display_finished = QtCore.Signal(object)
+    display_error = QtCore.Signal(str)
+    display_cancelled = QtCore.Signal()
+    display_progress = QtCore.Signal(object, object, int, int)
+
+    def __init__(self, shape, *, parent=None):
+        super().__init__(parent)
+        self.shape = shape
+        self.preview_mesh = None
+
+    def run(self):
+        from .cad_background import CadJobCancelled, run_cad_job
+        try:
+            if self.isInterruptionRequested():
+                raise CadJobCancelled("CAD display cancelled")
+            self.display_progress.emit(
+                {"type": "topopt_progress", "status_only": True,
+                 "stage": "Preparing CAD display in the background"}, None, 0, 0)
+            self.preview_mesh = run_cad_job(
+                "display_mesh", self.shape, cancel_callback=self.isInterruptionRequested)
+            self.display_finished.emit(self.preview_mesh)
+        except CadJobCancelled:
+            self.display_cancelled.emit()
+        except Exception as exc:
+            self.display_error.emit(str(exc))
 
 
 class TopOptCadPreviewWorker(QtCore.QThread):
@@ -656,6 +840,7 @@ class TopOptStepExportWorker(QtCore.QThread):
                 # transfer, validation and OCC's global settings can stall Qt.
                 run_cad_job(
                     "step_shape", self.cached_shape, temporary, product_name,
+                    True,
                     cancel_callback=self.isInterruptionRequested,
                 )
             else:
@@ -667,7 +852,7 @@ class TopOptStepExportWorker(QtCore.QThread):
                 )
 
                 # An export can be the first request for CAD. Retain that
-                # verified body so the next export uses the same cache as a
+                # constructed body so the next export uses the same cache as a
                 # solve or CAD preview, instead of fitting it again.
                 from .cad_background import reconstruct_cad_in_background
                 self.cached_shape, self.reconstruction_report, self.preview_mesh = reconstruct_cad_in_background(
@@ -676,6 +861,7 @@ class TopOptStepExportWorker(QtCore.QThread):
                 )
                 run_cad_job(
                     "step_shape", self.cached_shape, temporary, product_name,
+                    True,
                     cancel_callback=self.isInterruptionRequested,
                 )
 

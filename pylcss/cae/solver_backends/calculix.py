@@ -15,6 +15,7 @@ from pylcss.cae.solver_backends.calculix_deck import (
 from pylcss.cae.solver_backends.calculix_results import (
     _ingest_frd_into_result,
 )
+from pylcss.cae.solver_backends.calculix_runtime import calculix_thread_environment
 from pylcss.cae.solver_backends.calculix_assembly import (
     assembly_result_summary,
     prepare_calculix_assembly,
@@ -142,6 +143,7 @@ def run_calculix_static(
     solver_log = ""
     result_payload: dict = {}
     solver_elapsed_s: float | None = None
+    solver_threads: int | None = None
     if config.run_solver:
         if executable is None:
             raise SolverBackendError(
@@ -150,12 +152,15 @@ def run_calculix_static(
             )
         else:
             exe_dir = str(Path(executable).resolve().parent)
+            thread_env = calculix_thread_environment(warnings)
+            solver_threads = int(thread_env["OMP_NUM_THREADS"])
             started = time.perf_counter()
             proc = run_process(
                 [executable, job_name],
                 cwd=work_dir,
                 timeout_s=timeout_s,
                 extra_path_dirs=(exe_dir,),
+                extra_env=thread_env,
                 cancel_callback=config.cancel_callback,
             )
             solver_elapsed_s = time.perf_counter() - started
@@ -213,6 +218,7 @@ def run_calculix_static(
         "solver_log": solver_log,
         "analysis_type": effective_analysis_type,
         "solver_elapsed_s": solver_elapsed_s,
+        "solver_threads": solver_threads,
         "warnings": warnings,
         "message": (
             "CalculiX deck generated. Enable external execution and configure ccx "
@@ -276,6 +282,7 @@ def run_calculix_assembly(
     solver_log = ""
     result_payload: dict[str, Any] = {}
     solver_elapsed_s: float | None = None
+    solver_threads: int | None = None
     if config.run_solver:
         if executable is None:
             raise SolverBackendError(
@@ -283,12 +290,15 @@ def run_calculix_assembly(
                 "define PYLCSS_CALCULIX_CCX, or run scripts/install_solvers.py."
             )
         exe_dir = str(Path(executable).resolve().parent)
+        thread_env = calculix_thread_environment(warnings)
+        solver_threads = int(thread_env["OMP_NUM_THREADS"])
         started = time.perf_counter()
         proc = run_process(
             [executable, job_name],
             cwd=work_dir,
             timeout_s=timeout_s,
             extra_path_dirs=(exe_dir,),
+            extra_env=thread_env,
             cancel_callback=config.cancel_callback,
         )
         solver_elapsed_s = time.perf_counter() - started
@@ -343,6 +353,7 @@ def run_calculix_assembly(
         "solver_log": solver_log,
         "analysis_type": analysis_type,
         "solver_elapsed_s": solver_elapsed_s,
+        "solver_threads": solver_threads,
         "warnings": warnings,
         "components": result_payload.get(
             "components",

@@ -101,6 +101,7 @@ def validate_cad_performance(
     from netgen.occ import OCCGeometry
     import trimesh
     from pylcss.cae.solver_backends import ExternalRunConfig, run_calculix_static
+    from ..geometry.amrto_volume import measure_cad_volume
 
     material, constraints, loads = validate_boundary_definitions(
         material, constraints, loads, context="CAD performance comparison"
@@ -127,6 +128,7 @@ def validate_cad_performance(
             maximum_displacement, name="maximum_displacement"
         )
     shape = validated_cad_shape(shape)
+    cad_volume, _ = measure_cad_volume(shape)
     vertices, faces = reference_mesh
     source = trimesh.Trimesh(vertices, faces, process=False)
     if (
@@ -173,6 +175,7 @@ def validate_cad_performance(
                         folder,
                         name=f"{label}_{level}",
                         max_elements=max_validation_elements,
+                        reference_volume=cad_volume if label == "cad" else None,
                     )
                 except ValueError as exc:
                     report["reason"] = f"{label} mesh level {level + 1}: {exc}"

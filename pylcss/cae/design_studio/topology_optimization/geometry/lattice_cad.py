@@ -355,6 +355,11 @@ def topopt_export_formats(options: Any) -> tuple[str, ...]:
         generated = bool(result.get('generated_lattice'))
         mesh_lattice = generated or result.get('study_kind') == 'lattice_infill'
         recovered = result.get('recovered_shape') or {}
+        report = recovered.get('surface_recovery_report') or {}
+        if mesh_lattice and (report.get('analysis_occupancy_used_for_boundary') is False or result.get('source_lattice_geometry') is not None):
+            # The delivered cells include continuous boundary clipping. The
+            # density-derived beam graph cannot reproduce those trimmed ends.
+            return ('STL',)
         options = recovered.get('resolved_structure_options') or result.get('structure_options')
         fit = (result.get('generated_lattice') or {}).get('fit') or {}
         if fit.get('solid_feature_voxels', 0) > 0:

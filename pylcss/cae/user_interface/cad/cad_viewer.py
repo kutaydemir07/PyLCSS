@@ -354,6 +354,9 @@ class CQ3DViewer(
         if self._viewer_closed:
             return
         self._viewer_closed = True
+        from pylcss.user_interface.background_shutdown import stop_widget_workers
+
+        stop_widget_workers(self)
         self._crash_playing = False
         self._camera_anim_state = None
         self._hover_enabled = False

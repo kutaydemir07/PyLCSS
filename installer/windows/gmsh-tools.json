@@ -1,0 +1,20 @@
+{
+  "version": "4.15.2",
+  "binary_archive": {
+    "file": "gmsh-4.15.2-Windows64.zip",
+    "url": "https://gmsh.info/bin/Windows/gmsh-4.15.2-Windows64.zip",
+    "sha256": "a8208b56aedee3434907a893e303422acacd9003140766e09f2abbc664ba7157"
+  },
+  "source_archive": {
+    "file": "gmsh-4.15.2-source.tgz",
+    "url": "https://gmsh.info/src/gmsh-4.15.2-source.tgz",
+    "sha256": "be3f66f225d27ba9fa014f07e83169285da8a051b0e8ab7103d88066b39bdd3e"
+  },
+  "archive_prefix": "gmsh-4.15.2-Windows64/",
+  "files": [
+    {"file": "gmsh.exe", "sha256": "317c43391e5b1fab3a1dd80dc5245dad6e2d087910f4b8ebc234bd6d4b8f41a1"},
+    {"file": "LICENSE.txt", "sha256": "7fefa67a6c607068a33ba27e0a18aaf8596aa051f7cf2abcca094a3a484c5870"},
+    {"file": "CREDITS.txt", "sha256": "424b87009450302d59eda4d29a9e6f960f6c2e94d434c639c29bcfd80b7ca36f"},
+    {"file": "README.txt", "sha256": "4ab117dbb4c16edcd30c23d49726b345756acec90d82cb808eb8a8651acdca11"}
+  ]
+}

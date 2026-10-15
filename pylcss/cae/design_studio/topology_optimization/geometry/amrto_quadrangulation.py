@@ -229,22 +229,30 @@ def _topology_preserving_decimation(vertices: np.ndarray, faces: np.ndarray,
     return trimesh.Trimesh(vertices=mesh.vertex_matrix(), faces=mesh.face_matrix(), process=False)
 
 
+def _source_resolution_budgets(initial_budget: int, maximum_budget: int) -> list[int]:
+    """Increase work geometrically to a source-derived or caller-selected end."""
+    maximum_budget = max(1, int(maximum_budget))
+    budgets = [min(maximum_budget, max(1, int(initial_budget)))]
+    while budgets[-1] < maximum_budget:
+        budgets.append(min(maximum_budget, 2 * budgets[-1]))
+    return budgets
+
+
 def _bounded_fallback_triangles(vertices: np.ndarray, faces: np.ndarray, source_topology: dict,
-                               quad_budget: int, maximum_quad_budget: int = 60000,
+                               quad_budget: int, maximum_quad_budget: Optional[int] = None,
                                triangle_surface_validator: Optional[Callable[[np.ndarray, np.ndarray], dict]] = None,
                                maximum_volume_delta: Optional[float] = 0.03,
                                ) -> Tuple[np.ndarray, np.ndarray, dict]:
-    """Bound the CAD workload without accepting a changed closed-surface topology."""
-    initial_budget = min(360000, max(3, int(quad_budget)))
-    maximum_budget = min(360000, max(initial_budget, int(maximum_quad_budget)))
-    budgets = [initial_budget]
-    while budgets[-1] < maximum_budget:
-        next_budget = 2 * budgets[-1] if budgets[-1] < 60000 or budgets[-1] >= 120000 else int(1.5 * budgets[-1])
-        if budgets[-1] >= 240000:
-            next_budget = 360000
-        if budgets[-1] < 60000 < next_budget:
-            next_budget = 60000
-        budgets.append(min(maximum_budget, next_budget))
+    """Try cheaper surfaces first, ending at exact source-triangle subdivision."""
+    exact_source_budget = 3 * len(faces)
+    if exact_source_budget < 3:
+        raise ValueError("Quadrangulation requires at least one source triangle")
+    if maximum_quad_budget is not None and maximum_quad_budget < 3:
+        raise ValueError("An explicit fallback quad budget must allow at least three quads")
+    maximum_budget = (exact_source_budget if maximum_quad_budget is None else
+                      min(exact_source_budget, int(maximum_quad_budget)))
+    budgets = _source_resolution_budgets(max(3, int(quad_budget)), maximum_budget)
+    initial_budget = budgets[0]
     import trimesh
 
     source = trimesh.Trimesh(vertices, faces, process=False)
@@ -341,10 +349,13 @@ def quadrangulate_mesh(
     im_exe = im_executable or get_instant_meshes_executable()
     fallback_reason = "Instant-Meshes executable is unavailable"
     attempts = []
-    # Instant-Meshes interprets its requested count as a density target and
-    # can emit several times that many quads. Keep the CAD patch workload
-    # bounded even when later accuracy retries ask for a finer target.
-    maximum_quad_faces = max(60_000, 8 * int(target_faces))
+    # Instant-Meshes counts are density requests, not output complexity limits.
+    # Escalate to the exact triangle-to-three-quads source resolution, while
+    # retaining an explicitly requested initial density if it is already finer.
+    exact_source_budget = 3 * len(faces)
+    requested_density = max(1, int(target_faces))
+    native_densities = _source_resolution_budgets(
+        requested_density, max(requested_density, exact_source_budget))
     if im_exe and im_exe.is_file():
         with tempfile.TemporaryDirectory() as tmp_dir:
             in_obj = Path(tmp_dir) / "input_tri.obj"
@@ -352,7 +363,7 @@ def quadrangulate_mesh(
             # Thin high-genus lattices may be opened by coarse quadrangulation.
             # Retry at a finer density with the requested creases retained.
             # Silently disabling them accepts a different geometric problem.
-            configurations = [(max(1, int(target_faces * factor)), float(crease_deg)) for factor in (1, 2, 4, 8)]
+            configurations = [(density, float(crease_deg)) for density in native_densities]
             for number, (requested, crease) in enumerate(configurations):
                 out_obj = Path(tmp_dir) / f"output_quad_{number}.obj"
                 cmd = [str(im_exe), "-o", str(out_obj), "-r", "4", "-p", "4",
@@ -367,14 +378,6 @@ def quadrangulate_mesh(
                                    **headless_subprocess_kwargs())
                     q_verts, q_faces = load_quad_mesh_from_obj(out_obj)
                     attempt["quad_face_count"] = int(len(q_faces))
-                    if len(q_faces) > maximum_quad_faces:
-                        error = (f"Instant-Meshes produced {len(q_faces)} quads, exceeding the "
-                                 f"bounded CAD budget of {maximum_quad_faces}")
-                        attempt["error"] = error
-                        fallback_reason = error
-                        attempts.append(attempt)
-                        logger.warning("Instant-Meshes candidate rejected: %s", error)
-                        continue
                     topology = mesh_topology_report(q_verts, q_faces)
                     attempt["topology"] = topology
                     error = _quad_topology_error(source_topology, topology)
@@ -414,7 +417,8 @@ def quadrangulate_mesh(
                     return q_verts, q_faces, {
                         "step": 2, "quadrangulator": "Instant-Meshes", "vertex_count": len(q_verts),
                         "quad_face_count": len(q_faces), "paper_stage_2": True,
-                        "maximum_quad_faces": maximum_quad_faces,
+                        "source_exact_subdivision_quad_count": exact_source_budget,
+                        "native_density_requests": native_densities,
                         "source_topology": source_topology, "topology": topology,
                         "attempts": attempts,
                         **({"sampled_source_deviation": deviation} if deviation is not None else {}),
@@ -429,18 +433,12 @@ def quadrangulate_mesh(
         raise QuadrangulationValidationError(
             'Instant Meshes could not produce a topology-preserving quad mesh: ' + fallback_reason,
             {'step': 2, 'paper_stage_2': False, 'source_topology': source_topology,
-             'attempts': attempts, 'fallback_reason': fallback_reason})
+             'attempts': attempts, 'fallback_reason': fallback_reason,
+             'source_exact_subdivision_quad_count': exact_source_budget,
+             'native_density_requests': native_densities})
 
-    quad_budget = min(60000, max(12000, 3 * int(target_faces)))
-    # A lattice with hundreds of handles cannot be represented by the same
-    # bounded polygon count as a beam. Retain topology and requested volume
-    # checks while allowing an explicitly reported larger CAD workload.
-    handle_count = max(0, (2 * source_topology["connected_components"] -
-                          source_topology["euler_characteristic"]) // 2)
-    maximum_quad_budget = 60000
-    if source_topology["is_closed"] and handle_count >= 100:
-        maximum_quad_budget = 360000 if handle_count >= 2000 else 120000
-    requested_initial_budget = quad_budget
+    requested_initial_budget = max(3, 3 * int(target_faces))
+    quad_budget = min(exact_source_budget, requested_initial_budget)
     # For a closed triangular manifold F=2(V-chi), and every component
     # requires at least four vertices. Subdivision into three quads per face
     # cannot possibly meet a budget below this topology-derived lower bound.
@@ -448,11 +446,10 @@ def quadrangulate_mesh(
     if source_topology["is_closed"]:
         minimum_subdivision_quads = 3 * max(0, 8 * source_topology["connected_components"] -
                                             2 * source_topology["euler_characteristic"])
-        if minimum_subdivision_quads > quad_budget:
-            quad_budget = min(maximum_quad_budget, 60000 * int(np.ceil(minimum_subdivision_quads / 60000)))
+        quad_budget = min(exact_source_budget, max(quad_budget, minimum_subdivision_quads))
     try:
         fallback_vertices, fallback_faces, simplification = _bounded_fallback_triangles(
-            vertices, faces, source_topology, quad_budget, maximum_quad_budget, triangle_surface_validator,
+            vertices, faces, source_topology, quad_budget, None, triangle_surface_validator,
             maximum_volume_delta=maximum_volume_delta)
     except QuadrangulationValidationError as exc:
         exc.report = {"step": 2, "source_topology": source_topology, "attempts": attempts,
@@ -468,7 +465,8 @@ def quadrangulate_mesh(
     return q_verts, q_faces, {
         "step": 2, "quadrangulator": "Python Fallback", "vertex_count": len(q_verts),
         "quad_face_count": len(q_faces), "paper_stage_2": False,
-        "maximum_quad_faces": maximum_quad_faces,
+        "source_exact_subdivision_quad_count": exact_source_budget,
+        "native_density_requests": native_densities,
         "fallback_reason": fallback_reason,
         "method": "Triangle midpoint subdivision; does not optimize a 4-RoSy/4-PoSy field",
         "source_topology": source_topology, "topology": topology, "attempts": attempts,
@@ -476,3 +474,62 @@ def quadrangulate_mesh(
         **({"sampled_source_deviation": simplification["sampled_source_deviation"]}
            if "sampled_source_deviation" in simplification else {}),
     }
+
+
+def quadrangulate_paper_mesh(
+    vertices: np.ndarray, faces: np.ndarray, config=None, *,
+    target_faces: int | None = None, crease_deg: float | None = None,
+    im_executable: Path | str | None = None,
+) -> Tuple[np.ndarray, np.ndarray, dict]:
+    """Run AMRTO Step 2 once, at the requested Instant-Meshes resolution.
+
+    The paper measures approximation error after reconstruction. Its algorithm
+    does not repeatedly increase remeshing density until application-specific
+    volume, source-distance or feature-retention limits pass. No midpoint-quad
+    replacement is substituted for the native 4-RoSy/4-PoSy implementation.
+    """
+    vertices = np.asarray(vertices, dtype=float)
+    faces = np.asarray(faces, dtype=np.int64)
+    requested = int(target_faces if target_faces is not None else
+                    getattr(config, "target_quad_faces", 10000))
+    crease = float(crease_deg if crease_deg is not None else
+                   getattr(config, "quad_crease_deg", 0.0))
+    if requested < 1 or not np.isfinite(crease) or crease < 0:
+        raise ValueError("Instant-Meshes requires a positive face request and a finite nonnegative crease angle")
+    executable = Path(im_executable) if im_executable else get_instant_meshes_executable()
+    report = {"step": 2, "quadrangulator": "Instant-Meshes", "paper_stage_2": False,
+              "paper_section": "2.4", "requested_faces": requested,
+              "crease_deg": crease, "native_execution_count": 0}
+    if executable is None or not executable.is_file():
+        raise QuadrangulationValidationError("AMRTO Step 2 requires the Instant-Meshes executable", report)
+    with tempfile.TemporaryDirectory(prefix="pylcss_amrto_step2_") as folder:
+        source_path = export_tri_mesh_to_obj(vertices, faces, Path(folder) / "source.obj")
+        destination = Path(folder) / "quad.obj"
+        command = [str(executable), "-o", str(destination), "-r", "4", "-p", "4",
+                   "-f", str(requested), "-d"]
+        if crease > 0:
+            command.extend(["-c", str(crease)])
+        command.append(str(source_path))
+        report["native_execution_count"] = 1
+        try:
+            subprocess.run(command, check=True, capture_output=True, timeout=180,
+                           **headless_subprocess_kwargs())
+            quad_vertices, quads = load_quad_mesh_from_obj(destination)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            report["failure"] = f"{type(error).__name__}: {error}"
+            raise QuadrangulationValidationError("AMRTO Instant-Meshes execution failed: " + str(error), report) from error
+    # Preserve a closed input's orientation if the native writer reverses the
+    # entire connected model. This changes neither coordinates nor polygons.
+    source_topology = mesh_topology_report(vertices, faces)
+    topology = mesh_topology_report(quad_vertices, quads)
+    if source_topology["is_closed"] and source_topology["connected_components"] == 1 and topology["is_closed"]:
+        import trimesh
+        source_volume = float(trimesh.Trimesh(vertices, faces, process=False).volume)
+        quad_volume = float(trimesh.Trimesh(quad_vertices, triangulate_quad_faces(quad_vertices, quads), process=False).volume)
+        if source_volume * quad_volume < 0:
+            quads = quads[:, ::-1].copy()
+            report["global_winding_corrected"] = True
+    report.update(paper_stage_2=True, vertex_count=len(quad_vertices), quad_face_count=len(quads),
+                  source_topology=source_topology, topology=topology,
+                  method="Native Instant-Meshes 4-RoSy/4-PoSy quadrangulation")
+    return quad_vertices, quads, report

@@ -1129,18 +1129,21 @@ class SceneRenderingMixin:
         if isinstance(display_mesh, dict) and len(display_mesh.get("face_ranges", ())) == len(occ_faces):
             absolute_mesh = (np.asarray(display_mesh["vertices"]), np.asarray(display_mesh["faces"]),
                              display_mesh["face_ranges"])
-        try:
-            from pylcss.cae.design_studio.topology_optimization.geometry.cad_tessellation import (
-                tessellate_cad_absolute,
-            )
-            box = topo_shape.BoundingBox()
-            diagonal = (box.xlen ** 2 + box.ylen ** 2 + box.zlen ** 2) ** .5
-            if absolute_mesh is None:
+        if absolute_mesh is None:
+            try:
+                from pylcss.cae.design_studio.topology_optimization.geometry.cad_tessellation import (
+                    tessellate_cad_absolute,
+                )
+                # A worker-prepared mesh already has its display tolerance.
+                # Native NURBS bounds can take seconds on an unmeshed BREP,
+                # so do not recompute them on Qt's thread for that path.
+                box = topo_shape.BoundingBox()
+                diagonal = (box.xlen ** 2 + box.ylen ** 2 + box.zlen ** 2) ** .5
                 absolute_mesh = tessellate_cad_absolute(
                     topo_shape, max(1e-4, min(.1, diagonal * 1e-3)), .5, return_face_ranges=True,
                 )
-        except Exception:
-            logging.getLogger(__name__).debug("Absolute CAD display mesh unavailable", exc_info=True)
+            except Exception:
+                logging.getLogger(__name__).debug("Absolute CAD display mesh unavailable", exc_info=True)
 
         if use_per_face:
             for face_idx, occ_face in enumerate(occ_faces):

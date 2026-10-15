@@ -3,8 +3,9 @@
 
 """Step 5: NURBS fitting and B-rep CAD model generation.
 
-The paper's control-net hierarchy and curvature classification run after the
-initial fit, with explicit shared-boundary and geometric acceptance extensions.
+``fit_paper_nurbs_surface_for_layout`` implements the paper's independent
+chord-length fit and subsequent control-net hierarchy/curvature classification.
+The older constrained-fitting helpers remain separate for existing callers.
 
 Reference:
 Section 2.7: NURBS fitting and the generation of CAD model (step 5)
@@ -37,7 +38,6 @@ from OCP.BRepBuilderAPI import (
 )
 from OCP.Geom import Geom_BSplineSurface
 from OCP.IGESControl import IGESControl_Writer
-from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
 from OCP.ShapeFix import ShapeFix_Shell, ShapeFix_Solid
 from OCP.TColStd import TColStd_Array1OfInteger, TColStd_Array1OfReal
 from OCP.TColgp import TColgp_Array2OfPnt
@@ -47,6 +47,240 @@ from .amrto_common import QuadLayout, get_json2on_executable
 from .occ_shapes import _solid_volume, _unify_same_domain_shape
 
 logger = logging.getLogger(__name__)
+
+
+def fit_paper_nurbs_surface_for_layout(
+    layout: QuadLayout,
+    degree_u: int = 3,
+    degree_v: int = 3,
+    k_type: float = 0.5,
+    min_ctrlpts: int = 6,
+    curvature_ck: float = 0.1,
+    curvature_cp: float = 10.0,
+    multires_enabled: bool = True,
+    compression_ratio: float = 0.5,
+    multires_layers: int = 1,
+    maximum_knot_removal_attempts: int = 64,
+    join_boundaries: bool = False,
+    maximum_multires_displacement: float | None = None,
+    maximum_source_deviation: float | None = None,
+) -> Any:
+    """AMRTO step 5: one chord-length fit followed by Algorithms 2 and 3.
+
+    Equations (16)--(18) use unit rational weights, as in the authors'
+    ``PYTOCAD_simple.py``. Each sampled chart is fitted independently with
+    fixed control counts. The application's optional ``join_boundaries``
+    extension constrains common CAD seams in that single least-squares solve.
+    Supplying ``maximum_source_deviation`` enables a separately reported
+    engineering extension: exact boundary-clock alignment and one bounded
+    fixed-basis signed-area constrained optimization within this fitting
+    stage. It does not add control points or repeat the global fitting stage.
+
+    The paper leaves the precise initial control-count rule unspecified. Here
+    ``k_type`` is the fraction of step 4 samples in each direction, subject to
+    the requested minimum and the least-squares data rank. This choice is
+    reported, rather than presented as an additional equation of the paper.
+    """
+    from .amrto_multiresolution import apply_paper_multiresolution_strategy
+
+    if fitting is None:
+        raise RuntimeError("NURBS surface fitting requires the 'geomdl' package")
+    if layout.sampled_grid_3d is None:
+        raise ValueError(f"Layout {layout.layout_id} has no sampling points")
+    if not np.isfinite(k_type) or not 0 < k_type <= 1:
+        raise ValueError("The initial control-count fraction must be in (0, 1]")
+    n_u, n_v = layout.sampled_shape
+    if n_u <= degree_u or n_v <= degree_v:
+        raise ValueError("The sampling grid must exceed the spline degree in each direction")
+    points = np.asarray(layout.sampled_grid_3d, dtype=float).reshape(n_u, n_v, 3)
+    if not np.isfinite(points).all():
+        raise ValueError("The sampling grid contains nonfinite points")
+    # Chord-length parameterization is undefined on an entirely collapsed
+    # data row or column. Reject malformed data without perturbing geometry.
+    if any((np.linalg.norm(np.diff(points, axis=axis), axis=2).sum(axis=axis) <= 0).any()
+           for axis in (0, 1)):
+        raise ValueError("The sampling grid contains a collapsed row or column")
+    counts = [min(count, max(degree + 1, min_ctrlpts, round(k_type * count)))
+              for count, degree in ((n_u, degree_u), (n_v, degree_v))]
+    source_guard = maximum_source_deviation is not None
+    source_fit_report = None
+    boundary_parameter_report = None
+    target_transport_report = None
+    fitting_layout = layout
+    source_box_bounds = getattr(layout, 'source_box_bounds', None)
+    if source_guard:
+        if (not join_boundaries or not np.isfinite(maximum_source_deviation)
+                or maximum_source_deviation <= 0):
+            raise ValueError('Source-constrained solid fitting requires a finite positive source-deviation limit')
+        from .amrto_boundary_parameters import align_layout_boundary_parameters
+        from .amrto_fitting_targets import harmonic_fitting_targets
+        from .amrto_parameterization import sample_parameter_grid
+        try:
+            boundary_parameter_report = align_layout_boundary_parameters(layout)
+        except ValueError as error:
+            # Alignment is optional and atomic. A proposed clock map that
+            # would flip an actual triangle leaves the original chart intact;
+            # the same one-fit source admission below still remains mandatory.
+            boundary_parameter_report = {
+                'accepted': False, 'engineering_parameterization_extension': True,
+                'rejection_reason': str(error), 'output': 'Original source UV chart retained',
+                'source_XYZ_unchanged': True, 'source_UV_unchanged': True,
+                'physical_boundary_geometry_unchanged': True, 'surface_fits': 0,
+            }
+        # The XYZ mesh is unchanged, but samples evaluated in the old UV
+        # chart are stale. Keep the exact Stage4 sample counts and refresh
+        # their source inverse-map values in the new chart before this fit.
+        points = sample_parameter_grid(layout, np.linspace(0, 1, n_u), np.linspace(0, 1, n_v))
+        layout.sampled_grid_3d = points.reshape(-1, 3)
+        transport_budget = (maximum_multires_displacement if maximum_multires_displacement is not None
+                            else getattr(layout, 'solid_fit_tolerance', maximum_source_deviation))
+        try:
+            fitting_layout, target_transport_report = harmonic_fitting_targets(
+                layout, maximum_displacement=transport_budget)
+        except ValueError as error:
+            # Keep a complete reviewable fit, but never advertise a rejected
+            # target-compatibility proposal as an accepted solid input.
+            target_transport_report = {
+                'accepted': False, 'engineering_extension': True,
+                'rejection_reason': str(error), 'public_source_XYZ_unchanged': True,
+                'output': 'Original source targets retained for the reviewable rejected surface',
+            }
+    if join_boundaries:
+        if not getattr(layout, 'boundary_splines', None):
+            raise ValueError('Solid CAD fitting requires prepared common boundary curves')
+        # One least-squares solve per chart. This does not call the legacy
+        # fit/refinement loop. Matching curves implement the CAD stitching
+        # integration needed by the application's volumetric consumers.
+        surface = _fit_with_exact_polyline_boundaries(
+            fitting_layout, degree_u, degree_v, counts[0], counts[1], dense_fitting=True)
+    else:
+        surface = fitting.approximate_surface(
+            points.reshape(-1, 3).tolist(), size_u=n_u, size_v=n_v,
+            degree_u=degree_u, degree_v=degree_v, centripetal=False,
+            ctrlpts_size_u=counts[0], ctrlpts_size_v=counts[1])
+    if source_guard:
+        from .amrto_fit_orientation import assess_fit_orientation
+        from .amrto_fit_repair import repair_surface_orientation
+        from .amrto_shared_stock import control_hull_in_box
+        def stock_admission(candidate):
+            if source_box_bounds is None:
+                return {'accepted': True, 'assessed': False, 'reason': 'No source stock box was supplied'}
+            weights = getattr(candidate, 'weights', None)
+            if weights is not None and (not np.isfinite(weights).all() or np.any(np.asarray(weights) <= 0)):
+                return {'accepted': False, 'assessed': True, 'reason': 'Stock hull requires positive finite weights'}
+            poles = np.asarray(candidate.ctrlpts).reshape(candidate.ctrlpts_size_u, candidate.ctrlpts_size_v, 3)
+            return {'assessed': True, **control_hull_in_box(poles, source_box_bounds)}
+        orientation = assess_fit_orientation(layout, surface)
+        source_error = _surface_map_residual(layout, surface, grid_size=73)
+        stock = stock_admission(surface)
+        source_fit_report = {
+            'method': 'One initial LS solve and at most one bounded fixed-basis signed-area constrained optimization',
+            'engineering_extension': True, 'literal_paper_algorithm': False,
+            'maximum_source_deviation': float(maximum_source_deviation),
+            'initial_source_map_residual': source_error, 'initial_source_orientation': orientation,
+            'initial_control_shape': [surface.ctrlpts_size_u, surface.ctrlpts_size_v],
+            'optimization_calls': 0, 'control_points_added': 0, 'repartition_loops': 0,
+            'fitting_targets': 'Separate bounded harmonic copy; public source XYZ unchanged',
+            'initial_stock_hull': stock,
+        }
+        if not orientation['accepted'] or source_error > maximum_source_deviation or not stock['accepted']:
+            optimized, optimization = repair_surface_orientation(
+                fitting_layout, surface, reference_layout=layout, box_bounds=source_box_bounds,
+                position_limit=maximum_source_deviation,
+                maximum_seconds=45., maximum_iterations=8, maximum_control_points=4096,
+                maximum_training_sites=100_000, maximum_constraint_sites=50_000,
+                maximum_verification_sites=150_000)
+            source_fit_report.update(optimization_calls=1, constrained_optimization=optimization)
+            if optimized is not None:
+                surface = optimized
+                orientation = assess_fit_orientation(layout, surface)
+                source_error = _surface_map_residual(layout, surface, grid_size=73)
+                stock = stock_admission(surface)
+        source_fit_report.update(
+            accepted=bool(orientation['accepted'] and source_error <= maximum_source_deviation
+                          and stock['accepted'] and target_transport_report['accepted']),
+            source_map_residual=source_error, source_orientation=orientation,
+            stock_hull=stock,
+            output_control_shape=[surface.ctrlpts_size_u, surface.ctrlpts_size_v])
+    surface.delta = .05
+    layout.fitting_report = {
+        "method": "AMRTO Section 2.7: independent chord-length least-squares approximation",
+        "paper_equations": [16, 17, 18], "rational_weights": "unit",
+        "parameterization": "chord_length", "preserve_boundary": bool(join_boundaries),
+        "solid_boundary_join_extension": bool(join_boundaries),
+        "initial_control_shape": counts, "sample_shape": [n_u, n_v],
+        "initial_control_count_policy": "Sample fraction per axis, bounded by minimum and data count",
+        "initial_control_count_fraction": k_type, "initial_fitting_batches": 1,
+        "paper_multiresolution": bool(multires_enabled),
+    }
+    if source_guard:
+        layout.fitting_report.update(boundary_parameterization=boundary_parameter_report,
+                                     fitting_target_transport=target_transport_report,
+                                     constrained_source_fit=source_fit_report,
+                                     maximum_source_deviation=float(maximum_source_deviation))
+    if join_boundaries:
+        layout.fitting_report['method'] = 'Single least-squares fit with common G0 CAD stitching curves'
+        layout.fitting_report['parameterization'] = 'Shared-boundary source UV basis'
+    if multires_enabled:
+        strategy = apply_paper_multiresolution_strategy
+        extension = {}
+        if join_boundaries:
+            from .amrto_boundary_join import apply_joined_multiresolution
+            strategy = apply_joined_multiresolution
+            extension['maximum_displacement'] = maximum_multires_displacement
+            if source_guard:
+                def source_admission(candidate):
+                    assessed = assess_fit_orientation(layout, candidate)
+                    error = _surface_map_residual(layout, candidate, grid_size=73)
+                    stock = stock_admission(candidate)
+                    return {**assessed, 'orientation_accepted': assessed['accepted'],
+                            'source_map_residual': error,
+                            'stock_hull': stock,
+                            'maximum_source_deviation': float(maximum_source_deviation),
+                            'accepted': bool(assessed['accepted'] and error <= maximum_source_deviation
+                                             and stock['accepted'] and target_transport_report['accepted'])}
+                extension['orientation_evaluator'] = source_admission
+        result = strategy(
+            surface, curvature_ck=curvature_ck, curvature_cp=curvature_cp,
+            compression_ratio=compression_ratio, layers=multires_layers,
+            maximum_knot_removal_attempts=maximum_knot_removal_attempts, **extension)
+        surface = result.candidate
+        layout.principal_curvature = result.report["principal_curvature"]
+        layout.multiresolution_report = {"enabled": True, "paper_algorithm_executed": True,
+                                       **result.report}
+    else:
+        layout.multiresolution_report = {"enabled": False, "paper_algorithm_executed": False}
+    if join_boundaries:
+        # Sewing locates real T-junctions geometrically. Spline basis knots
+        # are not CAD edge endpoints; splitting at all of them creates tiny
+        # trim edges and unstable local pcurves without changing the surface.
+        surface.segment_boundary_edges = False
+        layout.fitting_report['cad_boundary_topology'] = 'Natural surface edges; sewing resolves shared T-junctions'
+    if source_guard:
+        # Optional MRA must not turn an accepted initial fit into an invalid
+        # source map. Retain the complete surface for review if it fails;
+        # volumetric callers must honor this explicit final acceptance flag.
+        final_orientation = assess_fit_orientation(layout, surface)
+        final_error = _surface_map_residual(layout, surface, grid_size=73)
+        final_stock = stock_admission(surface)
+        layout.fitting_report.update(
+            source_fit_acceptance={
+                'accepted': bool(final_orientation['accepted'] and final_error <= maximum_source_deviation
+                                 and final_stock['accepted'] and target_transport_report['accepted']),
+                'maximum_deviation_mm': float(maximum_source_deviation),
+                'measured_deviation_mm': final_error,
+                'surface_orientation': final_orientation,
+                'stock_hull': final_stock,
+                'harmonic_fitting_target_transport_accepted': bool(target_transport_report['accepted']),
+                'engineering_constrained_fit_extension': True,
+                'certified_global_injectivity': False,
+            },
+            maximum_source_map_residual=final_error, source_orientation=final_orientation)
+    layout.nurbs_surface = surface
+    layout.fitting_report.update(ctrlpts_u=surface.ctrlpts_size_u,
+                                 ctrlpts_v=surface.ctrlpts_size_v,
+                                 multiresolution=layout.multiresolution_report)
+    return surface
 
 
 def fit_nurbs_surface_for_layout(
@@ -227,7 +461,8 @@ def _finalize_multiresolution_fit(layout, surface, *, multires_enabled, curvatur
                            "method": "Exact spline derivative/source UV orientation check",
                            "error": f"{type(error).__name__}: {error}"}
         layout.fitting_report["surface_orientation"] = orientation
-        if not orientation["accepted"] and fit_tolerance > 0:
+        if (not orientation["accepted"] and fit_tolerance > 0
+                and orientation_repair_seconds > 0 and orientation_repair_iterations > 0):
             from .amrto_fit_repair import repair_surface_orientation
             logger.info("AMRTO patch %s: repairing folded interior with fixed shared borders", layout.layout_id)
             repaired, repair = repair_surface_orientation(layout, surface, position_limit=3 * fit_tolerance,
@@ -440,6 +675,32 @@ def _bounded_interior_fit(initial, multiply_normal, target, bounds):
     return np.clip(solution.x, lower, upper).reshape(shape)
 
 
+def _complete_shared_curve_basis(first, second, target):
+    """Keep every seam knot and distribute additional controls across [0, 1]."""
+    multiplicities = {}
+    for curve in (first, second):
+        for value, count in zip(*np.unique(curve.t, return_counts=True)):
+            value = float(value)
+            multiplicities[value] = max(int(count), multiplicities.get(value, 0))
+    multiplicities[0.0] = multiplicities[1.0] = 4
+    knots = np.concatenate([np.repeat(value, count) for value, count in sorted(multiplicities.items())])
+    needed = max(0, int(target) - (len(knots) - 4))
+    if not needed:
+        return knots
+    # Selecting the first N members of a denser grid puts every free knot in
+    # the first half of a chart. A steep feature near u=1 then has no support.
+    additional = [value for value in np.linspace(0, 1, needed + 2)[1:-1]
+                  if np.min(np.abs(knots - value)) > 1e-8]
+    while len(additional) < needed:
+        breaks = np.unique(np.r_[knots, additional])
+        index = int(np.argmax(np.diff(breaks)))
+        value = .5 * (breaks[index] + breaks[index + 1])
+        if min(value - breaks[index], breaks[index + 1] - value) <= 1e-8:
+            raise ValueError('The requested shared boundary basis has no distinct interior knot sites')
+        additional.append(value)
+    return np.sort(np.r_[knots, additional])
+
+
 def _fit_with_exact_polyline_boundaries(layout: QuadLayout, degree_u: int, degree_v: int,
                                         target_u: int, target_v: int, dense_fitting: bool = False,
                                         local_knots: tuple = ((), ()), *, fitted_bases=None,
@@ -492,29 +753,8 @@ def _fit_with_exact_polyline_boundaries(layout: QuadLayout, degree_u: int, degre
     ku = knots_for(parameters[0], parameters[2], degree_u, target_u)
     kv = knots_for(parameters[1], parameters[3], degree_v, target_v)
     if shared_curves is not None:
-        def curve_union_knots(first, second, target):
-            multiplicities = {}
-            for curve in (first, second):
-                values, counts = np.unique(curve.t, return_counts=True)
-                for value, count in zip(values, counts):
-                    value = float(value)
-                    multiplicities[value] = max(int(count), multiplicities.get(value, 0))
-            multiplicities[0.0] = 4
-            multiplicities[1.0] = 4
-            knots = np.concatenate([np.repeat(value, count) for value, count in sorted(multiplicities.items())])
-            count = len(knots) - 4
-            if count < target:
-                candidates = np.linspace(0, 1, 2 * (target - count) + 3)[1:-1]
-                additional = []
-                for value in candidates:
-                    if np.min(np.abs(knots - value)) > 1e-8:
-                        additional.append(value)
-                    if len(additional) == target - count:
-                        break
-                knots = np.sort(np.r_[knots, additional])
-            return knots
-        ku = curve_union_knots(shared_curves[0], shared_curves[2], target_u)
-        kv = curve_union_knots(shared_curves[1], shared_curves[3], target_v)
+        ku = _complete_shared_curve_basis(shared_curves[0], shared_curves[2], target_u)
+        kv = _complete_shared_curve_basis(shared_curves[1], shared_curves[3], target_v)
     for axis, knots in enumerate((ku, kv)):
         additions = []
         for value in local_knots[axis]:
@@ -1063,11 +1303,10 @@ def export_cad_model(
     occ_shape = shape.wrapped if hasattr(shape, "wrapped") else shape
 
     if fmt in {"STEP", "STP"}:
-        writer = STEPControl_Writer()
-        from OCP.IFSelect import IFSelect_RetDone
-        if writer.Transfer(occ_shape, STEPControl_AsIs) != IFSelect_RetDone or writer.Write(str(p)) != IFSelect_RetDone:
-            raise RuntimeError(f"STEP export failed: {p}")
-        return p
+        from .step_export import export_cad_model as export_step_model
+        # Final AMRTO transfer needs the same scoped precision policy as the
+        # passive-feature transfers. Its caller verifies the round trip.
+        return export_step_model(cq.Shape.cast(occ_shape), export_path=p, verify=False)
 
     elif fmt in {"IGES", "IGS"}:
         writer = IGESControl_Writer()

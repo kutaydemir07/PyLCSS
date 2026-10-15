@@ -10,6 +10,12 @@ from pathlib import Path
 import numpy as np
 
 
+# Curved CAD is discretized by planar triangles and linear tetrahedra. Allow
+# 1% material-volume error, while rejecting incomplete fills independently of
+# element shape quality. Check this before converting the mesh to C3D10.
+_CAD_MESH_VOLUME_RELATIVE_TOLERANCE = 0.01
+
+
 def finite_nonnegative(value, *, name, positive=False):
     """Validate a setting without replacing explicit zero with defaults."""
     try:
@@ -108,6 +114,36 @@ def validated_cad_shape(shape):
     return shape
 
 
+def _validate_native_external_surface(generated):
+    """Reject missing or inconsistently oriented native boundary triangles."""
+    import trimesh
+
+    triangles = []
+    for element in generated.Elements2D():
+        descriptor = generated.FaceDescriptor(element.index)
+        inside, outside = int(descriptor.domin), int(descriptor.domout)
+        # Interfaces between material domains are not external boundaries.
+        if bool(inside) == bool(outside):
+            continue
+        vertices = [int(vertex.nr) - 1 for vertex in element.vertices]
+        if not inside:
+            vertices.reverse()
+        if len(vertices) == 3:
+            triangles.append(vertices)
+        elif len(vertices) == 4:
+            triangles.extend((vertices[:3], [vertices[0], vertices[2], vertices[3]]))
+        else:
+            raise ValueError("Native mesh has an unsupported external surface element.")
+    if not triangles:
+        raise ValueError("Native mesh has no closed external material surface.")
+    points = np.asarray([tuple(point.p) for point in generated.Points()], dtype=float)
+    boundary = trimesh.Trimesh(points, np.asarray(triangles), process=False)
+    if not boundary.is_watertight:
+        raise ValueError("Native mesh external material surface is not closed.")
+    if not boundary.is_winding_consistent:
+        raise ValueError("Native mesh external material surface has inconsistent winding.")
+
+
 def tet_mesh_from_geometry(
     geometry,
     element_size,
@@ -118,27 +154,62 @@ def tet_mesh_from_geometry(
     grading=0.3,
     element_order="C3D10",
     max_elements=500_000,
+    reference_volume=None,
 ):
-    """Generate and quality-check a Netgen volume mesh for either STL or CAD."""
+    """Check native boundary closure, CAD material volume, and element quality.
+
+    CAD callers supply the independently measured ``reference_volume``. Its
+    1% tolerance accounts for discretization, not missing or duplicate solids.
+    """
     from skfem import Mesh, MeshTet2
+    from netgen.meshing import MeshingParameters, MeshingStep
     from pylcss.cae.design_studio.fem._helpers import suppress_output
     from pylcss.cae.design_studio.fem.quality import attach_mesh_quality
 
+    if reference_volume is not None:
+        reference_volume = finite_nonnegative(
+            reference_volume, name="CAD reference material volume", positive=True
+        )
     mesh_path = Path(directory) / f"{name}.msh"
     with suppress_output():
+        settings = dict(maxh=element_size, minh=minimum_size, grading=grading)
         generated = geometry.GenerateMesh(
-            maxh=element_size,
-            minh=minimum_size,
-            grading=grading,
+            **settings,
+            perfstepsend=MeshingStep.MESHSURFACE,
         )
+        # Netgen can continue volume generation after surface failures. Reject
+        # an open native front before that expensive, potentially unsafe call.
+        _validate_native_external_surface(generated)
+        # MeshingStep.MESHVOLUME means volume optimization in the native API;
+        # resuming there would optimize an empty mesh. GenerateVolumeMesh
+        # retains this CAD mesh and performs normal volume generation and
+        # optimization with the same default parameters.
+        generated.GenerateVolumeMesh(MeshingParameters(**settings))
         if generated.ne > max_elements:
             raise ValueError(
                 f"Validation mesh has {generated.ne:,} elements, exceeding the "
                 f"requested limit of {max_elements:,}. Increase element size "
                 "or the element limit."
             )
+        if generated.ne <= 0:
+            raise ValueError("Native mesher returned no tetrahedral material.")
+        _validate_native_external_surface(generated)
         generated.Export(str(mesh_path), "Gmsh2 Format")
     mesh = Mesh.load(str(mesh_path))
+    if reference_volume is not None:
+        corners = np.asarray(mesh.p[:3, mesh.t[:4]], dtype=float).transpose(2, 1, 0)
+        triple = np.einsum(
+            "ij,ij->i", corners[:, 1] - corners[:, 0],
+            np.cross(corners[:, 2] - corners[:, 0], corners[:, 3] - corners[:, 0]),
+        )
+        volume = float(np.abs(triple).sum() / 6.0)
+        relative_error = abs(volume - reference_volume) / reference_volume
+        if not np.isfinite(volume) or relative_error > _CAD_MESH_VOLUME_RELATIVE_TOLERANCE:
+            raise ValueError(
+                f"Native tetrahedral material volume {volume:.9g} differs from "
+                f"CAD volume {reference_volume:.9g} by {relative_error:.2%}; "
+                "the allowed CAD discretization error is 1%."
+            )
     if element_order == "C3D10":
         mesh = MeshTet2.from_mesh(mesh)
     if not attach_mesh_quality(mesh)["solver_ready"]:
@@ -146,15 +217,29 @@ def tet_mesh_from_geometry(
     return mesh
 
 
-def cad_tet_mesh(shape, element_size, directory, **settings):
-    """Export a solid CAD boundary and mesh it with the shared volume mesher."""
-    from netgen.occ import OCCGeometry
+def cad_tet_mesh(shape, element_size, directory, *, backend="auto", **settings):
+    """Mesh exact CAD through the configured external mesher without refitting."""
+    from ..geometry.amrto_volume import measure_cad_volume
+    from ..geometry.cad_gmsh_cli import cad_tet_mesh_cli, resolve_gmsh_executable
 
+    if backend not in {"auto", "gmsh", "netgen"}:
+        raise ValueError("Choose auto, gmsh or netgen for the CAD meshing backend.")
+    reference_volume, _ = measure_cad_volume(shape)
+    executable = resolve_gmsh_executable() if backend != "netgen" else None
+    if backend == "gmsh" or executable is not None:
+        # Choose the available mesher once. A rejected mesh is never retried
+        # using another backend or published with weaker completion checks.
+        return cad_tet_mesh_cli(
+            shape, element_size, directory, reference_volume=reference_volume,
+            executable=executable, **settings,
+        )
+    from netgen.occ import OCCGeometry
     step_path = Path(directory) / "analysis.step"
     shape.exportStep(str(step_path))
     return tet_mesh_from_geometry(
         OCCGeometry(str(step_path)),
         element_size,
         directory,
+        reference_volume=reference_volume,
         **settings,
     )

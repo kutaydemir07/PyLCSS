@@ -37,15 +37,33 @@ from .voxelization import (
 logger = logging.getLogger(__name__)
 
 # Invalidate surfaces recovered before original CAD boundaries were supplied.
-_SURFACE_RECOVERY_CACHE_REVISION = 2
+_SURFACE_RECOVERY_CACHE_REVISION = 3
 
 
 def _cad_shape_cache_identity(shape: Any) -> Any:
-    """Identify preserved CAD topology for the node's in-session mesh cache."""
+    """Identify current CAD contents, including edits to an existing TShape."""
     if shape is None:
         return None
+    if isinstance(shape, dict):
+        for key in ("shape", "cad", "geometry", "components", "mesh", "recovered_shape"):
+            nested = shape.get(key)
+            if nested is not None and nested is not shape:
+                return _cad_shape_cache_identity(nested)
+    if isinstance(shape, (list, tuple)):
+        return tuple(_cad_shape_cache_identity(item) for item in shape)
     if hasattr(shape, "val"):
         shape = shape.val()
+    from ..geometry.cad_features import _coerce_to_solid
+    from ..geometry.cad_fingerprint import cad_shape_fingerprint
+
+    cad_shape = _coerce_to_solid(shape)
+    if cad_shape is not None:
+        return cad_shape_fingerprint(cad_shape)
+    from .geometry_mapping import _surface_mesh_arrays
+
+    arrays = _surface_mesh_arrays(shape, allow_tessellation=False)
+    if arrays is not None:
+        return tuple((array.shape, hash(np.ascontiguousarray(array).tobytes())) for array in arrays)
     hash_code = getattr(shape, "hashCode", None)
     return hash_code() if callable(hash_code) else id(shape)
 
@@ -317,6 +335,9 @@ def build_topology_output(
             explicit_solid_shapes=explicit_solid_shapes,
             explicit_void_shapes=explicit_void_shapes,
             source_cad_shape=source_cad_shape,
+            source_lattice_geometry=(source_cad_shape if source_cad_shape is not None else study.source_design_domain) if is_infill_study else None,
+            include_manufacturing_field=is_infill_study,
+            raise_errors=is_infill_study,
             structure_options=structure_options,
             member_plan=member_plan,
         )
@@ -342,6 +363,7 @@ def build_topology_output(
         hash(np.ascontiguousarray(passive_void_mask).tobytes()),
         _SURFACE_RECOVERY_CACHE_REVISION,
         _cad_shape_cache_identity(source_cad_shape),
+        _cad_shape_cache_identity(study.source_design_domain) if is_infill_study else None,
         tuple(_cad_shape_cache_identity(shape) for shape in explicit_solid_shapes),
         tuple(_cad_shape_cache_identity(shape) for shape in explicit_void_shapes),
     )
@@ -450,6 +472,10 @@ def build_topology_output(
     if isinstance(recovered, dict) and recovered.get("recovery_field_fallback"):
         recovery_field = density
         recovery_cutoff = density_cutoff
+    if is_infill_study and isinstance(recovered, dict):
+        geometric_density = recovered.get("manufactured_density")
+        if geometric_density is not None:
+            manufactured_density = geometric_density
     if isinstance(recovered, dict):
         try:
             effective_cutoff = float(recovered.get("effective_recovery_cutoff"))
@@ -540,6 +566,7 @@ def build_topology_output(
     output: dict[str, Any] = {
         "type": "topopt_voxel",
         "source_cad_shape": source_cad_shape,
+        "source_lattice_geometry": recovered.get("source_lattice_geometry") if is_infill_study and isinstance(recovered, dict) else None,
         "design_goal": design_goal,
         "objective_mode": problem.objective_mode,
         "physics_mode": problem.physics_mode,
@@ -816,6 +843,8 @@ def build_topology_output(
     }
 
     if is_infill_study:
+        if isinstance(recovered, dict):
+            output["passive_regions"].update(recovered.get("preserved_lattice_geometry") or {})
         _apply_lattice_infill_reporting(
             node, output, recovered, requested_structure_options
         )

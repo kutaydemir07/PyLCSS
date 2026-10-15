@@ -137,7 +137,7 @@ class AMRTOConfig:
     quadrangulation_require_native: bool = True
 
     # Step 3: Sparse layouts division
-    layout_target_patch_faces: int = 200  # Raised from 50: larger patches on smooth topology-opt surfaces
+    layout_target_patch_faces: int = 200  # Legacy partitioner only; native paper GMCG chooses its own layouts.
     export_layout_patches: bool = False  # Grouped stage 3 OBJ retains every patch
     # Feature charting every sharp input edge is a production extension, not
     # part of the paper's GMCG layouts. Optimization meshes are faceted, so
@@ -150,8 +150,7 @@ class AMRTOConfig:
     sampling_min_d: int = 6       # d_min
     sampling_max_d: int = 2000    # d_max
     parameterization_method: str = "hybrid"
-    # Optional harmonic distortion heuristic; native rectangles follow the paper.
-    # Positivity and source-fit checks always run.
+    # Legacy compression admission is not part of the paper's hybrid mapping.
     parameterization_minimum_area_ratio: float = 0.0
     scaffold_max_iter: int = 50
     scaffold_relative_energy_tolerance: float = 1e-4
@@ -172,24 +171,23 @@ class AMRTOConfig:
     multires_enabled: bool = True
     multires_curvature_ck: float = 0.1
     multires_curvature_cp: float = 10.0
-    # K * reference length is unit-independent. None uses the source diagonal.
+    # Legacy constrained fitter scale; paper Algorithm 3 uses model-unit curvature.
     multires_reference_length: Optional[float] = None
     multires_compression_ratio: float = 0.5  # Highest-layer total controls / original total
     multires_layers: int = 1
     multires_regeneration: str = "author_uniform"
     multires_maximum_knot_removal_attempts: int = 64
-    preserve_patch_boundaries: bool = True  # Common boundary curves for sewing
+    # Application integration of Section 2.7's downstream stitching. Fit each
+    # chart once with common G0 seam curves and keep those curves through MRA.
+    # These constraints are an engineering extension, not an author-code claim.
+    stitch_surface_boundaries: bool = True
+    boundary_fit_relative_tolerance: float = 0.001
+    preserve_patch_boundaries: bool = False  # Legacy constrained fitter only; paper patches are independent.
     source_box_bounds: Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = None
     fitting_workers: int = 4  # Bound patch processes; each uses one BLAS thread
-    # Repair is a bounded quality extension run once per patch. Keep its total
-    # cost predictable on large layouts; unresolved patches are handled by the
-    # existing subdivision and validation path.
-    # Allow source fitting and the complete independent verification to finish
-    # before spending far more time subdividing and remapping the same chart.
-    orientation_repair_seconds: float = 4.0
-    # Independent verification adds missed fold sites to the active set.
-    # Two iterations can stop before those additional constraints converge.
-    orientation_repair_iterations: int = 8
+    # Legacy constrained-fitting repair options; not read by the paper path.
+    orientation_repair_seconds: float = 0.0
+    orientation_repair_iterations: int = 0
 
 
 

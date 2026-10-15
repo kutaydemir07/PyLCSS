@@ -333,6 +333,79 @@ def _physical_cylinder_to_solid(
 _BOOLEAN_FUZZY_RETRIES = (1e-5, 1e-4, 1e-3)
 
 
+def _material_bounds(shape: Any) -> np.ndarray:
+    """Bound CAD geometry independently of cached display triangulation.
+
+    Trimmed spline faces can retain a conservative UV-rectangle envelope.
+    A difference between these boxes needs the trim-aware distance check below.
+    """
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+
+    box = Bnd_Box()
+    # CadQuery BoundingBox() uses triangulation when available. STEP transfer
+    # drops that cache, so its deflection must never enter a material check.
+    BRepBndLib.AddOptimal_s(shape.wrapped, box, False, False)
+    bounds = np.asarray(box.Get(), dtype=float)[[0, 3, 1, 4, 2, 5]]
+    if not np.isfinite(bounds).all():
+        raise RuntimeError("Material bounds require finite CAD geometry")
+    return bounds
+
+
+def _material_bounds_delta(before: Any, after: Any, tolerance: float) -> np.ndarray:
+    """Resolve disputed box extrema against the actual trimmed material."""
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+    from OCP.Precision import Precision
+    from OCP.gp import gp_Dir, gp_Pln, gp_Pnt
+
+    delta = _material_bounds(before) - _material_bounds(after)
+    disputed = np.flatnonzero(np.abs(delta) > tolerance)
+    if not len(disputed):
+        return delta
+
+    # AddOptimal can keep a UV envelope when its trimmed-face extrema solver
+    # fails. Bound the full geometry conservatively, then place common support
+    # planes outside both operands. DistanceSS classifies extrema on the real
+    # face trims and also checks their boundary edges and vertices.
+    envelope = Bnd_Box()
+    for shape in (before, after):
+        BRepBndLib.Add_s(shape.wrapped, envelope, False)
+    limits = np.asarray(envelope.Get(), dtype=float)
+    if not np.isfinite(limits).all():
+        raise RuntimeError("Could not bound the trimmed CAD material")
+    lower, upper = limits[:3], limits[3:]
+    center = (lower + upper) * 0.5
+    margin = max(float(np.linalg.norm(upper - lower)), 1.0)
+    for index in disputed:
+        axis, end = divmod(int(index), 2)
+        point = center.copy()
+        point[axis] = upper[axis] + margin if end else lower[axis] - margin
+        normal = np.eye(3)[axis]
+        plane = BRepBuilderAPI_MakeFace(
+            gp_Pln(gp_Pnt(*point), gp_Dir(*normal)),
+            -margin, margin, -margin, margin,
+        ).Face()
+        supports = []
+        for shape in (before, after):
+            distance = BRepExtrema_DistShapeShape()
+            distance.LoadS1(shape.wrapped)
+            distance.LoadS2(plane)
+            distance.SetDeflection(Precision.Confusion_s() * 0.1)
+            distance.SetMultiThread(True)
+            distance.Perform()
+            if not distance.IsDone() or distance.NbSolution() < 1:
+                raise RuntimeError("Could not verify the trimmed CAD material bounds")
+            value = float(distance.Value())
+            if not np.isfinite(value) or value <= 0.0:
+                raise RuntimeError("Invalid distance to the CAD material support plane")
+            supports.append(point[axis] - value if end else point[axis] + value)
+        delta[index] = supports[0] - supports[1]
+    return delta
+
+
 def _prepare_boolean_continuity(shape: Any, *, return_parent_face_indices: bool = False) -> Any:
     """Split internal C0 surface spans without changing their geometry.
 
@@ -384,17 +457,15 @@ def _prepare_boolean_continuity(shape: Any, *, return_parent_face_indices: bool 
             or not all(BRep_Tool.IsClosed_s(shell.wrapped) for shell in candidate.Shells())):
         raise RuntimeError("Exact C1 subdivision did not retain a valid closed CAD body")
 
-    bounds, candidate_bounds = shape.BoundingBox(), candidate.BoundingBox()
-    scale = float(np.linalg.norm([bounds.xlen, bounds.ylen, bounds.zlen]))
+    bounds = _material_bounds(shape)
+    scale = float(np.linalg.norm(bounds[1::2] - bounds[::2]))
     geometry_tolerance = max(1e-8, scale * 1e-10)
-    if any(getattr(candidate_bounds, axis + "min") < getattr(bounds, axis + "min") - geometry_tolerance
-           or getattr(candidate_bounds, axis + "max") > getattr(bounds, axis + "max") + geometry_tolerance
-           for axis in "xyz"):
+    bounds_delta = _material_bounds_delta(shape, candidate, geometry_tolerance)
+    if (np.any(bounds_delta[::2] > geometry_tolerance)
+            or np.any(bounds_delta[1::2] < -geometry_tolerance)):
         raise RuntimeError("Exact C1 subdivision changed the CAD bounds")
-    volume = abs(float(shape.Volume(tol=1e-7)))
-    candidate_volume = abs(float(candidate.Volume(tol=1e-7)))
-    if abs(candidate_volume - volume) > max(1e-7, volume * 1e-6):
-        raise RuntimeError("Exact C1 subdivision changed the enclosed CAD volume")
+    from .amrto_volume import assert_unchanged_cad_volume
+    assert_unchanged_cad_volume(shape, candidate, relative_tolerance=1e-6)
 
     # The divider uses exact spline segmentation, not approximation. Check
     # that healing retained each child on an original surface at identical UVs.
@@ -418,6 +489,8 @@ def _prepare_boolean_continuity(shape: Any, *, return_parent_face_indices: bool 
                 for a in (.125, .5, .875) for b in (.125, .5, .875)):
             raise RuntimeError("C1 topology healing changed the fitted surface geometry")
         parent_face_indices.append(parent_index)
+    from .amrto_volume import assert_rectangular_spline_partition
+    assert_rectangular_spline_partition(shape, candidate, parent_face_indices)
     logger.info("Prepared %d fitted CAD faces as %d exact C1 faces for analytic booleans",
                 len(faces), len(candidate.Faces()))
     return (candidate, parent_face_indices) if return_parent_face_indices else candidate
@@ -436,6 +509,7 @@ def _native_boolean(body: Any, tool: Any, operation: str, fuzzy: float = 0.0) ->
     builder.SetArguments(arguments)
     builder.SetTools(tools)
     builder.SetNonDestructive(True)
+    builder.SetRunParallel(True)
     if fuzzy:
         builder.SetFuzzyValue(fuzzy)
     builder.Build()
@@ -444,26 +518,96 @@ def _native_boolean(body: Any, tool: Any, operation: str, fuzzy: float = 0.0) ->
     return cq.Shape.cast(builder.Shape())
 
 
-def _boolean_or_raise(result: Any, tool: Any, *, operation: str, allow_empty_cut: bool = False) -> Any:
-    """Run isolated CadQuery booleans and keep rejected operands unchanged."""
+def _normalize_boolean_trims(shape: Any) -> Any:
+    """Normalize Boolean trim bookkeeping without changing its material surfaces."""
+    import cadquery as cq
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+    from OCP.Precision import Precision
+    from .step_export import (
+        _closed, _assert_matching_surface_geometry, export_cad_model, verify_step_roundtrip,
+    )
+
+    # An unorientable trim can belong to an otherwise closed Boolean result.
+    # STEP transfer can reconstruct its wire/pcurve relationships. Open results
+    # and changes to the surfaces or enclosed material are never eligible.
+    if not _closed(shape):
+        raise RuntimeError("Boolean trim normalization requires closed solid geometry")
+    before = abs(float(shape.Volume(tol=1e-7)))
+    if not np.isfinite(before) or before <= 0.0:
+        raise RuntimeError("Boolean trim normalization requires positive finite material volume")
+    with TemporaryDirectory(prefix="pylcss_boolean_trims_") as directory:
+        isolated = cq.Shape.cast(BRepBuilderAPI_Copy(shape.wrapped, False, False).Shape())
+        path = Path(directory) / "material.step"
+        export_cad_model(isolated, export_path=path, verify=False)
+        canonical, _ = verify_step_roundtrip(path, return_shape=True)
+    # Reuse the two strict 1e-7 integrations below instead of also performing
+    # the generic STEP helper's weaker, duplicate 1e-5 integrations.
+    _assert_matching_surface_geometry(shape, canonical)
+    if (not canonical.isValid() or not _closed(canonical)
+            or len(canonical.Solids()) != len(shape.Solids())):
+        raise RuntimeError("Boolean trim normalization did not preserve valid closed solids")
+    after = abs(float(canonical.Volume(tol=1e-7)))
+    if not np.isfinite(after) or abs(after - before) > max(1e-9, before * 1e-6):
+        raise RuntimeError("Boolean trim normalization changed the enclosed material")
+    bounds = _material_bounds(shape)
+    bound_tolerance = max(2.0 * Precision.Confusion_s(),
+                          float(np.linalg.norm(bounds[1::2] - bounds[::2])) * 1e-9)
+    bounds_delta = _material_bounds_delta(shape, canonical, bound_tolerance)
+    if not np.isfinite(bounds_delta).all() or np.max(np.abs(bounds_delta)) > bound_tolerance:
+        raise RuntimeError("Boolean trim normalization changed the material bounds "
+                           f"(maximum change {np.max(np.abs(bounds_delta)):.9g}; "
+                           f"tolerance {bound_tolerance:.9g})")
+    return canonical
+
+
+def _boolean_or_raise(result: Any, tool: Any, *, operation: str, allow_empty_cut: bool = False,
+                      check_normalized_intersections: bool = True) -> Any:
+    """Protect operands; defer intermediate scans only to a mandatory body check."""
     solid_input = hasattr(result, "Solids") and bool(result.Solids())
 
-    def _run(fuzzy: float) -> Any:
-        # Copying every fitted surface can break its shared edge geometry.
-        # OCC's non-destructive mode protects operands without that copy.
-        return _native_boolean(result, tool, operation, fuzzy)
-
     last_error: Exception | None = None
-    for fuzzy in (0.0, *_BOOLEAN_FUZZY_RETRIES):
+
+    def attempts():
+        nonlocal last_error
+        # Native success pays for no transfer. If it fails, first retry the
+        # unchanged material in canonical STEP trim representation: increasing
+        # the fuzzy tolerance cannot repair inconsistent pcurve bookkeeping.
+        yield result, 0.0, False
+        body = result
         try:
-            candidate = _run(fuzzy)
+            body = _normalize_boolean_trims(result)
+        except Exception as exc:
+            last_error = exc
+        else:
+            yield body, 0.0, True
+        for fuzzy in _BOOLEAN_FUZZY_RETRIES:
+            yield body, fuzzy, body is not result
+
+    for body, fuzzy, normalized_operand in attempts():
+        try:
+            # Non-destructive mode protects the owner without copying shared
+            # fitted geometry before the native operation.
+            candidate = _native_boolean(body, tool, operation, fuzzy)
         except Exception as exc:  # noqa: PERF203 - each tolerance is a retry
             last_error = exc
             continue
         if candidate is None:
             continue
+        intersections_checked = False
         if hasattr(candidate, "isValid") and not candidate.isValid():
-            continue
+            try:
+                candidate = _normalize_boolean_trims(candidate)
+                if (check_normalized_intersections
+                        and not _assess_brep_self_intersections(candidate).get("passed", False)):
+                    raise RuntimeError("Normalized Boolean trims retain CAD intersections")
+                intersections_checked = check_normalized_intersections
+                logger.info("Recovered Shape STEP: analytic %s trim normalization preserved exact surfaces and material.",
+                            operation)
+            except Exception as exc:
+                last_error = exc
+                continue
         # OCC can return a valid empty Compound after a failed boolean. A
         # manufactured solid must retain solid geometry before accepting it.
         if solid_input and (not candidate.Solids() or not candidate.Faces()):
@@ -477,6 +621,10 @@ def _boolean_or_raise(result: Any, tool: Any, *, operation: str, allow_empty_cut
                     return candidate
             last_error = RuntimeError(f"Analytic {operation} erased the solid body")
             continue
+        if check_normalized_intersections and normalized_operand and not intersections_checked:
+            if not _assess_brep_self_intersections(candidate).get("passed", False):
+                last_error = RuntimeError("Boolean on normalized trims retains CAD intersections")
+                continue
         if solid_input and operation == "fuse":
             original_volume = abs(float(result.Volume(tol=1e-4)))
             candidate_volume = abs(float(candidate.Volume(tol=1e-4)))
@@ -535,7 +683,8 @@ def _intersecting_tools(shape: Any, tools: list[Any]) -> list[Any]:
     return retained
 
 
-def _cut_tools_sequentially(shape: Any, tools: list[Any], *, allow_empty_cut: bool = False) -> Any:
+def _cut_tools_sequentially(shape: Any, tools: list[Any], *, allow_empty_cut: bool = False,
+                            check_normalized_intersections: bool = True) -> Any:
     """Apply overlapping bore/cleanup tools one at a time.
 
     OCC compounds containing overlapping cylinders are not a boolean union;
@@ -545,7 +694,8 @@ def _cut_tools_sequentially(shape: Any, tools: list[Any], *, allow_empty_cut: bo
     """
     result = shape
     for tool in tools:
-        result = _boolean_or_raise(result, tool, operation="cut", allow_empty_cut=allow_empty_cut)
+        result = _boolean_or_raise(result, tool, operation="cut", allow_empty_cut=allow_empty_cut,
+                                  check_normalized_intersections=check_normalized_intersections)
         if allow_empty_cut and not result.Solids():
             break
     return result
@@ -708,6 +858,90 @@ def _preserved_bore_tools(shapes: list[Any], axial_margin: float) -> list[Any]:
     return tools
 
 
+def _canonical_annular_layer(shape: Any) -> Any:
+    """Rebuild an exact cylindrical sleeve with canonical, checked face trims.
+
+    Offset-generated annuli can carry valid but Boolean-incompatible seam
+    parameterizations. Only a complete two-cylinder, two-plane annulus is
+    eligible. Its analytic dimensions and two-sided native material equality
+    must agree; all other protected shapes retain their original geometry.
+    """
+    import cadquery as cq
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from .step_export import _closed
+
+    faces = shape.Faces()
+    cylinders = [face for face in faces if face.geomType() == 'CYLINDER']
+    planes = [face for face in faces if face.geomType() == 'PLANE']
+    if (len(faces) != 4 or len(cylinders) != 2 or len(planes) != 2
+            or len(shape.Solids()) != 1 or not shape.isValid() or not _closed(shape)):
+        return shape
+    try:
+        records = []
+        for face in cylinders:
+            surface = BRepAdaptor_Surface(face.wrapped)
+            if abs(surface.LastUParameter()-surface.FirstUParameter()-2*np.pi) > 1e-8:
+                return shape
+            cylinder = surface.Cylinder()
+            axis = np.asarray(cq.Vector(cylinder.Axis().Direction()).toTuple())
+            nonzero = np.flatnonzero(np.abs(axis) > 1e-12)
+            if axis[nonzero[0]] < 0:
+                axis = -axis
+            location = np.asarray(cq.Vector(cylinder.Location()).toTuple())
+            origin = location-(location @ axis)*axis
+            midpoint = (surface.FirstUParameter()+surface.LastUParameter())*.5
+            ends = sorted(np.asarray(cq.Vector(surface.Value(midpoint, value)).toTuple()) @ axis
+                          for value in (surface.FirstVParameter(), surface.LastVParameter()))
+            records.append((axis, origin, cylinder.Radius(), *ends))
+        inner, outer = sorted(records, key=lambda record: record[2])
+        axis, origin, radius, lower, upper = outer
+        scale = max(radius, upper-lower, 1.0)
+        linear = scale*1e-10
+        if (inner[2] <= 0 or radius <= inner[2]
+                or not np.allclose(inner[0], axis, rtol=0, atol=1e-12)
+                or np.linalg.norm(inner[1]-origin) > linear
+                or max(abs(inner[3]-lower), abs(inner[4]-upper)) > linear):
+            return shape
+        height = upper-lower
+        if height <= linear:
+            return shape
+        area = np.pi*(radius**2-inner[2]**2)
+        for face in planes:
+            surface = BRepAdaptor_Surface(face.wrapped)
+            plane = surface.Plane()
+            normal = np.asarray(cq.Vector(plane.Axis().Direction()).toTuple())
+            level = np.asarray(cq.Vector(plane.Location()).toTuple()) @ axis
+            if (abs(abs(normal @ axis)-1) > 1e-12
+                    or min(abs(level-lower), abs(level-upper)) > linear
+                    or abs(face.Area()-area) > max(1e-8, area*1e-10)):
+                return shape
+        for face, record in zip(cylinders, records):
+            expected_area = 2*np.pi*record[2]*height
+            if abs(face.Area()-expected_area) > max(1e-8, expected_area*1e-10):
+                return shape
+        base = cq.Vector(*(origin+axis*lower))
+        canonical = cq.Solid.makeCylinder(radius, height, base, cq.Vector(*axis)).cut(
+            cq.Solid.makeCylinder(inner[2], height, base, cq.Vector(*axis)))
+        expected_volume = area*height
+        volume_tolerance = max(1e-8, expected_volume*1e-10)
+        if (not canonical.isValid() or not _closed(canonical)
+                or abs(shape.Volume(tol=1e-7)-expected_volume) > volume_tolerance
+                or np.max(np.abs(_material_bounds_delta(shape, canonical, linear))) > max(linear, 2e-7)):
+            return shape
+        for first, second in ((shape, canonical), (canonical, shape)):
+            outside = _native_boolean(first, second, 'cut')
+            if (not outside.isValid()
+                    or sum(abs(part.Volume(tol=1e-7)) for part in outside.Solids()) > volume_tolerance):
+                return shape
+        common = _native_boolean(shape, canonical, 'common')
+        if (not common.isValid() or not _closed(common)
+                or abs(common.Volume(tol=1e-7)-expected_volume) > volume_tolerance):
+            return shape
+        return canonical
+    except Exception:
+        return shape
+
+
 def _collect_passive_tools(
     payload: Any,
     *,
@@ -818,14 +1052,15 @@ def _box_domain_contains_shape(shape: Any, domain: Any) -> bool:
     """Prove containment using conservative CAD bounds for a solid box only."""
     if len(domain.Solids()) != 1 or any(face.geomType() != "PLANE" for face in domain.Faces()):
         return False
-    domain_box, body_box = domain.BoundingBox(), shape.BoundingBox()
-    box_volume = domain_box.xlen * domain_box.ylen * domain_box.zlen
+    domain_bounds = _material_bounds(domain).reshape(3, 2)
+    body_bounds = _material_bounds(shape).reshape(3, 2)
+    box_lengths = domain_bounds[:, 1] - domain_bounds[:, 0]
+    box_volume = float(np.prod(box_lengths))
     if abs(abs(domain.Volume(tol=1e-7)) - box_volume) > max(1e-7, box_volume * 1e-8):
         return False
-    tolerance = max(1e-7, max(domain_box.xlen, domain_box.ylen, domain_box.zlen) * 1e-8)
-    return all(getattr(body_box, axis + "min") >= getattr(domain_box, axis + "min") - tolerance
-               and getattr(body_box, axis + "max") <= getattr(domain_box, axis + "max") + tolerance
-               for axis in "xyz")
+    tolerance = max(1e-7, float(np.max(box_lengths)) * 1e-8)
+    return bool(np.all(body_bounds[:, 0] >= domain_bounds[:, 0] - tolerance)
+                and np.all(body_bounds[:, 1] <= domain_bounds[:, 1] + tolerance))
 
 
 def _repair_boolean_vertex_contacts(shape: Any, quality: Optional[dict[str, Any]] = None) -> Any:
@@ -838,41 +1073,18 @@ def _repair_boolean_vertex_contacts(shape: Any, quality: Optional[dict[str, Any]
     A genuine surface/edge intersection is never eligible for this repair.
     """
     import cadquery as cq
-    from pathlib import Path
-    from tempfile import TemporaryDirectory
     from OCP.BRep import BRep_Tool
     from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
     from OCP.Precision import Precision
     from OCP.ShapeFix import ShapeFix_Wireframe
     from OCP.TopTools import TopTools_IndexedMapOfShape
-    from .step_export import (
-        assert_unchanged_surface_geometry, export_cad_model, verify_step_roundtrip,
-    )
+    from .step_export import _assert_matching_surface_geometry
 
     quality = quality if quality is not None else _assess_brep_self_intersections(shape)
     if quality.get("passed", False):
         return shape
 
-    def transfer(body):
-        with TemporaryDirectory(prefix="pylcss_boolean_contacts_") as directory:
-            isolated = cq.Shape.cast(BRepBuilderAPI_Copy(body.wrapped, False, False).Shape())
-            path = Path(directory) / "material.step"
-            export_cad_model(isolated, export_path=path, verify=False)
-            canonical, _ = verify_step_roundtrip(path, return_shape=True)
-        assert_unchanged_surface_geometry(body, canonical)
-        if (not canonical.isValid() or not canonical.Solids()
-                or len(canonical.Solids()) != len(body.Solids())
-                or len(canonical.Faces()) != sum(len(solid.Faces()) for solid in canonical.Solids())
-                or not all(BRep_Tool.IsClosed_s(shell.wrapped) for shell in canonical.Shells())):
-            raise RuntimeError("Post-Boolean STEP normalization did not preserve a valid closed solid")
-        before, after = (abs(float(part.Volume(tol=1e-7))) for part in (body, canonical))
-        if abs(after - before) > max(1e-9, before * 1e-6):
-            raise RuntimeError("Post-Boolean STEP normalization changed the enclosed material")
-        bound_tolerance = max(2.0 * Precision.Confusion_s(),
-                              float(body.BoundingBox().DiagonalLength) * 1e-9)
-        if np.max(np.abs(np.asarray(_shape_bounds(body)) - np.asarray(_shape_bounds(canonical)))) > bound_tolerance:
-            raise RuntimeError("Post-Boolean STEP normalization changed the material bounds")
-        return canonical
+    transfer = _normalize_boolean_trims
 
     def vertex_contacts(report):
         faults = report.get("self_intersection_faults", [])
@@ -941,16 +1153,17 @@ def _repair_boolean_vertex_contacts(shape: Any, quality: Optional[dict[str, Any]
             or len(repaired.Faces()) != sum(len(solid.Faces()) for solid in repaired.Solids())
             or not all(BRep_Tool.IsClosed_s(shell.wrapped) for shell in repaired.Shells())):
         raise RuntimeError("Post-Boolean vertex repair did not preserve a valid closed solid")
-    assert_unchanged_surface_geometry(shape, repaired)
+    # The stricter material-volume comparison immediately below supersedes
+    # the generic STEP helper's looser comparison; integrate each solid once.
+    _assert_matching_surface_geometry(shape, repaired)
     volume_before, volume_after = (abs(float(body.Volume(tol=1e-7))) for body in (shape, repaired))
     if abs(volume_after - volume_before) > max(1e-9, volume_before * 1e-6):
         raise RuntimeError("Post-Boolean vertex repair changed the enclosed material")
-    before_bounds, after_bounds = np.asarray(_shape_bounds(shape)), np.asarray(_shape_bounds(repaired))
     # OCC's optimal bounds use Confusion padding after curve consolidation;
     # unchanged planes can consequently gain 1e-7 numerical bounds padding.
     linear_tolerance = max(2.0 * Precision.Confusion_s(),
                            float(np.linalg.norm(np.ptp(points, axis=0))) * 1e-9)
-    if np.max(np.abs(before_bounds - after_bounds)) > linear_tolerance:
+    if np.max(np.abs(_material_bounds_delta(shape, repaired, linear_tolerance))) > linear_tolerance:
         raise RuntimeError("Post-Boolean vertex repair changed the material bounds")
 
     # The high-level OCC operation may inspect other short edges. Accept only
@@ -986,6 +1199,110 @@ def _repair_boolean_vertex_contacts(shape: Any, quality: Optional[dict[str, Any]
     return verified
 
 
+def _source_overlap_witness(material: Any, domain: Any) -> bool:
+    """Establish nonempty overlap independently of a failed Boolean classifier."""
+    from cadquery import Vector
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.Precision import Precision
+    from OCP.TopAbs import TopAbs_IN
+
+    tolerance = Precision.Confusion_s()
+    classifiers = [BRepClass3d_SolidClassifier(solid.wrapped) for solid in domain.Solids()]
+    points = [BRep_Tool.Pnt_s(vertex.wrapped) for vertex in material.Vertices()]
+    for solid in material.Solids():
+        center = solid.Center().toPnt()
+        own_classifier = BRepClass3d_SolidClassifier(solid.wrapped)
+        own_classifier.Perform(center, tolerance)
+        if own_classifier.State() == TopAbs_IN:
+            points.append(center)
+        # An annulus has its mass center inside the bore, and every seam
+        # vertex may lie exactly ON a containing body's analytic interfaces.
+        # Seek actual interior points beside its face interiors instead of
+        # mistaking that absence of vertex/centroid witnesses for detachment.
+        # Every candidate must first classify IN the requested material.
+        box = solid.BoundingBox()
+        lengths = [length for length in (box.xlen, box.ylen, box.zlen) if length > tolerance]
+        step = min(lengths, default=1.0) * 1e-3
+        for face in solid.Faces():
+            try:
+                u0, u1, v0, v1 = face._uvBounds()
+                surface = BRep_Tool.Surface_s(face.wrapped)
+                point = surface.Value((u0+u1)*.5, (v0+v1)*.5)
+                vector = face.normalAt(Vector(point)).multiply(-step)
+                candidate = point.Translated(vector.wrapped)
+                own_classifier.Perform(candidate, tolerance)
+                if own_classifier.State() == TopAbs_IN:
+                    points.append(candidate)
+            except Exception:
+                # This is positive evidence only. Unsupported faces retain
+                # the existing vertex/centroid test and paired Boolean guards.
+                continue
+    for point in points:
+        for classifier in classifiers:
+            classifier.Perform(point, tolerance)
+            if classifier.State() == TopAbs_IN:
+                return True
+    return False
+
+
+def _assert_source_contains_material(material: Any, domain: Any) -> None:
+    """Verify both sides of a contained solid's Boolean partition."""
+    from OCP.Precision import Precision
+    from .step_export import _closed
+
+    volume = abs(float(material.Volume(tol=1e-7)))
+    if not np.isfinite(volume) or volume <= 0.0:
+        raise RuntimeError("Source containment requires positive finite material volume")
+    volume_tolerance = max(1e-7, volume * 1e-6)
+    bounds = _material_bounds(material)
+    linear_tolerance = max(2.0 * Precision.Confusion_s(),
+                           float(np.linalg.norm(bounds[1::2] - bounds[::2])) * 1e-9)
+    last_error = None
+    retry_operand = material
+    # Coincident trimmed faces can be misclassified even in a valid Boolean
+    # result. Retry only the smallest existing contact tolerance, and require
+    # both an empty Cut and a complete Common before accepting containment.
+    for fuzzy in (0.0, _BOOLEAN_FUZZY_RETRIES[0]):
+        if fuzzy and not _source_overlap_witness(retry_operand, domain):
+            last_error = RuntimeError("no independent source-interior overlap witness")
+            break
+        try:
+            outside = _native_boolean(material, domain, 'cut', fuzzy)
+            outside_volume = sum(abs(float(solid.Volume(tol=1e-7)))
+                                 for solid in outside.Solids())
+            if not fuzzy and outside.Solids():
+                # Retry a claimed whole-body exterior only when that actual
+                # exterior contradicts an independent source classification.
+                retry_operand = outside
+            if (outside.isValid() and np.isfinite(outside_volume)
+                    and volume_tolerance < outside_volume < volume - volume_tolerance):
+                # A real partial protrusion is not a whole-body classifier
+                # failure. Never erase it by retrying at a fuzzy tolerance.
+                last_error = RuntimeError(f"outside partition contains {outside_volume:.9g} model-volume units")
+                break
+            if (not outside.isValid() or not np.isfinite(outside_volume)
+                    or outside_volume > volume_tolerance):
+                raise RuntimeError(f"outside partition contains {outside_volume:.9g} model-volume units")
+            inside = _native_boolean(material, domain, 'common', fuzzy)
+            if not inside.isValid() or not _closed(inside):
+                raise RuntimeError("inside partition is not a valid closed solid")
+            inside_volume = abs(float(inside.Volume(tol=1e-7)))
+            if (not np.isfinite(inside_volume)
+                    or abs(inside_volume - volume) > volume_tolerance):
+                raise RuntimeError("inside partition did not retain the complete material volume")
+            if np.max(np.abs(_material_bounds_delta(material, inside, linear_tolerance))) > linear_tolerance:
+                raise RuntimeError("inside partition changed the material bounds")
+        except Exception as error:
+            last_error = error
+            continue
+        if fuzzy:
+            logger.info("Verified source containment with paired Cut/Common at %g contact tolerance", fuzzy)
+        return
+    raise RuntimeError("Could not verify reconstructed material stays within the source CAD domain: "
+                       f"{last_error}") from last_error
+
+
 def _apply_passive_regions_to_step(
     shape: Any,
     payload: Any,
@@ -994,6 +1311,9 @@ def _apply_passive_regions_to_step(
     void_radial_margin: float = 0.0,
     validate_after_boolean: bool = True,
     repair_boolean_contacts: bool = False,
+    prepare_continuity: bool = True,
+    require_all_solid_tools: bool = False,
+    source_clip_after_passive: bool = False,
 ) -> Any:
     """Re-apply passive boxes/cylinders as analytic STEP features."""
     import cadquery as cq
@@ -1005,18 +1325,35 @@ def _apply_passive_regions_to_step(
         void_radial_margin=void_radial_margin,
     )
     requested_solid_tools = list(solid_tools)
+    if require_all_solid_tools:
+        solid_tools = [_canonical_annular_layer(tool) for tool in solid_tools]
+        # Canonical annuli have already proved two-sided material equality
+        # with the original selections. Keep that same verified trim form in
+        # the downstream containment proof against the reconstructed body.
+        requested_solid_tools = list(solid_tools)
     source_domain = _coerce_to_solid(payload.get('source_cad_shape')) if isinstance(payload,dict) else None
     validation_cut_tools = list(cut_tools)
-    if source_domain is not None or solid_tools or cut_tools:
+    # The repair path always checks the complete material body before any
+    # material/source/void guard or return. Its whole-body scan also covers
+    # normalized intermediate Booleans, avoiding another scan per operation.
+    check_intermediate_intersections = not repair_boolean_contacts
+    if prepare_continuity and (source_domain is not None or solid_tools or cut_tools):
         result = _prepare_boolean_continuity(result)
-    if source_domain is not None:
+    if source_domain is not None and source_clip_after_passive:
+        # Reordering (F intersect S) union A to (F union A) intersect S
+        # requires every mandatory added material A to lie within S. Keep
+        # the actual source CAD and its final Boolean/containment guards.
+        for tool in solid_tools:
+            _assert_source_contains_material(tool, source_domain)
+    if source_domain is not None and not source_clip_after_passive:
         # Match source bores and outer surfaces before adding face-coincident
         # protected layers, so both operands share the analytic boundaries.
         # A contained body already satisfies a box domain. Avoid intersecting
         # coincident fitted faces when conservative bounds prove this exactly.
         # Domains with bores or concavities still require the actual Boolean.
         if not _box_domain_contains_shape(result, source_domain):
-            result = _boolean_or_raise(result, source_domain, operation='common')
+            result = _boolean_or_raise(result, source_domain, operation='common',
+                check_normalized_intersections=check_intermediate_intersections)
         # A bore already excluded by the source CAD needs no further cut.
         # Re-cutting coincident cylinder walls can create microscopic strips
         # that pass solid checks but cannot be tessellated reliably.
@@ -1031,20 +1368,37 @@ def _apply_passive_regions_to_step(
     # First remove the bores from the reconstructed body. This also removes the
     # recovered-mesh copy of a joint pin, allowing the exact analytic pin to
     # be added once at the end.
-    if cut_tools:
-        result = _cut_tools_sequentially(result, cut_tools)
+    defer_bore_cuts = source_clip_after_passive and require_all_solid_tools and bool(solid_tools)
+    if cut_tools and not defer_bore_cuts:
+        result = _cut_tools_sequentially(result, cut_tools,
+            check_normalized_intersections=check_intermediate_intersections)
 
-    solid_tools = _intersecting_tools(result, solid_tools)
+    if not require_all_solid_tools:
+        solid_tools = _intersecting_tools(result, solid_tools)
     if solid_tools:
         # Overlapping preserved regions are material solids, not an already
         # fused compound. Add them independently to retain the complete body.
         for tool in solid_tools:
             for solid in tool.Solids():
-                result = _boolean_or_raise(result, solid, operation="fuse")
+                previous_solid_count = len(result.Solids())
+                fused = _boolean_or_raise(result, solid, operation="fuse",
+                    check_normalized_intersections=check_intermediate_intersections)
+                if require_all_solid_tools and len(fused.Solids()) > previous_solid_count:
+                    raise RuntimeError('Reconstructed CAD did not retain the complete non-design material '
+                                       'as connected material')
+                result = fused
         # A sleeve is an outer keep-material cylinder, not a plug. Re-cut the
         # exact bore after the fuse so its running surface stays analytic.
         if cut_tools:
-            result = _cut_tools_sequentially(result, cut_tools)
+            result = _cut_tools_sequentially(result, cut_tools,
+                check_normalized_intersections=check_intermediate_intersections)
+
+    if source_domain is not None and source_clip_after_passive:
+        # Analytic collars and bores are present before this intersection,
+        # avoiding intersections of approximated hole walls with their exact
+        # source counterparts. This is the same mandatory material set.
+        result = _boolean_or_raise(result, source_domain, operation='common',
+            check_normalized_intersections=check_intermediate_intersections)
 
     result = _drop_boolean_sliver_solids(result)
     # Validate the geometry actually returned after face consolidation.
@@ -1089,23 +1443,82 @@ def _apply_passive_regions_to_step(
         expected = _cut_tools_sequentially(tool, cut_tools, allow_empty_cut=True) if cut_tools else tool
         if not expected.Solids():
             continue
-        missing = _native_boolean(expected, material_result, 'cut')
-        expected_volume = abs(float(expected.Volume(tol=1e-4)))
-        missing_volume = abs(float(missing.Volume(tol=1e-4)))
-        if missing_volume > max(1e-7, expected_volume * 1e-6):
-            raise RuntimeError('Reconstructed CAD did not retain the complete non-design material')
+        try:
+            # A coincident cylindrical layer can produce an invalid whole-
+            # layer Cut even after a successful union. Empty Cut alone also
+            # cannot prove retention. Require the paired empty exterior and
+            # complete, closed Common, with independent volume/bounds checks.
+            _assert_source_contains_material(expected, material_result)
+        except RuntimeError as error:
+            raise RuntimeError('Reconstructed CAD did not retain the complete non-design material') from error
     for tool in validation_cut_tools:
         intrusion = _native_boolean(material_result, tool, 'common')
         intrusion_volume = sum(abs(float(solid.Volume(tol=1e-7))) for solid in intrusion.Solids())
         if not intrusion.isValid() or intrusion_volume > max(1e-7, abs(float(tool.Volume(tol=1e-4)))*1e-6):
             raise RuntimeError('Reconstructed CAD intruded into a protected bore or void')
     if source_domain is not None and not _box_domain_contains_shape(material_result, source_domain):
-        outside = _native_boolean(material_result, source_domain, 'cut')
-        if abs(float(outside.Volume(tol=1e-4))) > max(1e-7, abs(float(material_result.Volume(tol=1e-4)))*1e-6):
-            raise RuntimeError(f'Reconstructed material extends outside the source CAD domain '
-                f'({abs(float(outside.Volume(tol=1e-4))):.6g} model-volume units, '
-                f'{len(outside.Solids())} solids, {len(outside.Faces())} faces)')
+        _assert_source_contains_material(material_result, source_domain)
     return result
+
+
+def restore_paper_non_design_regions(
+    shape: Any,
+    payload: Any,
+    *,
+    void_axial_margin: float = 0.02,
+    void_radial_margin: float = 0.0,
+) -> tuple[Any, dict[str, Any]]:
+    """Restore protected CAD interfaces after the single paper fitting stage.
+
+    The fitted surface covers the whole recovered boundary, including sampled
+    copies of the original holes and non-design layers. Those samples are not
+    exact CAD interfaces. Intersecting with the actual source solid removes
+    bore intrusions and exterior bumps; adding the original protected layers
+    restores their complete analytic material. The existing paired material,
+    source and bore checks remain authoritative.
+
+    A shared-boundary tensor surface can retain C0 knots at chart junctions.
+    Regularize those exact spline spans once before the native Booleans; this
+    preserves their surfaces and checks the enclosed material independently.
+    This operation never refits or repartitions the source charts.
+    """
+    from .step_export import _closed
+
+    solids, cuts, hardware = _collect_passive_tools(
+        payload, void_axial_margin=void_axial_margin,
+        void_radial_margin=void_radial_margin,
+    )
+    source = (_coerce_to_solid(payload.get('source_cad_shape'))
+              if isinstance(payload, dict) else None)
+    report = {
+        'method': 'Exact source-domain clipping and original non-design CAD layers',
+        'source_cad_applied': source is not None,
+        'preserved_solid_count': len(solids),
+        'preserved_void_count': len(cuts),
+        'hardware_count': len(hardware),
+        'fitting_attempts': 0,
+    }
+    if source is None and not (solids or cuts or hardware):
+        return shape, {**report, 'applied': False}
+    if not shape.isValid() or not _closed(shape):
+        raise RuntimeError('Exact non-design restoration requires a valid closed reconstructed body')
+    boolean_ready = _prepare_boolean_continuity(shape)
+    report.update(input_face_count=len(shape.Faces()),
+                  boolean_ready_face_count=len(boolean_ready.Faces()),
+                  exact_continuity_subdivision=len(boolean_ready.Faces()) != len(shape.Faces()))
+    from .amrto_parameter_domains import normalize_paper_parameter_domains
+    boolean_ready, parameter_domains = normalize_paper_parameter_domains(boolean_ready)
+    report['parameter_domains'] = parameter_domains
+    result = _apply_passive_regions_to_step(
+        boolean_ready, payload, void_axial_margin=void_axial_margin,
+        void_radial_margin=void_radial_margin, prepare_continuity=False,
+        require_all_solid_tools=True,
+    )
+    if not result.isValid() or not _closed(result):
+        raise RuntimeError('Exact non-design restoration did not retain valid closed material')
+    return result, {**report, 'applied': True,
+                    'solid_count': len(result.Solids()),
+                    'face_count': len(result.Faces())}
 
 
 def _attach_passive_regions_to_lattice(

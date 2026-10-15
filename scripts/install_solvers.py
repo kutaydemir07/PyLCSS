@@ -3,8 +3,9 @@
 """Download and install the external solver components PyLCSS can launch.
 
 CalculiX (``ccx``), OpenCourant
-(``starter_*`` / ``engine_*`` / ``anim_to_vtk`` / ``th_to_csv``)
-and FreeCAD (``FreeCAD.exe`` for the interactive sketch/FEM authoring node) are
+(``starter_*`` / ``engine_*`` / ``anim_to_vtk`` / ``th_to_csv``),
+FreeCAD (``FreeCAD.exe`` for the interactive sketch/FEM authoring node), and
+Gmsh (the standalone ``gmsh`` CAD meshing command) are
 external components, not Python packages that ship in ``requirements.txt``.
 This script fetches the upstream release archives, unpacks them under
 ``<repo>/external_solvers/<solver>``, and writes the matching environment
@@ -16,6 +17,7 @@ Usage
     python scripts/install_solvers.py --only ccx         # CalculiX only
     python scripts/install_solvers.py --only opencourant # OpenCourant only
     python scripts/install_solvers.py --only freecad     # FreeCAD only
+    python scripts/install_solvers.py --only gmsh        # standalone Gmsh only
     python scripts/install_solvers.py --list             # show what would be installed
 
 Once the components are unpacked, point PyLCSS at them either by sourcing the
@@ -27,6 +29,7 @@ written env file or by setting these variables yourself:
     PYLCSS_OPENCOURANT_ANIM2VTK     -> full path to ``anim_to_vtk``
     PYLCSS_OPENCOURANT_TH2CSV       -> full path to ``th_to_csv``
     PYLCSS_FREECAD_EXE              -> full path to ``FreeCAD.exe`` / ``FreeCAD`` / ``FreeCAD.AppImage``
+    PYLCSS_GMSH_EXE                 -> full path to the standalone ``gmsh.exe`` / ``gmsh``
 
 The script is intentionally conservative: it never overwrites an existing
 install unless ``--force`` is passed, and it verifies SHA-256 hashes when one
@@ -207,6 +210,26 @@ SOLVERS: Dict[str, Dict[str, SolverAsset]] = {
             env_var="PYLCSS_FREECAD_EXE",
         ),
     },
+    "gmsh": {
+        # Run this upstream executable as a separate process with ordinary
+        # CAD/mesh files; no Gmsh Python module or shared library is installed.
+        "Windows": SolverAsset(
+            name="Gmsh",
+            url="https://gmsh.info/bin/Windows/gmsh-4.15.2-Windows64.zip",
+            archive="gmsh-4.15.2-Windows64.zip",
+            binary_glob="**/gmsh.exe",
+            env_var="PYLCSS_GMSH_EXE",
+            sha256="a8208b56aedee3434907a893e303422acacd9003140766e09f2abbc664ba7157",
+        ),
+        "Linux": SolverAsset(
+            name="Gmsh", url="apt:gmsh", archive="",
+            binary_glob="gmsh", env_var="PYLCSS_GMSH_EXE",
+        ),
+        "Darwin": SolverAsset(
+            name="Gmsh", url="brew:gmsh", archive="",
+            binary_glob="gmsh", env_var="PYLCSS_GMSH_EXE",
+        ),
+    },
 }
 
 COMPONENT_LICENSES: Dict[str, Dict[str, str]] = {
@@ -228,6 +251,14 @@ COMPONENT_LICENSES: Dict[str, Dict[str, str]] = {
         "license": "GNU Lesser General Public License version 2.1",
         "license_url": "https://github.com/FreeCAD/FreeCAD/blob/1.1.3/LICENSE",
         "source_url": "https://github.com/FreeCAD/FreeCAD/tree/1.1.3",
+    },
+    "gmsh": {
+        "version": "4.15.2",
+        "license": "GNU General Public License version 2 or later, with the upstream Gmsh exception",
+        "license_url": "https://gmsh.info/doc/texinfo/gmsh.html#License",
+        "source_url": "https://gmsh.info/src/gmsh-4.15.2-source.tgz",
+        "source_archive": "gmsh-4.15.2-source.tgz",
+        "source_sha256": "be3f66f225d27ba9fa014f07e83169285da8a051b0e8ab7103d88066b39bdd3e",
     },
 }
 
@@ -454,10 +485,11 @@ def _print_manual_instructions(asset: SolverAsset) -> None:
     print(f"[{asset.name}] cannot be auto-installed on this platform.")
     if scheme == "apt":
         print(f"  Install via your package manager, e.g.  sudo apt install {payload}")
-        print("  Then ensure the resulting binary is on PATH (PyLCSS auto-discovers ccx).")
+        print(f"  Then ensure the resulting binary is on PATH (PyLCSS auto-discovers {asset.binary_glob}).")
     elif scheme == "brew":
         print(f"  Install via Homebrew:  brew install {payload}")
-        print("  (You may need to tap a third-party formula; CalculiX is not in core homebrew.)")
+        if asset.name == "CalculiX":
+            print("  (You may need to tap a third-party formula; CalculiX is not in core homebrew.)")
     elif scheme == "manual":
         print(f"  {payload}")
     print(f"  Then export {asset.env_var}=/full/path/to/component  for PyLCSS to pick it up.")
@@ -492,6 +524,35 @@ def _write_component_notice(key: str, asset: SolverAsset, install_dir: Path) -> 
     (install_dir / "PYLCSS-THIRD-PARTY-NOTICE.txt").write_text(
         notice, encoding="utf-8"
     )
+    if key == "gmsh":
+        with (install_dir / "PYLCSS-THIRD-PARTY-NOTICE.txt").open("a", encoding="utf-8") as stream:
+            stream.write(
+                f"Version: {legal['version']}\n"
+                "PyLCSS launches the unmodified standalone Gmsh command as a\n"
+                "separate process using CAD and mesh files. No Gmsh library\n"
+                "or Python API is linked into the application.\n"
+                "\n"
+                "The upstream LICENSE.txt, CREDITS.txt, and other notices\n"
+                "are retained with the standalone distribution.\n"
+                f"Complete corresponding source: source/{legal['source_archive']}\n"
+                f"Source URL: {legal['source_url']}\n"
+                f"Source SHA-256: {legal['source_sha256']}\n"
+            )
+
+
+def _ensure_gmsh_source(install_dir: Path, force: bool) -> None:
+    """Keep the pinned, complete upstream source beside the Windows program."""
+    legal = COMPONENT_LICENSES["gmsh"]
+    source = install_dir / "source" / legal["source_archive"]
+    if not source.is_file() or force:
+        _download(legal["source_url"], source, legal["source_sha256"])
+    else:
+        actual = hashlib.sha256(source.read_bytes()).hexdigest()
+        if actual != legal["source_sha256"]:
+            raise SystemExit(
+                f"SHA-256 mismatch for {source.name}: expected "
+                f"{legal['source_sha256']}, got {actual}. Reinstall with --force."
+            )
 
 
 def _ensure_executable(path: Path) -> None:
@@ -579,6 +640,13 @@ def install_solver(key: str, force: bool, url_override: Optional[str]) -> Dict[s
     else:
         if archive_path.exists() and not force:
             print(f"[{asset.name}] reusing cached archive {archive_path.name}")
+            if key == "gmsh" and asset.sha256:
+                actual = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+                if actual != asset.sha256:
+                    raise SystemExit(
+                        f"SHA-256 mismatch for {archive_path.name}: expected "
+                        f"{asset.sha256}, got {actual}. Reinstall with --force."
+                    )
         else:
             _download(asset.url, archive_path, asset.sha256)
         if extract_dir.exists():
@@ -590,6 +658,8 @@ def install_solver(key: str, force: bool, url_override: Optional[str]) -> Dict[s
         _extract(archive_path, extract_dir)
 
     _remove_excluded_solver_artifacts(key, extract_dir, archive_path)
+    if key == "gmsh" and plat == "Windows":
+        _ensure_gmsh_source(install_dir, force)
 
     # Special case: Windows installer wizard (FreeCAD). After download we
     # run the .exe; it puts the real binaries under Program Files where the
@@ -860,7 +930,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--only",
         action="append",
         choices=sorted(set(SOLVERS.keys()) | set(SOLVER_ALIASES.keys())),
-        help="Install a specific component (e.g. --only ccx, --only opencourant, --only freecad).",
+        help="Install a specific component (e.g. --only ccx, --only opencourant, --only freecad, --only gmsh).",
     )
     parser.add_argument("--all", action="store_true",
                         help="Install every supported component non-interactively.")
@@ -950,6 +1020,7 @@ def _component_purpose(key: str) -> str:
         "ccx": "CalculiX -- linear static FEA solver (~10 MB download)",
         "opencourant": "OpenCourant -- explicit crash / impact solver (~335 MB download)",
         "freecad": "FreeCAD 1.x -- interactive parametric CAD GUI (~1 GB, runs Windows installer wizard with UAC)",
+        "gmsh": "Gmsh -- standalone CAD mesh command (~39 MB binary + 18 MB corresponding source on Windows)",
     }.get(key, "external component")
 
 

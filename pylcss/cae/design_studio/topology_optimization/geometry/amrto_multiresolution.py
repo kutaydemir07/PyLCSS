@@ -430,3 +430,119 @@ def apply_multiresolution_strategy(surface: Any, *, curvature: float | None = No
         curvature_policy="Maximum absolute principal curvature times reference length at uniform and knot-span sites",
         curvature_ck=curvature_ck, curvature_cp=curvature_cp)
     return result
+
+
+def _remove_paper_low_curvature_knots(surface: Any, *, maximum_attempts: int) -> MultiresolutionResult:
+    """Algorithm 3's knot removal, with the usual numerical removal tolerance.
+
+    Removing a knot is inverse knot insertion. Test its reconstructed control
+    net, rather than geomdl's removal result (which can change poles even when
+    its own removal test fails). This is a knot-removal operation, not a fit to
+    the source mesh, a source-normal test, or a CAD acceptance/retry loop.
+    """
+    if not isinstance(maximum_attempts, int) or maximum_attempts < 0:
+        raise ValueError("The knot removal attempt limit must be a nonnegative integer")
+    current = deepcopy(surface)
+    extent = float(np.linalg.norm(np.ptp(_controls(surface).reshape(-1, 3), axis=0)))
+    tolerance = max(1e-10, extent * 1e-10)
+    attempts = []
+    for axis, name in enumerate(("u", "v")):
+        degree = getattr(current, f"degree_{name}")
+        knots = list(getattr(current, f"knotvector_{name}"))
+        # Visit each existing interior knot occurrence once. Successful
+        # removals may delete repeated knots, but never create new ones.
+        for knot in knots[degree + 1:-degree - 1]:
+            if len(attempts) >= maximum_attempts:
+                break
+            old_knots = list(getattr(current, f"knotvector_{name}"))
+            record = {"axis": name, "knot": float(knot), "removed": False}
+            reduced_knots = old_knots.copy()
+            reduced_knots.remove(knot)
+            old_shape = _shape(current)
+            new_shape = list(old_shape)
+            new_shape[axis] -= 1
+            curve = BSpline.Curve()
+            curve.degree = degree
+            curve.ctrlpts = np.eye(new_shape[axis]).tolist()
+            curve.knotvector = reduced_knots
+            operations.insert_knot(curve, [float(knot)], [1])
+            insertion = np.asarray(curve.ctrlpts)
+            if not np.allclose(curve.knotvector, old_knots, rtol=0., atol=1e-14):
+                raise ValueError("Inverse knot insertion did not reproduce the original knots")
+            controls = np.asarray(current.ctrlptsw if current.rational else current.ctrlpts)
+            controls = controls.reshape(*old_shape, -1)
+            ordered = np.moveaxis(controls, axis, 0)
+            rhs = ordered.reshape(old_shape[axis], -1)
+            solution, _, rank, _ = np.linalg.lstsq(insertion, rhs, rcond=None)
+            reconstructed = (insertion @ solution).reshape(ordered.shape)
+            if current.rational:
+                original_points = ordered[..., :3] / ordered[..., 3:]
+                reconstructed_points = reconstructed[..., :3] / reconstructed[..., 3:]
+            else:
+                original_points, reconstructed_points = ordered, reconstructed
+            error = float(np.linalg.norm(reconstructed_points - original_points, axis=-1).max())
+            record["control_reconstruction_error"] = error
+            if rank == new_shape[axis] and np.isfinite(error) and error <= tolerance:
+                trial = deepcopy(current)
+                repaired = np.moveaxis(solution.reshape((new_shape[axis],) + ordered.shape[1:]), 0, axis)
+                trial.set_ctrlpts(repaired.reshape(-1, repaired.shape[-1]).tolist(), *new_shape)
+                setattr(trial, f"knotvector_{name}", reduced_knots)
+                current = trial
+                record["removed"] = True
+            attempts.append(record)
+    original_count, final_count = math.prod(_shape(surface)), math.prod(_shape(current))
+    return MultiresolutionResult(current, "knot_removal", report={
+        "algorithm": 3, "method": "Interior knot removal by inverse knot insertion",
+        "original_control_count": original_count, "candidate_control_count": final_count,
+        "actual_compression_ratio": final_count / original_count,
+        "removed_knot_count": sum(item["removed"] for item in attempts),
+        "attempts": attempts, "numerical_knot_removal_tolerance": tolerance,
+        "accepted": True, "boundary_restoration_extension": False,
+    })
+
+
+def apply_paper_multiresolution_strategy(
+    surface: Any, *, curvature: float | None = None,
+    curvature_ck: float = .1, curvature_cp: float = 10.,
+    compression_ratio: float = .5, layers: int = 1,
+    maximum_knot_removal_attempts: int = 64,
+) -> MultiresolutionResult:
+    """Apply Algorithms 3 and 2 directly to the initial independent fit.
+
+    Below Ck remove removable interior knots; above Cp keep the original;
+    otherwise fit control nets and regenerate the original-resolution patch.
+    The thresholds are in the model's units, with no normalization introduced
+    by the reconstruction application. The paper specifies neither a scalar
+    curvature reduction nor a sampling grid; maximum absolute principal
+    curvature sampled from exact spline derivatives is the stated policy.
+
+    Regeneration follows the author's uniform-parameter demonstration. It
+    retains the original degrees and knot vectors and outputs the regenerated
+    lower surface, not its compact control driver. No boundary restoration,
+    source-residual rejection, or surface-orientation repair is applied.
+    """
+    measured = principal_curvature(surface) if curvature is None else float(curvature)
+    classification = classify_patch_curvature(measured, curvature_ck, curvature_cp)
+    if classification == "preserve":
+        result = MultiresolutionResult(deepcopy(surface), classification, report={
+            "algorithm": 3, "method": "Preserve high-curvature original patch",
+            "actual_compression_ratio": 1., "accepted": True,
+            "boundary_restoration_extension": False,
+        })
+    elif classification == "knot_removal":
+        result = _remove_paper_low_curvature_knots(surface,
+                                                  maximum_attempts=maximum_knot_removal_attempts)
+    else:
+        result = build_control_hierarchy(surface, layers=layers,
+            compression_ratio=compression_ratio, regeneration="author_uniform")
+    result.report.update(
+        classification=classification, principal_curvature=measured,
+        principal_curvature_supplied=curvature is not None,
+        curvature_ck=curvature_ck, curvature_cp=curvature_cp,
+        curvature_policy="Maximum absolute principal curvature in model units at uniform and knot-span sites",
+        paper_algorithms=[3, 2] if classification == "hierarchy" else [3],
+        source_residual_acceptance_extension=False,
+        source_orientation_repair_extension=False,
+        shared_boundary_constraint_extension=False,
+    )
+    return result

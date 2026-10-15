@@ -60,12 +60,23 @@ def result_state_rows(data: dict[str, Any]) -> list[tuple[str, str]]:
         else:
             rows.append(("FEA analysis", "Not run"))
     cad = _mapping(data.get("cad_reconstruction"))
-    if data.get("cad_error"):
+    if data.get("cad_error") or cad.get("failed"):
         rows.append(("CAD", "Conversion failed"))
+    elif cad.get("paper_pipeline") and cad.get("is_solid") is False:
+        rows.append(("CAD", "Surface model — solid construction incomplete"))
     elif cad.get("valid") is False:
-        rows.append(("CAD", "Invalid solid"))
+        rows.append(("CAD", "Built — review topology" if cad.get("paper_pipeline") else "Invalid solid"))
     elif cad.get("valid") is True:
         rows.append(("CAD", "Complete"))
+    cad_checks = str(cad.get("validation_status") or "").lower()
+    if cad_checks in {"not_run", "reported", "unverified"}:
+        rows.append(("CAD checks", {
+            "not_run": "Not run", "reported": "Reported", "unverified": "Not run",
+        }[cad_checks]))
+    if cad.get("warnings"):
+        warnings = cad["warnings"]
+        count = len(warnings) if isinstance(warnings, (list, tuple)) else 1
+        rows.append(("CAD notes", f"{count} to review"))
     manufacturing = _mapping(data.get("manufacturing"))
     surface = _mapping(manufacturing.get("surface_quality") or _mapping(data.get("recovered_shape")).get("surface_quality"))
     if (surface.get("is_watertight", surface.get("watertight")) is False
