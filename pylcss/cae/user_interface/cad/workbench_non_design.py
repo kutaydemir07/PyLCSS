@@ -26,10 +26,9 @@ class NonDesignWorkbenchMixin:
             self.viewer.render_non_design_layers([])
             return
         try:
-            payloads = (
-                cached_non_design_payloads(node, geometry)
-                if cached_only else non_design_payloads(node, geometry)
-            )
+            payloads = cached_non_design_payloads(node, geometry)
+            if payloads is None:
+                payloads = non_design_payloads(node, geometry)
             if payloads is None:
                 self.viewer.render_non_design_layers([])
                 status = getattr(self.properties, "_non_design_status", None)

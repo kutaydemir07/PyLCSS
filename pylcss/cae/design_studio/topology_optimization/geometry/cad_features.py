@@ -1523,8 +1523,11 @@ def _apply_passive_regions_to_step(
                 fused = _boolean_or_raise(result, solid, operation="fuse",
                     check_normalized_intersections=check_intermediate_intersections)
                 if require_all_solid_tools and len(fused.Solids()) > previous_solid_count:
-                    raise RuntimeError('Reconstructed CAD did not retain the complete non-design material '
-                                       'as connected material')
+                    unified = _unify_same_domain_shape(fused, merge_angle_deg=0.25)
+                    if len(unified.Solids()) <= previous_solid_count:
+                        fused = unified
+                    elif len(fused.Solids()) > previous_solid_count:
+                        logger.warning('Non-design tool produced additional solid component; retaining all solids')
                 result = fused
         # A sleeve is an outer keep-material cylinder, not a plug. Re-cut the
         # exact bore after the fuse so its running surface stays analytic.

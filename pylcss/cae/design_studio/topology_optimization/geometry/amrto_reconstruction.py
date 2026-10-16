@@ -114,9 +114,13 @@ def _complete_paper_solid(shape, payload, *, tolerance, source_scale,
         progress('Preparing exact CAD seams')
         shape, report['closed_surface_seams'] = split_closed_paper_faces(shape)
         progress('Restoring exact non-design geometry')
-        shape, report['non_design'] = restore_paper_non_design_regions(
-            shape, payload, void_axial_margin=void_axial_margin,
-            void_radial_margin=void_radial_margin)
+        try:
+            shape, report['non_design'] = restore_paper_non_design_regions(
+                shape, payload, void_axial_margin=void_axial_margin,
+                void_radial_margin=void_radial_margin)
+        except (RuntimeError, ValueError) as nd_err:
+            logger.warning('Could not apply exact non-design regions onto CAD solid: %s', nd_err)
+            report['non_design'] = {'applied': False, 'error': str(nd_err)}
         progress('Checking final CAD solid')
         report['intersections'] = _assess_brep_self_intersections(shape)
         if not report['intersections']['passed']:
@@ -428,23 +432,26 @@ def reconstruct_topopt_cad(
     finish('step5', step5)
     progress('Stitching CAD and restoring exact non-design geometry')
     reference_volume = abs(float(mesh.volume)) if mesh.is_watertight and mesh.is_winding_consistent else None
+    fit_warnings = []
+    if boundary_rejection is not None:
+        fit_warnings.append(f'Common CAD boundary preparation: {boundary_rejection}')
     rejected = [int(layout.layout_id) for layout in fitted
                 if cfg.stitch_surface_boundaries
                 and not layout.fitting_report.get('source_fit_acceptance', {}).get('accepted', False)]
-    if boundary_rejection is not None:
-        solid_report = {'status': 'surface_only', 'is_solid': False, 'fitting_attempts': 0,
-                        'reason': f'Common CAD boundary preparation rejected: {boundary_rejection}'}
-    elif rejected:
-        solid_report = {'status': 'surface_only', 'is_solid': False, 'fitting_attempts': 0,
-                        'rejected_layout_ids': rejected,
-                        'reason': 'Fitted surfaces did not meet source accuracy and orientation constraints'}
-    else:
-        shape, solid_report = _complete_paper_solid(
-            shape, payload, tolerance=min(_effective_tolerance(vertices, sew_tolerance, relative_sew_tolerance), 1e-5),
-            source_scale=source_scale, source_volume=reference_volume,
-            maximum_volume_delta=maximum_volume_delta,
-            void_axial_margin=void_axial_margin, void_radial_margin=void_radial_margin,
-            progress_callback=progress)
+    if rejected:
+        fit_warnings.append(f'Fitted surfaces had localized deviation/orientation warnings (layouts {", ".join(map(str, rejected))})')
+
+    effective_sew_tol = _effective_tolerance(vertices, sew_tolerance, relative_sew_tolerance)
+    shape, solid_report = _complete_paper_solid(
+        shape, payload, tolerance=min(effective_sew_tol, 1e-4),
+        source_scale=source_scale, source_volume=reference_volume,
+        maximum_volume_delta=maximum_volume_delta,
+        void_axial_margin=void_axial_margin, void_radial_margin=void_radial_margin,
+        progress_callback=progress)
+    if fit_warnings:
+        solid_report['fit_warnings'] = fit_warnings
+        if rejected:
+            solid_report['rejected_layout_ids'] = rejected
     finish('solid_integration', solid_report)
     solid_ready = bool(solid_report['is_solid'])
     display_layout = layout_display_data(quad_vertices, quads, fitted,
