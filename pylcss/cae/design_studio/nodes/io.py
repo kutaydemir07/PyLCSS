@@ -50,13 +50,16 @@ class ExportStepNode(CadQueryNode):
         try:
             topology_payload = isinstance(shape, dict)
             if isinstance(shape, dict):
-                from pylcss.cae.design_studio.topology_optimization.geometry.cad_config import cached_cad_shape
+                from pylcss.cae.design_studio.topology_optimization.geometry.cad_config import (
+                    cached_cad_shape, require_step_export_ready,
+                )
                 from pylcss.cae.user_interface.cad.cad_background import reconstruct_cad_in_background
                 payload = shape
                 shape = cached_cad_shape(payload, 'auto')
                 if shape is None:
                     shape, report, preview = reconstruct_cad_in_background(payload)
                     payload.update(cad_shape=shape, cad_reconstruction=report, cad_preview_mesh=preview)
+                require_step_export_ready(payload.get('cad_reconstruction'))
             fd, temp_path = tempfile.mkstemp(
                 prefix=".pylcss_step_",
                 suffix=os.path.splitext(fname)[1],

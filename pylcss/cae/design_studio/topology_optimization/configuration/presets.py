@@ -15,8 +15,11 @@ INDUSTRIAL_DESIGN_GOALS = (
 
 def normalize_design_goal(value: object = None) -> str:
     """Return a current goal name; reject unsupported goals."""
-    text = str(value or INDUSTRIAL_DESIGN_GOALS[0]).strip().lower()
-    text = " ".join(text.replace("_", " ").replace("-", " ").split())
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return INDUSTRIAL_DESIGN_GOALS[0]
+    if not isinstance(value, str):
+        raise ValueError("Design goal must be " + " or ".join(INDUSTRIAL_DESIGN_GOALS) + ".")
+    text = " ".join(value.strip().lower().replace("_", " ").replace("-", " ").split())
     for goal in INDUSTRIAL_DESIGN_GOALS:
         if text == goal.lower():
             return goal
@@ -26,7 +29,7 @@ def normalize_design_goal(value: object = None) -> str:
 def industrial_topopt_defaults(
     design_goal: object = "Lightweight Stiffness",
 ) -> dict[str, Any]:
-    """Return solver defaults without changing mesh, filter, or result-view controls."""
+    """Return solver and recovery defaults without changing mesh, filter, or result-view controls."""
     goal = normalize_design_goal(design_goal)
     settings: dict[str, Any] = {
         "penal": 3.0,

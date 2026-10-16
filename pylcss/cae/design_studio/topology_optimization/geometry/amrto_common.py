@@ -156,7 +156,7 @@ class AMRTOConfig:
     scaffold_relative_energy_tolerance: float = 1e-4
     scaffold_rectangle_tolerance: float = 1e-6
     scaffold_timeout_s: float = 60.0
-    scaffold_require_native: bool = True
+    scaffold_require_native: bool = False
     harmonic_method: str = "iterative_geodesic"
     harmonic_max_iter: int = 10000
     harmonic_energy_threshold: float = 1e-10

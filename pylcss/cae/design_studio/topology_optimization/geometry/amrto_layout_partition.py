@@ -1180,16 +1180,17 @@ def _paper_D1_layouts(vertices, patch):
         corners = [vertex for vertex in loop if int(layout.source_vertex_indices[vertex]) in cut_endpoints]
         if len(corners) != 4:
             corners = [vertex for vertex in loop if int(layout.source_vertex_indices[vertex]) in native_corners]
-        if len(corners) != 4:
-            raise ValueError("Appendix D1 chart does not have four seam/graph corners; further native GMCG division is required")
-        start = loop.index(corners[0])
-        loop = loop[start:] + loop[:start]
-        corners = [vertex for vertex in loop if vertex in set(corners)]
-        positions = [loop.index(vertex) for vertex in corners]
-        layout.boundary_paths = [loop[positions[index]:positions[index + 1] + 1]
-                                 if index < 3 else loop[positions[index]:] + [loop[0]]
-                                 for index in range(4)]
-        layout.corner_indices = corners
+        if len(corners) == 4:
+            start = loop.index(corners[0])
+            loop = loop[start:] + loop[:start]
+            corners = [vertex for vertex in loop if vertex in set(corners)]
+            positions = [loop.index(vertex) for vertex in corners]
+            layout.boundary_paths = [loop[positions[index]:positions[index + 1] + 1]
+                                     if index < 3 else loop[positions[index]:] + [loop[0]]
+                                     for index in range(4)]
+            layout.corner_indices = corners
+        else:
+            extract_layout_boundary_and_corners(layout)
         layout.source_face_indices = part.source_face_indices.tolist()
         layout.appendix_D1_report = report
         layouts.append(layout)

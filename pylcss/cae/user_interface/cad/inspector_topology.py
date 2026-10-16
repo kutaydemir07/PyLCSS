@@ -666,7 +666,10 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             if face_count is None:
                 face_count = cad_report.get("cad_face_count")
             count_label = f", {int(face_count)} faces" if face_count is not None else ""
-            cad_status = QtWidgets.QLabel(f"{method_name}{count_label}")
+            incomplete = cad_report.get("is_solid") is False or cad_report.get("export_ready") is False
+            readiness = ("; surfaces only — STEP solid unavailable" if cad_report.get("is_solid") is False
+                         else "; STEP export unavailable" if incomplete else "")
+            cad_status = QtWidgets.QLabel(f"{method_name}{count_label}{readiness}")
             cad_status.setWordWrap(True)
             notes = [str(cad_report["error"])] if cad_report.get("error") else []
             warnings = cad_report.get("warnings") or ()
@@ -675,12 +678,18 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             notes.extend(str(warning) for warning in warnings if warning)
             if notes:
                 cad_status.setToolTip("\n".join(notes))
+            if incomplete and notes:
+                reason_label = QtWidgets.QLabel("\n".join(notes))
+                reason_label.setWordWrap(True)
+                reason_label.setStyleSheet("color:#ffb74d; font-size:10px;")
             cad_status.setStyleSheet(
                 "color:#66d17a; font-size:10px;"
-                if cad_report.get("valid") is True and not warnings
+                if cad_report.get("valid") is True and not warnings and not incomplete
                 else "color:#ffb74d; font-size:10px;"
             )
             view_layout.addRow("CAD:", cad_status)
+            if incomplete and notes:
+                view_layout.addRow("Solid construction:", reason_label)
 
         view_group.setLayout(view_layout)
         self.props_layout.addWidget(view_group)
@@ -909,7 +918,7 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             status_bar.showMessage("Generating lattice mesh...")
         dialog = QtWidgets.QProgressDialog("Generating lattice cells...", "Cancel", 0, 0, self)
         dialog.setWindowTitle("Generate Lattice")
-        dialog.setWindowModality(QtCore.Qt.WindowModal)
+        dialog.setWindowModality(QtCore.Qt.NonModal)
         dialog.setMinimumDuration(0)
         dialog.setAutoClose(False)
         dialog.canceled.connect(worker.requestInterruption)
@@ -963,6 +972,7 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         worker.finished.connect(finish, queued)
         worker.finished.connect(worker.deleteLater)
         worker.start()
+        dialog.show()
 
     def _build_topopt_surface_quality_ui(self, result):
         """Surface quality UI omitted to keep the TopOpt inspector clean."""

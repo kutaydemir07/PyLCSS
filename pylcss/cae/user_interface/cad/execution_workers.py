@@ -173,6 +173,8 @@ def _external_write_cad_step(
         sew_tolerance=1e-4,
         return_report=True,
     )
+    from pylcss.cae.design_studio.topology_optimization.geometry.cad_config import require_step_export_ready
+    require_step_export_ready(report)
     # The name comes from the caller's destination, not from ``path``: the
     # export writes to a temporary beside it and commits atomically, so
     # ``path`` here is ".bracket_a8f31c.step".
@@ -351,6 +353,34 @@ def _topopt_cad_payload(
 _LATTICE_INPUT_REFERENCE = "__pylcss_lattice_input_reference__"
 
 
+def _lattice_job_input(result):
+    """Send generation inputs, leaving analysis and viewer caches in Qt.
+
+    Keep omitted keys as placeholders so the child's result delta still
+    removes obsolete analysis fields when it is applied to the original solve.
+    Unchanged metadata is restored from the parent, never from placeholders.
+    """
+    from pylcss.cae.design_studio.topology_optimization.integration.post_lattice import topology_source
+
+    source = topology_source(result)
+    required = {
+        "type", "density", "recovery_density", "design_density", "bounds",
+        "recovery_cutoff", "density_cutoff", "passive_solid_mask",
+        "passive_void_mask", "passive_regions", "cad_shape", "shape",
+        "source_cad_shape", "mass", "volume", "source_volume",
+    }
+    payload = {key: value if key in required else None for key, value in source.items()}
+    recovered = source.get("recovered_shape")
+    if isinstance(recovered, dict):
+        payload["recovered_shape"] = _lattice_display_input(recovered)
+    return payload
+
+
+def _lattice_display_input(recovered):
+    """Display preparation consumes triangles, never CAD or analysis caches."""
+    return {key: recovered[key] for key in ("vertices", "faces") if key in recovered}
+
+
 def _lattice_native_reference_paths(value, path=(), references=None):
     """Identify inherited CAD objects without transferring them back to Qt."""
     import cadquery as cq
@@ -403,6 +433,20 @@ def _external_generate_lattice(result, settings, *, progress_callback=None):
     )
     source = topology_source(result)
     output = generate_post_topopt_lattice(result, settings, progress_callback=progress_callback)
+    # Prepare the bounded preview before the full manufacturing mesh leaves
+    # the generation process. Keep native display filters in their own child:
+    # a reducer crash must not discard the completed manufacturing mesh.
+    from .cad_background import run_cad_job
+    try:
+        output["lattice_preview_mesh"] = run_cad_job(
+            "lattice_display",
+            _lattice_display_input(output["recovered_shape"]),
+            progress_callback=progress_callback,
+        )
+    except Exception as exc:
+        # Preview failure must not discard a valid manufacturing/export mesh.
+        output["_lattice_display_error"] = str(exc)
+        logger.exception("Could not prepare lattice display")
     # Retain the application's original CAD context. Reimporting an unchanged
     # fitted body through OCC's binary pickle is unnecessary and can fail.
     updates = {key: value for key, value in output.items()
@@ -455,24 +499,13 @@ class TopOptLatticeWorker(QtCore.QThread):
             if self.isInterruptionRequested():
                 raise CadJobCancelled("Lattice generation cancelled")
             transfer = run_cad_job(
-                "lattice", self.result, self.settings, cancel_callback=self.isInterruptionRequested,
+                "lattice", _lattice_job_input(self.result), self.settings,
+                cancel_callback=self.isInterruptionRequested,
                 progress_callback=self.lattice_progress.emit,
             )
             if self.isInterruptionRequested():
                 raise CadJobCancelled("Lattice generation cancelled")
             output = _restore_lattice_output(self.result, transfer)
-            try:
-                output['lattice_preview_mesh'] = run_cad_job(
-                    "lattice_display", output['recovered_shape'],
-                    cancel_callback=self.isInterruptionRequested,
-                    progress_callback=self.lattice_progress.emit,
-                )
-            except CadJobCancelled:
-                raise
-            except Exception as exc:
-                # A display failure must not erase a completed export surface.
-                output['_lattice_display_error'] = str(exc)
-                logger.exception('Could not prepare lattice display')
             if self.isInterruptionRequested():
                 raise CadJobCancelled("Lattice generation cancelled")
             self.lattice_finished.emit(output)
@@ -499,7 +532,7 @@ class TopOptLatticeDisplayWorker(QtCore.QThread):
         try:
             if self.isInterruptionRequested():
                 raise CadJobCancelled('Lattice display cancelled')
-            display = run_cad_job('lattice_display', self.recovered,
+            display = run_cad_job('lattice_display', _lattice_display_input(self.recovered),
                                   cancel_callback=self.isInterruptionRequested)
             if self.isInterruptionRequested():
                 raise CadJobCancelled('Lattice display cancelled')
@@ -829,8 +862,11 @@ class TopOptStepExportWorker(QtCore.QThread):
         temporary = ""
         try:
             from pylcss.cae.design_studio.topology_optimization.geometry.lattice_cad import topopt_export_formats
+            from pylcss.cae.design_studio.topology_optimization.geometry.cad_config import require_step_export_ready
             if "STEP" not in topopt_export_formats(self.topo_output):
                 raise ValueError("Export this complete lattice body as STL. A supported CAD representation including all its material is not available.")
+            if self.cached_shape is not None:
+                require_step_export_ready(self.topo_output.get("cad_reconstruction"))
             temporary = _temporary_export_path(self.path)
             product_name = Path(self.path).stem
             from .cad_background import run_cad_job
@@ -859,6 +895,7 @@ class TopOptStepExportWorker(QtCore.QThread):
                     payload, reconstruction_strategy=self.reconstruction_strategy,
                     cancel_callback=self.isInterruptionRequested,
                 )
+                require_step_export_ready(self.reconstruction_report)
                 run_cad_job(
                     "step_shape", self.cached_shape, temporary, product_name,
                     True,

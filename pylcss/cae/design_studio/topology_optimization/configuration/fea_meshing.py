@@ -57,8 +57,13 @@ class CadFeaMeshOptions:
 
     def __post_init__(self):
         for name in ("element_size_mm", "min_element_size_mm", "mesh_grading", "convergence_tolerance"):
+            raw = getattr(self, name)
+            if isinstance(raw, bool):
+                raise ValueError(
+                    f"FEA {name.replace('_', ' ')} must be numeric."
+                )
             try:
-                value = float(getattr(self, name))
+                value = float(raw)
             except (TypeError, ValueError) as exc:
                 raise ValueError(
                     f"FEA {name.replace('_', ' ')} must be numeric."
@@ -68,12 +73,18 @@ class CadFeaMeshOptions:
                     f"FEA {name.replace('_', ' ')} must be finite and nonnegative."
                 )
             object.__setattr__(self, name, value)
+        if self.element_size_mm > 0 and self.min_element_size_mm > self.element_size_mm:
+            raise ValueError(
+                "FEA minimum element size cannot exceed maximum element size."
+            )
         if not 0 < self.mesh_grading <= 1:
             raise ValueError(
                 "FEA mesh grading must be greater than zero and at most 1."
             )
         if self.element_order not in FEA_ELEMENT_ORDERS.values():
             raise ValueError("Choose C3D4 or C3D10 FEA tetrahedra.")
+        if isinstance(self.max_elements, bool):
+            raise ValueError("FEA maximum elements must be a positive integer.")
         try:
             limit = float(self.max_elements)
         except (TypeError, ValueError) as exc:
@@ -86,7 +97,15 @@ class CadFeaMeshOptions:
 
     def resolve_sizes(self, spans):
         """Resolve automatic sizing without silently coarsening a request."""
-        spans = tuple(float(span) for span in spans)
+        try:
+            if isinstance(spans, (str, bytes)):
+                raise ValueError
+            spans = tuple(
+                float(span) if not isinstance(span, bool) else math.nan
+                for span in spans
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("CAD FEA requires finite positive body dimensions.") from exc
         if len(spans) != 3 or any(not math.isfinite(s) or s <= 0 for s in spans):
             raise ValueError("CAD FEA requires finite positive body dimensions.")
         maximum = self.element_size_mm or min(max(spans) / 20, min(spans) / 2)

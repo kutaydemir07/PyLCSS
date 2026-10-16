@@ -1248,7 +1248,9 @@ def _source_overlap_witness(material: Any, domain: Any) -> bool:
 
 def _assert_source_contains_material(material: Any, domain: Any) -> None:
     """Verify both sides of a contained solid's Boolean partition."""
+    import cadquery as cq
     from OCP.Precision import Precision
+    from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
     from .step_export import _closed
 
     volume = abs(float(material.Volume(tol=1e-7)))
@@ -1291,6 +1293,27 @@ def _assert_source_contains_material(material: Any, domain: Any) -> None:
             if (not np.isfinite(inside_volume)
                     or abs(inside_volume - volume) > volume_tolerance):
                 raise RuntimeError("inside partition did not retain the complete material volume")
+            # Common can split an unchanged planar pad into coplanar faces.
+            # Their redundant internal spline seam can extend beyond the
+            # material within its native edge tolerance, misleading both
+            # AddOptimal and the trim-aware distance bounds check. Remove
+            # those internal partitions before measuring the actual boundary.
+            # Do not increase tolerance, concatenate spline curves, or modify
+            # either operand. Check the normalized partition independently.
+            unifier = ShapeUpgrade_UnifySameDomain(inside.wrapped, True, True, False)
+            unifier.SetSafeInputMode(True)
+            unifier.SetLinearTolerance(Precision.Confusion_s())
+            unifier.SetAngularTolerance(1e-12)
+            unifier.AllowInternalEdges(False)
+            unifier.Build()
+            inside = cq.Shape.cast(unifier.Shape())
+            if not inside.isValid() or not _closed(inside):
+                raise RuntimeError("normalized inside partition is not a valid closed solid")
+            normalized_volume = abs(float(inside.Volume(tol=1e-7)))
+            if (not np.isfinite(normalized_volume)
+                    or abs(normalized_volume - inside_volume) > max(1e-7, inside_volume * 1e-8)
+                    or abs(normalized_volume - volume) > volume_tolerance):
+                raise RuntimeError("inside partition normalization changed the material volume")
             if np.max(np.abs(_material_bounds_delta(material, inside, linear_tolerance))) > linear_tolerance:
                 raise RuntimeError("inside partition changed the material bounds")
         except Exception as error:
@@ -1301,6 +1324,112 @@ def _assert_source_contains_material(material: Any, domain: Any) -> None:
         return
     raise RuntimeError("Could not verify reconstructed material stays within the source CAD domain: "
                        f"{last_error}") from last_error
+
+
+def _axis_aligned_material_box(shape: Any) -> Optional[np.ndarray]:
+    """Recognize a closed box from its actual planes, allowing face partitions."""
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from .step_export import _closed
+
+    if not shape.isValid() or not _closed(shape) or len(shape.Solids()) != 1:
+        return None
+    planes = []
+    for face in shape.Faces():
+        if face.geomType() != 'PLANE':
+            return None
+        normal = np.asarray(face.normalAt().toTuple())
+        axis = int(np.argmax(np.abs(normal)))
+        if np.max(np.abs(np.abs(normal) - np.eye(3)[axis])) > 1e-12:
+            return None
+        location = BRepAdaptor_Surface(face.wrapped).Plane().Location()
+        coordinate = (location.X(), location.Y(), location.Z())[axis]
+        planes.append((axis, float(coordinate), float(normal[axis]), face.Area()))
+    if {axis for axis, *_ in planes} != {0, 1, 2}:
+        return None
+    bounds = np.array([[min(p[1] for p in planes if p[0] == axis),
+                        max(p[1] for p in planes if p[0] == axis)] for axis in range(3)])
+    lengths = bounds[:, 1] - bounds[:, 0]
+    if not np.isfinite(bounds).all() or np.any(lengths <= 0):
+        return None
+    areas = np.zeros((3, 2))
+    linear = max(1e-10, float(np.max(lengths)) * 1e-12)
+    for axis, coordinate, normal, area in planes:
+        side = int(normal > 0)
+        if abs(coordinate - bounds[axis, side]) > linear:
+            return None
+        areas[axis, side] += area
+    volume = float(np.prod(lengths))
+    if not np.allclose(areas, (volume / lengths)[:, None], rtol=1e-9, atol=1e-9):
+        return None
+    if abs(abs(shape.Volume(tol=1e-7)) - volume) > max(1e-9, volume * 1e-9):
+        return None
+    return bounds
+
+
+def _stock_boundary_pad_tools(source: Any, pads: list[Any]) -> Optional[list[Any]]:
+    """Extend only box-pad faces on the stock exterior, proving clipped equality.
+
+    Fusing a pad exactly tangent to a fitted stock face can make OCCT swallow
+    an overlapping trim into a large-tolerance vertex. Move that intersection
+    outside the stock, then clip the union back to the original CAD. For each
+    tool E we verify E intersect S = P, so the delivered material is unchanged.
+    This construction applies only to contained box pads in rectangular stock.
+    """
+    import cadquery as cq
+
+    stock = _axis_aligned_material_box(source)
+    if stock is None or not pads:
+        return None
+    boxes = [_axis_aligned_material_box(pad) for pad in pads]
+    if any(box is None for box in boxes):
+        return None
+    tolerance = max(1e-10, float(np.max(stock[:, 1] - stock[:, 0])) * 1e-12)
+    margin = max(1.0, float(np.max(stock[:, 1] - stock[:, 0])) * 1e-3)
+    extended, changed_any = [], False
+    for pad, bounds in zip(pads, boxes):
+        if np.any(bounds[:, 0] < stock[:, 0] - tolerance) or np.any(bounds[:, 1] > stock[:, 1] + tolerance):
+            return None
+        boundary = np.abs(bounds - stock) <= tolerance
+        changed = bounds.copy()
+        changed[:, 0] -= margin * boundary[:, 0]
+        changed[:, 1] += margin * boundary[:, 1]
+        if not boundary.any():
+            extended.append(pad)
+            continue
+        tool = cq.Solid.makeBox(*(changed[:, 1] - changed[:, 0]), cq.Vector(*changed[:, 0]))
+        clipped = _native_boolean(tool, source, 'common')
+        _assert_source_contains_material(pad, clipped)
+        _assert_source_contains_material(clipped, pad)
+        extended.append(tool)
+        changed_any = True
+    return extended if changed_any else None
+
+
+def _fuse_stock_boundary_pads(body: Any, tools: list[Any], source: Any) -> Any:
+    """Perform the certified pad union once, then restore the exact stock boundary."""
+    import cadquery as cq
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+    from OCP.TopTools import TopTools_ListOfShape
+    from .step_export import _closed
+
+    arguments, native_tools = TopTools_ListOfShape(), TopTools_ListOfShape()
+    arguments.Append(body.wrapped)
+    for tool in tools:
+        native_tools.Append(tool.wrapped)
+    builder = BRepAlgoAPI_Fuse()
+    builder.SetArguments(arguments)
+    builder.SetTools(native_tools)
+    builder.SetNonDestructive(True)
+    builder.SetRunParallel(True)
+    builder.Build()
+    if not builder.IsDone():
+        raise RuntimeError('Stock-boundary pad union failed')
+    fused = cq.Shape.cast(builder.Shape())
+    result = _native_boolean(fused, source, 'common')
+    if (not result.isValid() or not _closed(result)
+            or len(result.Solids()) != len(body.Solids())):
+        raise RuntimeError('Stock-boundary pad union did not retain connected closed material')
+    return result
 
 
 def _apply_passive_regions_to_step(
@@ -1339,6 +1468,11 @@ def _apply_passive_regions_to_step(
     check_intermediate_intersections = not repair_boolean_contacts
     if prepare_continuity and (source_domain is not None or solid_tools or cut_tools):
         result = _prepare_boolean_continuity(result)
+    extended_pad_tools = None
+    if (require_all_solid_tools and source_domain is not None
+            and not cut_tools and not hardware_tools
+            and (not source_clip_after_passive or _box_domain_contains_shape(result, source_domain))):
+        extended_pad_tools = _stock_boundary_pad_tools(source_domain, solid_tools)
     if source_domain is not None and source_clip_after_passive:
         # Reordering (F intersect S) union A to (F union A) intersect S
         # requires every mandatory added material A to lie within S. Keep
@@ -1375,7 +1509,12 @@ def _apply_passive_regions_to_step(
 
     if not require_all_solid_tools:
         solid_tools = _intersecting_tools(result, solid_tools)
-    if solid_tools:
+    if extended_pad_tools is not None:
+        original_material = result
+        result = _fuse_stock_boundary_pads(result, extended_pad_tools, source_domain)
+        _assert_source_contains_material(original_material, result)
+        _assert_source_contains_material(result, source_domain)
+    elif solid_tools:
         # Overlapping preserved regions are material solids, not an already
         # fused compound. Add them independently to retain the complete body.
         for tool in solid_tools:
@@ -1393,7 +1532,7 @@ def _apply_passive_regions_to_step(
             result = _cut_tools_sequentially(result, cut_tools,
                 check_normalized_intersections=check_intermediate_intersections)
 
-    if source_domain is not None and source_clip_after_passive:
+    if source_domain is not None and source_clip_after_passive and extended_pad_tools is None:
         # Analytic collars and bores are present before this intersection,
         # avoiding intersections of approximated hole walls with their exact
         # source counterparts. This is the same mandatory material set.
@@ -1403,7 +1542,7 @@ def _apply_passive_regions_to_step(
     result = _drop_boolean_sliver_solids(result)
     # Validate the geometry actually returned after face consolidation.
     # Material checks must not use the pre-consolidation B-rep.
-    if solid_tools or cut_tools:
+    if (solid_tools or cut_tools) and extended_pad_tools is None:
         result = _unify_same_domain_shape(result, merge_angle_deg=0.25)
     if repair_boolean_contacts:
         result = _repair_boolean_vertex_contacts(result)
@@ -1450,7 +1589,8 @@ def _apply_passive_regions_to_step(
             # complete, closed Common, with independent volume/bounds checks.
             _assert_source_contains_material(expected, material_result)
         except RuntimeError as error:
-            raise RuntimeError('Reconstructed CAD did not retain the complete non-design material') from error
+            raise RuntimeError('Reconstructed CAD did not retain the complete non-design material: '
+                               f'{error}') from error
     for tool in validation_cut_tools:
         intrusion = _native_boolean(material_result, tool, 'common')
         intrusion_volume = sum(abs(float(solid.Volume(tol=1e-7))) for solid in intrusion.Solids())

@@ -173,6 +173,28 @@ def _terminate_cad_process(process):
     process.wait()
 
 
+def _cad_job_process_options(operation):
+    options = headless_subprocess_kwargs()
+    if operation in {"lattice", "lattice_display"}:
+        # Native numerical pools otherwise compete for every core while Qt
+        # renders the existing model. Apply limits only to the child process.
+        limit = max(1, min(4, (os.cpu_count() or 1) - 1))
+        environment = os.environ.copy()
+        for name in (
+            "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+            "BLIS_NUM_THREADS", "NUMEXPR_NUM_THREADS", "VTK_SMP_MAX_THREADS",
+        ):
+            try:
+                requested = int(environment.get(name, limit))
+            except ValueError:
+                requested = limit
+            environment[name] = str(max(1, min(limit, requested)))
+        options["env"] = environment
+        if os.name == "nt":
+            options["creationflags"] |= subprocess.BELOW_NORMAL_PRIORITY_CLASS
+    return options
+
+
 def run_cad_job(operation: str, *arguments, timeout_seconds: float | None = None,
                 progress_callback=None, cancel_callback=None):
     if operation not in {"brep", "step", "step_shape", "mesh", "surface_layout", "display_mesh", "fea", "lattice", "lattice_display", "worker_environment"}:
@@ -203,7 +225,7 @@ def run_cad_job(operation: str, *arguments, timeout_seconds: float | None = None
         with stdout.open("wb") as out, stderr.open("wb") as err:
             process = subprocess.Popen(command, stdout=out, stderr=err,
                                        cwd=Path(__file__).resolve().parents[4],
-                                       **headless_subprocess_kwargs())
+                                       **_cad_job_process_options(operation))
             started = monotonic()
             previous_progress = ""
             try:

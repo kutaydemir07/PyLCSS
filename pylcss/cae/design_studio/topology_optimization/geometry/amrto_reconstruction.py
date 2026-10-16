@@ -154,6 +154,50 @@ def _write_parameterized_layout_checkpoint(layouts, folder: Path) -> None:
     np.savez_compressed(folder / "step4_parameterized_layouts.npz", **arrays)
 
 
+def _write_incomplete_cad_checkpoint(folder, vertices, triangles, shape, report):
+    """Retain portable failure evidence without losing the fitted CAD view."""
+    errors = []
+    saved = []
+
+    def retain(name, write):
+        try:
+            write()
+            saved.append(name)
+        except Exception as error:
+            # Diagnostics are best effort: even a native BREP writer failure
+            # must not replace the completed surface model with a failed job.
+            errors.append(f'{name}: {error}')
+            report['failure_checkpoint_error'] = '; '.join(errors)
+            logger.warning('Could not retain AMRTO %s in %s', name, folder, exc_info=True)
+
+    try:
+        folder = Path(folder).resolve()
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        report['failure_checkpoint_error'] = str(error)
+        logger.warning('Could not create AMRTO failure checkpoint %s', folder, exc_info=True)
+        return
+    report['failure_checkpoint_dir'] = str(folder)
+    retain('source_mesh.npz', lambda: np.savez_compressed(
+        folder / 'source_mesh.npz', vertices=np.asarray(vertices, dtype=float),
+        faces=np.asarray(triangles, dtype=np.int64)))
+
+    def write_brep():
+        from OCP.BRepTools import BRepTools
+        from OCP.TopTools import TopTools_FormatVersion_VERSION_1
+        if not BRepTools.Write_s(shape.wrapped, str(folder / 'fitted_surfaces.brep'),
+                                False, False, TopTools_FormatVersion_VERSION_1):
+            raise OSError('The CAD surface BREP writer did not produce a checkpoint')
+
+    retain('fitted_surfaces.brep', write_brep)
+    # Save before _surface_layout attaches the large in-memory display cache.
+    # The integration report contains the precise rejection reason.
+    retain('cad_stage_reports.json', lambda: (folder / 'cad_stage_reports.json').write_text(
+        json.dumps(report, indent=2), encoding='utf-8'))
+    if not saved:
+        report.pop('failure_checkpoint_dir', None)
+
+
 def _sampled_layout_checkpoints(layouts, folder: Optional[Path]) -> dict:
     """Show the unchanged source surface and save sampling as a point overlay.
 
@@ -422,6 +466,8 @@ def reconstruct_topopt_cad(
         'warnings': [] if solid_ready else [solid_report.get('reason', 'Solid CAD construction is incomplete')],
         'stages': stages, 'elapsed_seconds': time.perf_counter()-started,
     }
+    if not solid_ready and failure_checkpoint_dir is not None:
+        _write_incomplete_cad_checkpoint(failure_checkpoint_dir, vertices, triangles, shape, report)
     if folder:
         (folder/'cad_stage_reports.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     report['_surface_layout'] = display_layout

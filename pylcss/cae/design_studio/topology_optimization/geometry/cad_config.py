@@ -5,11 +5,15 @@ from dataclasses import dataclass
 import math
 
 
-CAD_RECONSTRUCTION_REVISION = 21
+CAD_RECONSTRUCTION_REVISION = 22
 
 
 def cached_cad_shape(payload, strategy):
-    """Reuse the current construction without confusing topology with QA."""
+    """Reuse current CAD for display, including an incomplete surface model.
+
+    Solid-only consumers must also call ``require_step_export_ready`` with
+    the reconstruction report; a useful preview need not enclose material.
+    """
     from .lattice_cad import topopt_export_formats
     if 'STEP' not in topopt_export_formats(payload):
         return None
@@ -25,6 +29,47 @@ def cached_cad_shape(payload, strategy):
     elif not report.get('valid') or report.get('export_ready') is False:
         return None
     return payload.get('cad_shape') or payload.get('shape')
+
+
+def require_step_export_ready(report):
+    """Reject known incomplete reconstruction before starting STEP transfer.
+
+    Keep the original integration diagnosis instead of refitting the same
+    input or replacing it with the exporter's generic topology error. Missing
+    legacy metadata still reaches the exporter's native closed-solid check.
+    """
+    if not isinstance(report, dict):
+        return
+    incomplete = (
+        report.get('is_solid') is False or report.get('export_ready') is False
+        or report.get('valid') is False or report.get('failed') is True
+        or report.get('validation_status') in {'incomplete', 'failed', 'unverified'}
+    )
+    if not incomplete:
+        return
+    stages = report.get('stages') or report.get('stage_reports') or {}
+    integration = stages.get('solid_integration') or {}
+    reason = integration.get('reason') or report.get('error')
+    if not reason:
+        warnings = report.get('warnings') or ()
+        reason = warnings if isinstance(warnings, str) else '; '.join(map(str, warnings))
+    if not reason:
+        reason = 'The fitted surfaces have not produced a verified closed solid.'
+    rejected = integration.get('rejected_layout_ids')
+    if rejected:
+        reason = f"{reason} (layouts {', '.join(map(str, rejected))})"
+    if report.get('is_solid') is False:
+        status = 'The current CAD result contains fitted surfaces only.'
+    else:
+        status = 'The current CAD result is not ready for solid export.'
+    message = (
+        f'STEP export requires a valid closed CAD solid. {status}\n'
+        f'Solid construction: {reason}'
+    )
+    checkpoint = report.get('failure_checkpoint_dir')
+    if checkpoint:
+        message += f'\nDiagnostics saved to: {checkpoint}'
+    raise RuntimeError(message)
 
 
 @dataclass(frozen=True)

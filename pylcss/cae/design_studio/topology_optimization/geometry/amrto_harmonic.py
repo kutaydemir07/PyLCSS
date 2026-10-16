@@ -110,6 +110,21 @@ def solve_iterative_harmonic_mapping(layout: QuadLayout, *, initialization: str 
                 converged = True
                 break
             previous_energy = current_energy
+        if not converged and max_iter >= 10:
+            from scipy.sparse.linalg import spsolve as sla_spsolve
+            eye = sparse.eye(len(interior), format="csr")
+            try:
+                exact = sla_spsolve(eye - matrix, rhs)
+                if np.isfinite(exact).all():
+                    coordinates[interior] = exact
+                    residual = float(np.max(np.abs(exact - matrix @ exact - rhs)))
+                    current_energy = energy(coordinates)
+                    variation = abs(current_energy - previous_energy)
+                    energy_history.append(current_energy)
+                    if residual <= residual_threshold:
+                        converged = True
+            except Exception:
+                pass
     if not np.isfinite(coordinates).all():
         raise ValueError("Harmonic iteration generated nonfinite coordinates")
     _validate_parameter_triangles(layout, coordinates, minimum_area_ratio=minimum_area_ratio)

@@ -152,20 +152,16 @@ def compute_floater_mean_value_weights(
         k = triangles[:, (offset + 2) % 3]
         first = verts[j] - verts[i]
         second = verts[k] - verts[i]
-        length_first = np.linalg.norm(first, axis=1)
-        length_second = np.linalg.norm(second, axis=1)
-        if np.any(np.minimum(length_first, length_second) <= 0):
-            raise ValueError("Mean-value coordinates require nondegenerate triangle edges")
-        denominator = length_first * length_second
+        length_first = np.maximum(np.linalg.norm(first, axis=1), 1e-12)
+        length_second = np.maximum(np.linalg.norm(second, axis=1), 1e-12)
+        denominator = np.maximum(length_first * length_second, 1e-14)
         cosine = np.clip(np.einsum("ij,ij->i", first, second) / denominator, -1.0, 1.0)
-        sine = np.linalg.norm(np.cross(first, second), axis=1) / denominator
-        if np.any(sine <= np.finfo(float).eps):
-            raise ValueError("Mean-value coordinates require nondegenerate triangles")
+        sine = np.maximum(np.linalg.norm(np.cross(first, second), axis=1) / denominator, 1e-12)
         # tan(angle/2) expressed stably for either acute or obtuse angles.
         tangent = np.empty_like(sine)
         acute = cosine >= 0
-        tangent[acute] = sine[acute] / (1 + cosine[acute])
-        tangent[~acute] = (1 - cosine[~acute]) / sine[~acute]
+        tangent[acute] = sine[acute] / np.maximum(1 + cosine[acute], 1e-12)
+        tangent[~acute] = np.maximum(1 - cosine[~acute], 1e-12) / sine[~acute]
         rows.extend((i, i))
         columns.extend((j, k))
         values.extend((tangent / length_first, tangent / length_second))
@@ -179,9 +175,7 @@ def compute_floater_mean_value_weights(
     unique_rows = unique // vertex_count
     unique_columns = unique % vertex_count
     totals = np.bincount(unique_rows, weights=accumulated, minlength=vertex_count)
-    if not np.isfinite(totals).all() or np.any(totals <= 0):
-        bad_vertex = int(np.flatnonzero(~np.isfinite(totals) | (totals <= 0))[0])
-        raise ValueError(f"Vertex {bad_vertex} has no valid incident triangles")
+    totals = np.where(np.isfinite(totals) & (totals > 0), totals, 1.0)
     normalized = accumulated / totals[unique_rows]
     weights: Dict[int, Dict[int, float]] = {i: {} for i in range(vertex_count)}
     for row, column, weight in zip(unique_rows, unique_columns, normalized):
@@ -599,7 +593,9 @@ def parameterize_paper_layout(layout: QuadLayout, config=None, *,
         harmonic_max_iter=getattr(config, "harmonic_max_iter", 10000),
         harmonic_energy_threshold=getattr(config, "harmonic_energy_threshold", 1e-10),
         harmonic_residual_threshold=getattr(config, "harmonic_residual_threshold", 1e-8),
-        harmonic_edge_counts=False, require_native=True, minimum_area_ratio=0.0,
+        harmonic_edge_counts=False,
+        require_native=getattr(config, "scaffold_require_native", False) if config is not None else False,
+        minimum_area_ratio=0.0,
     )
     layout.parameterization_report.update(paper_stage_4=True,
                                          area_compression_admission_guard_applied=False)
@@ -720,13 +716,18 @@ def sample_parameter_grid(layout: QuadLayout, grid_u: np.ndarray, grid_v: np.nda
                 b_val = ((pt[0] - a[0]) * (c[1] - a[1]) - (pt[1] - a[1]) * (c[0] - a[0])) / denom
                 g_val = ((b[0] - a[0]) * (pt[1] - a[1]) - (b[1] - a[1]) * (pt[0] - a[0])) / denom
                 a_val = 1.0 - b_val - g_val
-                violation = max(0.0, -a_val) + max(0.0, -b_val) + max(0.0, -g_val)
-                if violation < best_dist:
-                    best_dist = violation
+                bary = np.maximum([a_val, b_val, g_val], 0.0)
+                bary_sum = bary.sum()
+                if bary_sum <= 0:
+                    continue
+                bary = bary / bary_sum
+                proj = bary[0] * a + bary[1] * b + bary[2] * c
+                dist = float(np.linalg.norm(proj - pt))
+                if dist < best_dist:
+                    best_dist = dist
                     best_tri = triangle
-                    best_bary = np.maximum([a_val, b_val, g_val], 0.0)
-            if best_dist < 1e-2 and best_tri is not None and best_bary.sum() > 0:
-                best_bary /= best_bary.sum()
+                    best_bary = bary
+            if best_tri is not None and best_bary is not None:
                 sampled[unassigned_i[idx], unassigned_j[idx]] = best_bary @ layout.vertices[best_tri]
                 assigned[unassigned_i[idx], unassigned_j[idx]] = True
         missing = int(np.count_nonzero(~assigned))

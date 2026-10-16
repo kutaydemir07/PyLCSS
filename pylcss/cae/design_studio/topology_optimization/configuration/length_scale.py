@@ -29,57 +29,62 @@ class LengthScale:
     eta_dilated: float = 0.5 - MAX_THRESHOLD_OFFSET
 
 
-def extrusion_inactive_axes(extrusion: object) -> tuple[int, ...]:
-    """Exclude the axis along which an extruded density field is constant."""
-    return {
-        "x": (0,),
-        "y": (1,),
-        "z": (2,),
-    }.get(str(extrusion or "none").strip().lower(), ())
-
-
 def coarsest_active_edge(
     voxel_edges: Sequence[float],
-    inactive_axes: Sequence[int] = (),
 ) -> float:
-    """Largest voxel edge among the axes the filter has to regularize."""
+    """Largest voxel edge across the three grid axes."""
     edges = np.asarray(tuple(voxel_edges)[:3], dtype=float)
-    inactive = {
-        int(axis) for axis in inactive_axes if 0 <= int(axis) < edges.size
-    }
-    active = np.asarray(
-        [edge for axis, edge in enumerate(edges) if axis not in inactive],
-        dtype=float,
-    )
-    if active.size == 0:
-        active = edges
-    return float(np.max(active))
+    if edges.size != 3 or not np.all(np.isfinite(edges)) or np.any(edges <= 0.0):
+        raise ValueError("Voxel edge lengths must be three finite, positive numbers.")
+    return float(np.max(edges))
 
 
 def voxel_edge_lengths(
-    bounds: tuple[np.ndarray, np.ndarray],
+    bounds: tuple[Sequence[float], Sequence[float]],
     shape: Sequence[int],
 ) -> np.ndarray:
     """Return the three physical voxel edge lengths."""
     mins = np.asarray(bounds[0], dtype=float)[:3]
     maxs = np.asarray(bounds[1], dtype=float)[:3]
-    dims = np.maximum(np.asarray(tuple(shape)[:3], dtype=float), 1.0)
-    return np.maximum(maxs - mins, 1e-12) / dims
+    span = maxs - mins
+    if span.shape != (3,) or not np.all(np.isfinite(span)) or np.any(span <= 0.0):
+        raise ValueError("Length-scale resolution needs three finite, positive domain extents.")
+    dims = np.asarray(tuple(shape)[:3], dtype=float)
+    if (
+        dims.shape != (3,)
+        or not np.all(np.isfinite(dims))
+        or np.any(dims < 1.0)
+        or np.any(dims != np.floor(dims))
+    ):
+        raise ValueError("Length-scale resolution needs three positive integer grid counts.")
+    return span / dims
+
+
+def _nonnegative_feature_size(value: object) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError("Minimum solid and void sizes must be finite and non-negative.")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Minimum solid and void sizes must be finite and non-negative.") from exc
+    if not np.isfinite(number) or number < 0.0:
+        raise ValueError("Minimum solid and void sizes must be finite and non-negative.")
+    return number
 
 
 def resolve_physical_length_scale(
-    bounds: tuple[np.ndarray, np.ndarray],
+    bounds: tuple[Sequence[float], Sequence[float]],
     shape: Sequence[int],
     minimum_solid_size: float | None,
     minimum_void_size: float | None = None,
-    *,
-    inactive_axes: Sequence[int] = (),
 ) -> LengthScale:
     """Resolve physical sizes and robust thresholds for a cone density filter.
 
     Explicit sizes stay fixed across mesh refinements and must span at least
-    three cells on the coarsest active axis. An unspecified solid size uses
-    three cells; an unspecified void size uses the resolved solid size.
+    three cells on the coarsest axis. An unspecified solid size uses three
+    cells; an unspecified void size uses the resolved solid size.
 
     The nominal-feature planning relation used here is
     d = 2 * R * sqrt(threshold_offset).
@@ -89,11 +94,9 @@ def resolve_physical_length_scale(
     length scale; this helper does not measure the recovered 3-D feature sizes.
     """
     edges = voxel_edge_lengths(bounds, shape)
-    limiting_edge = coarsest_active_edge(edges, inactive_axes)
-    solid = float(minimum_solid_size or 0.0)
-    void = float(minimum_void_size or 0.0)
-    if not np.isfinite([solid, void]).all() or solid < 0 or void < 0:
-        raise ValueError("Minimum solid and void sizes must be finite and non-negative.")
+    limiting_edge = coarsest_active_edge(edges)
+    solid = _nonnegative_feature_size(minimum_solid_size)
+    void = _nonnegative_feature_size(minimum_void_size)
     if solid <= 0.0:
         solid = PROGRAM_CONTROLLED_FEATURE_ELEMENTS * limiting_edge
     if void <= 0.0:

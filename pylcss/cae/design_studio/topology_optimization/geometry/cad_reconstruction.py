@@ -21,7 +21,8 @@ from .cad_features import (_payload_bounds, _apply_passive_regions_to_step,
 from .cad_mesh_repair import _extract_recovered_mesh
 from .spline_recovery import SurfaceFitError
 from .lattice_cad import (beam_lattice_from_member_plan, beam_lattice_from_structure,
-                          beam_lattice_solid, lattice_cad_strategy, topopt_export_formats)
+                          beam_lattice_solid, beam_lattice_triangles,
+                          lattice_cad_strategy, topopt_export_formats)
 from .occ_shapes import _unify_same_domain_shape
 from .step_export import verify_step_roundtrip, assert_unchanged_surface_geometry, export_cad_model
 
@@ -177,7 +178,8 @@ def reconstruct_topopt_cad(
             maximum_volume_delta=maximum_volume_delta,
             maximum_relative_deviation=maximum_relative_deviation,
             void_axial_margin=void_axial_margin, void_radial_margin=void_radial_margin,
-            export_steps_dir=folder, progress_callback=progress_callback)
+            export_steps_dir=folder, failure_checkpoint_dir=failure_checkpoint_dir,
+            progress_callback=progress_callback)
         paper_report['requested_strategy'] = strategy
         return (paper_model, paper_report) if return_report else paper_model
 
@@ -219,8 +221,10 @@ def reconstruct_topopt_cad(
         from ..verification.cad_performance import validate_cad_performance
         progress('Comparing recovered and reconstructed mechanical performance')
         recovered = _extract_recovered_mesh(payload)
-        if recovered is None:
-            recovered = (vertices, faces) if kind != 'beam' else None
+        if recovered is None and kind == 'beam':
+            tri_v, tri_f = beam_lattice_triangles(lattice)
+            if len(tri_v) and len(tri_f):
+                recovered = (tri_v, tri_f)
         if recovered is None:
             raise SmoothCadUnavailable('Mechanical comparison requires a recovered reference surface')
         performance = validate_cad_performance(recovered, shape, **request)
