@@ -117,7 +117,7 @@ _RETIRED_INFILL_PROPERTIES = frozenset({
     "lattice_cell_size_mm", "lattice_member_thickness_mm", "lattice_skin_thickness_mm",
     "lattice_min_relative_density", "lattice_max_relative_density",
     "lattice_solid_transition_density", "lattice_porosity",
-    "post_lattice_type", "post_lattice_cell_size_mm", "post_lattice_min_thickness_mm",
+    "post_lattice_type", "post_lattice_quality", "post_lattice_adaptive_cells", "post_lattice_cell_size_mm", "post_lattice_min_thickness_mm",
     "post_lattice_skin_thickness_mm", "post_lattice_min_density", "post_lattice_max_density",
 })
 
@@ -236,6 +236,10 @@ def migrate_lattice_topology_nodes(session: dict[str, Any]) -> dict[str, Any]:
         if not retired and not type_name.endswith(f".{TOPOLOGY_SOLVER_CLASS_NAME}"):
             continue
         custom = record.setdefault("custom", {})
+        # Persist the post-processing default in older saved studies as well.
+        # This quality only controls lattice sampling, never the solid solve.
+        custom.setdefault("post_lattice_quality", "High")
+        custom.setdefault("post_lattice_adaptive_cells", True)
         family = normalize_family_key(custom.get("structure_mode"))
         if family and family != "solid":
             custom.setdefault("post_lattice_type", custom["structure_mode"])

@@ -10,8 +10,79 @@ from skimage.morphology import skeletonize
 
 from ..manufacturing.lattice_families import tpms_specific_surface_area
 
-MAX_POST_LATTICE_VOXELS = 8_000_000
+POST_LATTICE_QUALITY_BUDGETS = {"Standard": 8_000_000, "High": 64_000_000, "Professional": 128_000_000}
+POST_LATTICE_QUALITY_SCALES = {"Standard": 1.0, "High": 1.5, "Professional": 2.0}
+DEFAULT_POST_LATTICE_QUALITY = "High"
+MAX_POST_LATTICE_VOXELS = POST_LATTICE_QUALITY_BUDGETS[DEFAULT_POST_LATTICE_QUALITY]
 CELLS_ACROSS_FEATURE = 2.0
+
+
+def resolve_lattice_quality(value=None):
+    """Return one explicit sampling preset; physical dimensions are separate."""
+    text = str(value or DEFAULT_POST_LATTICE_QUALITY).strip().lower()
+    for name in POST_LATTICE_QUALITY_BUDGETS:
+        if text == name.lower():
+            return name
+    raise ValueError("Lattice quality must be Standard, High, or Professional.")
+
+
+def plan_lattice_sampling(span, pitch, member, family, surface_quality="High", max_samples=None,
+                          *, refined_pitch=None):
+    """Plan resolved continuous cells without changing pitch or member size.
+
+    Each quality preset resolves at least its scaled family sampling guidance
+    and three samples through the minimum wall/strut. Counts include the two
+    exterior samples and interval endpoint used by geometry recovery.
+    """
+    span = np.asarray(span, dtype=float)
+    if span.shape != (3,) or not np.isfinite(span).all() or np.any(span <= 0):
+        raise ValueError("Lattice sampling needs finite positive 3-D bounds.")
+    if not np.isfinite([pitch, member]).all() or min(pitch, member) <= 0:
+        raise ValueError("Lattice sampling needs positive cell size and wall/strut thickness.")
+    quality = resolve_lattice_quality(surface_quality)
+    budget = POST_LATTICE_QUALITY_BUDGETS[quality] if max_samples is None else int(max_samples)
+    if budget <= 0:
+        raise ValueError("The lattice sampling budget must be positive.")
+    samples_per_cell = POST_LATTICE_QUALITY_SCALES[quality] * float(family.minimum_cell_voxels)
+    edge = min(float(pitch) / samples_per_cell, float(member) / 3.)
+    if refined_pitch is not None:
+        if not np.isfinite(refined_pitch) or not 0 < refined_pitch <= pitch:
+            raise ValueError("Refined cell pitch must be positive and no larger than nominal pitch.")
+        # Resolve both the nominal-cell quality guidance and every smaller
+        # boundary cell's independent family minimum. No coarse grid is reused
+        # for a finer physical pattern.
+        edge = min(edge, float(refined_pitch) / float(family.minimum_cell_voxels))
+    counts = np.maximum(2., np.ceil(span / edge)) + 3.
+    required = float(np.prod(counts))
+    if not np.isfinite(required) or required > budget:
+        required_text = f"{required:,.0f}" if np.isfinite(required) else "an unbounded number of"
+        raise ValueError(
+            f"{quality} lattice quality needs {required_text} samples for the requested "
+            f"{float(pitch):g} mm cell size and {float(member):g} mm minimum wall/strut; "
+            f"its limit is {budget:,}. Choose a higher quality budget, a larger cell size, "
+            "or a thicker minimum wall/strut. The requested dimensions were not changed."
+        )
+    from ..configuration.voxel_meshing import available_voxel_memory_bytes
+    available = available_voxel_memory_bytes()
+    estimated_memory = int(required*80.+512*1024**2)
+    if available is not None and estimated_memory > .65*available:
+        raise ValueError(
+            f"The requested lattice needs approximately {estimated_memory/1024**3:.1f} GB of working memory; "
+            f"only {available/1024**3:.1f} GB is currently available. Choose a lower sampling quality "
+            "or a larger minimum wall/strut. Cell dimensions were not changed.")
+    intervals = counts.astype(np.int64) - 3
+    spacing = span / intervals
+    report = {
+        "quality": quality, "max_build_voxels": budget,
+        "required_grid_samples": int(required), "grid_shape": counts.astype(int).tolist(),
+        "requested_sampling_edge_mm": edge, "sampling_spacing_mm": spacing.tolist(),
+        "minimum_cell_samples": samples_per_cell, "minimum_member_samples": 3,
+        "refined_cell_pitch_mm": None if refined_pitch is None else float(refined_pitch),
+        "minimum_refined_cell_samples": None if refined_pitch is None else float(family.minimum_cell_voxels),
+        "physical_dimensions_preserved": True,
+        "estimated_working_memory_bytes": estimated_memory,
+    }
+    return intervals, spacing, report
 
 
 def design_feature_widths(design, spacing):
@@ -64,6 +135,9 @@ def fit_lattice_dimensions(
     requested_cell=0.0,
     requested_member=0.0,
     requested_skin=0.0,
+    surface_quality=DEFAULT_POST_LATTICE_QUALITY,
+    max_recovery_voxels=None,
+    boundary_adaptation=False,
 ):
     """Prefer two cells across 90% of the design-only medial samples.
 
@@ -86,7 +160,11 @@ def fit_lattice_dimensions(
     nominal_edge = float(np.mean(spacing))
     local, samples = design_feature_widths(design, spacing)
     feature = float(np.percentile(samples, 10))
-    budget_edge = _budget_edge(span)
+    quality = resolve_lattice_quality(surface_quality)
+    budget = POST_LATTICE_QUALITY_BUDGETS[quality] if max_recovery_voxels is None else int(max_recovery_voxels)
+    if budget <= 0:
+        raise ValueError("The lattice sampling budget must be positive.")
+    budget_edge = _budget_edge(span, budget)
     automatic = requested_cell == 0.0
     # Automatic wall follows feature size but must remain resolvable. A stated
     # process minimum is authoritative and is never reduced to obtain a fit.
@@ -103,9 +181,7 @@ def fit_lattice_dimensions(
         member = max(member, 3.0 * budget_edge)
 
     skin = float(requested_skin)
-    resolution_floor = 2.0 * float(family.minimum_cell_voxels) * budget_edge
-    # Ensure minimum resolvable member
-    member = max(member, 3.0 * budget_edge)
+    resolution_floor = POST_LATTICE_QUALITY_SCALES[quality] * float(family.minimum_cell_voxels) * budget_edge
 
     # The TPMS renderer caps its wall-derived occupancy at 80%. Do not request
     # a thicker wall than that cap can represent and silently lose the floor.
@@ -123,31 +199,25 @@ def fit_lattice_dimensions(
         cell = max(target, floor)
     else:
         cell = float(requested_cell)
-        if cell < resolution_floor:
-            cell = resolution_floor
-        if member >= cell or cell < member_pitch * (1.0 - 1e-6):
-            max_safe_member = 0.75 * cell / (area / 0.80 if family.is_tpms else 1.0)
-            if max_safe_member >= 3.0 * budget_edge:
-                member = max_safe_member
-                member_pitch = member
-                if family.is_tpms:
-                    member_pitch = max(member_pitch, area * member / 0.80)
-            else:
-                cell = max(cell, member_pitch * 1.05, resolution_floor)
-
-    if cell <= member:
-        cell = member * 1.1
+    if cell <= member or cell < member_pitch * (1.0 - 1e-6):
+        if automatic:
+            cell = max(cell, member_pitch * 1.05, member * 1.1)
+        else:
+            raise ValueError(
+                "The requested cell size cannot contain the minimum wall/strut with an open cell. "
+                "Increase cell size or reduce the minimum wall/strut thickness; dimensions were not changed."
+            )
+    adaptation = None
+    if boundary_adaptation:
+        from ..geometry.lattice_adaptation import plan_lattice_adaptation
+        adaptation = plan_lattice_adaptation(cell, member, family)
+    _, _, sampling_report = plan_lattice_sampling(span, cell, member, family, quality, budget,
+        refined_pitch=None if adaptation is None else adaptation["refined_pitch_mm"])
 
     # A full cell need only fit somewhere; thinner features may contain valid
     # partial cells. They receive the same lattice field, never solid fallback.
     too_thin = design & (local < cell + 2.0 * skin)
     fallback = np.zeros_like(design, dtype=bool)
-    if not np.any(design & ~too_thin):
-        max_local = float(np.max(local)) if np.any(local > 0) else feature
-        if skin > 0.25 * max_local:
-            skin = max(0.0, 0.1 * max_local)
-        cell = max(resolution_floor, min(cell, max(max_local - 2.0 * skin, 0.5 * max_local)))
-        too_thin = design & (local < cell + 2.0 * skin)
     coverage = float(np.mean(samples >= CELLS_ACROSS_FEATURE * cell + 2.0 * skin))
     report = {
         "mode": "Automatic fit" if automatic else "Manual",
@@ -178,7 +248,8 @@ def fit_lattice_dimensions(
             if skin == 0
             else "Trimmed cells joined to a boundary skin; no conformal warping"
         ),
-        "max_build_voxels": MAX_POST_LATTICE_VOXELS,
+        **sampling_report,
+        "boundary_adaptation": adaptation,
     }
     return (
         cell / nominal_edge,

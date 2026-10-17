@@ -57,13 +57,21 @@ def _topopt_cad_display_mesh(data, shape):
 
 def _topopt_lattice_display_mesh(data):
     """Validate bounded prepared arrays without running native geometry filters."""
-    from pylcss.cae.design_studio.topology_optimization.geometry.lattice_display import MAX_LATTICE_DISPLAY_FACES
+    from pylcss.cae.design_studio.topology_optimization.geometry.lattice_display import (
+        MAX_LATTICE_DISPLAY_FACES, LATTICE_DISPLAY_REVISION, lattice_display_quality,
+    )
     mesh = data.get('lattice_preview_mesh')
     if not isinstance(mesh, dict):
         return None
     try:
+        report = mesh.get('report') or {}
+        if (report.get('revision') != LATTICE_DISPLAY_REVISION
+                or report.get('quality') != lattice_display_quality(data)):
+            return None
         vertices, faces = np.asarray(mesh['vertices']), np.asarray(mesh['faces'])
         normals = np.asarray(mesh['point_normals'])
+        section = mesh['section_mesh']
+        section_vertices, section_faces = np.asarray(section['vertices']), np.asarray(section['faces'])
         if (vertices.ndim != 2 or vertices.shape[1:] != (3,) or not len(vertices)
                 or faces.ndim != 2 or faces.shape[1:] != (3,)
                 or not 0 < len(faces) <= MAX_LATTICE_DISPLAY_FACES
@@ -71,11 +79,47 @@ def _topopt_lattice_display_mesh(data):
                 or normals.shape != vertices.shape
                 or not np.isfinite(vertices).all() or not np.isfinite(normals).all()
                 or not np.issubdtype(faces.dtype, np.integer)
-                or faces.min() < 0 or faces.max() >= len(vertices)):
+                or faces.min() < 0 or faces.max() >= len(vertices)
+                or section_vertices.ndim != 2 or section_vertices.shape[1:] != (3,)
+                or not 0 < len(section_vertices) <= 3 * len(faces)
+                or section_faces.shape != faces.shape
+                or not np.isfinite(section_vertices).all()
+                or not np.issubdtype(section_faces.dtype, np.integer)
+                or section_faces.min() < 0 or section_faces.max() >= len(section_vertices)):
             return None
     except (KeyError, TypeError, ValueError):
         return None
     return mesh
+
+
+def _prepared_lattice_polydata(mesh, *, section=False):
+    """Attach worker-prepared arrays directly; run no geometry filters in Qt."""
+    from vtk.util.numpy_support import numpy_to_vtk, numpy_to_vtkIdTypeArray
+
+    arrays = mesh['section_mesh'] if section else mesh
+    vertices = np.ascontiguousarray(arrays['vertices'], dtype=np.float64)
+    faces = np.ascontiguousarray(arrays['faces'], dtype=np.int64)
+    points = vtk.vtkPoints()
+    points.SetData(numpy_to_vtk(vertices, deep=False))
+    cells = vtk.vtkCellArray()
+    offsets = np.arange(len(faces)+1, dtype=np.int64) * 3
+    # Offsets are created here, unlike the result-owned geometry arrays.
+    # Let VTK own their storage when this Python stack frame goes away.
+    cells.SetData(numpy_to_vtkIdTypeArray(offsets, deep=True),
+                  numpy_to_vtkIdTypeArray(faces.reshape(-1), deep=False))
+    poly = vtk.vtkPolyData()
+    poly.SetPoints(points)
+    poly.SetPolys(cells)
+    if not section:
+        normals = np.ascontiguousarray(mesh['point_normals'], dtype=np.float32)
+        poly.GetPointData().SetNormals(numpy_to_vtk(
+            normals, deep=False))
+    else:
+        normals = None
+    # Keep zero-copy backing arrays alive for standalone callers as well as
+    # the viewer, which also retains the result owning its prepared cache.
+    poly._lattice_numpy_arrays = (vertices, faces, normals)
+    return poly
 
 
 def _stress_display_range(values, stress_location=""):
@@ -993,14 +1037,16 @@ class SimulationRenderingMixin:
     def _prepare_topopt_lattice_display(self, result, recovered, *, force=False):
         """Prepare an older lattice cache without touching its export surface."""
         from .execution_workers import TopOptLatticeDisplayWorker
+        from pylcss.cae.design_studio.topology_optimization.geometry.lattice_display import lattice_display_quality
+        quality = lattice_display_quality(result)
         jobs = getattr(self, '_topopt_lattice_display_jobs', None)
         if jobs is None:
             jobs = self._topopt_lattice_display_jobs = {}
-        key = id(recovered)
+        key = (id(recovered), quality)
         if key in jobs or (result.get('_lattice_display_error') and not force):
             return
         result.pop('_lattice_display_error', None)
-        worker = TopOptLatticeDisplayWorker(recovered, parent=self)
+        worker = TopOptLatticeDisplayWorker(recovered, quality=quality, parent=self)
         jobs[key] = worker
         window = self.window()
         window = getattr(window, 'cad_widget', window)
@@ -1012,6 +1058,8 @@ class SimulationRenderingMixin:
             if getattr(self, '_viewer_closed', False):
                 return
             if result.get('recovered_shape') is not recovered:
+                return
+            if lattice_display_quality(result) != quality:
                 return
             result['lattice_preview_mesh'] = mesh
             if _topopt_lattice_display_mesh(result) is None:
@@ -1222,7 +1270,9 @@ class SimulationRenderingMixin:
                     self._prepare_topopt_lattice_display(original if original is not None else data, rec)
                     return
                 rec = prepared_lattice
-            if rec and "vertices" in rec and "faces" in rec:
+            if prepared_lattice is not None:
+                poly_data = _prepared_lattice_polydata(prepared_lattice)
+            elif rec and "vertices" in rec and "faces" in rec:
                 poly_data = build_surface_polydata(rec["vertices"], rec["faces"])
             else:
                 poly_data = None
@@ -1246,9 +1296,6 @@ class SimulationRenderingMixin:
                     poly_data.GetCellData().AddArray(groups)
                 mapper = vtk.vtkPolyDataMapper()
                 if prepared_lattice is not None:
-                    from vtk.util.numpy_support import numpy_to_vtk
-                    poly_data.GetPointData().SetNormals(numpy_to_vtk(
-                        np.asarray(prepared_lattice['point_normals'], dtype=np.float32), deep=True))
                     mapper.SetInputData(poly_data)
                 else:
                     normals = vtk.vtkPolyDataNormals()
@@ -1280,17 +1327,20 @@ class SimulationRenderingMixin:
                 self.renderer.AddActor(actor)
                 self.current_actor = actor
                 self.actors.append(actor)
-                self.register_section_surface(actor, poly_data)
+                section_poly = (_prepared_lattice_polydata(prepared_lattice, section=True)
+                                if prepared_lattice is not None else poly_data)
+                self.register_section_surface(actor, section_poly)
                 self._render_topopt_joint_overlays(data)
 
-                self._pickable_surface_dataset = vtk.vtkPolyData()
-                self._pickable_surface_dataset.DeepCopy(poly_data)
                 if prepared_lattice is None:
+                    self._pickable_surface_dataset = vtk.vtkPolyData()
+                    self._pickable_surface_dataset.DeepCopy(poly_data)
                     self._configure_mesh_face_picking_from_surface(self._pickable_surface_dataset)
                 else:
                     # LOD triangle ids do not identify the full manufacturing
                     # boundary. Avoid regrouping them or attaching CAD loads.
                     self._configure_mesh_face_picking_from_surface(None)
+                    self._pickable_surface_dataset = None
                     self._mesh_picking_too_dense = True
 
                 # Update scalar bar to be empty for geometry view

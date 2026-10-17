@@ -51,16 +51,8 @@ def geometry_triangle_mesh(geometry: Any, tolerance: float) -> trimesh.Trimesh:
     # vertices merge. Remove those faces without reorienting cavity shells.
     mesh.update_faces(mesh.nondegenerate_faces())
     mesh.remove_unreferenced_vertices()
-    if not len(mesh.faces):
-        raise ValueError("The CAD/STL lattice envelope has no faces.")
-    if not mesh.is_winding_consistent:
-        trimesh.repair.fix_winding(mesh)
-    if not mesh.is_watertight:
-        mesh.fill_holes()
-    if not mesh.is_watertight:
-        trimesh.repair.fix_normals(mesh)
-        trimesh.repair.fix_inversion(mesh)
-        mesh.fill_holes()
+    if not len(mesh.faces) or not mesh.is_winding_consistent or not mesh.is_watertight:
+        raise ValueError("The CAD/STL lattice envelope must be a closed, consistently oriented surface.")
     # Preserve inward cavity shells. Fixing every component independently would
     # turn those holes into solid material. A wholly reversed boundary is safe
     # to reverse as a whole.
@@ -69,7 +61,9 @@ def geometry_triangle_mesh(geometry: Any, tolerance: float) -> trimesh.Trimesh:
     return mesh
 
 
-def _direct_mesh_signed_distance_grid(mesh: trimesh.Trimesh, axes: tuple[np.ndarray, ...]) -> np.ndarray:
+def _direct_mesh_signed_distance_grid(mesh: trimesh.Trimesh, axes: tuple[np.ndarray, ...], *,
+                                      max_chunk_points=1_000_000,
+                                      progress_callback=None, report=None) -> np.ndarray:
     from vtkmodules.util.numpy_support import numpy_to_vtk, numpy_to_vtkIdTypeArray, vtk_to_numpy
     from vtkmodules.vtkCommonCore import vtkPoints
     from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkPolyData
@@ -87,15 +81,48 @@ def _direct_mesh_signed_distance_grid(mesh: trimesh.Trimesh, axes: tuple[np.ndar
     poly.SetPolys(cells)
     distance = vtkImplicitPolyDataDistance()
     distance.SetInput(poly)
-    sampler = vtkSampleFunction()
-    sampler.SetImplicitFunction(distance)
-    sampler.SetModelBounds(*(float(value) for axis in axes for value in (axis[0], axis[-1])))
-    sampler.SetSampleDimensions(*(len(axis) for axis in axes))
-    sampler.ComputeNormalsOff()
-    sampler.SetOutputScalarTypeToFloat()
-    sampler.Update()
-    values = vtk_to_numpy(sampler.GetOutput().GetPointData().GetScalars())
-    return -values.reshape(tuple(len(axis) for axis in axes), order="F").copy()
+    # Reuse one native triangle locator across bounded slabs. Coarsening each
+    # axis to an arbitrary node count erases bores and thin protected regions,
+    # even when the subsequent lattice grid has adequate physical resolution.
+    dims = tuple(len(axis) for axis in axes)
+    field = np.empty(dims, dtype=np.float32)
+    from itertools import product
+    chunk_dims = np.asarray(dims, dtype=int)
+    while np.prod(np.maximum(chunk_dims, 2), dtype=np.int64) > max_chunk_points:
+        dimension = int(np.argmax(chunk_dims))
+        chunk_dims[dimension] = max(1, (int(chunk_dims[dimension]) + 1) // 2)
+    starts = tuple(range(0, dims[index], int(chunk_dims[index])) for index in range(3))
+    slab_count = int(np.prod([len(values) for values in starts]))
+    largest_native_chunk = 0
+    for number, start in enumerate(product(*starts)):
+        if callable(progress_callback):
+            progress_callback(f"Sampling geometric boundary {number + 1}/{slab_count}")
+        end = tuple(min(start[index] + int(chunk_dims[index]), dims[index]) for index in range(3))
+        slices = tuple(slice(start[index], end[index]) for index in range(3))
+        slab_axes = tuple(axis[selection] for axis, selection in zip(axes, slices))
+        sampler = vtkSampleFunction()
+        sampler.SetImplicitFunction(distance)
+        sampler.SetModelBounds(*(float(value) for axis in slab_axes for value in (axis[0], axis[-1])))
+        # A final one-plane slab uses two coincident native planes; publish
+        # only its first plane. vtkSampleFunction requires at least two.
+        native_dims = tuple(max(2, len(axis)) for axis in slab_axes)
+        largest_native_chunk = max(largest_native_chunk, int(np.prod(native_dims)))
+        sampler.SetSampleDimensions(*native_dims)
+        sampler.ComputeNormalsOff()
+        sampler.SetOutputScalarTypeToFloat()
+        sampler.Update()
+        values = vtk_to_numpy(sampler.GetOutput().GetPointData().GetScalars())
+        native = values.reshape(native_dims, order="F")
+        field[slices] = -native[tuple(slice(0, end[index]-start[index]) for index in range(3))]
+    if report is not None:
+        steps = [float(axis[1] - axis[0]) if len(axis) > 1 else 0. for axis in axes]
+        report.update(method="Native triangle signed distance at every requested node",
+                      grid_shape=list(dims), evaluated_node_count=int(np.prod(dims, dtype=np.int64)),
+                      sampling_spacing=steps, coarse_grid_interpolation=False,
+                      native_chunk_count=slab_count, maximum_chunk_points=int(max_chunk_points),
+                      largest_native_chunk_points=largest_native_chunk,
+                      cell_half_diagonal=float(np.linalg.norm(steps) * .5))
+    return field
 
 
 def _interpolate_distance_grid(field: np.ndarray, target_axes: tuple[np.ndarray, ...], src_axes: tuple[np.ndarray, ...]) -> np.ndarray:
@@ -115,16 +142,22 @@ def _interpolate_distance_grid(field: np.ndarray, target_axes: tuple[np.ndarray,
     return res
 
 
-def mesh_signed_distance_grid(mesh: trimesh.Trimesh, axes: tuple[np.ndarray, ...]) -> np.ndarray:
-    """Evaluate distance to triangles in C++; positive values denote material."""
-    total_pts = int(np.prod([len(axis) for axis in axes]))
-    max_axis = max(len(axis) for axis in axes) if axes else 0
-    if total_pts > 200_000 or max_axis > 90:
-        coarse_dims = tuple(min(len(a), 90) for a in axes)
-        coarse_axes = tuple(np.linspace(a[0], a[-1], d) for a, d in zip(axes, coarse_dims))
-        coarse_field = _direct_mesh_signed_distance_grid(mesh, coarse_axes)
-        return _interpolate_distance_grid(coarse_field, axes, coarse_axes)
-    return _direct_mesh_signed_distance_grid(mesh, axes)
+def mesh_signed_distance_grid(mesh: trimesh.Trimesh, axes: tuple[np.ndarray, ...], *,
+                              progress_callback=None, report=None,
+                              max_chunk_points=1_000_000) -> np.ndarray:
+    """Sample every physical grid node with bounded native temporary memory."""
+    axes = tuple(np.asarray(axis, dtype=float) for axis in axes)
+    if len(axes) != 3 or any(axis.ndim != 1 or not len(axis) or not np.isfinite(axis).all()
+                             for axis in axes):
+        raise ValueError("Signed-distance sampling needs three finite coordinate axes")
+    for axis in axes:
+        if len(axis) > 1 and (np.any(np.diff(axis) <= 0.) or
+                not np.allclose(np.diff(axis), axis[1] - axis[0], rtol=1e-9, atol=1e-12)):
+            raise ValueError("Signed-distance axes must be uniformly spaced and increasing")
+    if int(max_chunk_points) < 8:
+        raise ValueError("Signed-distance chunk size must allow at least eight native nodes")
+    return _direct_mesh_signed_distance_grid(mesh, axes, progress_callback=progress_callback,
+                                             report=report, max_chunk_points=max_chunk_points)
 
 
 def _sample_analysis(field: np.ndarray, axes, lower, cell, *, order=1):
@@ -258,7 +291,7 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
                              solid_boxes=(), void_boxes=(), solid_cylinders=(), void_cylinders=(),
                              joint_pin_cylinders=(), member_plan=None, surface_quality="Professional",
                              max_recovery_voxels=None, include_manufacturing_field=False,
-                             progress_stage_callback=None, **_):
+                             progress_stage_callback=None, boundary_adaptation=False, **_):
     """Fill the geometric envelope with cells, preserving prescribed material.
 
     Numerical samples resolve the continuous surfaces; neither the source
@@ -275,58 +308,104 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
     upper = lower + cell * np.asarray(density.shape)
     pitch = options.cell_size_voxels * float(np.mean(cell))
     thickness = options.member_thickness_voxels * float(np.mean(cell))
-    quality = {"standard": 1., "high": 1.5}.get(str(surface_quality).lower(), 2.)
     family = options.family
-    cell_samples = family.minimum_cell_voxels if family is not None else 12.
-    edge = min(pitch / (quality * cell_samples), thickness / 3.)
-    intervals = np.maximum(2, np.ceil((upper - lower) / edge).astype(int))
-    spacing = (upper - lower) / intervals
+    from ..integration.lattice_fit import plan_lattice_sampling
+    adaptation = None
+    if boundary_adaptation:
+        if member_plan is not None:
+            raise ValueError("Boundary cell refinement requires a periodic family, not an explicit member graph.")
+        from .lattice_adaptation import plan_lattice_adaptation
+        adaptation = plan_lattice_adaptation(pitch, thickness, family)
+    intervals, spacing, sampling_report = plan_lattice_sampling(
+        upper - lower, pitch, thickness, family, surface_quality, max_samples=max_recovery_voxels,
+        refined_pitch=None if adaptation is None else adaptation["refined_pitch_mm"])
     dims = tuple(int(value + 3) for value in intervals)
-    if max_recovery_voxels and np.prod(dims, dtype=np.int64) > int(max_recovery_voxels):
-        scale_factor = (float(np.prod(dims, dtype=np.float64)) / float(max_recovery_voxels)) ** (1.0 / 3.0)
-        edge *= scale_factor * 1.02
-        intervals = np.maximum(2, np.ceil((upper - lower) / edge).astype(int))
-        spacing = (upper - lower) / intervals
-        dims = tuple(int(value + 3) for value in intervals)
     # Offset samples from the bound planes. Contouring an entire plane of
     # exactly-zero distances can create zero-area triangles at cell junctions.
     axes = tuple(lower[index] + (np.arange(-1, int(intervals[index]) + 2) + .5) * spacing[index]
                  for index in range(3))
-    tolerance = max(0.1, float(np.min(spacing)) * 0.35)
+    contour_level = float(np.min(spacing)) * 1e-6
+    tolerance = max(1e-6, min(0.1, float(np.min(spacing)) * 0.35))
+    distance_reports = []
+    def sample_boundary(mesh, name):
+        details = {"boundary": name}
+        result = mesh_signed_distance_grid(mesh, axes, progress_callback=stage, report=details)
+        distance_reports.append(details)
+        return result
     stage("Trimming lattice against CAD/STL geometry")
     envelope_mesh = geometry_triangle_mesh(source_geometry, tolerance)
-    envelope = mesh_signed_distance_grid(envelope_mesh, axes)
+    envelope = sample_boundary(envelope_mesh, "Optimized CAD/STL envelope")
     original_boundary = None
     if source_cad_shape is not None:
         if source_cad_shape is source_geometry:
             original_boundary = envelope.copy()
         else:
             original = geometry_triangle_mesh(source_cad_shape, tolerance)
-            original_boundary = mesh_signed_distance_grid(original, axes)
+            original_boundary = sample_boundary(original, "Original source CAD")
         np.minimum(envelope, original_boundary, out=envelope)
     if not np.any(envelope > 0):
-        envelope = envelope - float(np.min(envelope)) + 1e-3
+        raise ValueError("The CAD/STL envelope contains no material samples at the selected resolution. "
+                         "Check the closed source body and increase lattice sampling quality.")
 
     solid_level = np.full(dims, -np.inf, dtype=np.float32)
     void_level = np.full(dims, -np.inf, dtype=np.float32)
+    from .bore_constraints import source_bore_records, conservative_bore_void_field
+    bore_records = source_bore_records(source_cad_shape)
+    if not bore_records:
+        bore_records = source_bore_records(source_geometry)
+    bore_allowances = []
+    if bore_records:
+        stage("Preserving original bore clearance before surface extraction")
+        void_level, bore_allowances = conservative_bore_void_field(axes, bore_records, spacing)
     region_meshes = {}
+    prescribed_region_samples = []
+    # Packed masks retain each region's identity without retaining another
+    # float distance grid per region. They are discarded before contouring.
+    prescribed_masks = []
     for shapes, result in ((explicit_solid_shapes, solid_level), (explicit_void_shapes, void_level)):
-        for raw in shapes:
+        for number, raw in enumerate(shapes):
             key = id(raw)
             if key not in region_meshes:
                 region_meshes[key] = geometry_triangle_mesh(raw, tolerance)
-            np.maximum(result, mesh_signed_distance_grid(region_meshes[key], axes), out=result)
+            sampled = sample_boundary(region_meshes[key],
+                f"Prescribed {'solid' if result is solid_level else 'void'} {number + 1}")
+            if result is solid_level:
+                sample_count = int(np.count_nonzero(sampled > contour_level))
+                if not sample_count:
+                    raise ValueError("A prescribed solid region has no interior samples. "
+                                     "Increase lattice sampling quality; the region was not discarded.")
+                prescribed_region_samples.append({"kind": "CAD/STL solid", "index": number,
+                                                   "sample_count": sample_count})
+                prescribed_masks.append([(slice(0, dims[0]), np.packbits(sampled > contour_level))])
+            np.maximum(result, sampled, out=result)
+            del sampled
     analytic = _convert_legacy_to_physical_shapes((lower, upper), solid_boxes=solid_boxes, void_boxes=void_boxes,
                                                solid_cylinders=solid_cylinders, void_cylinders=void_cylinders)
     # Analytic evaluation is chunked so the temporary points array cannot
     # dominate the memory consumed by the geometry fields.
+    analytic_counts = np.zeros(len(analytic), dtype=np.int64)
+    analytic_masks = [[] for region in analytic]
     if analytic:
         for start in range(0, dims[0], 16):
             selection = slice(start, min(start + 16, dims[0]))
             points = np.stack(np.meshgrid(axes[0][selection], axes[1], axes[2], indexing="ij"), axis=-1)
-            for region in analytic:
+            for number, region in enumerate(analytic):
                 result = solid_level if region.is_solid else void_level
-                np.maximum(result[selection], -region.sdf(points), out=result[selection])
+                sampled = -region.sdf(points)
+                if region.is_solid:
+                    analytic_counts[number] += np.count_nonzero(sampled > contour_level)
+                    analytic_masks[number].append((selection, np.packbits(sampled > contour_level)))
+                np.maximum(result[selection], sampled, out=result[selection])
+            stage("Sampling prescribed analytic regions")
+        for number, region in enumerate(analytic):
+            if region.is_solid:
+                if not analytic_counts[number]:
+                    raise ValueError("A prescribed analytic solid has no interior samples. "
+                                     "Increase lattice sampling quality; the region was not discarded.")
+                prescribed_region_samples.append({"kind": "Analytic solid", "index": number,
+                                                   "sample_count": int(analytic_counts[number])})
+                prescribed_masks.append(analytic_masks[number])
+        del analytic_masks
     # Exact region records supersede their own coarse mask copies, while any
     # independent saved mask-only constraints remain prescribed geometry.
     residual_solid = _residual_preserved_mask(passive_solid_mask, tuple(region_meshes[id(raw)] for raw in explicit_solid_shapes),
@@ -334,7 +413,15 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
     residual_void = _residual_preserved_mask(passive_void_mask, tuple(region_meshes[id(raw)] for raw in explicit_void_shapes),
                                             void_boxes, void_cylinders, (lower, upper), tolerance)
     if residual_solid is not None:
-        np.maximum(solid_level, _mask_distance(residual_solid, axes, lower, cell), out=solid_level)
+        sampled = _mask_distance(residual_solid, axes, lower, cell)
+        count = int(np.count_nonzero(sampled > contour_level))
+        if not count and np.any(residual_solid):
+            raise ValueError("A saved prescribed solid mask has no interior samples at the selected resolution.")
+        if count:
+            prescribed_region_samples.append({"kind": "Saved solid mask", "sample_count": count})
+            prescribed_masks.append([(slice(0, dims[0]), np.packbits(sampled > contour_level))])
+        np.maximum(solid_level, sampled, out=solid_level)
+        del sampled
     if residual_void is not None:
         np.maximum(void_level, _mask_distance(residual_void, axes, lower, cell), out=void_level)
     # A recovered STL may have approximated a collar. Its exact prescribed
@@ -351,6 +438,14 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
     elif options.target_relative_density > 0:
         relative = np.full(dims, options.target_relative_density, dtype=np.float32)
     lattice = _lattice_level(axes, lower, pitch, thickness, options, relative, member_plan, cell)
+    if adaptation is not None:
+        stage("Fitting smaller lattice cells near the CAD boundary")
+        from .lattice_adaptation import blend_boundary_lattice_fields
+        refined = _lattice_level(axes, lower, adaptation["refined_pitch_mm"], thickness,
+                                 options, relative, None, cell)
+        lattice, adaptation = blend_boundary_lattice_fields(lattice, refined, envelope,
+            nominal_pitch=pitch, minimum_member=thickness, family=family)
+        del refined
     level_shift = 0.
     if options.target_relative_density > 0 and member_plan is None:
         # Fit a continuous offset of the cell level set against the actual
@@ -385,7 +480,27 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
     np.minimum(lattice, -void_level, out=lattice)
     np.minimum(lattice, envelope, out=lattice)
 
-    occupied = lattice > 0
+    for region, packed_chunks in zip(prescribed_region_samples, prescribed_masks):
+        retained_count = 0
+        for selection, packed in packed_chunks:
+            shape = envelope[selection].shape
+            mask = np.unpackbits(packed, count=int(np.prod(shape))).reshape(shape).astype(bool)
+            mask &= envelope[selection] > contour_level
+            mask &= void_level[selection] < -contour_level
+            retained_count += int(np.count_nonzero(mask))
+            if np.any(lattice[selection][mask] <= contour_level):
+                raise ValueError("A prescribed solid region was lost during lattice composition.")
+        region["samples_after_source_and_void_constraints"] = retained_count
+        if not retained_count:
+            raise ValueError("A prescribed solid region is entirely excluded by source CAD or void constraints. "
+                             "Resolve the conflicting preserved regions; no region was silently discarded.")
+    del prescribed_masks
+
+    stage("Checking lattice material connectivity")
+    from .lattice_connectivity import filter_anchored_lattice_material
+    connectivity = filter_anchored_lattice_material(lattice, envelope, solid_level, void_level,
+        threshold=contour_level, spacing=spacing, progress_callback=stage)
+    occupied = lattice > contour_level
     envelope_count = int(np.count_nonzero(envelope > 0))
     built_count = int(np.count_nonzero(occupied))
     achieved = built_count / max(envelope_count, 1)
@@ -393,24 +508,16 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
     # Internal CAD faces can also coincide with sample planes. A microscopic
     # positive level breaks exactly-zero contour ties without a voxel step or
     # a measurable change to the prescribed boundary.
-    contour_level = float(np.min(spacing)) * 1e-6
     vertices, faces, _, _ = marching_cubes(lattice, level=contour_level, spacing=tuple(spacing),
                                           allow_degenerate=False, gradient_direction="descent")
     vertices += np.asarray([axis[0] for axis in axes])
     mesh = trimesh.Trimesh(vertices, faces, process=True)
     if mesh.volume < 0:
         mesh.invert()
-    if not mesh.is_watertight:
-        mesh.fill_holes()
-        mesh.process(validate=True)
-        if not mesh.is_watertight:
-            trimesh.repair.fix_normals(mesh)
-            trimesh.repair.fix_inversion(mesh)
-            mesh.fill_holes()
-    from .bore_constraints import enforce_bore_clearance, source_bore_records
-    bore_records = source_bore_records(source_cad_shape)
-    if not bore_records:
-        bore_records = source_bore_records(source_geometry)
+    if not mesh.is_watertight or not mesh.is_winding_consistent:
+        raise ValueError("The sampled lattice boundary is not closed and consistently oriented. "
+                         "Increase lattice sampling quality; no surface repair was substituted.")
+    from .bore_constraints import enforce_bore_clearance
     vertices, bore_report = enforce_bore_clearance(np.asarray(mesh.vertices), np.asarray(mesh.faces), bore_records, spacing)
     mesh = trimesh.Trimesh(vertices, mesh.faces, process=False)
     if joint_pin_cylinders:
@@ -422,6 +529,8 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
             if raw is not None:
                 bodies.append(geometry_triangle_mesh(raw, tolerance))
         mesh = trimesh.util.concatenate(bodies)
+    if not mesh.is_watertight or not mesh.is_winding_consistent:
+        raise ValueError("Bore and preserved-geometry constraints produced an invalid lattice boundary.")
     stage("Checking lattice surface")
     from .mesh_screening import screen_mesh_intersections
     if len(mesh.faces) <= 50_000:
@@ -451,6 +560,7 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
     envelope_volume = envelope_count * float(np.prod(spacing))
     reference_volume = built_count * float(np.prod(spacing))
     sizing = {"achieved_relative_density": achieved, "mesh_relative_density": volume / max(envelope_volume, 1e-30),
+              "boundary_adaptation": adaptation,
               "target_relative_density": options.target_relative_density,
               "member_thickness_voxels": options.member_thickness_voxels,
               "member_thickness_model_units": thickness, "member_scale": options.member_scale,
@@ -458,7 +568,14 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
     report = {"method": "Continuous cell level sets intersected with CAD/STL signed distances",
               "envelope_basis": "CAD/STL triangle boundary", "analysis_occupancy_used_for_boundary": False,
               "sampling_spacing": spacing.tolist(), "source_tessellation_tolerance": tolerance,
-              "bore_clearance": bore_report, "density_solid_transition_used": False,
+              "sampling_plan": sampling_report, "boundary_sampling": distance_reports,
+              "envelope_accuracy": {"native_samples_at_requested_resolution": True,
+                  "coarse_distance_interpolation": False,
+                  "source_tessellation_tolerance": tolerance,
+                  "contour_cell_half_diagonal": float(np.linalg.norm(spacing) * .5),
+                  "scope": "Triangle-boundary distances at grid nodes; finite contour sampling, not an exact CAD surface"},
+              "bore_clearance": bore_report, "precontour_bore_allowances": bore_allowances,
+              "density_solid_transition_used": False,
               "reference_volume_method": "Sampled continuous CAD/STL CSG domain",
               "source_envelope_mesh_volume": abs(float(envelope_mesh.volume)),
               "contour_tie_offset_model_units": contour_level}
@@ -471,13 +588,15 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
                   for key, shapes in (("explicit_solid_shapes", explicit_solid_shapes),
                                       ("explicit_void_shapes", explicit_void_shapes))},
               "surface_backend": report["method"], "surface_quality_preset": "Geometry based",
-              "manufacturing_structure": options.display_name, "volume": volume, "is_watertight": True,
+              "manufacturing_structure": options.display_name, "volume": volume,
+              "is_watertight": bool(mesh.is_watertight),
+              "is_winding_consistent": bool(mesh.is_winding_consistent),
               "manufacturing_reference_volume": reference_volume, "manufacturing_reference_sample_count": built_count,
               "analyzed_reference_volume": envelope_volume, "recovery_target_volume": reference_volume,
               "lattice_sizing": sizing,
-              "lattice_connectivity": {"component_count": positive_shells,
+              "lattice_connectivity": {**connectivity, "component_count": positive_shells,
                                        "connecting_ligaments": 0, "repaired_fraction": 0.,
-                                       "method": "Continuous cells clipped to the geometric boundary"},
+                                       "prescribed_region_samples": prescribed_region_samples},
               "resolved_structure_options": asdict(options), "effective_recovery_cutoff": .5,
               "structure_resolution_scale": float(np.mean(cell) / np.mean(spacing)),
               "recovery_grid_shape": [int(value) for value in intervals], "surface_recovery_report": report,

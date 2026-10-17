@@ -15,11 +15,18 @@ from ..manufacturing.structures import (
     ManufacturingStructureOptions,
     passive_region_masks,
 )
-from .lattice_fit import fit_lattice_dimensions, MAX_POST_LATTICE_VOXELS
+from .lattice_fit import (
+    DEFAULT_POST_LATTICE_QUALITY,
+    POST_LATTICE_QUALITY_BUDGETS,
+    fit_lattice_dimensions,
+    resolve_lattice_quality,
+)
 from .voxelization import voxel_size_from_bounds
 
 POST_LATTICE_DEFAULTS = {
     "post_lattice_type": "Gyroid Lattice",
+    "post_lattice_quality": DEFAULT_POST_LATTICE_QUALITY,
+    "post_lattice_adaptive_cells": True,
     "post_lattice_cell_size_mm": 0.0,
     "post_lattice_min_thickness_mm": 0.0,
     "post_lattice_skin_thickness_mm": 0.0,
@@ -99,6 +106,7 @@ def prepare_lattice_field(result: dict[str, Any], settings: dict[str, Any], *, b
     """
     source = topology_source(result)
     values = {**POST_LATTICE_DEFAULTS, **settings}
+    values["post_lattice_quality"] = resolve_lattice_quality(values["post_lattice_quality"])
     family = family_for(values["post_lattice_type"])
     if family is None:
         raise ValueError("Choose a supported lattice type.")
@@ -175,6 +183,9 @@ def prepare_lattice_field(result: dict[str, Any], settings: dict[str, Any], *, b
         requested_cell=lengths[0],
         requested_member=lengths[1],
         requested_skin=lengths[2],
+        surface_quality=values["post_lattice_quality"],
+        max_recovery_voxels=POST_LATTICE_QUALITY_BUDGETS[values["post_lattice_quality"]],
+        boundary_adaptation=bool(values["post_lattice_adaptive_cells"]),
     )
     fit_report["non_design_solid_voxels"] = int(np.count_nonzero(solid))
     values["_fit_report"] = fit_report
@@ -236,7 +247,9 @@ def generate_post_topopt_lattice(
         source_mask=envelope,
         include_manufacturing_field=True,
         cubic_lattice_grid=True,
-        max_recovery_voxels=MAX_POST_LATTICE_VOXELS,
+        max_recovery_voxels=POST_LATTICE_QUALITY_BUDGETS[values["post_lattice_quality"]],
+        surface_quality=values["post_lattice_quality"],
+        boundary_adaptation=bool(values["post_lattice_adaptive_cells"]),
         raise_errors=True,
         progress_stage_callback=stage,
         passive_solid_mask=solid,
@@ -262,20 +275,19 @@ def generate_post_topopt_lattice(
         raise ValueError(
             "Lattice generation produced no surface. Increase cell size or minimum thickness."
         )
-    if not recovered.get("is_watertight") or not recovered.get("volume", 0):
-        mesh = trimesh.Trimesh(recovered.get("vertices", []), recovered.get("faces", []), process=True)
-        mesh.fill_holes()
-        if not mesh.is_watertight:
-            trimesh.repair.fix_normals(mesh)
-            trimesh.repair.fix_inversion(mesh)
-            mesh.fill_holes()
-        recovered["vertices"] = np.asarray(mesh.vertices)
-        recovered["faces"] = np.asarray(mesh.faces, dtype=np.int64)
-        recovered["is_watertight"] = bool(mesh.is_watertight)
-        recovered["volume"] = abs(float(mesh.volume))
-    if not len(recovered.get("faces", [])) or not recovered.get("volume", 0):
+    volume = float(recovered.get("volume") or 0.)
+    winding = recovered.get("is_winding_consistent")
+    if winding is None and recovered.get("is_watertight"):
+        # Older recovery payloads lack the explicit winding certificate.
+        # Inspect them without changing vertices, topology, or cavity signs.
+        import trimesh
+        mesh = trimesh.Trimesh(recovered.get("vertices", []), recovered["faces"], process=False)
+        winding = bool(mesh.is_winding_consistent)
+    if not recovered.get("is_watertight") or not winding or not np.isfinite(volume) or volume <= 0:
         raise ValueError(
-            "The lattice surface is empty. Increase cell size or minimum thickness."
+            "The generated lattice surface is not closed and consistently oriented with positive volume. "
+            "Choose a higher lattice quality or revise cell size/minimum thickness and regenerate. "
+            "No surface was healed or accepted for export."
         )
     manufactured = recovered.pop("manufactured_density", None)
     resolved = recovered.get("resolved_structure_options")

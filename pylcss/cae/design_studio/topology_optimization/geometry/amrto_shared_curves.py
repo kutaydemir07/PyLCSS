@@ -223,20 +223,25 @@ def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None, blocked_j
         for layout in layouts if getattr(layout, "require_exact_boundaries", False)
         for path in layout.boundary_paths for a, b in zip(path, path[1:])
     )
-    anchors, graph, owners = set(), defaultdict(set), defaultdict(set)
+    anchors, corner_positions, graph, owners = set(), set(), defaultdict(set), defaultdict(set)
     for owner, layout in enumerate(layouts):
         for path in layout.boundary_paths:
             points = layout.vertices[path]
-            anchors.update((key(points[0]), key(points[-1])))
+            endpoints = (key(points[0]), key(points[-1]))
+            anchors.update(endpoints)
+            corner_positions.update(endpoints)
             for a, b in zip(map(key, points), map(key, points[1:])):
                 graph[a].add(b)
                 graph[b].add(a)
                 owners[tuple(sorted((a, b)))].add(owner)
+    cornerless_junctions = set()
     for vertex, neighbors in graph.items():
-        if (len(neighbors) != 2
-                or len({frozenset(owners[tuple(sorted((vertex, n)))]) for n in neighbors}) != 1
-                or len({tuple(sorted((vertex, n))) in protected_edges for n in neighbors}) != 1):
+        multi_patch = (len(neighbors) != 2
+                       or len({frozenset(owners[tuple(sorted((vertex, n)))]) for n in neighbors}) != 1)
+        if multi_patch or len({tuple(sorted((vertex, n))) in protected_edges for n in neighbors}) != 1:
             anchors.add(vertex)
+            if multi_patch and vertex not in corner_positions:
+                cornerless_junctions.add(vertex)
         elif len(neighbors) == 2 and any(
                 tuple(sorted((vertex, neighbor))) in protected_edges for neighbor in neighbors):
             # Ordinary graph seams follow the faceted quad mesh and can zigzag
@@ -254,6 +259,10 @@ def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None, blocked_j
     cache, reports, native_reports, stock_reports = {}, [], [], []
     records, record_indices, side_specs = [], {}, []
     for layout in layouts:
+        layout.cornerless_junction_positions = [
+            [pos for vertex in path[1:-1] if (pos := key(layout.vertices[vertex])) in cornerless_junctions]
+            for path in layout.boundary_paths
+        ]
         for side, path in enumerate(layout.boundary_paths):
             cuts = [i for i, vertex in enumerate(path) if key(layout.vertices[vertex]) in anchors]
             chain_points = [layout.vertices[path[left:right + 1]] for left, right in zip(cuts, cuts[1:])]

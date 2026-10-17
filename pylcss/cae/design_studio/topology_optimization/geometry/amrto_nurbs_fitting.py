@@ -264,11 +264,29 @@ def fit_paper_nurbs_surface_for_layout(
     else:
         layout.multiresolution_report = {"enabled": False, "paper_algorithm_executed": False}
     if join_boundaries:
-        # Sewing locates real T-junctions geometrically. Spline basis knots
-        # are not CAD edge endpoints; splitting at all of them creates tiny
-        # trim edges and unstable local pcurves without changing the surface.
-        surface.segment_boundary_edges = False
-        layout.fitting_report['cad_boundary_topology'] = 'Natural surface edges; sewing resolves shared T-junctions'
+        # Sewing locates real T-junctions geometrically when at least one face
+        # has a corner vertex at the junction. Split only at cornerless
+        # multi-patch junctions where three sides meet in their interiors.
+        cornerless_by_side = getattr(layout, 'cornerless_junction_positions', ())
+        if any(cornerless_by_side) and getattr(layout, 'boundary_splines', None):
+            side_splits = []
+            for side_idx, positions in enumerate(cornerless_by_side):
+                splits = [0.0, 1.0]
+                if positions:
+                    kv = surface.knotvector_u if side_idx in (0, 2) else surface.knotvector_v
+                    u_cand = np.unique(kv)
+                    sp = layout.boundary_splines[side_idx]
+                    pts = np.asarray([sp(1.0 - float(u) if side_idx >= 2 else float(u)) for u in u_cand], dtype=float)
+                    for pos in positions:
+                        idx = int(np.argmin(np.linalg.norm(pts - np.asarray(pos, dtype=float), axis=1)))
+                        splits.append(float(u_cand[idx]))
+                side_splits.append(np.unique(splits).tolist())
+            surface.boundary_side_splits = side_splits
+            surface.segment_boundary_edges = True
+            layout.fitting_report['cad_boundary_topology'] = 'Natural surface edges split at cornerless multi-patch junctions'
+        else:
+            surface.segment_boundary_edges = False
+            layout.fitting_report['cad_boundary_topology'] = 'Natural surface edges; sewing resolves shared T-junctions'
     if source_guard:
         # Optional MRA must not turn an accepted initial fit into an invalid
         # source map. Retain the complete surface for review if it fails;
@@ -1034,6 +1052,11 @@ def nurbs_surface_to_occ_face(surf: Any, tol: float = 1e-4) -> Any:
                     or split_u[0] < u_uniq[0] or split_u[-1] > u_uniq[-1]
                     or split_v[0] < v_uniq[0] or split_v[-1] > v_uniq[-1]):
                 raise ValueError("Spline boundary split parameters must lie in the surface domain")
+            side_splits = getattr(surf, "boundary_side_splits", None)
+            if side_splits is not None:
+                s0, s1, s2, s3 = [np.unique(np.r_[0.0, 1.0, s]) for s in side_splits]
+            else:
+                s0, s1, s2, s3 = split_u, split_v, split_u, split_v
             # Isocurves already contain the exact boundary control points and
             # knots. Lifting a local-parameter pcurve with BuildCurves3d would
             # approximate them and can fail on compressed knot intervals.
@@ -1041,10 +1064,10 @@ def nurbs_surface_to_occ_face(surf: Any, tol: float = 1e-4) -> Any:
             # curve parameters paired with very short edge intervals can lose
             # trim correspondence during repeated STEP transfers. An affine
             # knot change and a linear UV Bezier preserve the exact geometry.
-            sides = [(split_u, occ_surf.VIso(0.0), (0.0, 0.0), (1.0, 0.0), False),
-                     (split_v, occ_surf.UIso(1.0), (1.0, 0.0), (0.0, 1.0), False),
-                     (split_u, occ_surf.VIso(1.0), (0.0, 1.0), (1.0, 0.0), True),
-                     (split_v, occ_surf.UIso(0.0), (0.0, 0.0), (0.0, 1.0), True)]
+            sides = [(s0, occ_surf.VIso(0.0), (0.0, 0.0), (1.0, 0.0), False),
+                     (s1, occ_surf.UIso(1.0), (1.0, 0.0), (0.0, 1.0), False),
+                     (s2, occ_surf.VIso(1.0), (0.0, 1.0), (1.0, 0.0), True),
+                     (s3, occ_surf.UIso(0.0), (0.0, 0.0), (0.0, 1.0), True)]
             for parameters, iso_curve, origin, direction, reverse in sides:
                 intervals = list(zip(parameters, parameters[1:]))
                 if reverse:

@@ -156,7 +156,13 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, GeometryStudyNode):
             widget_type="combo",
             items=[PUBLIC_FAMILIES[key].display_name for key in PUBLIC_FAMILY_KEYS],
         )
+        from .lattice_fit import DEFAULT_POST_LATTICE_QUALITY, POST_LATTICE_QUALITY_BUDGETS
+        self.create_property(
+            "post_lattice_quality", DEFAULT_POST_LATTICE_QUALITY,
+            widget_type="combo", items=list(POST_LATTICE_QUALITY_BUDGETS),
+        )
         self.create_property("post_lattice_cell_size_mm", 0.0, widget_type="float")
+        self.create_property("post_lattice_adaptive_cells", True, widget_type="bool")
         self.create_property("post_lattice_min_thickness_mm", 0.0, widget_type="float")
         self.create_property("post_lattice_skin_thickness_mm", 0.0, widget_type="float")
         self.create_property("post_lattice_min_density", 0.15, widget_type="float")

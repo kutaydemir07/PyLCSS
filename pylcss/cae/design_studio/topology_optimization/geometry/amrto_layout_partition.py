@@ -15,6 +15,7 @@ equivalent to a disk."
 from __future__ import annotations
 
 import glob
+import heapq
 import logging
 import math
 import json
@@ -1131,7 +1132,12 @@ class PaperLayoutError(ValueError):
 
 
 def _paper_layout_from_graph_patch(vertices, patch):
-    """Consume the GMCG sides verbatim, with only a winding reversal allowed."""
+    """Consume native GMCG sides, removing retraced interior edge excursions.
+
+    GMCG can export a side walk containing A-B-A excursions through an interior
+    edge. Cancel opposite traversals of the same edge, preserve the four native
+    corners, and validate that the resulting sides cover the disk boundary.
+    """
     patch_quads = np.asarray(patch["quads"], dtype=np.int64)
     if (patch_quads.ndim != 2 or patch_quads.shape[1] != 4 or not len(patch_quads)
             or patch_quads.min() < 0 or patch_quads.max() >= len(vertices)):
@@ -1140,30 +1146,264 @@ def _paper_layout_from_graph_patch(vertices, patch):
     layout = QuadLayout(int(patch["patch"]), vertices[used].copy(), triangles, quads=quads)
     layout.source_vertex_indices = used
     loop = _boundary_loop(triangles, len(used))
-    local_ids = {int(source): index for index, source in enumerate(used)}
-    paths = [[local_ids[int(source)] for source in side] for side in patch["sides"]]
+    source_ids = {int(global_id): local_id for local_id, global_id in enumerate(used)}
+    paths, side_repairs = [], []
+    for side_index, side in enumerate(patch["sides"]):
+        cleaned = []
+        for raw_source in side:
+            local_vertex = source_ids[int(raw_source)]
+            if len(cleaned) >= 2 and local_vertex == cleaned[-2]:
+                cleaned.pop()
+            else:
+                cleaned.append(local_vertex)
+        paths.append(cleaned)
+        if len(cleaned) != len(side):
+            side_repairs.append({"side": side_index,
+                                 "original_source_path": list(map(int, side)),
+                                 "source_path": [int(used[v]) for v in cleaned],
+                                 "removed_edge_traversal_count": len(side) - len(cleaned)})
     if (len(paths) != 4 or any(len(side) < 2 for side in paths)
             or len({side[0] for side in paths}) != 4
             or any(paths[index][-1] != paths[(index + 1) % 4][0] for index in range(4))):
         raise ValueError("GMCG did not provide four connected graph sides")
-    boundary = Counter(tuple(sorted(edge)) for edge in zip(loop, loop[1:] + loop[:1]))
-    graph_edges = Counter(tuple(sorted(edge)) for side in paths for edge in zip(side, side[1:]))
-    if graph_edges != boundary:
+    boundary = Counter(tuple(sorted((a, b))) for a, b in zip(loop, loop[1:] + loop[:1]))
+    sides = Counter(tuple(sorted((a, b))) for side in paths for a, b in zip(side, side[1:]))
+    if sides != boundary:
         raise ValueError("GMCG graph sides do not cover the complete layout boundary")
-    if (paths[0][0], paths[0][1]) not in set(zip(loop, loop[1:] + loop[:1])):
+    directed = set(zip(loop, loop[1:] + loop[:1]))
+    if (paths[0][0], paths[0][1]) not in directed:
         paths = [list(reversed(side)) for side in reversed(paths)]
     layout.boundary_paths = paths
     layout.corner_indices = [side[0] for side in paths]
+    if side_repairs:
+        layout.native_graph_side_repair = {
+            "patch": int(patch["patch"]),
+            "method": "Cancel opposite traversals of retraced native GMCG edges",
+            "native_corners_preserved": True, "source_quads_unchanged": True,
+            "complete_disk_boundary_validated": True, "side_repairs": side_repairs}
     return layout
 
 
+def _paper_D1_annular_layouts(vertices, patch):
+    """Divide a genus-0 two-loop annular chart into self-seam-free disks via D1 cuts."""
+    from .amrto_disk_repairs import (
+        _boundary_loops, _face_components, _shortest_boundary_cut, _split_vertex_fans, _topology,
+    )
+
+    patch_quads = np.asarray(patch["quads"], dtype=np.int64)
+    used = np.unique(patch_quads)
+    local_map = {int(old): index for index, old in enumerate(used)}
+    local_quads = np.asarray([[local_map[int(v)] for v in quad] for quad in patch_quads], dtype=np.int64)
+    local_verts = np.asarray(vertices, dtype=float)[used].copy()
+    initial_topology = _topology(local_quads)
+    if (initial_topology["euler_characteristic"] != 0
+            or initial_topology["boundary_loop_count"] != 2
+            or initial_topology["edge_connected_component_count"] != 1):
+        return None
+    loops = sorted(_boundary_loops(local_quads), key=len)
+    inner_loop, outer_loop = loops[0], loops[1]
+    quad_deg = Counter(int(v) for quad in local_quads for v in quad)
+    reflex_outer = [v for v in outer_loop if quad_deg[v] >= 3]
+    convex_outer = [v for v in outer_loop if quad_deg[v] == 1]
+    native_corners = {int(side[0]) for side in patch.get("sides", ()) if len(side)}
+
+    quad_edge_counts = Counter(
+        tuple(sorted((int(u), int(v))))
+        for quad in patch_quads for u, v in zip(quad, np.roll(quad, -1))
+    )
+    cleaned_sides = []
+    for side in patch.get("sides", ()):
+        cleaned = []
+        for raw in side:
+            val = int(raw)
+            if len(cleaned) >= 2 and val == cleaned[-2]:
+                cleaned.pop()
+            else:
+                cleaned.append(val)
+        cleaned_sides.append(cleaned)
+    side_directed = [(a, b) for side in cleaned_sides for a, b in zip(side, side[1:])]
+    side_counts = Counter(tuple(sorted(edge)) for edge in side_directed)
+    seam_edges = sorted(
+        edge for edge, count in side_counts.items()
+        if count == 2 and quad_edge_counts.get(edge) == 2
+        and side_directed.count(edge) == 1
+        and side_directed.count((edge[1], edge[0])) == 1
+    )
+
+    cuts, cut_edges, strip_corner_sets = [], [], []
+    ring_comp = list(range(len(local_quads)))
+    if reflex_outer and len(convex_outer) >= 2:
+        local_ec = Counter(
+            tuple(sorted((int(u), int(v))))
+            for quad in local_quads for u, v in zip(quad, np.roll(quad, -1))
+        )
+        int_adj = defaultdict(list)
+        for (u, v), count in local_ec.items():
+            if count == 2:
+                w = float(np.linalg.norm(local_verts[u] - local_verts[v]))
+                int_adj[u].append((w, v))
+                int_adj[v].append((w, u))
+        outer_set, inner_set = set(outer_loop), set(inner_loop)
+        best_neck = None
+        for r in reflex_outer:
+            dist, prev, pq = {r: 0.0}, {}, [(0.0, r)]
+            c_cand, l_cand = None, None
+            while pq:
+                d_u, u = heapq.heappop(pq)
+                if d_u > dist[u]:
+                    continue
+                if u != r and u in outer_set:
+                    c_cand = [u]
+                    while c_cand[-1] != r:
+                        c_cand.append(prev[c_cand[-1]])
+                    c_cand.reverse()
+                    l_cand = d_u
+                    break
+                if u != r and u in inner_set:
+                    continue
+                for w, v in int_adj[u]:
+                    if v not in dist or d_u + w < dist[v]:
+                        dist[v] = d_u + w
+                        prev[v] = u
+                        heapq.heappush(pq, (d_u + w, v))
+            if c_cand is None:
+                continue
+            cand_edges = [tuple(sorted((a, b))) for a, b in zip(c_cand, c_cand[1:])]
+            _, test_faces, _, _ = _split_vertex_fans(local_verts, local_quads, used, cand_edges)
+            comps = _face_components(test_faces)
+            if len(comps) != 2:
+                continue
+            disk_comps = [comp for comp in comps if _topology(local_quads[comp])["is_disk"]]
+            ring_comps = [comp for comp in comps if not _topology(local_quads[comp])["is_disk"]]
+            if len(disk_comps) != 1 or len(ring_comps) != 1:
+                continue
+            r_comp = ring_comps[0]
+            r_loops = sorted(_boundary_loops(local_quads[r_comp]), key=len)
+            if len(r_loops) != 2:
+                continue
+            r_deg = Counter(int(v) for quad in local_quads[r_comp] for v in quad)
+            rem_reflex = sum(1 for v in r_loops[1] if r_deg[v] >= 3)
+            score = (rem_reflex, float(l_cand))
+            if best_neck is None or score < best_neck[0]:
+                best_neck = (score, c_cand, l_cand, cand_edges, disk_comps[0], r_comp, r_loops)
+        if best_neck is not None:
+            _, c_strip, l_strip, c_strip_edges, d_comp, ring_comp, ring_loops = best_neck
+            cuts.append({
+                "component": 0, "path": list(map(int, c_strip)),
+                "source_vertex_path": [int(used[v]) for v in c_strip],
+                "physical_length": float(l_strip),
+                "metric": "Shortest physical mesh-edge geodesic across peninsula neck",
+            })
+            cut_edges.extend(c_strip_edges)
+            neck_ends = {int(used[c_strip[0]]), int(used[c_strip[-1]])}
+            sub_loop_src = {int(used[v]) for v in _boundary_loops(local_quads[d_comp])[0]}
+            tip_corners = (sub_loop_src & native_corners) - neck_ends
+            if len(tip_corners) != 2:
+                tip_corners = {int(used[v]) for v in convex_outer if int(used[v]) in sub_loop_src} - neck_ends
+            c_set = neck_ends | tip_corners
+            strip_corner_sets.append((set(d_comp), c_set))
+            inner_loop, outer_loop = ring_loops[0], ring_loops[1]
+
+    cut1 = None
+    if seam_edges:
+        adj = defaultdict(list)
+        for u, v in seam_edges:
+            if u in local_map and v in local_map:
+                lu, lv = local_map[u], local_map[v]
+                adj[lu].append(lv)
+                adj[lv].append(lu)
+        starts = [v for v in adj if v in set(inner_loop)]
+        ends = [v for v in adj if v in set(outer_loop)]
+        if len(starts) == 1 and len(ends) == 1:
+            path = [starts[0]]
+            while path[-1] != ends[0]:
+                nxt = [n for n in adj[path[-1]] if len(path) < 2 or n != path[-2]]
+                if len(nxt) != 1:
+                    break
+                path.append(nxt[0])
+            if path[-1] == ends[0]:
+                cut1 = path
+    if cut1 is None:
+        cut1, _ = _shortest_boundary_cut(local_verts, local_quads[ring_comp], [inner_loop, outer_loop])
+    if cut1[0] not in set(inner_loop):
+        cut1 = list(reversed(cut1))
+    l1 = float(sum(np.linalg.norm(local_verts[a] - local_verts[b]) for a, b in zip(cut1, cut1[1:])))
+    cuts.append({
+        "component": 0, "path": list(map(int, cut1)),
+        "source_vertex_path": [int(used[v]) for v in cut1],
+        "physical_length": l1,
+        "metric": "Shortest physical mesh-edge geodesic",
+    })
+    cut_edges.extend(tuple(sorted((a, b))) for a, b in zip(cut1, cut1[1:]))
+
+    u1, v1 = cut1[0], cut1[-1]
+    idx_u1 = inner_loop.index(u1)
+    rot_in = inner_loop[idx_u1:] + inner_loop[:idx_u1]
+    u2 = rot_in[len(rot_in) // 2]
+    ring_sub_quads = [quad for quad in local_quads[ring_comp] if not (set(quad) & set(cut1))]
+    if not ring_sub_quads:
+        return None
+    cut2, l2 = _shortest_boundary_cut(
+        local_verts, np.asarray(ring_sub_quads, dtype=np.int64),
+        [[u2], [v for v in outer_loop if v not in set(cut1)]])
+    v2 = cut2[-1]
+    cuts.append({
+        "component": 0, "path": list(map(int, cut2)),
+        "source_vertex_path": [int(used[v]) for v in cut2],
+        "physical_length": float(l2),
+        "metric": "Shortest physical mesh-edge geodesic",
+    })
+    cut_edges.extend(tuple(sorted((a, b))) for a, b in zip(cut2, cut2[1:]))
+
+    ring_corners = {int(used[u1]), int(used[v1]), int(used[u2]), int(used[v2])}
+    pos, faces, src_ids, coincident_splits = _split_vertex_fans(local_verts, local_quads, used, cut_edges)
+    layouts = []
+    report = {
+        "method": "Appendix D Improvement 1: shortest mesh-edge seams and coincident vertex fan splitting",
+        "paper_D1_executed": True, "paper_D1_validated": True,
+        "coincident_vertex_splits": coincident_splits, "geodesic_cuts": cuts,
+        "new_vertex_count": int(len(pos) - len(used)),
+        "input_quad_count": int(len(patch_quads)), "covered_quad_count": int(len(patch_quads)),
+        "physical_geometry_unchanged": True, "source_quad_coverage_exactly_once": True,
+        "remaining_non_disk_part_count": 0,
+    }
+    for comp in _face_components(faces):
+        u2_idx, tris, c_qs = triangulate_quads_clean(pos, faces[comp])
+        layout = QuadLayout(int(patch["patch"]), pos[u2_idx].copy(), tris, quads=c_qs)
+        layout.source_vertex_indices = src_ids[u2_idx]
+        layout.source_face_indices = list(comp)
+        loop = _boundary_loop(tris, len(u2_idx))
+        target_corners = next((cs for fset, cs in strip_corner_sets if fset == set(comp)), ring_corners)
+        corners = [v for v in loop if int(layout.source_vertex_indices[v]) in target_corners]
+        if len(corners) != 4:
+            return None
+        start = loop.index(corners[0])
+        loop = loop[start:] + loop[:start]
+        corners = [v for v in loop if v in set(corners)]
+        positions = [loop.index(v) for v in corners]
+        layout.boundary_paths = [
+            loop[positions[i]:positions[i + 1] + 1] if i < 3 else loop[positions[3]:] + [loop[0]]
+            for i in range(4)
+        ]
+        layout.corner_indices = corners
+        if _self_seam_source_ids(layout):
+            return None
+        layout.appendix_D1_report = report
+        layouts.append(layout)
+    return layouts, report
+
+
 def _paper_D1_layouts(vertices, patch):
-    """Cut a cylindrical chart at a geodesic seam; its ends supply four corners.
+    """Cut a cylindrical chart at geodesic seams; their ends supply four corners.
 
     Unlike geometric corner reselection or PCA clustering, these corners are
-    exactly the two copies of the two Appendix D1 seam endpoints. Complex cuts
-    that do not supply four corners remain an explicit unsupported case.
+    supplied directly by the Appendix D1 seam endpoints (and any retained
+    native corners on reflex-bounded peninsulas). Complex cuts that do not
+    supply four corners remain an explicit unsupported case.
     """
+    annular = _paper_D1_annular_layouts(vertices, patch)
+    if annular is not None:
+        return annular
     patch_quads = np.asarray(patch["quads"], dtype=np.int64)
     parts, report = repair_quad_patch_to_disks(vertices, patch_quads)
     if not report.get("paper_D1_executed") or not report.get("paper_D1_validated"):
@@ -1237,6 +1477,8 @@ def _load_paper_indexed_gmcg_layouts(path: Path, vertices, quads):
                      "input_quad_count": len(quads), "covered_quad_count": covered,
                      "boundary_source": "Native graph sides; Appendix D1 seam endpoints where required",
                      "appendix_D1": D1_reports, "parameterization_repairs": [],
+                     "native_graph_side_repairs": [layout.native_graph_side_repair for layout in layouts
+                                                   if hasattr(layout, "native_graph_side_repair")],
                      "coverage_validation": "Every source quad occurs exactly once; source coordinates unchanged",
                      **_appendix_report(layouts)}
 

@@ -441,6 +441,7 @@ def _external_generate_lattice(result, settings, *, progress_callback=None):
         output["lattice_preview_mesh"] = run_cad_job(
             "lattice_display",
             _lattice_display_input(output["recovered_shape"]),
+            output["generated_lattice"]["settings"].get("post_lattice_quality") or "High",
             progress_callback=progress_callback,
         )
     except Exception as exc:
@@ -458,11 +459,11 @@ def _external_generate_lattice(result, settings, *, progress_callback=None):
     }
 
 
-def _external_prepare_lattice_display(recovered, *, progress_callback=None):
+def _external_prepare_lattice_display(recovered, quality="High", *, progress_callback=None):
     from pylcss.cae.design_studio.topology_optimization.geometry.lattice_display import prepare_lattice_display
     if progress_callback:
         progress_callback({'status_only': True, 'stage': 'Preparing lattice display'}, None, 0, 0)
-    return prepare_lattice_display(recovered)
+    return prepare_lattice_display(recovered, quality=quality)
 
 
 def _restore_lattice_output(result, transfer):
@@ -523,9 +524,10 @@ class TopOptLatticeDisplayWorker(QtCore.QThread):
     display_error = QtCore.Signal(str)
     display_cancelled = QtCore.Signal()
 
-    def __init__(self, recovered, *, parent=None):
+    def __init__(self, recovered, *, quality="High", parent=None):
         super().__init__(parent)
         self.recovered = recovered
+        self.quality = quality
 
     def run(self):
         from .cad_background import CadJobCancelled, run_cad_job
@@ -533,6 +535,7 @@ class TopOptLatticeDisplayWorker(QtCore.QThread):
             if self.isInterruptionRequested():
                 raise CadJobCancelled('Lattice display cancelled')
             display = run_cad_job('lattice_display', _lattice_display_input(self.recovered),
+                                  self.quality,
                                   cancel_callback=self.isInterruptionRequested)
             if self.isInterruptionRequested():
                 raise CadJobCancelled('Lattice display cancelled')

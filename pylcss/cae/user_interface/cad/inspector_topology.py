@@ -776,6 +776,25 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             "Select a family for the intended loads and manufacturing process."
         )
         layout.addRow("Lattice Type:", selector)
+        from pylcss.cae.design_studio.topology_optimization.integration.lattice_fit import (
+            DEFAULT_POST_LATTICE_QUALITY, POST_LATTICE_QUALITY_BUDGETS,
+        )
+        quality = combo("post_lattice_quality", list(POST_LATTICE_QUALITY_BUDGETS), DEFAULT_POST_LATTICE_QUALITY)
+        quality.setToolTip(
+            "Sampling quality: Standard up to 8 million samples, High up to 64 million, "
+            "Professional up to 128 million. Higher quality uses more memory. "
+            "Cell size and minimum wall/strut are preserved. If they exceed the selected "
+            "sampling budget, generation stops with an explanation."
+        )
+        layout.addRow("Lattice Quality:", quality)
+        adaptive = QtWidgets.QCheckBox("Fit smaller cells near boundaries")
+        saved_adaptive = node.get_property("post_lattice_adaptive_cells")
+        adaptive.setChecked(True if saved_adaptive is None else bool(saved_adaptive))
+        adaptive.setToolTip("Keep the nominal cell size in broad interiors. Fit smaller cells near the "
+                            "CAD/STL boundary, joined through an overlapping transition. Minimum wall/strut "
+                            "thickness is retained. This can require more sampling and time.")
+        adaptive.toggled.connect(lambda value: self.update_property("post_lattice_adaptive_cells", value))
+        layout.addRow("Boundary Cells:", adaptive)
         for prop, label in (
             ("post_lattice_cell_size_mm", "Cell Size:"),
             ("post_lattice_min_thickness_mm", "Minimum Wall / Strut:"),
@@ -794,7 +813,14 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
                     "Auto fit sizes cells in design material, excluding non-design "
                     "pads, while honoring wall/strut thickness. All design features "
                     "receive lattice cells, trimmed to the optimized CAD/STL boundary. "
-                    "A positive value sets a fixed pitch."
+                    "A positive value sets the nominal interior pitch that quality settings never change. "
+                    "Boundary Cells can use smaller cells near the boundary."
+                )
+            if prop == "post_lattice_min_thickness_mm":
+                widget.setToolTip(
+                    "A positive value is the physical minimum wall/strut thickness. "
+                    "The graded cell-density range can produce thicker members. "
+                    "Sampling quality never changes this minimum."
                 )
             layout.addRow(label, widget)
         for prop, label, default in (

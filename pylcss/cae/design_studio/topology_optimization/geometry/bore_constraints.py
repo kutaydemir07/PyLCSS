@@ -9,6 +9,39 @@ from typing import Any
 import numpy as np
 
 
+def conservative_bore_void_field(axes, records, spacing):
+    """Reserve facet sag before contouring, avoiding a folded post-projection.
+
+    A marching-cubes triangle lies in one sampling cell. Inflating the bore by
+    sqrt(R²+D²)-R, with D the cell diagonal, bounds radial chord sag for its
+    convex facets. The original bore is never reduced; this is an explicit,
+    reported outward allowance in the sampled manufacturing surface.
+    """
+    spacing = np.asarray(spacing, dtype=float)
+    diagonal = float(np.linalg.norm(spacing))
+    result = np.full(tuple(len(a) for a in axes), -np.inf, dtype=np.float32)
+    report = []
+    for axis, origin, radius, lower, upper in records:
+        axis, origin = np.asarray(axis), np.asarray(origin)
+        # Cover binary-STL coordinate rounding as well as the chord bound.
+        coordinate = max(float(np.max(np.abs(a))) for a in axes)
+        safety = max(1e-6, 8.*abs(float(np.spacing(np.float32(coordinate)))))
+        effective = float(np.sqrt(radius*radius+diagonal*diagonal)+safety)
+        for start in range(0, len(axes[0]), 16):
+            stop = min(start+16, len(axes[0]))
+            delta = (axes[0][start:stop, None, None]-origin[0],
+                     axes[1][None, :, None]-origin[1], axes[2][None, None, :]-origin[2])
+            height = sum(delta[i]*axis[i] for i in range(3))
+            radial = np.sqrt(sum((delta[i]-height*axis[i])**2 for i in range(3)))
+            level = np.minimum(effective-radial,
+                (upper-lower)*.5+diagonal-np.abs(height-(upper+lower)*.5))
+            np.maximum(result[start:stop], level, out=result[start:stop])
+        report.append({'original_radius_mm': float(radius), 'sampled_clearance_radius_mm': effective,
+                       'maximum_radial_allowance_mm': effective-float(radius),
+                       'sampling_cell_diagonal_mm': diagonal})
+    return result, report
+
+
 def source_bore_records(source_cad: Any, *, diagnostics: dict | None = None) -> list:
     """Return inward cylindrical through-bores in the original CAD coordinates.
 
