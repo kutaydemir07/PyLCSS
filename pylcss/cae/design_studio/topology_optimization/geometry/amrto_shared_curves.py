@@ -116,6 +116,12 @@ def simplify_shared_curve(curve, points, tolerance, *, bounds=None, maximum_atte
             distance = max(float(np.linalg.norm(candidate(sites) - source, axis=1).max()),
                            float(_curve_distance_to_polyline(candidate(sites), points).max()))
             if distance <= tolerance:
+                if bounds is not None:
+                    from .amrto_shared_stock import CanonicalChainCertificationError, project_canonical_chain
+                    try:
+                        project_canonical_chain(candidate, points, bounds, tolerance)
+                    except CanonicalChainCertificationError:
+                        continue
                 current = candidate
                 removed += 1
                 changed = True
@@ -157,6 +163,12 @@ def _fit_curve(points, tolerance, *, preserve_polyline=False, bounds=None):
                        float(_curve_distance_to_polyline(curve(dense_t), points).max()))
         best = (curve, distance)
         if distance <= tolerance:
+            if bounds is not None:
+                from .amrto_shared_stock import CanonicalChainCertificationError, project_canonical_chain
+                try:
+                    project_canonical_chain(curve, points, bounds, tolerance)
+                except CanonicalChainCertificationError:
+                    continue
             curve, reduction = simplify_shared_curve(curve, points, tolerance, bounds=bounds)
             distance = max(float(np.linalg.norm(curve(sample_t) - samples, axis=1).max()),
                            float(_curve_distance_to_polyline(curve(dense_t), points).max()))
