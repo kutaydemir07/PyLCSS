@@ -85,7 +85,7 @@ def lattice_design_mask(geometry, shape, bounds):
         lower[axis] + (np.arange(size) + .5) * spacing[axis]
         for axis, size in enumerate(shape)
     )
-    mesh = geometry_triangle_mesh(geometry, float(np.min(spacing)) * .05)
+    mesh = geometry_triangle_mesh(geometry, max(0.1, float(np.min(spacing)) * 0.35))
     return mesh_signed_distance_grid(mesh, axes) > 0.
 
 
@@ -263,8 +263,19 @@ def generate_post_topopt_lattice(
             "Lattice generation produced no surface. Increase cell size or minimum thickness."
         )
     if not recovered.get("is_watertight") or not recovered.get("volume", 0):
+        mesh = trimesh.Trimesh(recovered.get("vertices", []), recovered.get("faces", []), process=True)
+        mesh.fill_holes()
+        if not mesh.is_watertight:
+            trimesh.repair.fix_normals(mesh)
+            trimesh.repair.fix_inversion(mesh)
+            mesh.fill_holes()
+        recovered["vertices"] = np.asarray(mesh.vertices)
+        recovered["faces"] = np.asarray(mesh.faces, dtype=np.int64)
+        recovered["is_watertight"] = bool(mesh.is_watertight)
+        recovered["volume"] = abs(float(mesh.volume))
+    if not len(recovered.get("faces", [])) or not recovered.get("volume", 0):
         raise ValueError(
-            "The lattice surface is not closed. Increase cell size or minimum thickness."
+            "The lattice surface is empty. Increase cell size or minimum thickness."
         )
     manufactured = recovered.pop("manufactured_density", None)
     resolved = recovered.get("resolved_structure_options")

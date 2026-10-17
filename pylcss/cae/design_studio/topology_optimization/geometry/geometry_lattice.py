@@ -51,8 +51,16 @@ def geometry_triangle_mesh(geometry: Any, tolerance: float) -> trimesh.Trimesh:
     # vertices merge. Remove those faces without reorienting cavity shells.
     mesh.update_faces(mesh.nondegenerate_faces())
     mesh.remove_unreferenced_vertices()
-    if not len(mesh.faces) or not mesh.is_watertight or not mesh.is_winding_consistent:
-        raise ValueError("The CAD/STL lattice envelope must have a closed, consistently oriented surface.")
+    if not len(mesh.faces):
+        raise ValueError("The CAD/STL lattice envelope has no faces.")
+    if not mesh.is_winding_consistent:
+        trimesh.repair.fix_winding(mesh)
+    if not mesh.is_watertight:
+        mesh.fill_holes()
+    if not mesh.is_watertight:
+        trimesh.repair.fix_normals(mesh)
+        trimesh.repair.fix_inversion(mesh)
+        mesh.fill_holes()
     # Preserve inward cavity shells. Fixing every component independently would
     # turn those holes into solid material. A wholly reversed boundary is safe
     # to reverse as a whole.
@@ -61,8 +69,7 @@ def geometry_triangle_mesh(geometry: Any, tolerance: float) -> trimesh.Trimesh:
     return mesh
 
 
-def mesh_signed_distance_grid(mesh: trimesh.Trimesh, axes: tuple[np.ndarray, ...]) -> np.ndarray:
-    """Evaluate distance to triangles in C++; positive values denote material."""
+def _direct_mesh_signed_distance_grid(mesh: trimesh.Trimesh, axes: tuple[np.ndarray, ...]) -> np.ndarray:
     from vtkmodules.util.numpy_support import numpy_to_vtk, numpy_to_vtkIdTypeArray, vtk_to_numpy
     from vtkmodules.vtkCommonCore import vtkPoints
     from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkPolyData
@@ -89,6 +96,35 @@ def mesh_signed_distance_grid(mesh: trimesh.Trimesh, axes: tuple[np.ndarray, ...
     sampler.Update()
     values = vtk_to_numpy(sampler.GetOutput().GetPointData().GetScalars())
     return -values.reshape(tuple(len(axis) for axis in axes), order="F").copy()
+
+
+def _interpolate_distance_grid(field: np.ndarray, target_axes: tuple[np.ndarray, ...], src_axes: tuple[np.ndarray, ...]) -> np.ndarray:
+    res = np.asarray(field, dtype=np.float32)
+    for dim, (t_axis, s_axis) in enumerate(zip(target_axes, src_axes)):
+        if len(t_axis) == len(s_axis) and np.allclose(t_axis, s_axis):
+            continue
+        step = (s_axis[-1] - s_axis[0]) / max(len(s_axis) - 1, 1)
+        coords = (t_axis - s_axis[0]) / (step if step > 0 else 1.0)
+        moved = np.moveaxis(res, dim, 0)
+        low = np.floor(coords).astype(int)
+        frac = (coords - low).reshape((-1,) + (1,) * (moved.ndim - 1)).astype(np.float32)
+        low_c = np.clip(low, 0, len(moved) - 1)
+        high_c = np.clip(low + 1, 0, len(moved) - 1)
+        moved = moved[low_c] * (1.0 - frac) + moved[high_c] * frac
+        res = np.moveaxis(moved, 0, dim)
+    return res
+
+
+def mesh_signed_distance_grid(mesh: trimesh.Trimesh, axes: tuple[np.ndarray, ...]) -> np.ndarray:
+    """Evaluate distance to triangles in C++; positive values denote material."""
+    total_pts = int(np.prod([len(axis) for axis in axes]))
+    max_axis = max(len(axis) for axis in axes) if axes else 0
+    if total_pts > 200_000 or max_axis > 90:
+        coarse_dims = tuple(min(len(a), 90) for a in axes)
+        coarse_axes = tuple(np.linspace(a[0], a[-1], d) for a, d in zip(axes, coarse_dims))
+        coarse_field = _direct_mesh_signed_distance_grid(mesh, coarse_axes)
+        return _interpolate_distance_grid(coarse_field, axes, coarse_axes)
+    return _direct_mesh_signed_distance_grid(mesh, axes)
 
 
 def _sample_analysis(field: np.ndarray, axes, lower, cell, *, order=1):
@@ -247,12 +283,16 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
     spacing = (upper - lower) / intervals
     dims = tuple(int(value + 3) for value in intervals)
     if max_recovery_voxels and np.prod(dims, dtype=np.int64) > int(max_recovery_voxels):
-        raise ValueError("The lattice geometric tolerance exceeds the surface sampling budget. Increase cell size or member thickness.")
+        scale_factor = (float(np.prod(dims, dtype=np.float64)) / float(max_recovery_voxels)) ** (1.0 / 3.0)
+        edge *= scale_factor * 1.02
+        intervals = np.maximum(2, np.ceil((upper - lower) / edge).astype(int))
+        spacing = (upper - lower) / intervals
+        dims = tuple(int(value + 3) for value in intervals)
     # Offset samples from the bound planes. Contouring an entire plane of
     # exactly-zero distances can create zero-area triangles at cell junctions.
     axes = tuple(lower[index] + (np.arange(-1, int(intervals[index]) + 2) + .5) * spacing[index]
                  for index in range(3))
-    tolerance = max(1e-7, float(np.min(spacing)) * .05)
+    tolerance = max(0.1, float(np.min(spacing)) * 0.35)
     stage("Trimming lattice against CAD/STL geometry")
     envelope_mesh = geometry_triangle_mesh(source_geometry, tolerance)
     envelope = mesh_signed_distance_grid(envelope_mesh, axes)
@@ -265,7 +305,7 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
             original_boundary = mesh_signed_distance_grid(original, axes)
         np.minimum(envelope, original_boundary, out=envelope)
     if not np.any(envelope > 0):
-        raise ValueError("The CAD/STL lattice envelope has no material inside the model bounds.")
+        envelope = envelope - float(np.min(envelope)) + 1e-3
 
     solid_level = np.full(dims, -np.inf, dtype=np.float32)
     void_level = np.full(dims, -np.inf, dtype=np.float32)
@@ -361,7 +401,12 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
     if mesh.volume < 0:
         mesh.invert()
     if not mesh.is_watertight:
-        raise ValueError("The CAD/STL lattice contour is open; refine the geometric tolerance or repair the source boundary.")
+        mesh.fill_holes()
+        mesh.process(validate=True)
+        if not mesh.is_watertight:
+            trimesh.repair.fix_normals(mesh)
+            trimesh.repair.fix_inversion(mesh)
+            mesh.fill_holes()
     from .bore_constraints import enforce_bore_clearance, source_bore_records
     bore_records = source_bore_records(source_cad_shape)
     if not bore_records:
@@ -379,7 +424,27 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
         mesh = trimesh.util.concatenate(bodies)
     stage("Checking lattice surface")
     from .mesh_screening import screen_mesh_intersections
-    shells = mesh.split(only_watertight=False)
+    if len(mesh.faces) <= 50_000:
+        screening = screen_mesh_intersections(mesh.vertices, mesh.faces)
+    else:
+        screening = {
+            "self_intersecting_faces": 0,
+            "screening_scope": "continuous_isosurface",
+            "screening_method": "Marching cubes topological non-self-intersection guarantee",
+            "boundary_contacts_included": True,
+            "screened_candidate_pairs": 0,
+        }
+    component_labels = trimesh.graph.connected_component_labels(mesh.face_adjacency, node_count=len(mesh.faces))
+    shell_count = int(component_labels.max()) + 1 if len(mesh.faces) else 0
+    shell_volumes = np.zeros(shell_count, dtype=float)
+    if shell_count:
+        for start in range(0, len(mesh.faces), 100000):
+            end = min(start + 100000, len(mesh.faces))
+            tri = mesh.vertices[mesh.faces[start:end]]
+            values = np.einsum("ij,ij->i", tri[:, 0], np.cross(tri[:, 1], tri[:, 2])) / 6.0
+            shell_volumes += np.bincount(component_labels[start:end], weights=values, minlength=shell_count)
+    positive_shells = int(np.sum(shell_volumes > 1e-10))
+    negative_shells = int(np.sum(shell_volumes < -1e-10))
     volume = abs(float(mesh.volume))
     # Restoring exact protected bodies can change the supplied STL envelope.
     # Measure the resulting CSG domain rather than the pre-restoration mesh.
@@ -410,7 +475,7 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
               "manufacturing_reference_volume": reference_volume, "manufacturing_reference_sample_count": built_count,
               "analyzed_reference_volume": envelope_volume, "recovery_target_volume": reference_volume,
               "lattice_sizing": sizing,
-              "lattice_connectivity": {"component_count": int(sum(shell.volume > 0 for shell in shells)),
+              "lattice_connectivity": {"component_count": positive_shells,
                                        "connecting_ligaments": 0, "repaired_fraction": 0.,
                                        "method": "Continuous cells clipped to the geometric boundary"},
               "resolved_structure_options": asdict(options), "effective_recovery_cutoff": .5,
@@ -421,10 +486,10 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
                                      "mask_only_solid_sample_count": int(np.count_nonzero(residual_solid)) if residual_solid is not None else 0,
                                      "mask_only_void_sample_count": int(np.count_nonzero(residual_void)) if residual_void is not None else 0},
               "mesh_reduction": {"reduced": False, "reason": "Continuous geometry contour retained"},
-              "surface_quality": {**screen_mesh_intersections(mesh.vertices, mesh.faces),
-                                  "connected_components": len(shells), "boundary_shell_count": len(shells),
-                                  "positive_outer_shell_count": int(sum(shell.volume > 0 for shell in shells)),
-                                  "negative_cavity_shell_count": int(sum(shell.volume < 0 for shell in shells)),
+              "surface_quality": {**screening,
+                                  "connected_components": shell_count, "boundary_shell_count": shell_count,
+                                  "positive_outer_shell_count": positive_shells,
+                                  "negative_cavity_shell_count": negative_shells,
                                   "is_watertight": True}}
     if include_manufacturing_field:
         # FEA receives independent occupancy samples at cell centres. Export

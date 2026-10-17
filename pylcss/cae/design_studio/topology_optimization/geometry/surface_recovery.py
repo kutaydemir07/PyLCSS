@@ -138,10 +138,8 @@ def _recover_voxel_shape(
             zoom = target_counts / analysis_shape
         point_budget = kwargs.get("max_recovery_voxels")
         if point_budget and float(np.prod(np.round(analysis_shape * zoom))) > int(point_budget):
-            raise ValueError(
-                "The requested lattice needs more than the build-grid voxel budget. "
-                "Increase cell size or minimum wall/strut thickness."
-            )
+            scale = (float(point_budget) / float(np.prod(np.round(analysis_shape * zoom)))) ** (1.0 / 3.0)
+            zoom = np.maximum(1.0, zoom * scale * 0.98)
         extrusion_index = {"x": 0, "y": 1, "z": 2}.get(str(extrusion_axis or "").lower())
         if extrusion_index is not None and not is_lattice:
             grid = np.broadcast_to(np.mean(grid, axis=extrusion_index, keepdims=True), grid.shape).copy()

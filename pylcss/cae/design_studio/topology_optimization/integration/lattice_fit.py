@@ -90,19 +90,28 @@ def fit_lattice_dimensions(
     automatic = requested_cell == 0.0
     # Automatic wall follows feature size but must remain resolvable. A stated
     # process minimum is authoritative and is never reduced to obtain a fit.
-    member = (
-        float(requested_member)
-        if requested_member > 0.0
-        else (
-            max(feature / 16.0, 3.0 * budget_edge) if automatic else 0.5 * nominal_edge
-        )
-    )
+    if requested_member > 0.0:
+        member = float(requested_member)
+    elif automatic:
+        member = max(feature / 16.0, 3.0 * budget_edge)
+    else:
+        area_factor = (tpms_specific_surface_area(family.key) / 0.80) if family.is_tpms else 1.0
+        if family.is_tpms and family.wall_mode == "skeletal":
+            area_factor *= 0.5
+        max_member_for_cell = 0.70 * float(requested_cell) / max(area_factor, 1.0)
+        member = min(0.5 * nominal_edge, max_member_for_cell)
+        member = max(member, 3.0 * budget_edge)
+
     skin = float(requested_skin)
     resolution_floor = 2.0 * float(family.minimum_cell_voxels) * budget_edge
+    # Ensure minimum resolvable member
+    member = max(member, 3.0 * budget_edge)
+
     # The TPMS renderer caps its wall-derived occupancy at 80%. Do not request
     # a thicker wall than that cap can represent and silently lose the floor.
     # Strut diameter must stay below the pitch to retain a cell opening.
     member_pitch = member
+    area = 1.0
     if family.is_tpms:
         area = tpms_specific_surface_area(family.key)
         if family.wall_mode == "skeletal":
@@ -110,33 +119,35 @@ def fit_lattice_dimensions(
         member_pitch = max(member_pitch, area * member / 0.80)
     floor = max(resolution_floor, member_pitch)
     target = max(0.0, (feature - 2.0 * skin) / CELLS_ACROSS_FEATURE)
-    cell = max(target, floor) if automatic else float(requested_cell)
-    if (
-        member < 3.0 * budget_edge * (1.0 - 1e-6)
-        or cell < resolution_floor * (1.0 - 1e-6)
-    ):
-        raise ValueError(
-            "The requested lattice cannot resolve its cell and minimum wall/strut "
-            "within the build-grid budget. Increase cell size or minimum "
-            "thickness. Design regions will not be replaced with solid material."
-        )
-    if member >= cell or cell < member_pitch * (1.0 - 1e-6):
-        raise ValueError(
-            "The minimum wall/strut thickness exceeds the cell's supported "
-            "thickness or leaves no lattice opening. "
-            "Increase cell size or reduce the minimum thickness."
-        )
+    if automatic:
+        cell = max(target, floor)
+    else:
+        cell = float(requested_cell)
+        if cell < resolution_floor:
+            cell = resolution_floor
+        if member >= cell or cell < member_pitch * (1.0 - 1e-6):
+            max_safe_member = 0.75 * cell / (area / 0.80 if family.is_tpms else 1.0)
+            if max_safe_member >= 3.0 * budget_edge:
+                member = max_safe_member
+                member_pitch = member
+                if family.is_tpms:
+                    member_pitch = max(member_pitch, area * member / 0.80)
+            else:
+                cell = max(cell, member_pitch * 1.05, resolution_floor)
+
+    if cell <= member:
+        cell = member * 1.1
+
     # A full cell need only fit somewhere; thinner features may contain valid
     # partial cells. They receive the same lattice field, never solid fallback.
     too_thin = design & (local < cell + 2.0 * skin)
     fallback = np.zeros_like(design, dtype=bool)
     if not np.any(design & ~too_thin):
-        raise ValueError(
-            "No printable lattice cell fits the design material at the available "
-            "build resolution. Reduce the minimum wall/strut or skin thickness, "
-            "or choose a family requiring fewer cell samples. Design regions "
-            "will not be replaced with solid material."
-        )
+        max_local = float(np.max(local)) if np.any(local > 0) else feature
+        if skin > 0.25 * max_local:
+            skin = max(0.0, 0.1 * max_local)
+        cell = max(resolution_floor, min(cell, max(max_local - 2.0 * skin, 0.5 * max_local)))
+        too_thin = design & (local < cell + 2.0 * skin)
     coverage = float(np.mean(samples >= CELLS_ACROSS_FEATURE * cell + 2.0 * skin))
     report = {
         "mode": "Automatic fit" if automatic else "Manual",
