@@ -36,8 +36,8 @@ from .voxelization import (
 
 logger = logging.getLogger(__name__)
 
-# Invalidate surfaces recovered before original CAD boundaries were supplied.
-_SURFACE_RECOVERY_CACHE_REVISION = 3
+# Invalidate surfaces recovered before certified final CAD mesh restoration.
+_SURFACE_RECOVERY_CACHE_REVISION = 6
 
 
 def _cad_shape_cache_identity(shape: Any) -> Any:

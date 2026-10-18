@@ -209,7 +209,8 @@ class WorkbenchRenderingMixin:
         # payload, and the identity test then skipped a render that was needed.
         self._last_rendered_geom = obj
         selected = getattr(self.properties, "current_node", None)
-        if selected is None or not selected.has_property("non_design_regions"):
+        if ((selected is None or not selected.has_property("non_design_regions"))
+                and not (isinstance(obj, dict) and obj.get("type") == "topopt_voxel")):
             self.viewer.render_non_design_layers([])
 
     @staticmethod
@@ -555,9 +556,6 @@ class WorkbenchRenderingMixin:
 
         self.properties.display_node(node)
         self._update_results_panel_visibility(node)
-        if not node.has_property("non_design_regions"):
-            self.viewer.render_non_design_layers([])
-
         if self._is_topopt_result_consumer(node):
             own = getattr(node, "_last_result", None)
             if self._is_renderable_result(own):
@@ -566,6 +564,10 @@ class WorkbenchRenderingMixin:
                 source_node, geometry = self._find_upstream_topopt_result(node)
         else:
             source_node, geometry = self._get_render_context_for_node(node)
+
+        if (not node.has_property("non_design_regions")
+                and not (isinstance(geometry, dict) and geometry.get("type") == "topopt_voxel")):
+            self.viewer.render_non_design_layers([])
 
         if geometry is not None:
             self._last_rendered_node = source_node or node

@@ -37,11 +37,15 @@ class NonDesignWorkbenchMixin:
                 return
             if render_domain and payloads:
                 self._render_result_in_viewer(design_domain_shape(geometry))
-            self.viewer.render_non_design_layers(
-                [payload["geometry"] for payload in payloads]
-            )
+            displayed = getattr(self, "_last_rendered_geom", None)
+            showing_result = isinstance(displayed, dict) and displayed.get("type") == "topopt_voxel"
+            if showing_result:
+                self.viewer._render_topopt_non_design_overlays(displayed)
+                self.viewer._request_render()
+            else:
+                self.viewer.render_non_design_layers([payload["geometry"] for payload in payloads])
             message = (
-                f"{len(payloads)} preserved region(s) · cyan preview"
+                f"{len(payloads)} preserved region(s) · cyan {'outlines' if showing_result else 'preview'}"
                 if payloads
                 else "No active non-design face layers"
             )

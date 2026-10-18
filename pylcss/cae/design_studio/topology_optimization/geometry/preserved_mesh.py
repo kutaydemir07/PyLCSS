@@ -90,7 +90,8 @@ def refined_preserved_masks(
                 return mask
             statistics["mask_cache_misses"] += 1
             if mesh is None:
-                vertices, faces = shape.tessellate(tolerance, 0.2)
+                from .cad_tessellation import private_cad_mesh_copy
+                vertices, faces = private_cad_mesh_copy(shape).tessellate(tolerance, 0.2)
                 mesh = {
                     "vertices": np.asarray([point.toTuple() for point in vertices]),
                     "faces": np.asarray(faces, dtype=np.int64),

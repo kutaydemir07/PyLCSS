@@ -583,6 +583,12 @@ def parameterize_paper_layout(layout: QuadLayout, config=None, *,
     branch subdivides a layout or retries surface fitting. Internal harmonic
     iterations are the paper's numerical solve, not CAD reconstruction passes.
     """
+    corner_repair = {'applied': False, 'enabled': False, 'engineering_extension': True,
+                     'paper_algorithm': False}
+    if getattr(config, 'repair_reflex_square_corners', False):
+        from .amrto_layout_partition import repair_reflex_square_corners
+        corner_repair = repair_reflex_square_corners(layout)
+        corner_repair['enabled'] = True
     coordinates = hybrid_parameterization(
         layout, scaffold_executable=scaffold_executable,
         maximum_iterations=getattr(config, "scaffold_max_iter", 50),
@@ -598,7 +604,8 @@ def parameterize_paper_layout(layout: QuadLayout, config=None, *,
         minimum_area_ratio=0.0,
     )
     layout.parameterization_report.update(paper_stage_4=True,
-                                         area_compression_admission_guard_applied=False)
+                                         area_compression_admission_guard_applied=False,
+                                         corner_orientation_repair=corner_repair)
     return coordinates
 
 

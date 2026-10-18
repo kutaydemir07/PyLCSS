@@ -8,6 +8,65 @@ import numpy as np
 from ._compat import warn_retired_options
 
 
+def _noncoplanar_interiors_cross(first: np.ndarray, second: np.ndarray, tolerance: float) -> bool:
+    """Confirm a positive interior intersection without unstable skinny normals.
+
+    SAT's tolerance deliberately admits nearby candidates. A nearly collinear
+    triangle has an ill-conditioned plane normal, so plane-side tests alone can
+    mistake a near-boundary miss for a crossing. Exact rational determinants
+    on the input floating-point coordinates resolve only these positive
+    candidates; no triangle is discarded because it is thin.
+    """
+    from fractions import Fraction
+    from itertools import combinations
+
+    triangles = [tuple(tuple(Fraction(float(value)) for value in point) for point in triangle)
+                 for triangle in (first, second)]
+    def subtract(a, b):
+        return tuple(x-y for x, y in zip(a, b))
+    def dot(a, b):
+        return sum(x*y for x, y in zip(a, b))
+    def cross(a, b):
+        return (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
+    points = set()
+    for source, target in (triangles, triangles[::-1]):
+        first_edge, second_edge = subtract(target[1], target[0]), subtract(target[2], target[0])
+        for index in range(3):
+            origin = source[index]
+            direction = subtract(source[(index+1) % 3], origin)
+            pvec = cross(direction, second_edge)
+            determinant = dot(first_edge, pvec)
+            if determinant == 0:
+                continue
+            relative = subtract(origin, target[0])
+            u = dot(relative, pvec) / determinant
+            qvec = cross(relative, first_edge)
+            v = dot(direction, qvec) / determinant
+            t = dot(second_edge, qvec) / determinant
+            if 0 <= t <= 1 and u >= 0 and v >= 0 and u+v <= 1:
+                points.add(tuple(a+t*b for a, b in zip(origin, direction)))
+
+    def strictly_inside(point, triangle):
+        a, b = subtract(triangle[1], triangle[0]), subtract(triangle[2], triangle[0])
+        relative = subtract(point, triangle[0])
+        aa, ab, bb = dot(a, a), dot(a, b), dot(b, b)
+        denominator = aa*bb-ab*ab
+        if denominator == 0:
+            return False
+        ar, br = dot(a, relative), dot(b, relative)
+        u, v = (bb*ar-ab*br)/denominator, (aa*br-ab*ar)/denominator
+        return u > 0 and v > 0 and u+v < 1
+
+    minimum_length_squared = Fraction(float(tolerance)) ** 2
+    for a, b in combinations(points, 2):
+        delta = subtract(a, b)
+        midpoint = tuple((x+y)/2 for x, y in zip(a, b))
+        if (dot(delta, delta) > minimum_length_squared
+                and all(strictly_inside(midpoint, triangle) for triangle in triangles)):
+            return True
+    return False
+
+
 def _intersecting_triangles(first: np.ndarray, second: np.ndarray, tolerance: float,
                             *, include_boundary_contacts: bool = True) -> np.ndarray:
     """Separating-axis test, including axes needed for coplanar triangles."""
@@ -52,7 +111,10 @@ def _intersecting_triangles(first: np.ndarray, second: np.ndarray, tolerance: fl
     in_plane_overlap = (np.minimum(projection_a[:, -6:].max(axis=2), projection_b[:, -6:].max(axis=2))
                         - np.maximum(projection_a[:, -6:].min(axis=2), projection_b[:, -6:].min(axis=2)))
     positive_coplanar_area = np.all((in_plane_overlap > tolerance) | ~valid[:, -6:], axis=1)
-    return hits & ((coplanar & positive_coplanar_area) | (~coplanar & crosses_planes))
+    result = hits & ((coplanar & positive_coplanar_area) | (~coplanar & crosses_planes))
+    for index in np.flatnonzero(result & ~coplanar):
+        result[index] = _noncoplanar_interiors_cross(first[index], second[index], tolerance)
+    return result
 
 
 def screen_mesh_intersections(vertices: np.ndarray, faces: np.ndarray,

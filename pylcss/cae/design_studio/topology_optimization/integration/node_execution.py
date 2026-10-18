@@ -112,8 +112,13 @@ def _emit_recovery_preview(
     try:
         surface_preview = dict(output_context.payload)
         surface_preview["_preview"] = True
-        surface_preview["stage"] = "Surface ready"
-        surface_preview["visualization_mode"] = "Surface"
+        recovered = surface_preview.get("recovered_shape")
+        if recovered is None:
+            surface_preview["stage"] = "Surface recovery failed — showing solved density"
+            surface_preview["visualization_mode"] = "Density"
+        else:
+            surface_preview["stage"] = "Surface ready"
+            surface_preview["visualization_mode"] = "Surface"
         progress_callback(surface_preview, None, 1, 1)
     except Exception:
         logger.debug(

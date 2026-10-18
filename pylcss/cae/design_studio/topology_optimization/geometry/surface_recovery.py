@@ -165,6 +165,12 @@ def _recover_voxel_shape(
         explicit_solids = kwargs.get("explicit_solid_shapes") or ()
         explicit_voids = kwargs.get("explicit_void_shapes") or ()
         source_cad = kwargs.get("source_cad_shape")
+        restore_solid_geometry = not is_lattice and bool(
+            source_cad is not None or explicit_solids or explicit_voids
+            or solid_boxes or void_boxes or solid_cylinders or void_cylinders
+            or hardware_cylinders or kwargs.get("cad_features")
+            or kwargs.get("passive_cad_features")
+        )
         from .bore_constraints import source_bore_records
         bore_records = source_bore_records(source_cad)
         if source_cad is None:
@@ -336,8 +342,10 @@ def _recover_voxel_shape(
         if len(verts) == 0 or len(faces) == 0:
             return None
 
-        # Reproject analytic interface boundaries if passive shapes are present
-        if passive_shapes_present:
+        # The certified solid path restores complete prescribed surfaces after
+        # reduction. Moving individual vertices first can invert coarse bore
+        # facets and cannot restore material missing between those vertices.
+        if passive_shapes_present and not restore_solid_geometry:
             try:
                 shapes = _convert_legacy_to_physical_shapes(
                     bounds,
@@ -386,10 +394,53 @@ def _recover_voxel_shape(
         stage("Reducing mesh triangles")
         verts, faces, reduction_report = compact_mesh(
             verts, faces, tolerance=float(np.min(spacing))*0.2)
-        from .bore_constraints import enforce_bore_clearance
-        verts, bore_report = enforce_bore_clearance(verts, faces, bore_records, spacing)
-        recovery_report["bore_clearance"] = bore_report
-        if hardware_cylinders:
+        if restore_solid_geometry:
+            from .preserved_surface import restore_preserved_surface
+            from .amrto_surface import geometry_fingerprint
+            # Fit the smoothed design isosurface; restore engineering features
+            # analytically after fitting. Re-quadrangulating the Boolean STL
+            # seams introduces sliver triangles and rounds those features again.
+            design_vertices, design_faces = verts.copy(), faces.copy()
+            preservation_bounds = bounds
+            if preservation_bounds is None:
+                lower, pitch = _voxel_origin_cell(tuple(grid.shape), None)
+                preservation_bounds = (lower, lower + np.asarray(grid.shape) * pitch)
+            stage("Restoring original CAD boundaries on the solid surface")
+            verts, faces, restoration = restore_preserved_surface(verts, faces, {
+                "bounds": preservation_bounds,
+                "source_cad_shape": source_cad,
+                "passive_regions": {
+                    "solid_boxes": solid_boxes, "void_boxes": void_boxes,
+                    "solid_cylinders": solid_cylinders, "void_cylinders": void_cylinders,
+                    "joint_pin_cylinders": hardware_cylinders,
+                    "explicit_solid_shapes": explicit_solids,
+                    "explicit_void_shapes": explicit_voids,
+                },
+                "cad_features": kwargs.get("cad_features"),
+                "passive_cad_features": kwargs.get("passive_cad_features"),
+            })
+            if not restoration.get("certified") or not restoration.get("applied"):
+                raise RuntimeError("Original CAD surface restoration was not certified")
+            preserved_surface_sampling = restoration.pop("_sampling_cache")
+            amrto_design_surface = {
+                "vertices": design_vertices, "faces": design_faces,
+                "geometry_sha256": geometry_fingerprint(design_vertices, design_faces),
+                "restored_geometry_sha256": geometry_fingerprint(verts, faces),
+                "method": "Smoothed design isosurface before final prescribed-geometry Booleans",
+                "requires_exact_cad_restoration": True,
+            }
+            preservation_report["surface_restoration"] = restoration
+            recovery_report["bore_clearance"] = {
+                "through_bore_count": len(bore_records),
+                "corrected_vertex_count": 0,
+                "method": "Certified original source and protected-void mesh Boolean boundaries",
+            }
+            recovery_report["joint_hardware_body_count"] = restoration["hardware_count"]
+        else:
+            from .bore_constraints import enforce_bore_clearance
+            verts, bore_report = enforce_bore_clearance(verts, faces, bore_records, spacing)
+            recovery_report["bore_clearance"] = bore_report
+        if hardware_cylinders and not restore_solid_geometry:
             from .cad_features import _payload_region_cylinders, _region_cylinder_to_solid
             hardware_bounds = bounds
             if hardware_bounds is None:
@@ -421,13 +472,21 @@ def _recover_voxel_shape(
             LAST_LATTICE_SIZING.update(lattice_sizing)
 
         stage("Checking mesh intersections")
+        # The certified final surface was already screened for actual triangle
+        # crossings. Preserve that result: a second screen treating coincident
+        # boundary contacts as crossings would contradict its certificate.
+        intersection_report = (restoration["intersections"] if restore_solid_geometry
+                               else screen_mesh_intersections(verts, faces))
         recovered_shape = {
             "vertices": np.asarray(verts, dtype=float),
             "faces": np.asarray(faces, dtype=np.int64),
-            "surface_backend": "Marching Cubes with feature-constrained smoothing",
+            "surface_backend": (
+                "Marching Cubes with final certified original CAD mesh restoration"
+                if restore_solid_geometry else "Marching Cubes with feature-constrained smoothing"
+            ),
             "surface_quality_preset": "Feature preserving",
             "surface_quality": {
-                **screen_mesh_intersections(verts, faces),
+                **intersection_report,
                 "connected_components": int(component_count),
                 "boundary_shell_count": int(component_count),
                 "positive_outer_shell_count": sum(body.volume > 0 for body in boundary_shells),
@@ -458,6 +517,9 @@ def _recover_voxel_shape(
             "mesh_reduction": reduction_report,
             "is_watertight": is_watertight,
         }
+        if restore_solid_geometry:
+            recovered_shape["amrto_design_surface"] = amrto_design_surface
+            recovered_shape["preserved_surface_sampling"] = preserved_surface_sampling
         if is_lattice and kwargs.get("include_manufacturing_field"):
             # Preserve explicit resolved cells for downstream voxel FEA; the
             # graded macro field describes their thickness, not solid occupancy.

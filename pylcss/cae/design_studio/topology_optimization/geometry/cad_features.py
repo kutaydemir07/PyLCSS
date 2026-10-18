@@ -1296,24 +1296,26 @@ def _assert_source_contains_material(material: Any, domain: Any) -> None:
             # Common can split an unchanged planar pad into coplanar faces.
             # Their redundant internal spline seam can extend beyond the
             # material within its native edge tolerance, misleading both
-            # AddOptimal and the trim-aware distance bounds check. Remove
-            # those internal partitions before measuring the actual boundary.
-            # Do not increase tolerance, concatenate spline curves, or modify
-            # either operand. Check the normalized partition independently.
-            unifier = ShapeUpgrade_UnifySameDomain(inside.wrapped, True, True, False)
-            unifier.SetSafeInputMode(True)
-            unifier.SetLinearTolerance(Precision.Confusion_s())
-            unifier.SetAngularTolerance(1e-12)
-            unifier.AllowInternalEdges(False)
-            unifier.Build()
-            inside = cq.Shape.cast(unifier.Shape())
-            if not inside.isValid() or not _closed(inside):
-                raise RuntimeError("normalized inside partition is not a valid closed solid")
-            normalized_volume = abs(float(inside.Volume(tol=1e-7)))
-            if (not np.isfinite(normalized_volume)
-                    or abs(normalized_volume - inside_volume) > max(1e-7, inside_volume * 1e-8)
-                    or abs(normalized_volume - volume) > volume_tolerance):
-                raise RuntimeError("inside partition normalization changed the material volume")
+            # AddOptimal and the trim-aware distance bounds check. Normalize
+            # only a disputed bound: a complete valid Common with matching
+            # bounds already proves the required partition. Unnecessarily
+            # unifying its trims can change a tiny Boolean contact strip.
+            # Retain the same strict checks whenever normalization is needed.
+            if np.max(np.abs(_material_bounds_delta(material, inside, linear_tolerance))) > linear_tolerance:
+                unifier = ShapeUpgrade_UnifySameDomain(inside.wrapped, True, True, False)
+                unifier.SetSafeInputMode(True)
+                unifier.SetLinearTolerance(Precision.Confusion_s())
+                unifier.SetAngularTolerance(1e-12)
+                unifier.AllowInternalEdges(False)
+                unifier.Build()
+                inside = cq.Shape.cast(unifier.Shape())
+                if not inside.isValid() or not _closed(inside):
+                    raise RuntimeError("normalized inside partition is not a valid closed solid")
+                normalized_volume = abs(float(inside.Volume(tol=1e-7)))
+                if (not np.isfinite(normalized_volume)
+                        or abs(normalized_volume - inside_volume) > max(1e-7, inside_volume * 1e-8)
+                        or abs(normalized_volume - volume) > volume_tolerance):
+                    raise RuntimeError("inside partition normalization changed the material volume")
             if np.max(np.abs(_material_bounds_delta(material, inside, linear_tolerance))) > linear_tolerance:
                 raise RuntimeError("inside partition changed the material bounds")
         except Exception as error:
@@ -1455,7 +1457,11 @@ def _apply_passive_regions_to_step(
     )
     requested_solid_tools = list(solid_tools)
     if require_all_solid_tools:
-        solid_tools = [_canonical_annular_layer(tool) for tool in solid_tools]
+        # A face selection can hold several disconnected collars in one
+        # compound. Normalize and verify each actual solid: treating the
+        # compound as one annulus skips the verified seam normalization.
+        solid_tools = [_canonical_annular_layer(solid)
+                       for tool in solid_tools for solid in tool.Solids()]
         # Canonical annuli have already proved two-sided material equality
         # with the original selections. Keep that same verified trim form in
         # the downstream containment proof against the reconstructed body.
@@ -1523,11 +1529,7 @@ def _apply_passive_regions_to_step(
                 fused = _boolean_or_raise(result, solid, operation="fuse",
                     check_normalized_intersections=check_intermediate_intersections)
                 if require_all_solid_tools and len(fused.Solids()) > previous_solid_count:
-                    unified = _unify_same_domain_shape(fused, merge_angle_deg=0.25)
-                    if len(unified.Solids()) <= previous_solid_count:
-                        fused = unified
-                    elif len(fused.Solids()) > previous_solid_count:
-                        logger.warning('Non-design tool produced additional solid component; retaining all solids')
+                    logger.warning('Non-design tool produced additional solid component; retaining all solids')
                 result = fused
         # A sleeve is an outer keep-material cylinder, not a plug. Re-cut the
         # exact bore after the fuse so its running surface stays analytic.
@@ -1543,9 +1545,10 @@ def _apply_passive_regions_to_step(
             check_normalized_intersections=check_intermediate_intersections)
 
     result = _drop_boolean_sliver_solids(result)
-    # Validate the geometry actually returned after face consolidation.
-    # Material checks must not use the pre-consolidation B-rep.
-    if (solid_tools or cut_tools) and extended_pad_tools is None:
+    # Exact preservation keeps the Boolean face partition. Optional spline
+    # concatenation can stall on hundreds of trimmed faces and is unnecessary
+    # for a closed solid. All native and material guards check this final body.
+    if (solid_tools or cut_tools) and extended_pad_tools is None and not require_all_solid_tools:
         result = _unify_same_domain_shape(result, merge_angle_deg=0.25)
     if repair_boolean_contacts:
         result = _repair_boolean_vertex_contacts(result)
@@ -1611,11 +1614,10 @@ def restore_paper_non_design_regions(
     void_axial_margin: float = 0.02,
     void_radial_margin: float = 0.0,
 ) -> tuple[Any, dict[str, Any]]:
-    """Restore protected CAD interfaces after the single paper fitting stage.
+    """Restore protected CAD interfaces after the accepted fitting stage.
 
-    The fitted surface covers the whole recovered boundary, including sampled
-    copies of the original holes and non-design layers. Those samples are not
-    exact CAD interfaces. Intersecting with the actual source solid removes
+    The fitted design isosurface can include approximate holes and interfaces.
+    Those samples are not exact CAD interfaces. Intersecting with the source solid removes
     bore intrusions and exterior bumps; adding the original protected layers
     restores their complete analytic material. The existing paired material,
     source and bore checks remain authoritative.
@@ -1655,7 +1657,9 @@ def restore_paper_non_design_regions(
     result = _apply_passive_regions_to_step(
         boolean_ready, payload, void_axial_margin=void_axial_margin,
         void_radial_margin=void_radial_margin, prepare_continuity=False,
-        require_all_solid_tools=True,
+        # Canonicalize bounded Boolean trim contacts before the existing
+        # mandatory-material, source-domain and protected-void checks.
+        require_all_solid_tools=True, repair_boolean_contacts=True,
     )
     if not result.isValid() or not _closed(result):
         raise RuntimeError('Exact non-design restoration did not retain valid closed material')

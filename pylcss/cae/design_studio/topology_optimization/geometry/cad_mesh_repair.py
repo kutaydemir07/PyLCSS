@@ -54,6 +54,42 @@ def _extract_recovered_mesh(payload: Any) -> Optional[tuple[np.ndarray, np.ndarr
     return vertices[:, :3], faces[:, :3]
 
 
+def _extract_amrto_design_mesh(payload: Any, *, validate_geometry: bool = True) -> Optional[tuple[np.ndarray, np.ndarray]]:
+    """Read the certified recovery's fitting surface, keeping public STL intact.
+
+    CAD assembly must still restore the original analytic regions. Fingerprints
+    bind the auxiliary surface to the delivered recovery so stale cached arrays
+    cannot silently supply a different topology result.
+    """
+    recovered = _extract_recovered_mesh(payload)
+    record = payload.get('recovered_shape') if isinstance(payload, dict) else None
+    design = record.get('amrto_design_surface') if isinstance(record, dict) else None
+    if design is None:
+        return recovered
+    from .amrto_surface import geometry_fingerprint
+    from .preserved_surface import _closed_mesh
+    from .mesh_screening import screen_mesh_intersections
+
+    certificate = record.get('preserved_geometry', {}).get('surface_restoration', {})
+    if (recovered is None or not isinstance(design, dict)
+            or certificate.get('certified') is not True or certificate.get('applied') is not True
+            or design.get('requires_exact_cad_restoration') is not True
+            or design.get('restored_geometry_sha256') != geometry_fingerprint(*recovered)):
+        raise ValueError('AMRTO design surface is not bound to the certified recovered geometry')
+    selected = _extract_recovered_mesh({'recovered_shape': design})
+    if selected is None or design.get('geometry_sha256') != geometry_fingerprint(*selected):
+        raise ValueError('AMRTO design surface changed after recovery')
+    # UI cache lookup checks identities only. The background build validates
+    # closure and all intersections before invoking either native stage.
+    if not validate_geometry:
+        return selected
+    mesh = _closed_mesh(*selected, 'AMRTO design surface')
+    screening = screen_mesh_intersections(mesh.vertices, mesh.faces, include_boundary_contacts=False)
+    if screening.get('screening_scope') != 'full' or screening.get('self_intersecting_faces') != 0:
+        raise ValueError('AMRTO design surface has unresolved triangle intersections')
+    return mesh.vertices, mesh.faces
+
+
 def _bbox_diag(vertices: np.ndarray) -> float:
     """Return the model bounding-box diagonal, clamped to a non-zero value."""
     vertices = np.asarray(vertices, dtype=float)

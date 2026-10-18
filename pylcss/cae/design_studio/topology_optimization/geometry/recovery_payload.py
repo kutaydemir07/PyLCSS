@@ -15,9 +15,17 @@ def surface_recovery_constraints(payload: dict[str, Any]) -> dict[str, Any]:
         regions = {}
     else:
         regions = dict(regions)
+    for name in (
+        "solid_boxes", "void_boxes", "solid_cylinders", "void_cylinders",
+        "joint_pin_cylinders", "explicit_solid_shapes", "explicit_void_shapes",
+    ):
+        if name not in regions and payload.get(name) is not None:
+            regions[name] = payload[name]
     recovered = payload.get("recovered_shape") or {}
     if isinstance(recovered, dict):
-        regions.update(recovered.get("preserved_lattice_geometry") or {})
+        # Persisted display triangles cannot replace the original CAD selection.
+        for name, value in (recovered.get("preserved_lattice_geometry") or {}).items():
+            regions.setdefault(name, value)
     constraints = {
         name: regions.get(name, payload.get(name)) or ()
         for name in (
@@ -43,5 +51,7 @@ def surface_recovery_constraints(payload: dict[str, Any]) -> dict[str, Any]:
         source_lattice_geometry=lattice_geometry,
         passive_solid_mask=payload.get("passive_solid_mask"),
         passive_void_mask=payload.get("passive_void_mask"),
+        cad_features=payload.get("cad_features"),
+        passive_cad_features=payload.get("passive_cad_features"),
     )
     return constraints

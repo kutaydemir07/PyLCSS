@@ -4,7 +4,8 @@
 
 Ren et al., CMAME 435 (2025), 117673, Sections 2.3-2.7 and 3.1.
 Section 2.7 stitches the fitted surfaces before volumetric analysis. Common
-boundary constraints automate that integration here without a fitting loop.
+boundary constraints automate that integration; a failed solid may receive
+one explicitly reported local chart retry without changing the source mesh.
 """
 from __future__ import annotations
 
@@ -30,13 +31,13 @@ except ImportError:
 from .amrto_common import AMRTOConfig
 from .amrto_tri_mesh import generate_topopt_triangular_mesh, preprocess_and_repair_mesh
 from .amrto_quadrangulation import quadrangulate_paper_mesh
-from .amrto_layout_partition import divide_paper_sparse_quad_layouts
+from .amrto_layout_partition import PaperLayoutError, divide_paper_sparse_quad_layouts
 from .amrto_parameterization import parameterize_paper_layout, adaptive_sample_layout
 from .amrto_nurbs_fitting import fit_paper_nurbs_surface_for_layout, nurbs_surface_to_occ_face
 from .amrto_surface import geometry_fingerprint, layout_display_data, add_source_groups
 from .cad_config import CAD_RECONSTRUCTION_REVISION
 from .cad_diagnostics import _export_stage_mesh, _export_cad_animation_mesh
-from .cad_mesh_repair import _extract_recovered_mesh, _extract_supplied_quad_mesh, _effective_tolerance
+from .cad_mesh_repair import _extract_recovered_mesh, _extract_amrto_design_mesh, _extract_supplied_quad_mesh, _effective_tolerance
 from .cad_features import _payload_bounds, restore_paper_non_design_regions
 from .amrto_shared_curves import prepare_shared_boundary_curves
 from .amrto_solid import stitch_paper_surfaces, split_closed_paper_faces
@@ -118,9 +119,15 @@ def _complete_paper_solid(shape, payload, *, tolerance, source_scale,
             shape, report['non_design'] = restore_paper_non_design_regions(
                 shape, payload, void_axial_margin=void_axial_margin,
                 void_radial_margin=void_radial_margin)
-        except (RuntimeError, ValueError) as nd_err:
+        except MemoryError:
+            raise
+        except Exception as nd_err:
             logger.warning('Could not apply exact non-design regions onto CAD solid: %s', nd_err)
             report['non_design'] = {'applied': False, 'error': str(nd_err)}
+            # A closed fitted body is not the requested CAD when its original
+            # bores, interfaces or source boundary could not be restored.
+            # Keep the fitted surfaces through the outer failure handler.
+            raise RuntimeError(f'Exact non-design restoration failed: {nd_err}') from nd_err
         progress('Checking final CAD solid')
         report['intersections'] = _assess_brep_self_intersections(shape)
         if not report['intersections']['passed']:
@@ -131,7 +138,9 @@ def _complete_paper_solid(shape, payload, *, tolerance, source_scale,
         report.update(status='closed_solid', is_solid=True, cad_volume=volume,
                       solid_count=len(shape.Solids()), face_count=len(shape.Faces()))
         return shape, report
-    except (RuntimeError, ValueError) as error:
+    except MemoryError:
+        raise
+    except Exception as error:
         # Keep the complete fitted model visible. Do not publish a solid-shaped
         # but unusable intermediate to FEA or lattice consumers.
         logger.warning('AMRTO solid integration incomplete: %s', error)
@@ -300,7 +309,7 @@ def reconstruct_topopt_cad(
     # 1. Isosurface/triangular mesh and the paper's routine smoothing.
     progress('Step 1/5 — Preparing triangular mesh')
     supplied = _extract_supplied_quad_mesh(payload)
-    recovered = _extract_recovered_mesh(payload)
+    recovered = _extract_amrto_design_mesh(payload)
     if recovered is None and supplied is not None:
         recovered = supplied[0], triangulate_quad_faces(*supplied)
     if recovered is not None:
@@ -308,7 +317,23 @@ def reconstruct_topopt_cad(
         if repair_mesh:
             vertices, triangles = preprocess_and_repair_mesh(vertices, triangles, laplacian_iters=0)
         step1 = {'source': 'Supplied triangular boundary; already smoothed'}
+        if isinstance(payload.get('recovered_shape'), dict) and payload['recovered_shape'].get('amrto_design_surface'):
+            step1.update(source='Smoothed design isosurface before prescribed-geometry restoration',
+                         exact_non_design_restoration_stage='Downstream CAD solid assembly',
+                         engineering_extension='Analytic prescribed regions are restored after NURBS fitting')
     else:
+        # A completed topology solve explicitly records that recovery was
+        # attempted. Re-contouring its raw field here would bypass the source
+        # and bore constraints which rejected that manufactured boundary.
+        # Standalone pseudo-density callers have no such failed recovery and
+        # retain the paper's direct-density entry point below.
+        if payload.get('surface_recovery_requested'):
+            raise SmoothCadUnavailable(
+                'The topology result has no valid recovered surface. Regenerate '
+                'the constrained topology surface and resolve its recovery error '
+                'before CAD reconstruction; raw density cannot bypass failed '
+                'source-geometry and bore preservation.'
+            )
         field = payload.get('recovery_density')
         cutoff = payload.get('recovery_cutoff')
         if field is None:
@@ -351,8 +376,14 @@ def reconstruct_topopt_cad(
 
     # 3. Generalized motorcycle graph layouts, including Appendix D topology handling.
     progress('Step 3/5 — Sparse quadrilateral layouts')
-    layouts, step3 = divide_paper_sparse_quad_layouts(
-        quad_vertices, quads, layout_folder=payload.get('amrto_layouts_dir'))
+    try:
+        layouts, step3 = divide_paper_sparse_quad_layouts(
+            quad_vertices, quads, layout_folder=payload.get('amrto_layouts_dir'))
+    except PaperLayoutError as error:
+        # Retain native stderr and topology diagnostics before temporary GMCG
+        # files disappear; an executable exit code alone cannot explain failure.
+        finish('step3', {**error.report, 'status': 'failed'})
+        raise
     if not layouts:
         raise SmoothCadUnavailable('The generalized motorcycle graph produced no layouts')
     if folder:
@@ -427,6 +458,8 @@ def reconstruct_topopt_cad(
                                 'multiresolution': layout.multiresolution_report} for layout in fitted]}
     if folder:
         export_cad_model(shape, export_path=folder/'step5_cad.step', require_solid=False)
+        step5['cad_checkpoint_file'] = 'step5_cad.step'
+        step5['cad_checkpoint_current'] = True
         step5['animation_mesh'] = _export_cad_animation_mesh(
             folder, 'step5_cad', shape, max(float(np.linalg.norm(np.ptp(vertices, axis=0)))*1e-3, 1e-7))
     finish('step5', step5)
@@ -442,22 +475,182 @@ def reconstruct_topopt_cad(
         fit_warnings.append(f'Fitted surfaces had localized deviation/orientation warnings (layouts {", ".join(map(str, rejected))})')
 
     effective_sew_tol = _effective_tolerance(vertices, sew_tolerance, relative_sew_tolerance)
-    shape, solid_report = _complete_paper_solid(
-        shape, payload, tolerance=min(effective_sew_tol, 1e-4),
-        source_scale=source_scale, source_volume=reference_volume,
-        maximum_volume_delta=maximum_volume_delta,
-        void_axial_margin=void_axial_margin, void_radial_margin=void_radial_margin,
-        progress_callback=progress)
+    intrinsic_preflight = []
+    if rejected:
+        from .amrto_intrinsic import preflight_layout_intrinsic_fold
+        progress('Checking rejected fitted patches before native solid operations')
+        for layout in fitted:
+            if int(layout.layout_id) not in rejected:
+                continue
+            check = preflight_layout_intrinsic_fold(layout, tolerance=min(effective_sew_tol, 1e-4))
+            intrinsic_preflight.append(check)
+            if check['definitive_fold']:
+                break
+    if any(check['definitive_fold'] for check in intrinsic_preflight):
+        solid_report = {'status': 'surface_only', 'is_solid': False, 'fitting_attempts': 0,
+            'reason': 'A rejected fitted patch has an intrinsic C1 surface self-intersection',
+            'intrinsic_patch_preflight': intrinsic_preflight,
+            'native_solid_operations_skipped_for_proven_intrinsic_fold': True}
+    else:
+        shape, solid_report = _complete_paper_solid(
+            shape, payload, tolerance=min(effective_sew_tol, 1e-4),
+            source_scale=source_scale, source_volume=reference_volume,
+            maximum_volume_delta=maximum_volume_delta,
+            void_axial_margin=void_axial_margin, void_radial_margin=void_radial_margin,
+            progress_callback=progress)
+        if intrinsic_preflight:
+            solid_report['intrinsic_patch_preflight'] = intrinsic_preflight
+    finish('solid_integration', solid_report)
+    if not solid_report['is_solid'] and rejected and boundary_rejection is None and cfg.stitch_surface_boundaries:
+        from .amrto_chart_retry import propose_failed_chart_retry, refine_failed_chart_retry
+        retry_report = {'accepted': False, 'engineering_extension': True,
+                        'paper_algorithm': False, 'initial_solid_integration': deepcopy(solid_report),
+                        'initial_rejected_layout_ids': rejected.copy(),
+                        'initial_patch_reports': step5['patch_reports']}
+        try:
+            progress('Retrying rejected CAD charts on the unchanged source mesh')
+            retry_layouts, tangent_edges, proposal = propose_failed_chart_retry(clean_layouts, rejected, cfg)
+            retry_report.update(proposal)
+            retry_report['refinement_rounds'] = []
+            for refinement_round in range(3):
+                # Keep pristine source UVs for the next proposal. Shared seam
+                # preparation/fitting can change their parameter clocks.
+                retry_clean = deepcopy(retry_layouts)
+                retry_report['boundary_curves'] = prepare_shared_boundary_curves(
+                    retry_layouts, boundary_tolerance, bounds=bounds, certify_stock_hull=bounds is not None,
+                    blocked_junction_positions={tuple(map(float, point)) for layout in retry_layouts for point in layout.vertices},
+                    tangent_preserving_edges=tangent_edges)
+                for layout in retry_layouts:
+                    layout.source_box_bounds = bounds
+                    layout.solid_fit_tolerance = boundary_tolerance
+                    layout.solid_source_fit_limit = max(source_scale * float(maximum_relative_deviation), 1e-12)
+                retry_fitted = []
+                for index, layout in enumerate(_fit_paper_layouts(retry_layouts, cfg), 1):
+                    retry_fitted.append(layout)
+                    progress(f'Refitting CAD charts {index}/{len(retry_layouts)}', index, len(retry_layouts))
+                retry_rejected = [int(layout.layout_id) for layout in retry_fitted
+                                  if not layout.fitting_report.get('source_fit_acceptance', {}).get('accepted', False)]
+                retry_report['attempts'] = refinement_round + 1
+                retry_report['rejected_layout_ids'] = retry_rejected
+                retry_report['patch_reports'] = [
+                    {'layout_id': int(layout.layout_id), **layout.fitting_report,
+                     'multiresolution': layout.multiresolution_report} for layout in retry_fitted]
+                if not retry_rejected or refinement_round == 2:
+                    break
+                progress('Subdividing rejected CAD charts while retaining every source quad')
+                retry_layouts, added_edges, refinement = refine_failed_chart_retry(
+                    retry_clean, retry_rejected, cfg, round_index=refinement_round+1)
+                retry_report['refinement_rounds'].append(refinement)
+                if not refinement['applied']:
+                    break
+                tangent_edges.update(added_edges)
+                if refinement['subdivision']['applied']:
+                    retry_report['patch_partition_unchanged'] = False
+            if retry_rejected:
+                retry_report['reason'] = 'The bounded chart retry did not pass every original source-fit check'
+            else:
+                retry_surface = _assemble_paper_cad(retry_fitted, effective_sew_tol)
+                if folder:
+                    try:
+                        candidate_file = folder/'retry_fitted_surfaces.brep'
+                        retry_surface.exportBrep(str(candidate_file))
+                        retry_report['candidate_checkpoint_file'] = candidate_file.name
+                        retry_report['candidate_checkpoint_is_export_ready_solid'] = False
+                    except MemoryError:
+                        raise
+                    except Exception as error:
+                        retry_report['candidate_checkpoint_error'] = str(error)
+                retry_shape, retry_solid = _complete_paper_solid(
+                    retry_surface, payload, tolerance=min(effective_sew_tol, 1e-4),
+                    source_scale=source_scale, source_volume=reference_volume,
+                    maximum_volume_delta=maximum_volume_delta,
+                    void_axial_margin=void_axial_margin, void_radial_margin=void_radial_margin,
+                    progress_callback=progress)
+                retry_report['solid_integration'] = retry_solid
+                if retry_solid['is_solid']:
+                    shape, solid_report, fitted = retry_shape, retry_solid, retry_fitted
+                    rejected, fit_warnings = [], []
+                    retry_report['accepted'] = True
+                    control_count = sum(layout.nurbs_surface.ctrlpts_size_u * layout.nurbs_surface.ctrlpts_size_v
+                                        for layout in fitted)
+                    step4 = {**step4, 'local_chart_retry': True, 'patch_count': len(fitted), 'parameterizations': [
+                        {'layout_id': int(layout.layout_id), 'sampled_shape': list(layout.sampled_shape),
+                         **layout.parameterization_report} for layout in fitted]}
+                    step5 = {**step5, 'fitting_attempts': 1+retry_report['attempts'],
+                             'refinement_passes': 1+retry_report['attempts'], 'nurbs_patch_count': len(fitted),
+                             'patch_partition_unchanged': retry_report['patch_partition_unchanged'],
+                             'control_point_count': control_count, 'patch_reports': retry_report['patch_reports']}
+                    if folder:
+                        # Checkpoint errors do not reverse an already validated
+                        # geometry decision or reinstate stale stage metadata.
+                        step4 = {key: value for key, value in step4.items()
+                                 if key in ('method', 'patch_count', 'parameterizations', 'local_chart_retry')}
+                        step5.pop('animation_mesh', None)
+                        step5.update(cad_checkpoint_file='step5_retry_cad.step', cad_checkpoint_current=False)
+                        try:
+                            step4.update(_sampled_layout_checkpoints(fitted, folder))
+                            export_cad_model(retry_surface, export_path=folder/'step5_retry_cad.step', require_solid=False)
+                            step5['cad_checkpoint_current'] = True
+                            step5['animation_mesh'] = _export_cad_animation_mesh(
+                                folder, 'step5_cad', retry_surface, max(float(np.linalg.norm(np.ptp(vertices, axis=0)))*1e-3, 1e-7))
+                        except MemoryError:
+                            raise
+                        except Exception as error:
+                            retry_report['checkpoint_error'] = str(error)
+                            logger.warning('Accepted chart retry checkpoint could not be refreshed: %s', error)
+                    # Preserve first-attempt stage timings. The complete retry
+                    # has its own timer, rather than attributing its native
+                    # assembly and fitting time to parameterization.
+                    for name, data in (('step4', step4), ('step5', step5)):
+                        stages[name] = {**data, 'elapsed_s': stages[name]['elapsed_s'],
+                                        'timing_scope': 'Initial attempt; retry work is recorded in local_chart_retry'}
+                else:
+                    retry_report['reason'] = retry_solid.get('reason', 'Chart retry did not produce an accepted solid')
+        except MemoryError:
+            raise
+        except Exception as error:
+            retry_report['reason'] = str(error)
+            logger.warning('AMRTO bounded chart retry rejected: %s', error)
+        finish('local_chart_retry', retry_report)
     if fit_warnings:
         solid_report['fit_warnings'] = fit_warnings
         if rejected:
             solid_report['rejected_layout_ids'] = rejected
-    finish('solid_integration', solid_report)
+    stages['solid_integration'] = {**solid_report,
+        'elapsed_s': stages['solid_integration']['elapsed_s'],
+        'timing_scope': 'Initial attempt; any retry work is recorded in local_chart_retry'}
     solid_ready = bool(solid_report['is_solid'])
+    grouping_report = step3
+    accepted_retry = stages.get('local_chart_retry', {})
+    if accepted_retry.get('accepted') and not accepted_retry.get('patch_partition_unchanged', True):
+        grouping_report = {
+            'method': 'Native sparse layouts with bounded engineering source-quad subdivision',
+            'engineering_extension': True, 'paper_stage_3': False,
+            'initial_paper_layout_count': len(layouts), 'layout_count': len(fitted),
+            'initial_paper_stage3': step3,
+            'refinement_rounds': accepted_retry['refinement_rounds'],
+            'source_quad_coverage_exactly_once': True,
+            'final_source_parents': [{'layout_id': int(layout.layout_id),
+                'source_parent_id': int(getattr(layout, 'source_chart_parent_id', layout.layout_id)),
+                'subdivision_generation': int(getattr(layout, 'source_chart_subdivision_generation', 0))}
+                for layout in fitted]}
+        if folder:
+            try:
+                _export_stage_mesh(folder, 'retry_layouts', [
+                    (f'layout_{layout.layout_id}', layout.vertices, layout.quads) for layout in fitted])
+            except MemoryError:
+                raise
+            except Exception as error:
+                grouping_report['checkpoint_error'] = str(error)
+        stages['effective_layout_grouping'] = grouping_report
     display_layout = layout_display_data(quad_vertices, quads, fitted,
-        reports={'quadrangulation': step2, 'grouping': step3})
-    display_layout.update(source_geometry_sha256=fingerprint, requested_settings=settings)
-    add_source_groups(display_layout, vertices, triangles)
+        reports={'quadrangulation': step2, 'grouping': grouping_report})
+    display_source = _extract_recovered_mesh(payload)
+    if display_source is None:
+        display_source = vertices, triangles
+    display_layout.update(source_geometry_sha256=geometry_fingerprint(*display_source),
+                          design_geometry_sha256=fingerprint, requested_settings=settings)
+    add_source_groups(display_layout, *display_source)
     report = {
         'method': 'AMRTO five-step reconstruction (Ren et al., 2025)', 'paper_pipeline': True,
         'backend': 'in-process', 'revision': CAD_RECONSTRUCTION_REVISION,
@@ -465,7 +658,8 @@ def reconstruct_topopt_cad(
         'valid': bool(shape.isValid()), 'is_solid': solid_ready,
         'cad_volume': solid_report.get('cad_volume'), 'cad_face_count': len(shape.Faces()),
         'cad_surface_types': {kind: sum(face.geomType() == kind for face in shape.Faces())
-                              for kind in {face.geomType() for face in shape.Faces()}}, 'step3_layouts': len(fitted),
+                              for kind in {face.geomType() for face in shape.Faces()}}, 'step3_layouts': len(layouts),
+        'effective_fitting_layouts': len(fitted),
         'control_point_count': control_count, 'step5_nurbs_faces': len(fitted),
         'validation_status': 'passed' if solid_ready else 'incomplete',
         'export_ready': solid_ready, 'display_ready': True,

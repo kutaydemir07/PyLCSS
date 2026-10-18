@@ -168,7 +168,7 @@ def reconstruct_topopt_cad(
             amrto_payload['amrto_cached_quadrangulation'] = {
                 'vertices': cache['vertices'], 'quads': cache['quads'],
                 'report': {**cache['reports']['quadrangulation'],
-                           'source_geometry_sha256': cache['source_geometry_sha256'],
+                           'source_geometry_sha256': cache['design_geometry_sha256'],
                            'requested_settings': cache['requested_settings']}}
         paper_model, paper_report = reconstruct_amrto(
             amrto_payload, reconstruction_strategy='amrto',

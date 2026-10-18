@@ -9,10 +9,10 @@ import numpy as np
 from .amrto_common import AMRTOConfig
 from .amrto_quadrangulation import quadrangulate_paper_mesh
 from .amrto_layout_partition import divide_paper_sparse_quad_layouts
-from .cad_mesh_repair import _extract_recovered_mesh
+from .cad_mesh_repair import _extract_recovered_mesh, _extract_amrto_design_mesh
 from .mesh_topology import triangulate_quad_faces
 
-SURFACE_LAYOUT_REVISION = 3
+SURFACE_LAYOUT_REVISION = 4
 
 
 def geometry_fingerprint(vertices, faces):
@@ -58,6 +58,12 @@ def cached_surface_layout(payload, *, requested_settings=None):
         return None
     if (cache.get('revision') != SURFACE_LAYOUT_REVISION
             or cache.get('source_geometry_sha256') != geometry_fingerprint(*recovered)):
+        return None
+    try:
+        design = _extract_amrto_design_mesh(payload, validate_geometry=False)
+    except (ValueError, TypeError):
+        return None
+    if design is None or cache.get('design_geometry_sha256') != geometry_fingerprint(*design):
         return None
     if requested_settings is not None and cache.get('requested_settings') != requested_settings:
         return None
@@ -105,7 +111,7 @@ def prepare_amrto_surface(payload, *, progress_callback=None, target_faces=None,
     recovered = _extract_recovered_mesh(payload)
     if recovered is None:
         raise ValueError('A recovered topology surface is required')
-    vertices, faces = recovered
+    vertices, faces = _extract_amrto_design_mesh(payload)
     source = trimesh.Trimesh(vertices, faces, process=False)
     if not source.is_watertight or not source.is_winding_consistent or source.volume <= 0:
         raise ValueError('The recovered topology surface must be closed and outward oriented')
@@ -133,6 +139,7 @@ def prepare_amrto_surface(payload, *, progress_callback=None, target_faces=None,
     layouts, group_report = divide_paper_sparse_quad_layouts(quad_vertices, quads)
     result = layout_display_data(quad_vertices, quads, layouts,
                                  reports={'quadrangulation': quad_report, 'grouping': group_report})
-    result['source_geometry_sha256'] = fingerprint
+    result['source_geometry_sha256'] = geometry_fingerprint(*recovered)
+    result['design_geometry_sha256'] = fingerprint
     result['requested_settings'] = settings
-    return add_source_groups(result, vertices, faces)
+    return add_source_groups(result, *recovered)

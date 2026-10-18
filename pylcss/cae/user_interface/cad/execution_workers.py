@@ -279,6 +279,96 @@ def _temporary_export_path(path: str | os.PathLike[str]) -> str:
     return temporary
 
 
+def _cad_stl_boundary(vertices, faces):
+    """Weld CAD seams at double roundoff without float32 or small-face removal."""
+    import trimesh
+
+    vertices = np.asarray(vertices, dtype=np.float64)
+    faces = np.asarray(faces, dtype=np.int64)
+    sites, inverse = np.unique(vertices, axis=0, return_inverse=True)
+    faces = inverse[faces]
+
+    def boundary(points, triangles):
+        corners = points[triangles]
+        area = np.linalg.norm(np.cross(corners[:, 1]-corners[:, 0], corners[:, 2]-corners[:, 0]), axis=1)
+        return trimesh.Trimesh(points, triangles[area > 0.], process=False), int(np.count_nonzero(area == 0.))
+
+    mesh, removed = boundary(sites, faces)
+    weld_tolerance = 0.
+    maximum_weld = 0.
+    if not mesh.is_watertight:
+        from scipy.spatial import cKDTree
+
+        # Faces independently evaluate shared CAD edges. Only floating point
+        # evaluation roundoff may be merged; model/tessellation tolerances
+        # cannot justify losing a small preserved geometric feature.
+        scale = max(float(np.max(np.abs(sites))), float(np.max(np.ptp(sites, axis=0))), np.finfo(float).tiny)
+        weld_tolerance = 64 * np.finfo(float).eps * scale
+        parents = np.arange(len(sites), dtype=np.int64)
+
+        def root(index):
+            while parents[index] != index:
+                parents[index] = parents[parents[index]]
+                index = parents[index]
+            return index
+
+        for first, second in cKDTree(sites).query_pairs(weld_tolerance, output_type="ndarray"):
+            a, b = root(first), root(second)
+            if a != b:
+                parents[max(a, b)] = min(a, b)
+        remap = np.array([root(index) for index in range(len(sites))])
+        maximum_weld = float(np.max(np.linalg.norm(sites-sites[remap], axis=1)))
+        if maximum_weld > weld_tolerance:
+            raise ValueError("CAD seam welding would exceed coordinate roundoff.")
+        mesh, removed = boundary(sites, remap[faces])
+    if (not mesh.is_watertight or not mesh.is_winding_consistent
+            or not np.isfinite(mesh.volume) or mesh.volume <= 0):
+        raise ValueError("CAD tessellation did not produce a closed, consistently oriented positive-volume STL mesh.")
+    from pylcss.cae.design_studio.topology_optimization.geometry.mesh_screening import screen_mesh_intersections
+    screening = screen_mesh_intersections(mesh.vertices, mesh.faces, include_boundary_contacts=False)
+    if screening.get("screening_scope") != "full" or screening.get("self_intersecting_faces") != 0:
+        raise ValueError("CAD tessellation has unresolved triangle intersections.")
+    return mesh, {"removed_exact_zero_area_triangles": removed,
+                  "seam_weld_tolerance": weld_tolerance,
+                  "maximum_seam_vertex_displacement": maximum_weld,
+                  "intersections": screening}
+
+
+def _write_certified_ascii_stl(path, vertices, faces):
+    """Store certified double coordinates without binary STL quantization."""
+    import trimesh
+
+    vertices = np.asarray(vertices, dtype=np.float64)
+    faces = np.asarray(faces, dtype=np.int64)
+    triangles = vertices[faces]
+    normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+    lengths = np.linalg.norm(normals, axis=1)
+    if not len(faces) or not np.isfinite(triangles).all() or np.any(lengths <= 0):
+        raise ValueError("The certified STL mesh contains invalid triangles.")
+    normals /= lengths[:, None]
+    with open(path, "w", encoding="ascii", newline="\n") as stream:
+        stream.write("solid PyLCSS_preserved_boundary\n")
+        for normal, triangle in zip(normals, triangles):
+            stream.write("facet normal " + " ".join(format(v, ".17g") for v in normal) + "\nouter loop\n")
+            for point in triangle:
+                stream.write("vertex " + " ".join(format(v, ".17g") for v in point) + "\n")
+            stream.write("endloop\nendfacet\n")
+        stream.write("endsolid PyLCSS_preserved_boundary\n")
+    # No merging or process tolerance: each reloaded triangle must reproduce
+    # the exact certified double coordinates and winding, in order.
+    reloaded = trimesh.load_mesh(path, file_type="stl", process=False)
+    if not np.array_equal(reloaded.triangles, triangles):
+        raise ValueError("STL roundtrip changed the certified boundary coordinates.")
+    # STL carries coordinates, not the original indexed topology. Exact
+    # coincident vertices must still form a closed boundary after reloading.
+    sites, inverse = np.unique(reloaded.triangles.reshape(-1, 3), axis=0, return_inverse=True)
+    welded = trimesh.Trimesh(sites, inverse.reshape(-1, 3), process=False)
+    if (not welded.is_watertight or not welded.is_winding_consistent
+            or not np.isfinite(welded.volume) or welded.volume <= 0):
+        raise ValueError('STL roundtrip does not retain a closed oriented positive-volume boundary.')
+    return len(faces)
+
+
 def _commit_export(temporary: str, destination: str) -> None:
     """Atomically replace ``destination`` with a verified non-empty file."""
     if not os.path.isfile(temporary) or os.path.getsize(temporary) <= 0:
@@ -656,51 +746,88 @@ class TopOptMeshExportWorker(QtCore.QThread):
         self.export_format = str(export_format).lower()
 
     def _export_stl(self, temporary: str) -> dict[str, object]:
-        # The manufacturing boundary includes clipped members, joined material,
-        # skins and passive interfaces. Export it directly instead of replacing
-        # it with intersecting capped cylinders or refitting it through STEP.
+        # Exact CAD restoration can add material/bores beyond the recovered
+        # voxel contour. Once validated, export that final body rather than
+        # silently returning to the earlier approximated manufacturing mesh.
+        report = self.topology_result.get("cad_reconstruction") or {}
+        integration = report.get("stages", {}).get("solid_integration", {})
+        non_design = integration.get("non_design", {})
+        restored_cad = (
+            all(report.get(key) is True for key in ("valid", "is_solid", "export_ready"))
+            and report.get("validation_status") == "passed"
+            and non_design.get("applied") is True
+            and non_design.get("source_cad_applied") is True
+            and not non_design.get("error")
+        )
         recovered = self.recovered_shape
         if not isinstance(recovered, dict):
             recovered = self.topology_result.get("recovered_shape")
         if isinstance(recovered, dict):
             self.recovered_shape = recovered
-        if self.cad_shape is not None and not isinstance(recovered, dict) and not self.topology_result:
-            from pylcss.cae.design_studio.topology_optimization.geometry.cad_tessellation import (
-                tessellate_cad_absolute,
-            )
+        cad_tessellation_failure = None
+        if self.cad_shape is not None and (restored_cad or not self.topology_result):
+            try:
+                return self._export_cad_stl(temporary, restored_cad, non_design)
+            except (ValueError, RuntimeError, MemoryError) as error:
+                if not self.topology_result:
+                    raise
+                cad_tessellation_failure = str(error)
+                logger.warning('CAD STL tessellation rejected; checking preserved recovered boundary: %s', error)
 
-            shape = (
-                self.cad_shape.val()
-                if hasattr(self.cad_shape, "val")
-                else self.cad_shape
-            )
-            tolerance = _tessellation_tolerance(shape)
-            vertices, triangles = tessellate_cad_absolute(shape, tolerance, STL_ANGULAR_TOLERANCE)
-            # OCC emits zero-area pole triangles on otherwise valid spheres
-            # and other singular parameterizations. Remove only triangles that
-            # collapse at STL precision, then require a closed oriented mesh.
-            import trimesh
+        try:
+            return self._export_recovered_stl(temporary, cad_tessellation_failure)
+        except (ValueError, RuntimeError, MemoryError) as error:
+            if cad_tessellation_failure:
+                raise ValueError(f'CAD tessellation was rejected ({cad_tessellation_failure}); '
+                                 f'the recovered STL fallback also failed: {error}') from error
+            raise
 
-            vertices = np.asarray(vertices, dtype=np.float32).astype(float)
-            sites = vertices[triangles]
-            keep = np.linalg.norm(np.cross(sites[:, 1] - sites[:, 0],
-                                           sites[:, 2] - sites[:, 0]), axis=1) > 1e-12
-            removed = int(np.count_nonzero(~keep))
-            mesh = trimesh.Trimesh(vertices, triangles[keep], process=True)
-            if not mesh.is_watertight or not mesh.is_winding_consistent:
-                raise ValueError("CAD tessellation did not produce a closed, consistently oriented STL mesh.")
-            vertices, triangles = mesh.vertices, mesh.faces
-            triangle_count = _write_binary_stl(temporary, vertices, triangles)
-            return {
-                "format": "stl",
-                "path": self.path,
-                "triangles": triangle_count,
-                "chordal_tolerance": tolerance,
-                "relative_occ_deflection": False,
-                "removed_degenerate_triangles": removed,
-                "recovered_shape": None,
-            }
+    def _export_cad_stl(self, temporary, restored_cad, non_design):
+        from pylcss.cae.design_studio.topology_optimization.geometry.cad_tessellation import (
+            tessellate_cad_absolute,
+        )
 
+        shape = (
+            self.cad_shape.val()
+            if hasattr(self.cad_shape, "val")
+            else self.cad_shape
+        )
+        from OCP.BRep import BRep_Tool
+        if (not shape.isValid() or not shape.Solids()
+                or not all(BRep_Tool.IsClosed_s(shell.wrapped) for shell in shape.Shells())):
+            raise ValueError("CAD STL export requires a valid closed solid, not a fitted surface preview.")
+        tolerance = _tessellation_tolerance(shape)
+        vertices, triangles = tessellate_cad_absolute(
+            shape, tolerance, STL_ANGULAR_TOLERANCE,
+            max_triangles=2_000_000 if self.topology_result else None,
+            max_vertices=2_000_000 if self.topology_result else None,
+        )
+        mesh, tessellation_validation = _cad_stl_boundary(vertices, triangles)
+        vertices, triangles = mesh.vertices, mesh.faces
+        triangle_count = _write_certified_ascii_stl(temporary, vertices, triangles)
+        preservation = {
+            "method": "Tessellation of the final CAD solid",
+            "exact_cad_restoration_applied": restored_cad,
+            "source_cad_applied": non_design.get("source_cad_applied") if restored_cad else None,
+            "chordal_tolerance": tolerance,
+        }
+        return {
+            "format": "stl",
+            "path": self.path,
+            "triangles": triangle_count,
+            "chordal_tolerance": tolerance,
+            "relative_occ_deflection": False,
+            "encoding": "ascii_float64_17_digits",
+            "roundtrip_coordinates_unchanged": True,
+            "tessellation_validation": tessellation_validation,
+            "recovered_shape": None,
+            "stl_shape": {"vertices": vertices, "faces": triangles,
+                          "non_design_preservation": preservation},
+            "source": "Validated restored CAD boundary" if restored_cad else "CAD solid boundary",
+            "non_design_preservation": preservation,
+        }
+
+    def _export_recovered_stl(self, temporary, cad_tessellation_failure=None):
         recovered = self.recovered_shape
         if not isinstance(recovered, dict) and self.topology_result:
             field = (
@@ -744,21 +871,57 @@ class TopOptMeshExportWorker(QtCore.QThread):
         faces = np.asarray(recovered.get("faces"), dtype=int)
 
         import trimesh
-        mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=True)
+        mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
         if not mesh.is_watertight or not mesh.is_winding_consistent or mesh.volume <= 0:
             raise ValueError("The recovered manufacturing boundary must be closed and consistently oriented.")
         reduction = recovered.get("mesh_reduction")
-        if reduction is None:
+        previous_restoration = (recovered.get("preserved_geometry") or {}).get("surface_restoration") or {}
+        if reduction is None and previous_restoration.get("certified") is not True:
             from pylcss.cae.design_studio.topology_optimization.geometry.mesh_reduction import compact_mesh
             vertices, faces, reduction = compact_mesh(
                 mesh.vertices, mesh.faces, tolerance=float(np.linalg.norm(mesh.extents))*1e-3)
         else:
             vertices, faces = mesh.vertices, mesh.faces
-        triangle_count = _write_binary_stl(temporary, vertices, faces)
+        from pylcss.cae.design_studio.topology_optimization.geometry.preserved_surface import (
+            restore_preserved_surface,
+        )
+        vertices, faces, preservation = restore_preserved_surface(
+            vertices, faces, dict(self.topology_result, recovered_shape=recovered),
+            validate_only=previous_restoration.get("certified") is True,
+            sampling_cache=(recovered.get("preserved_surface_sampling")
+                            if previous_restoration.get("certified") is True else None),
+        )
+        # Keep frozen sampled operands out of public export diagnostics. The
+        # original recovery owns its private cache; this export does not alter it.
+        preservation.pop("_sampling_cache", None)
+        if preservation.get("certified") is not True:
+            raise ValueError("The recovered STL boundary did not pass preserved-region certification.")
+        if cad_tessellation_failure and preservation.get("source_cad_applied") is not True:
+            raise ValueError('CAD tessellation failed and the recovered boundary lacks its original CAD source certificate.')
+        preservation = dict(preservation, exact_cad_restoration_applied=False)
+        # Restoration follows simplification. Retain its original double CAD
+        # region boundaries in both the STL and its display; never simplify.
+        exported = trimesh.Trimesh(vertices, faces, process=False)
+        if (not exported.is_watertight or not exported.is_winding_consistent
+                or exported.volume <= 0):
+            raise ValueError("The preserved boundary is not a valid closed mesh.")
+        triangle_count = _write_certified_ascii_stl(temporary, vertices, faces)
+        warning = (f'CAD tessellation was rejected: {cad_tessellation_failure} '
+                   'STL uses the recovered surface with certified tessellated original CAD regions.'
+                   if cad_tessellation_failure else None)
         return {
             "format": "stl", "path": self.path, "triangles": triangle_count,
-            "source": "Recovered manufacturing boundary", "mesh_reduction": reduction,
+            "encoding": "ascii_float64_17_digits", "roundtrip_coordinates_unchanged": True,
+            "source": ("Recovered boundary with certified tessellated CAD regions"
+                       if preservation.get("applied") else "Recovered manufacturing boundary"),
+            "cad_tessellation_fallback": bool(cad_tessellation_failure),
+            "cad_tessellation_error": cad_tessellation_failure,
+            "warnings": [warning] if warning else [],
+            "mesh_reduction": reduction,
             "recovered_shape": recovered,
+            "stl_shape": {"vertices": vertices, "faces": faces,
+                          "non_design_preservation": preservation},
+            "non_design_preservation": preservation,
         }
 
     def _export_3mf(self, temporary: str) -> dict[str, object]:

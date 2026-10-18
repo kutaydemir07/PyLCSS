@@ -11,6 +11,8 @@ from typing import Any
 import cadquery as cq
 from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
 
+_NON_DESIGN_GEOMETRY_REVISION = 2
+
 
 def design_domain_shape(value: Any) -> cq.Shape:
     """Resolve the same CAD face order used by the viewer, including assemblies."""
@@ -83,6 +85,71 @@ def _matches_signature(face: cq.Face, signature: dict[str, Any]) -> bool:
     )
 
 
+def _clip_cylindrical_layer(layer: cq.Shape, domain: cq.Shape) -> cq.Shape:
+    """Intersect an offset cylinder without introducing subtractive trim seams.
+
+    Some coincident cylinders are misclassified by Common. Its independent
+    exterior partition must account for all of the input material, and the
+    result must pass both existing source and offset-layer containment checks.
+    Only an exact trim normalization may precede a retry. The older two-Cut
+    construction remains a checked fallback for the coincident-face case.
+    """
+    from .amrto_volume import measure_cad_volume
+    from .cad_features import (
+        _assert_source_contains_material, _native_boolean, _normalize_boolean_trims,
+    )
+    from .step_export import _closed
+
+    # An offset can already lie completely inside the source. Prove this with
+    # both Boolean partitions before avoiding a redundant clipping operation:
+    # even Common can introduce tiny self-crossing cap trims at a shoulder.
+    try:
+        _assert_source_contains_material(layer, domain)
+        return layer
+    except (ValueError, RuntimeError):
+        pass
+    normalized_layer = None
+    try:
+        # A simple bore can have ambiguous offset pcurves too. Normalize the
+        # unchanged layer before trusting an invalid exterior classification.
+        normalized_layer = _normalize_boolean_trims(layer)
+        _assert_source_contains_material(normalized_layer, domain)
+        return normalized_layer
+    except (ValueError, RuntimeError):
+        pass
+
+    reference, _ = measure_cad_volume(layer)
+    tolerance = reference * 1e-6
+    exterior = _native_boolean(layer, domain, "cut")
+    if not exterior.isValid() or (exterior.Faces() and not _closed(exterior)):
+        raise ValueError("The cylindrical layer exterior is not a valid closed partition.")
+    outside = sum(measure_cad_volume(solid)[0] for solid in exterior.Solids())
+    expected = reference - outside
+    if expected <= 0.0:
+        raise ValueError("The cylindrical face layer has no material inside its source.")
+
+    def checked(candidate):
+        if not candidate.isValid() or not _closed(candidate):
+            raise ValueError("The cylindrical face intersection is not a valid closed solid.")
+        volume, _ = measure_cad_volume(candidate)
+        if abs(volume - expected) > tolerance:
+            raise ValueError("The cylindrical face intersection did not retain its complete material partition.")
+        _assert_source_contains_material(candidate, domain)
+        _assert_source_contains_material(candidate, layer)
+        return candidate
+
+    for normalize in (False, True):
+        try:
+            operand = (normalized_layer if normalized_layer is not None
+                       else _normalize_boolean_trims(layer)) if normalize else layer
+            return checked(_native_boolean(operand, domain, "common"))
+        except (ValueError, RuntimeError):
+            continue
+    return checked(_native_boolean(
+        domain, _native_boolean(domain, layer, "cut", 1e-6), "cut", 1e-6,
+    ))
+
+
 def face_material_layer(face: cq.Face, domain: cq.Shape, thickness: float) -> cq.Shape:
     """Thicken the actual trimmed surface and retain only its interior material.
 
@@ -111,10 +178,12 @@ def face_material_layer(face: cq.Face, domain: cq.Shape, thickness: float) -> cq
                     if layer.Volume() < 0.0:
                         layer = cq.Shape.cast(layer.wrapped.Reversed())
                     if layer.isValid() and layer.Solids():
-                        # Common can lose a cylindrical layer when its outer
-                        # face coincides with the source face. Two cuts retain
-                        # the identical intersection reliably in that case.
-                        clipped = domain.cut(domain.cut(layer, tol=1e-6), tol=1e-6)
+                        if face.geomType() == "CYLINDER":
+                            # Subtracting twice can introduce malformed caps
+                            # where a counterbore meets a curved shoulder.
+                            clipped = _clip_cylindrical_layer(layer, domain)
+                        else:
+                            clipped = domain.cut(domain.cut(layer, tol=1e-6), tol=1e-6)
                         if (
                             not clipped.Solids() or clipped.Volume() <= 1e-9
                         ) and face.geomType() in {"BSPLINE", "BEZIER", "OFFSET"}:
@@ -168,7 +237,8 @@ def cached_non_design_payloads(
     if not read_non_design_regions(raw):
         return []
     cached = getattr(node, "_non_design_cache", None)
-    if cached is not None and cached[0] == raw:
+    if (cached is not None and len(cached) == 4
+            and cached[3] == _NON_DESIGN_GEOMETRY_REVISION and cached[0] == raw):
         domain = design_domain_shape(design_domain)
         if domain.isSame(cached[1]):
             return cached[2]
@@ -185,7 +255,9 @@ def non_design_payloads(node: Any, design_domain: Any) -> list[dict[str, Any]]:
         return []
     domain = design_domain_shape(design_domain)
     cached = getattr(node, "_non_design_cache", None)
-    if cached is not None and cached[0] == raw and domain.isSame(cached[1]):
+    if (cached is not None and len(cached) == 4
+            and cached[3] == _NON_DESIGN_GEOMETRY_REVISION
+            and cached[0] == raw and domain.isSame(cached[1])):
         return cached[2]
     faces = domain.Faces()
     payloads = []
@@ -216,5 +288,5 @@ def non_design_payloads(node: Any, design_domain: Any) -> list[dict[str, Any]]:
                 "geometry": geometry,
             }
         )
-    node._non_design_cache = (raw, domain, payloads)
+    node._non_design_cache = (raw, domain, payloads, _NON_DESIGN_GEOMETRY_REVISION)
     return payloads

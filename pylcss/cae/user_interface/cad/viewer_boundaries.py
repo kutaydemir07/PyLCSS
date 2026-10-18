@@ -205,7 +205,8 @@ class BoundaryOverlayMixin:
 
         def _triangulate_face(occ_face):
             try:
-                tri = occ_face.tessellate(tolerance=0.15, angularTolerance=0.3)
+                from ...design_studio.topology_optimization.geometry.cad_tessellation import private_cad_mesh_copy
+                tri = private_cad_mesh_copy(occ_face).tessellate(tolerance=0.15, angularTolerance=0.3)
                 if isinstance(tri, dict):
                     verts = tri.get("vertices") or tri.get("verts") or []
                     tris = tri.get("triangles") or tri.get("faces") or []

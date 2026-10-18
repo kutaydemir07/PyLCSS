@@ -75,6 +75,98 @@ def _validate_patch_partition(original, divided):
             "geometry_tolerance": tolerance, "source_uv_coverage_exactly_once": True}
 
 
+def preflight_layout_intrinsic_fold(layout, *, tolerance=1e-4):
+    """Find a definite fold in an isolated exact C1 child without compound BOP.
+
+    Call only for source-rejected fits before potentially expensive Boolean
+    integration. A pure FACE self-intersection on a single child establishes
+    an intrinsic fold; edge/vertex contacts, unknown faults and unsupported
+    native checks defer to the required complete-body checker. A clean result
+    is never an acceptance certificate for either the patch or the final CAD.
+    """
+    started = time.perf_counter()
+    report = {'method': 'Individual exact C1 child native FACE self-intersection preflight',
+              'layout_id': int(layout.layout_id), 'definitive_fold': False,
+              'deferred_to_global': True, 'closed_body_and_final_step_checks_required': True,
+              'compound_BOP_executed': False, 'child_reports': [], 'cache_hit': False}
+    fingerprint = None
+    try:
+        fingerprint = _surface_fingerprint(layout.nurbs_surface, tolerance)
+        if (getattr(layout, '_intrinsic_preflight_fingerprint', None) == fingerprint
+                and isinstance(getattr(layout, '_intrinsic_preflight_report', None), dict)):
+            cached = deepcopy(layout._intrinsic_preflight_report)
+            cached.update(layout_id=int(layout.layout_id), cache_hit=True)
+            return cached
+        import cadquery as cq
+        from OCP.BRepAdaptor import BRepAdaptor_Surface
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+        from OCP.GeomAbs import GeomAbs_C0, GeomAbs_C1
+        from OCP.ShapeFix import ShapeFix_Shape
+        from OCP.ShapeUpgrade import ShapeUpgrade_ShapeDivideContinuity
+        from .amrto_nurbs_fitting import nurbs_surface_to_occ_face
+
+        face = cq.Shape.cast(nurbs_surface_to_occ_face(layout.nurbs_surface, tol=tolerance))
+        if not face.isValid():
+            raise ValueError('Original isolated face requires complete-body topology normalization')
+        candidate = face
+        adaptor = BRepAdaptor_Surface(face.wrapped, True)
+        if adaptor.UContinuity() == GeomAbs_C0 or adaptor.VContinuity() == GeomAbs_C0:
+            divider = ShapeUpgrade_ShapeDivideContinuity(BRepBuilderAPI_Copy(face.wrapped, False, False).Shape())
+            divider.SetSurfaceCriterion(GeomAbs_C1)
+            divider.SetBoundaryCriterion(GeomAbs_C1)
+            divider.SetPCurveCriterion(GeomAbs_C1)
+            divider.SetPrecision(1e-7)
+            if not divider.Perform():
+                raise ValueError('The isolated patch could not be divided into exact C1 spans')
+            fixer = ShapeFix_Shape(divider.Result())
+            fixer.SetPrecision(1e-7)
+            fixer.SetMaxTolerance(1e-5)
+            fixer.Perform()
+            candidate = cq.Shape.cast(fixer.Shape())
+        report['surface_geometry_validation'] = _validate_patch_partition(face, candidate)
+        children = candidate.Faces()
+        report['normalized_face_count'] = len(children)
+        for index, child in enumerate(children):
+            row = {'child_index': index, 'definitive_fold': False}
+            try:
+                adaptor = BRepAdaptor_Surface(child.wrapped, True)
+                if adaptor.UContinuity() == GeomAbs_C0 or adaptor.VContinuity() == GeomAbs_C0:
+                    raise ValueError('Isolated child retained an internal C0 span')
+                quality = _assess_brep_self_intersections(child)
+                row['native_quality'] = quality
+                faults = quality.get('self_intersection_faults', [])
+                definite = bool(not quality.get('passed', False) and faults
+                    and quality.get('failed_face_indices') == [0]
+                    and quality.get('unmapped_fault_count') == 0
+                    and quality.get('other_fault_count') == 0
+                    and all(fault.get('shape_types') == ['FACE'] and fault.get('face_indices') == [0]
+                            for fault in faults))
+                row['definitive_fold'] = definite
+                report['child_reports'].append(row)
+                if definite:
+                    report.update(definitive_fold=True, deferred_to_global=False,
+                                  failed_child_index=index,
+                                  reason='A single exact C1 child has a mapped pure FACE self-intersection')
+                    break
+            except MemoryError:
+                raise
+            except Exception as error:
+                row.update(deferred_to_global=True, reason=f'{type(error).__name__}: {error}')
+                report['child_reports'].append(row)
+        report['checked_child_count'] = len(report['child_reports'])
+        if not report['definitive_fold']:
+            report['reason'] = 'No definitive isolated-child fold; complete-body and STEP checks remain required'
+    except MemoryError:
+        raise
+    except Exception as error:
+        report['reason'] = f'{type(error).__name__}: {error}'
+    report['elapsed_seconds'] = time.perf_counter() - started
+    if fingerprint is not None:
+        layout._intrinsic_preflight_fingerprint = fingerprint
+        layout._intrinsic_preflight_report = deepcopy(report)
+    return report
+
+
 def assess_layout_intrinsic_intersections(layout, *, tolerance=1e-4):
     """Return explicit intrinsic faults; defer unsupported open checks globally.
 

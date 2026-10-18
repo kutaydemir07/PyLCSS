@@ -5,8 +5,20 @@
 from typing import Any
 import numpy as np
 
+def private_cad_mesh_copy(shape: Any):
+    """Isolate CAD topology and geometry before meshing can populate pcurves."""
+    import cadquery as cq
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+
+    shape = shape.val() if hasattr(shape, "val") else shape
+    if not hasattr(shape, "wrapped"):
+        return shape  # Non-CAD display providers retain their existing protocol.
+    return cq.Shape.cast(BRepBuilderAPI_Copy(shape.wrapped, True, False).Shape())
+
+
 def tessellate_cad_absolute(shape: Any, tolerance: float, angular_tolerance: float = 0.5,
-                            *, return_face_ranges: bool = False):
+                            *, return_face_ranges: bool = False,
+                            max_triangles: int | None = None, max_vertices: int | None = None):
     """Mesh a CAD shape with absolute model-unit deflection, preserving seams.
 
     CadQuery's Shape.tessellate uses relative OCC deflection. Extract the OCC
@@ -18,13 +30,16 @@ def tessellate_cad_absolute(shape: Any, tolerance: float, angular_tolerance: flo
     from OCP.TopAbs import TopAbs_REVERSED
     from OCP.TopLoc import TopLoc_Location
 
-    shape = shape.val() if hasattr(shape, "val") else shape
+    # OCC meshing updates pcurves as well as triangulation caches. Copy the
+    # geometry too; a topology-only copy can still mutate shared CAD surfaces.
+    shape = private_cad_mesh_copy(shape)
     BRepTools.Clean_s(shape.wrapped)
     mesher = BRepMesh_IncrementalMesh(shape.wrapped, float(tolerance), False,
                                     float(angular_tolerance), True)
     if not mesher.IsDone():
         raise RuntimeError("Absolute CAD tessellation failed")
-    vertices, triangles, face_ranges = [], [], []
+    triangulated_faces = []
+    vertex_count = triangle_count = 0
     for face in shape.Faces():
         location = TopLoc_Location()
         triangulation = BRep_Tool.Triangulation_s(face.wrapped, location)
@@ -32,6 +47,18 @@ def tessellate_cad_absolute(shape: Any, tolerance: float, angular_tolerance: flo
             BRepMesh_IncrementalMesh(face.wrapped, float(tolerance), False,
                                      float(angular_tolerance), True)
             triangulation = BRep_Tool.Triangulation_s(face.wrapped, location)
+        if triangulation is not None:
+            vertex_count += triangulation.NbNodes()
+            triangle_count += triangulation.NbTriangles()
+        triangulated_faces.append((face, location, triangulation))
+    # Check before allocating Python coordinate/triangle buffers. This limits
+    # export data, not native OCCT meshing memory or its execution time.
+    if ((max_triangles is not None and triangle_count > max_triangles)
+            or (max_vertices is not None and vertex_count > max_vertices)):
+        raise ValueError(f'CAD tessellation exceeds the export mesh limit '
+                         f'({vertex_count} vertices, {triangle_count} triangles).')
+    vertices, triangles, face_ranges = [], [], []
+    for face, location, triangulation in triangulated_faces:
         if triangulation is None:
             face_ranges.append((len(vertices), len(vertices), len(triangles), len(triangles)))
             continue

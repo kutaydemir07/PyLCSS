@@ -43,6 +43,17 @@ from .result_fields import available_result_fields
 __all__ = ["TopologyInspectorMixin"]
 
 
+def _topopt_cad_export_error(report):
+    """Reuse the solid export gate without inspecting or rebuilding geometry."""
+    from pylcss.cae.design_studio.topology_optimization.geometry.cad_config import require_step_export_ready
+
+    try:
+        require_step_export_ready(report)
+    except RuntimeError as error:
+        return str(error)
+    return None
+
+
 class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
     def _build_topopt_definition_ui(self, node):
         """Engineer-facing inspector for TopOpt study-definition nodes.
@@ -595,7 +606,7 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         )
         visualization.setToolTip(
             "Density: solved voxel field\n"
-            "STL Shape: recovered solid surface mesh\n"
+            "STL Shape: preserved material boundary; shows the exported STL when available\n"
             "CAD: fitted CAD surfaces\n"
             "FEA: completed independent analysis\n"
             "Lattice: generated cells with preserved solid regions"
@@ -625,11 +636,14 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         cad_worker = getattr(self, "_topopt_cad_preview_worker", None)
         building_cad = cad_worker is not None and cad_worker.isRunning()
         display_failed = bool(has_cad_body and last_result.get("_cad_display_error"))
-        build_cad = QtWidgets.QPushButton("Retry CAD display" if display_failed else "Build CAD")
+        solid_error = _topopt_cad_export_error((last_result or {}).get("cad_reconstruction"))
+        build_cad = QtWidgets.QPushButton(
+            "Rebuild CAD" if has_cad_body and solid_error else
+            "Retry CAD display" if display_failed else "Build CAD")
         build_cad.setObjectName("TopOptBuildCad")
         build_cad.setEnabled(
             supports_cad and (has_recovered_surface or has_density)
-            and (not has_cad_body or display_failed) and not building_cad
+            and (not has_cad_body or display_failed or bool(solid_error)) and not building_cad
         )
         build_cad.clicked.connect(lambda _checked=False: self._preview_topopt_cad(node))
         if not (is_lattice_structure and not supports_cad):
@@ -640,6 +654,9 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             cad_hint = "Lattice mesh is ready. Export as STL."
         elif building_cad:
             cad_hint = "Building CAD in the background."
+        elif has_cad_body and solid_error:
+            cad_hint = ("Fitted CAD surfaces are available for inspection. STEP solid export is unavailable. "
+                        "Use Rebuild CAD to retry solid construction.\n" + solid_error)
         elif display_failed:
             cad_hint = "CAD is built, but its display failed. Retry CAD display to prepare its mesh again."
         elif has_cad_body:
@@ -1358,6 +1375,7 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         viewer = getattr(window, "viewer", None)
         if (
             cached_shape is not None
+            and not _topopt_cad_export_error(result.get("cad_reconstruction"))
             and _topopt_cad_display_mesh(result, cached_shape) is None
             and viewer is not None
         ):
@@ -1406,6 +1424,11 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
 
         def _finish(shape, report):
             self._topopt_cad_preview_worker = None
+            if getattr(node, "_last_result", None) is not result:
+                # A newer solve owns the node. This completed CAD job belongs
+                # to the previous result and must not replace its geometry,
+                # view selection, verification state or progress display.
+                return
             report = dict(report or {})
             layout = report.pop('_surface_layout', None)
             if layout is not None:
@@ -1461,8 +1484,9 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
                 f", {int(face_count)} faces" if face_count is not None else ""
             )
             if hasattr(window, "statusBar") and window.statusBar():
-                state = ("CAD surfaces ready; solid construction incomplete"
-                         if report.get("is_solid") is False else "CAD ready")
+                solid_error = _topopt_cad_export_error(report)
+                state = "CAD preview ready; STEP solid export unavailable" if solid_error else "CAD ready"
+                window.statusBar().setToolTip(solid_error or "")
                 window.statusBar().showMessage(
                     f"{state}{count_text}",
                     12000,
@@ -1471,6 +1495,8 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
 
         def _fail(message):
             self._topopt_cad_preview_worker = None
+            if getattr(node, "_last_result", None) is not result:
+                return
             result["cad_error"] = message
             result["cad_reconstruction"] = {
                 "method": "CAD reconstruction failed", "failed": True,
@@ -1496,6 +1522,8 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
 
         def _cancelled():
             self._topopt_cad_preview_worker = None
+            if getattr(node, "_last_result", None) is not result:
+                return
             mode = "Lattice" if result.get("generated_lattice") else "STL Shape"
             if mode not in available_result_fields(result):
                 mode = "Density"
@@ -1858,6 +1886,7 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         structure_options = result.get("structure_options")
         cad_shape = cached_cad_shape(result, settings["strategy"])
         recovered = result.get("recovered_shape")
+        cad_report = result.get("cad_reconstruction")
 
         # Recovery is expensive too; let the isolated export job do it. A
         # filename change or Export click must never rebuild the surface here.
@@ -1885,14 +1914,37 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
 
         def _finish(details):
             self._topopt_mesh_export_worker = None
-            if isinstance(details.get("recovered_shape"), dict):
-                result["recovered_shape"] = details["recovered_shape"]
+            source_unchanged = result.get("recovered_shape") is recovered
+            if details.get("non_design_preservation", {}).get("exact_cad_restoration_applied"):
+                source_unchanged = source_unchanged and result.get("cad_reconstruction") is cad_report
+            if getattr(node, "_last_result", None) is result and source_unchanged:
+                if recovered is None and isinstance(details.get("recovered_shape"), dict):
+                    result["recovered_shape"] = details["recovered_shape"]
+                if isinstance(details.get("stl_shape"), dict):
+                    # Keep the exact exported boundary separate from the
+                    # optimization contour used for later CAD fitting.
+                    mesh = dict(details["stl_shape"])
+                    mesh["source_recovered_shape"] = result.get("recovered_shape")
+                    mesh["source_cad_shape"] = cad_shape
+                    mesh["source_cad_report"] = cad_report
+                    result["stl_shape"] = mesh
+                result["stl_export"] = {key: value for key, value in details.items()
+                                        if key not in {"recovered_shape", "stl_shape"}}
+                window = self.window()
+                window = getattr(window, "cad_widget", window)
+                if (getattr(window, "_last_rendered_geom", None) is result
+                        and result.get("visualization_mode") in {"STL Shape", "Lattice"}
+                        and getattr(window, "viewer", None) is not None):
+                    window.viewer.render_simulation(result)
             triangle_count = int(details.get("triangles", 0))
             source = str(details.get("source") or "")
             suffix = f" from {source}" if source else ""
+            warnings = "\n".join(str(value) for value in details.get("warnings", []))
             if hasattr(self.window(), "statusBar") and self.window().statusBar():
+                self.window().statusBar().setToolTip(warnings)
                 self.window().statusBar().showMessage(
                     f"Exported {triangle_count} STL triangles{suffix} to {details['path']}"
+                    + (f". {warnings}" if warnings else "")
                 )
 
         def _fail(message):

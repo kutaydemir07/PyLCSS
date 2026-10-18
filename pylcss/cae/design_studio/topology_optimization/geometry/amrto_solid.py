@@ -45,6 +45,90 @@ def _same_surfaces(before: list[Any], shape: Any) -> bool:
     return not remaining
 
 
+def _split_partial_self_seam_faces(shape: Any, sewn: Any, free_edges: list[Any], source_scale: float):
+    """Expose a positively overlapping partial seam by exact C1 subdivision.
+
+    This runs only after ordinary stitching fails. Two free edges on the same
+    surface must overlap along a positive-length curve, rather than merely
+    sharing an endpoint. The test only selects candidates: every subdivision
+    still has to prove complete source UV coverage and unchanged geometry.
+    """
+    import numpy as np
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+    from OCP.GeomAbs import GeomAbs_C0, GeomAbs_C1
+    from OCP.ShapeFix import ShapeFix_Shape
+    from OCP.ShapeUpgrade import ShapeUpgrade_ShapeDivideContinuity
+    from .amrto_intrinsic import _validate_patch_partition
+
+    faces = shape.Faces()
+    originals = [_surface_location(face) for face in faces]
+    candidate_edges = {}
+    for face in sewn.Faces():
+        owned = [edge for edge in free_edges if any(edge.isSame(item) for item in face.Edges())]
+        if len(owned) < 2:
+            continue
+        surface, location = _surface_location(face)
+        for index, (original, original_location) in enumerate(originals):
+            if original == surface and original_location.IsEqual(location):
+                candidate_edges[index] = owned
+
+    report = {'method': 'One exact C1 subdivision of positively overlapping partial self-seam faces',
+              'engineering_topology_extension': True, 'applied': False, 'patches_refitted': 0,
+              'input_face_count': len(faces), 'output_face_count': len(faces),
+              'split_source_face_indices': [], 'source_uv_coverage_exactly_once': True,
+              'maximum_matching_uv_geometry_error': 0.0, 'faces': []}
+    # Candidate detection uses coordinate-roundoff scale, never a larger sew
+    # tolerance. Its samples are not advertised as a global geometry proof.
+    overlap_tolerance = 128 * np.finfo(float).eps * max(float(source_scale), 1.)
+    output = []
+    for index, face in enumerate(faces):
+        edges = candidate_edges.get(index, [])
+        overlap = None
+        for first in range(len(edges)):
+            for second in range(first + 1, len(edges)):
+                shorter, longer = sorted((edges[first], edges[second]), key=lambda edge: edge.Length())
+                if shorter.Length() <= overlap_tolerance:
+                    continue
+                distances = [longer.distance(cq.Vertex.makeVertex(*shorter.positionAt(t).toTuple()))
+                             for t in (.125, .375, .625, .875)]
+                if all(math.isfinite(value) and value <= overlap_tolerance for value in distances):
+                    overlap = {'sampled_maximum_curve_distance': max(distances),
+                               'coordinate_roundoff_tolerance': overlap_tolerance,
+                               'shorter_edge_length': shorter.Length(), 'longer_edge_length': longer.Length()}
+                    break
+            if overlap is not None:
+                break
+        adaptor = BRepAdaptor_Surface(face.wrapped, True)
+        if overlap is None or (adaptor.UContinuity() != GeomAbs_C0 and adaptor.VContinuity() != GeomAbs_C0):
+            output.append(face)
+            continue
+        divider = ShapeUpgrade_ShapeDivideContinuity(BRepBuilderAPI_Copy(face.wrapped, False, False).Shape())
+        divider.SetSurfaceCriterion(GeomAbs_C1)
+        divider.SetBoundaryCriterion(GeomAbs_C1)
+        divider.SetPCurveCriterion(GeomAbs_C1)
+        divider.SetPrecision(1e-7)
+        if not divider.Perform():
+            raise ValueError('Partial self-seam surface could not be divided into exact C1 spans')
+        fixer = ShapeFix_Shape(divider.Result())
+        fixer.SetPrecision(1e-7)
+        fixer.SetMaxTolerance(1e-5)
+        fixer.Perform()
+        divided = cq.Shape.cast(fixer.Shape())
+        proof = _validate_patch_partition(face, divided)
+        if len(divided.Faces()) <= 1:
+            output.append(face)
+            continue
+        output.extend(divided.Faces())
+        report['split_source_face_indices'].append(index)
+        report['faces'].append({'source_face_index': index, 'child_count': len(divided.Faces()),
+                                'overlap_candidate': overlap, **proof})
+        report['maximum_matching_uv_geometry_error'] = max(
+            report['maximum_matching_uv_geometry_error'], proof['maximum_matching_uv_geometry_error'])
+    report.update(applied=bool(report['split_source_face_indices']), output_face_count=len(output))
+    return (cq.Compound.makeCompound(output) if report['applied'] else shape), report
+
+
 def split_closed_paper_faces(
     shape: Any, *, reference_volume: float | None = None,
 ) -> tuple[Any, dict[str, Any]]:
@@ -129,14 +213,19 @@ def stitch_paper_surfaces(
     maximum_relative_tolerance: float = 0.003,
     source_volume: float | None = None,
     maximum_volume_relative_error: float = 0.05,
+    _allow_partial_seam_subdivision: bool = True,
 ) -> tuple[Any, dict[str, Any]]:
-    """Stitch once at each of at most nine bounded tolerances; keep every fit.
+    """Try the bounded stitch schedule, with one exact partial-seam fallback.
 
     A successful result has no free/multiple edges, contains every original
     face on its unchanged surface, and consists entirely of closed, valid
     solids. Nested closed shells become cavities. Global self-intersection,
     exact-feature restoration, and STEP verification remain downstream
     checks: native topological validity alone is not their substitute.
+
+    Only a failed original schedule may expose an overlapping partial seam
+    by exact C1 subdivision and repeat that same schedule once. Every source
+    UV rectangle remains covered once and no spline is refitted.
 
     Failure returns the complete best sewn surface model and a report with
     ``is_solid=False``. This keeps a useful CAD result without falsely making
@@ -181,7 +270,7 @@ def stitch_paper_surfaces(
         'surface_geometry_unchanged': True, 'trials': [],
         'global_intersection_validation': 'not_run', 'cad_volume': None,
     }
-    best_shape, best_free = shape, math.inf
+    best_shape, best_free, best_free_edges = shape, math.inf, []
     for current_tolerance in schedule:
         sewing = BRepBuilderAPI_Sewing(current_tolerance)
         sewing.SetMaxTolerance(current_tolerance)
@@ -202,6 +291,7 @@ def stitch_paper_surfaces(
                      face_count=len(sewn.Faces()), surface_geometry_unchanged=unchanged)
         if unchanged and free < best_free:
             best_shape, best_free = sewn, free
+            best_free_edges = [cq.Edge(sewing.FreeEdge(i)) for i in range(1, free + 1)]
             report.update(free_edge_count=free, is_valid=bool(sewn.isValid()),
                           sew_tolerance=current_tolerance)
         if free or sewing.NbMultipleEdges() or sewing.NbDegeneratedShapes() or not unchanged:
@@ -250,6 +340,31 @@ def stitch_paper_surfaces(
         return candidate, report
     report.update(status='open_or_incomplete_brep', solid_count=0,
                   shell_count=len(best_shape.Shells()), cavity_shell_count=0)
+    if _allow_partial_seam_subdivision and best_free_edges:
+        try:
+            divided, split_report = _split_partial_self_seam_faces(shape, best_shape, best_free_edges, source_scale)
+            if split_report['applied']:
+                candidate, retry = stitch_paper_surfaces(
+                    divided, tolerance=tolerance, source_scale=source_scale,
+                    maximum_relative_tolerance=maximum_relative_tolerance,
+                    source_volume=source_volume, maximum_volume_relative_error=maximum_volume_relative_error,
+                    _allow_partial_seam_subdivision=False)
+                split_report['same_tolerance_schedule'] = schedule
+                split_report['retry_tolerances_attempted'] = [row['tolerance'] for row in retry['trials']]
+                split_report['retry_is_solid'] = retry['is_solid']
+                if retry['is_solid']:
+                    retry.update(initial_stitching=report, partial_self_seam_subdivision=split_report,
+                                 original_fitted_face_count=len(faces))
+                    return candidate, retry
+                split_report['retry_report'] = retry
+                split_report['original_fitted_surfaces_retained'] = True
+            report['partial_self_seam_subdivision'] = split_report
+        except MemoryError:
+            raise
+        except Exception as error:
+            report['partial_self_seam_subdivision'] = {
+                'applied': False, 'accepted': False, 'error': f'{type(error).__name__}: {error}',
+                'original_fitted_surfaces_retained': True}
     return best_shape, report
 
 

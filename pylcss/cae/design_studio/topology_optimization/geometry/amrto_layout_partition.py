@@ -48,6 +48,7 @@ def triangle_area_3d(cor_1: np.ndarray, cor_2: np.ndarray, cor_3: np.ndarray) ->
 def triangulate_quads_clean(
     verts: np.ndarray,
     quads_arr: np.ndarray,
+    *, return_report: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Appendix D Improvement 2: choose the diagonal with least area imbalance.
 
@@ -57,12 +58,72 @@ def triangulate_quads_clean(
     verts = np.asarray(verts, dtype=float)
     quads_arr = np.asarray(quads_arr, dtype=np.int64)
     tri_arr = triangulate_quad_faces(verts, quads_arr)
+    preferred = tri_arr[:len(quads_arr), 2] == quads_arr[:, 2]
+    diagonals = np.sort(np.stack((quads_arr[:, [0, 2]], quads_arr[:, [1, 3]]), axis=1), axis=2)
+    quad_edges = {tuple(sorted((int(a), int(b)))) for quad in quads_arr
+                  for a, b in zip(quad, np.roll(quad, -1))}
+    selected = diagonals[np.arange(len(quads_arr)), np.where(preferred, 0, 1)]
+    selected_edges = [tuple(map(int, edge)) for edge in selected]
+    changed = 0
+    if len(set(selected_edges)) != len(selected_edges) or any(edge in quad_edges for edge in selected_edges):
+        # Two valid quads can share a two-edge corner. Choosing the same
+        # diagonal then creates duplicate triangles and a four-owner edge.
+        # Match each quad to a unique diagonal that is not an existing edge,
+        # minimizing the total additional Appendix D2 area imbalance.
+        from scipy.sparse import coo_matrix
+        from scipy.sparse.csgraph import min_weight_full_bipartite_matching
+
+        points = verts[quads_arr]
+        def area(a, b, c):
+            return np.linalg.norm(np.cross(points[:, b]-points[:, a], points[:, c]-points[:, a]), axis=1)
+        imbalance = np.stack((abs(area(0, 1, 2)-area(0, 2, 3)),
+                              abs(area(0, 1, 3)-area(1, 2, 3))), axis=1)
+        penalty = imbalance-imbalance.min(axis=1, keepdims=True)
+        cost = 1.+penalty/max(float(penalty.max()), np.finfo(float).tiny)
+        edges, columns = np.unique(diagonals.reshape(-1, 2), axis=0, return_inverse=True)
+        columns = columns.reshape(-1, 2)
+        selected_counts = Counter(selected_edges)
+        pending = [i for i, edge in enumerate(selected_edges)
+                   if selected_counts[edge] > 1 or edge in quad_edges]
+        owners = defaultdict(set)
+        for i, pair in enumerate(columns):
+            for column in pair:
+                owners[int(column)].add(i)
+        affected = set(pending)
+        while pending:
+            for column in columns[pending.pop()]:
+                for neighbor in owners[int(column)]-affected:
+                    affected.add(neighbor)
+                    pending.append(neighbor)
+        active = np.asarray(sorted(affected), dtype=np.int64)
+        allowed = np.asarray([tuple(map(int, edge)) not in quad_edges
+                              for edge in diagonals[active].reshape(-1, 2)])
+        rows = np.repeat(np.arange(len(active)), 2)
+        graph = coo_matrix((cost[active].ravel()[allowed],
+                            (rows[allowed], columns[active].ravel()[allowed])),
+                           shape=(len(active), len(edges))).tocsr()
+        try:
+            assigned_rows, assigned_columns = min_weight_full_bipartite_matching(graph)
+        except ValueError as error:
+            raise ValueError('Quad chart has no manifold triangulation using its original corners') from error
+        chosen = preferred.copy()
+        chosen[active[assigned_rows]] = np.all(edges[assigned_columns] == diagonals[active[assigned_rows], 0], axis=1)
+        changed = int(np.count_nonzero(chosen != preferred))
+        first = np.where(chosen[:, None], quads_arr[:, [0, 1, 2]], quads_arr[:, [0, 1, 3]])
+        second = np.where(chosen[:, None], quads_arr[:, [0, 2, 3]], quads_arr[:, [1, 2, 3]])
+        tri_arr = np.concatenate((first, second))
     tri_arr = tri_arr.reshape(2, len(quads_arr), 3).transpose(1, 0, 2).reshape(-1, 3)
     used_v = np.unique(tri_arr)
     v_map = {old: new for new, old in enumerate(used_v)}
     local_tris = np.asarray([[v_map[int(v)] for v in t] for t in tri_arr], dtype=np.int64)
     local_quads = np.asarray([[v_map[int(v)] for v in q] for q in quads_arr], dtype=np.int64)
-    return used_v, local_tris, local_quads
+    result = (used_v, local_tris, local_quads)
+    if return_report:
+        return (*result, {'engineering_manifold_diagonal_constraint': bool(changed),
+                         'preferred_diagonal_changes': changed,
+                         'source_quad_array_unchanged': True, 'source_coordinates_unchanged': True,
+                         'method': 'Least total area imbalance subject to unique interior diagonals'})
+    return result
 
 
 def load_layout_from_obj(obj_path: str | Path, layout_id: int = 0,
@@ -273,6 +334,107 @@ def _required_square_corners(triangles: np.ndarray, loop: list[int]) -> set[int]
     return required
 
 
+def repair_reflex_square_corners(layout: QuadLayout) -> dict:
+    """Move only unambiguously reflex square corners along the same boundary.
+
+    A regular rectangular spline cannot preserve both source-edge tangents at
+    a reflex physical corner. Its fixed corner Jacobian would be inverted,
+    regardless of interior fitting. This engineering chart repair retains the
+    complete source boundary, vertices, triangles and quads. Mixed incident
+    normal signs are ambiguous in 3D and never justify a corner replacement.
+    """
+    paths = layout.boundary_paths
+    if (len(paths) != 4 or any(len(path) < 2 for path in paths)
+            or any(paths[i][-1] != paths[(i + 1) % 4][0] for i in range(4))):
+        raise ValueError('Corner orientation assessment requires four connected boundary paths')
+    loop = [int(vertex) for path in paths for vertex in path[:-1]]
+    if len(set(loop)) != len(loop):
+        raise ValueError('Corner orientation assessment requires one simple source boundary')
+    source_edges = Counter((a, b) for path in paths for a, b in zip(path[:-1], path[1:]))
+    triangles, points = np.asarray(layout.triangles), np.asarray(layout.vertices)
+    normals = np.cross(points[triangles[:, 1]] - points[triangles[:, 0]],
+                       points[triangles[:, 2]] - points[triangles[:, 0]])
+    # Match actual source normals to this boundary's cyclic orientation.
+    first_edge = (loop[0], loop[1])
+    winding = None
+    for triangle in triangles:
+        directed = set(zip(map(int, triangle), map(int, np.roll(triangle, -1))))
+        if first_edge in directed:
+            winding = 1.
+            break
+        if first_edge[::-1] in directed:
+            winding = -1.
+            break
+    if winding is None:
+        raise ValueError('Declared layout boundary edge is absent from source triangles')
+    normals *= winding
+    normal_lengths = np.linalg.norm(normals, axis=1)
+    assessments = {}
+    for index, vertex in enumerate(loop):
+        cross = np.cross(points[loop[(index + 1) % len(loop)]] - points[vertex],
+                         points[loop[index - 1]] - points[vertex])
+        length = float(np.linalg.norm(cross))
+        incident = np.flatnonzero(np.any(triangles == vertex, axis=1))
+        if not len(incident) or length == 0 or np.any(normal_lengths[incident] == 0):
+            assessments[vertex] = {'classification': 'ambiguous', 'incident_normal_cosines': []}
+            continue
+        cosine = normals[incident] @ cross / (normal_lengths[incident] * length)
+        kind = ('convex' if np.all(cosine > 1e-8) else
+                'reflex' if np.all(cosine < -1e-8) else 'ambiguous')
+        assessments[vertex] = {'classification': kind, 'incident_normal_cosines': cosine.tolist()}
+    corners = [int(path[0]) for path in paths]
+    original_corners = corners.copy()
+    report = {'method': 'Reselect unambiguously reflex square corners on the unchanged source boundary',
+              'engineering_extension': True, 'paper_algorithm': False,
+              'applied': False, 'source_vertices_unchanged': True, 'source_triangles_unchanged': True,
+              'source_quads_unchanged': True, 'complete_source_boundary_unchanged': True,
+              'original_corners': original_corners,
+              'original_corner_assessments': [assessments[v] for v in corners], 'replacements': []}
+    lengths = np.linalg.norm(points[np.roll(loop, -1)] - points[loop], axis=1)
+    arclength = np.r_[0., np.cumsum(lengths)]
+    for side, vertex in enumerate(original_corners):
+        if assessments[vertex]['classification'] != 'reflex':
+            continue
+        previous, following = loop.index(corners[side - 1]), loop.index(corners[(side + 1) % 4])
+        interval = []
+        cursor = (previous + 1) % len(loop)
+        while cursor != following:
+            if loop[cursor] not in corners and assessments[loop[cursor]]['classification'] == 'convex':
+                interval.append(cursor)
+            cursor = (cursor + 1) % len(loop)
+        if not interval:
+            report.update(accepted=False, applied=False, final_corners=original_corners,
+                          rejection_reason='No unambiguous convex replacement between adjacent square corners',
+                          proposed_replacements=report.pop('replacements'), replacements=[])
+            layout.corner_orientation_repair_report = report
+            return report  # An optional chart extension cannot suppress reviewable paper fits.
+        old = loop.index(vertex)
+        def distance(index):
+            difference = abs(float(arclength[index] - arclength[old]))
+            return min(difference, float(arclength[-1]) - difference), index
+        chosen = loop[min(interval, key=distance)]
+        corners[side] = chosen
+        report['replacements'].append({'old_vertex': vertex, 'new_vertex': chosen,
+                                       'old_assessment': assessments[vertex], 'new_assessment': assessments[chosen]})
+    if corners != original_corners:
+        start = loop.index(corners[0])
+        ordered = loop[start:] + loop[:start]
+        positions = [ordered.index(vertex) for vertex in corners]
+        if positions != sorted(positions):
+            raise ValueError('Convex corner selection changed cyclic boundary order')
+        replacement = [ordered[positions[i]:positions[i + 1] + 1] if i < 3
+                       else ordered[positions[i]:] + [ordered[0]] for i in range(4)]
+        if Counter((a, b) for path in replacement for a, b in zip(path[:-1], path[1:])) != source_edges:
+            raise ValueError('Convex corner selection changed source boundary coverage')
+        layout.corner_indices, layout.boundary_paths = corners, replacement
+        layout.parameter_coords = None
+        layout.sampled_grid_3d = None
+        report['applied'] = True
+    report.update(accepted=True, final_corners=corners)
+    layout.corner_orientation_repair_report = report
+    return report
+
+
 def extract_layout_boundary_and_corners(
     layout: QuadLayout,
     pts_vt: Optional[list] = None,
@@ -424,8 +586,13 @@ def _validate_source_quad_coverage(layouts, vertices, quads):
 
 def _appendix_report(layouts):
     reports = [getattr(layout, "appendix_D4_report", {}) for layout in layouts]
+    D2_reports = [getattr(layout, "appendix_D2_report", {}) for layout in layouts]
     return {"paper_D2_executed": True,
             "triangulation_method": "Appendix D2 minimum difference of physical triangle areas",
+            "D2_manifold_diagonal_changes": sum(report.get("preferred_diagonal_changes", 0) for report in D2_reports),
+            "D2_topology_constraints": [{"patch": layout.layout_id, **report}
+                                        for layout, report in zip(layouts, D2_reports)
+                                        if report.get("engineering_manifold_diagonal_constraint")],
             "paper_D4_executed": any(report.get("paper_D4_executed", False) for report in reports),
             "paper_D4_condition_satisfied": all(report.get("paper_D4_condition_satisfied", False) for report in reports),
             "D4_new_vertex_count": sum(report.get("new_vertex_count", 0) for report in reports),
@@ -1142,8 +1309,9 @@ def _paper_layout_from_graph_patch(vertices, patch):
     if (patch_quads.ndim != 2 or patch_quads.shape[1] != 4 or not len(patch_quads)
             or patch_quads.min() < 0 or patch_quads.max() >= len(vertices)):
         raise ValueError("GMCG exported invalid global quad indices")
-    used, triangles, quads = triangulate_quads_clean(vertices, patch_quads)
+    used, triangles, quads, D2_report = triangulate_quads_clean(vertices, patch_quads, return_report=True)
     layout = QuadLayout(int(patch["patch"]), vertices[used].copy(), triangles, quads=quads)
+    layout.appendix_D2_report = D2_report
     layout.source_vertex_indices = used
     loop = _boundary_loop(triangles, len(used))
     source_ids = {int(global_id): local_id for local_id, global_id in enumerate(used)}
@@ -1195,6 +1363,13 @@ def _paper_D1_annular_layouts(vertices, patch):
     local_map = {int(old): index for index, old in enumerate(used)}
     local_quads = np.asarray([[local_map[int(v)] for v in quad] for quad in patch_quads], dtype=np.int64)
     local_verts = np.asarray(vertices, dtype=float)[used].copy()
+    # A pinched boundary can look annular by Euler characteristic while its
+    # incident faces belong to disconnected vertex fans.  Only the generic D1
+    # treatment can retain the source correspondence and report those copies;
+    # do not ask the annular loop probe to classify the unsplit boundary.
+    _, _, _, fan_splits = _split_vertex_fans(local_verts, local_quads, used)
+    if fan_splits:
+        return None
     initial_topology = _topology(local_quads)
     if (initial_topology["euler_characteristic"] != 0
             or initial_topology["boundary_loop_count"] != 2
@@ -1368,8 +1543,9 @@ def _paper_D1_annular_layouts(vertices, patch):
         "remaining_non_disk_part_count": 0,
     }
     for comp in _face_components(faces):
-        u2_idx, tris, c_qs = triangulate_quads_clean(pos, faces[comp])
+        u2_idx, tris, c_qs, D2_report = triangulate_quads_clean(pos, faces[comp], return_report=True)
         layout = QuadLayout(int(patch["patch"]), pos[u2_idx].copy(), tris, quads=c_qs)
+        layout.appendix_D2_report = D2_report
         layout.source_vertex_indices = src_ids[u2_idx]
         layout.source_face_indices = list(comp)
         loop = _boundary_loop(tris, len(u2_idx))
@@ -1406,15 +1582,19 @@ def _paper_D1_layouts(vertices, patch):
         return annular
     patch_quads = np.asarray(patch["quads"], dtype=np.int64)
     parts, report = repair_quad_patch_to_disks(vertices, patch_quads)
-    if not report.get("paper_D1_executed") or not report.get("paper_D1_validated"):
+    # A retraced native side can collapse to one vertex on an already valid
+    # disk.  Such a chart needs four boundary corners, not a topological cut;
+    # the generic repair correctly reports a validated no-op in this case.
+    if not report.get("paper_D1_validated"):
         raise ValueError("The native chart requires further GMCG division; Appendix D1 did not produce disks")
     cut_endpoints = {int(path[index]) for cut in report["geodesic_cuts"]
                      for path in [cut["source_vertex_path"]] for index in (0, -1)}
     native_corners = {int(side[0]) for side in patch["sides"] if len(side)}
     layouts = []
     for part in parts:
-        used, triangles, quads = triangulate_quads_clean(part.vertices, part.quads)
+        used, triangles, quads, D2_report = triangulate_quads_clean(part.vertices, part.quads, return_report=True)
         layout = QuadLayout(int(patch["patch"]), part.vertices[used].copy(), triangles, quads=quads)
+        layout.appendix_D2_report = D2_report
         layout.source_vertex_indices = part.source_vertex_indices[used]
         loop = _boundary_loop(triangles, len(used))
         corners = [vertex for vertex in loop if int(layout.source_vertex_indices[vertex]) in cut_endpoints]
@@ -1431,6 +1611,15 @@ def _paper_D1_layouts(vertices, patch):
             layout.corner_indices = corners
         else:
             extract_layout_boundary_and_corners(layout)
+            report.setdefault("native_graph_corner_repairs", []).append({
+                "part": len(layouts),
+                "method": "Select four boundary corners on the validated source disk",
+                "paper_algorithm": False,
+                "engineering_boundary_corner_repair": True,
+                "native_distinct_corner_count": len(native_corners),
+                "source_quads_unchanged": True,
+                "source_corner_ids": [int(layout.source_vertex_indices[v]) for v in layout.corner_indices],
+            })
         layout.source_face_indices = part.source_face_indices.tolist()
         layout.appendix_D1_report = report
         layouts.append(layout)
@@ -1483,6 +1672,44 @@ def _load_paper_indexed_gmcg_layouts(path: Path, vertices, quads):
                      **_appendix_report(layouts)}
 
 
+def _prepare_native_vertex_fans(vertices, quads):
+    """Give OpenMesh separate coincident vertices for disconnected face fans."""
+    from .amrto_disk_repairs import _split_vertex_fans
+
+    if (vertices.ndim != 2 or vertices.shape[1] != 3 or not np.isfinite(vertices).all()
+            or quads.ndim != 2 or quads.shape[1] != 4 or not len(quads)
+            or quads.min() < 0 or quads.max() >= len(vertices)
+            or any(len(set(face)) != 4 for face in quads)):
+        raise ValueError("Native GMCG requires finite vertices and nondegenerate indexed quads")
+    points, faces, source, splits = _split_vertex_fans(vertices, quads, np.arange(len(vertices)))
+    if (not np.array_equal(points[faces], vertices[quads])
+            or not np.array_equal(source[faces], quads)):
+        raise ValueError("Native vertex fan preparation changed source quad geometry or correspondence")
+    return points, faces, source, {
+        "method": "Duplicate coincident vertices only for disconnected incident face fans before native GMCG",
+        "engineering_input_topology_repair": bool(splits),
+        "coincident_vertex_splits": splits, "new_vertex_count": len(points)-len(vertices),
+        "physical_geometry_unchanged": True, "source_quad_coverage_exactly_once": True,
+        "source_vertex_ids_restored_after_native_layouts": True,
+    }
+
+
+def _remap_native_report_vertices(report, source):
+    """Keep source IDs in diagnostic paths tied to the original Step 2 mesh."""
+    sequence_keys = {"source_vertex_path", "source_corner_ids", "source_path", "original_source_path"}
+    if isinstance(report, dict):
+        for key, value in report.items():
+            if key in sequence_keys:
+                report[key] = _remap_source_ids(value, source).tolist()
+            elif key == "source_vertex":
+                report[key] = int(source[value]) if value >= 0 else value
+            else:
+                _remap_native_report_vertices(value, source)
+    elif isinstance(report, list):
+        for value in report:
+            _remap_native_report_vertices(value, source)
+
+
 def divide_paper_sparse_quad_layouts(vertices, quads, layout_folder=None, *, gmcg_executable=None):
     """Paper Step 3 with no distortion preflight, clustering or fit-driven cuts."""
     vertices, quads = np.asarray(vertices, dtype=float), np.asarray(quads, dtype=np.int64)
@@ -1501,20 +1728,24 @@ def divide_paper_sparse_quad_layouts(vertices, quads, layout_folder=None, *, gmc
     if executable is None or not executable.is_file():
         raise PaperLayoutError("AMRTO Step 3 requires the native GMCG headless executable",
                                {"step": 3, "paper_stage_3": False, "native_execution_count": 0})
+    # OpenMesh drops incident faces at a pinched vertex before GMCG can apply
+    # any chart repair. Split only disconnected fans, retaining all original
+    # polygons and positions; restore their source IDs after native processing.
+    native_vertices, native_quads, native_source, fan_report = _prepare_native_vertex_fans(vertices, quads)
     with tempfile.TemporaryDirectory(prefix="pylcss_amrto_step3_") as folder:
         root = Path(folder)
         source = root / "source.obj"
         with source.open("w", encoding="ascii") as stream:
-            for vertex in vertices:
+            for vertex in native_vertices:
                 stream.write("v " + " ".join(f"{float(value):.17g}" for value in vertex) + "\n")
-            for quad in quads:
+            for quad in native_quads:
                 stream.write("f " + " ".join(str(int(index) + 1) for index in quad) + "\n")
         try:
             subprocess.run([str(executable), str(source), str(root / "layouts")],
                            check=True, capture_output=True, timeout=180,
                            **headless_subprocess_kwargs())
             layouts, report = _load_paper_indexed_gmcg_layouts(
-                root / "layouts" / "quad_patch_indices.json", vertices, quads)
+                root / "layouts" / "quad_patch_indices.json", native_vertices, native_quads)
         except PaperLayoutError:
             raise
         except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
@@ -1524,6 +1755,12 @@ def divide_paper_sparse_quad_layouts(vertices, quads, layout_folder=None, *, gmc
             raise PaperLayoutError("AMRTO native GMCG execution failed: " + str(error),
                                    {"step": 3, "paper_stage_3": False, "native_execution_count": 1,
                                     "failure": str(error), "native_error": details[-2000:]}) from error
+    if fan_report["coincident_vertex_splits"]:
+        for layout in layouts:
+            layout.source_vertex_indices = _remap_source_ids(layout.source_vertex_indices, native_source)
+        _remap_native_report_vertices(report, native_source)
+        _validate_source_quad_coverage(layouts, vertices, quads)
+    report["native_input_vertex_fan_repair"] = fan_report
     report.update(native_execution_count=1, executable=str(executable))
     return layouts, report
 

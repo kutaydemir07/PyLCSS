@@ -23,6 +23,23 @@ logger = logging.getLogger(__name__)
 _NODAL_STRESS_DISPLAY_PERCENTILE = 99.5
 
 
+def _topopt_exported_stl_mesh(data):
+    """Return the exported boundary only while its source result is current."""
+    mesh = data.get("stl_shape")
+    if not isinstance(mesh, dict):
+        return None
+    if mesh.get("source_recovered_shape") is not data.get("recovered_shape"):
+        return None
+    if mesh.get("non_design_preservation", {}).get("exact_cad_restoration_applied"):
+        shape = data.get("cad_shape")
+        if shape is None:
+            shape = data.get("shape")
+        if (mesh.get("source_cad_shape") is not shape
+                or mesh.get("source_cad_report") is not data.get("cad_reconstruction")):
+            return None
+    return mesh if "vertices" in mesh and "faces" in mesh else None
+
+
 def _topopt_cad_display_mesh(data, shape):
     """Return a prepared native-face display mesh without meshing geometry."""
     mesh = data.get("cad_preview_mesh")
@@ -812,8 +829,27 @@ class SimulationRenderingMixin:
         self._request_render()
         return True
 
+    def _render_topopt_non_design_overlays(self, data):
+        """Outline the prescribed source regions without adding result material."""
+        if not isinstance(data, dict):
+            return
+        from pylcss.cae.design_studio.topology_optimization.geometry.cad_features import (
+            _collect_passive_tools,
+        )
+        try:
+            # Use restoration's region definitions, including the original
+            # empty bores inside annular preserved material. Hardware retains
+            # its separate joint overlay; these outlines add no material.
+            solids, voids, _hardware = _collect_passive_tools(
+                data, void_axial_margin=0., void_radial_margin=0.)
+            self.render_non_design_layers(solids, void_layers=voids,
+                                          fade_base=False, render=False)
+        except (ValueError, RuntimeError, TypeError):
+            logger.debug("Could not display prescribed non-design boundaries", exc_info=True)
+
     def _render_topopt_joint_overlays(self, data):
-        """Show kinematic joint pins without treating them as optimized material."""
+        """Restore engineering reference overlays after each TopOpt render."""
+        self._render_topopt_non_design_overlays(data)
         self._clear_topopt_joint_overlays()
         multibody = data.get("multibody") if isinstance(data, dict) else None
         joints = multibody.get("global_joints") if isinstance(multibody, dict) else None
@@ -897,6 +933,7 @@ class SimulationRenderingMixin:
         their lifetime and re-renders them itself, and field/scale switches
         must not silently discard them.
         """
+        self.render_non_design_layers([], render=False)
         self._clear_topopt_joint_overlays()
         self._clear_undeformed_overlay()
         self._clear_result_extrema()
@@ -1261,11 +1298,14 @@ class SimulationRenderingMixin:
                 "Recovered Surface (Mesh)",
             }
         ):
-            rec = data.get("recovered_shape")
+            exported_stl = (_topopt_exported_stl_mesh(data)
+                            if data.get("visualization_mode") in {"STL Shape", "Lattice"}
+                            else None)
+            rec = exported_stl if exported_stl is not None else data.get("recovered_shape")
             prepared_lattice = None
-            if data.get('generated_lattice') and isinstance(rec, dict):
+            if data.get('generated_lattice') and isinstance(rec, dict) and exported_stl is None:
                 prepared_lattice = _topopt_lattice_display_mesh(data)
-                if prepared_lattice is None:
+                if prepared_lattice is None and exported_stl is None:
                     original = getattr(self, '_topopt_lattice_display_result', None)
                     self._prepare_topopt_lattice_display(original if original is not None else data, rec)
                     return

@@ -9,6 +9,7 @@ import logging
 import numpy as np
 import vtk
 from PySide6 import QtCore
+from ...design_studio.topology_optimization.geometry.cad_tessellation import private_cad_mesh_copy
 
 from .navigation_cube import NavCubeWidget
 from .viewer_constants import (
@@ -106,8 +107,12 @@ class SceneRenderingMixin:
         self.scalar_bar.VisibilityOff()
         self._request_render()
 
-    def render_non_design_layers(self, layers, *, render=True):
-        """Show the actual closed preserved volumes without altering face picking."""
+    def render_non_design_layers(self, layers, *, void_layers=(), render=True, fade_base=True):
+        """Show prescribed regions separately from the displayed material.
+
+        Setup previews can fade the design domain. Result views use boundary
+        outlines, preserving the actual mesh/CAD appearance and empty voids.
+        """
         for actor in getattr(self, "_non_design_actors", []):
             self.renderer.RemoveActor(actor)
         self._non_design_actors = []
@@ -115,11 +120,11 @@ class SceneRenderingMixin:
         if previous is not None:
             previous[0].GetProperty().SetOpacity(previous[1])
         self._non_design_base_actor = None
-        if layers and self.current_actor is not None:
+        if (layers or void_layers) and fade_base and self.current_actor is not None:
             self._non_design_base_actor = (self.current_actor, self.current_actor.GetProperty().GetOpacity())
             self.current_actor.GetProperty().SetOpacity(0.22)
-        for layer in layers:
-            vertices, triangles = layer.tessellate(0.05, 0.1)
+        for layer, is_void in [(layer, False) for layer in layers] + [(layer, True) for layer in void_layers]:
+            vertices, triangles = private_cad_mesh_copy(layer).tessellate(0.05, 0.1)
             points = vtk.vtkPoints()
             for vertex in vertices:
                 points.InsertNextPoint(*vertex.toTuple())
@@ -132,11 +137,30 @@ class SceneRenderingMixin:
             polydata.SetPoints(points)
             polydata.SetPolys(cells)
             mapper = vtk.vtkPolyDataMapper()
-            mapper.SetInputData(polydata)
+            if is_void or not fade_base:
+                edges = vtk.vtkFeatureEdges()
+                edges.SetInputData(polydata)
+                edges.BoundaryEdgesOn()
+                edges.FeatureEdgesOn()
+                edges.SetFeatureAngle(30.)
+                edges.ManifoldEdgesOff()
+                edges.NonManifoldEdgesOff()
+                edges.ColoringOff()
+                mapper.SetInputConnection(edges.GetOutputPort())
+            else:
+                mapper.SetInputData(polydata)
+            mapper.ScalarVisibilityOff()
+            mapper.SetResolveCoincidentTopologyToPolygonOffset()
+            mapper.SetRelativeCoincidentTopologyLineOffsetParameters(-1., -1.)
             actor = vtk.vtkActor()
             actor.SetMapper(mapper)
-            actor.GetProperty().SetColor(0.1, 0.8, 0.95)
-            actor.GetProperty().SetOpacity(0.8)
+            actor.GetProperty().SetColor(*((1., .55, .15) if is_void else (.1, .8, .95)))
+            actor.GetProperty().SetOpacity(1. if is_void or not fade_base else .8)
+            actor.GetProperty().SetLineWidth(2.)
+            if self.current_actor is not None:
+                actor.SetUserMatrix(self.current_actor.GetMatrix())
+                actor.SetVisibility(self.current_actor.GetVisibility())
+            actor._pylcss_non_design_region_type = "void" if is_void else "solid"
             actor.PickableOff()
             self.renderer.AddActor(actor)
             self._non_design_actors.append(actor)
@@ -1158,7 +1182,7 @@ class SceneRenderingMixin:
                         tri = (vertices[start:end].tolist(),
                                (mesh_triangles[triangle_start:triangle_end] - start).tolist())
                     else:
-                        tri = occ_face.tessellate(tolerance=0.1, angularTolerance=0.2)
+                        tri = private_cad_mesh_copy(occ_face).tessellate(tolerance=0.1, angularTolerance=0.2)
                     if isinstance(tri, dict):
                         verts = tri.get("vertices") or tri.get("verts") or []
                         triangles = tri.get("triangles") or tri.get("faces") or []
@@ -1208,7 +1232,7 @@ class SceneRenderingMixin:
             # Fallback: whole-shape tessellation (no per-face picking)
             try:
                 triangulation = ((absolute_mesh[0].tolist(), absolute_mesh[1].tolist())
-                                 if absolute_mesh is not None else topo_shape.tessellate(
+                                 if absolute_mesh is not None else private_cad_mesh_copy(topo_shape).tessellate(
                                      tolerance=0.1, angularTolerance=0.2))
                 if isinstance(triangulation, dict):
                     verts = triangulation.get("vertices") or triangulation.get("verts")

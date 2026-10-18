@@ -82,7 +82,8 @@ def _polyline_curve(points, parameters):
     return BSpline(knots, controls, 3)
 
 
-def simplify_shared_curve(curve, points, tolerance, *, bounds=None, maximum_attempts=64):
+def simplify_shared_curve(curve, points, tolerance, *, bounds=None, maximum_attempts=64,
+                          preserve_endpoint_tangents=False):
     """Remove boundary knots once per shared chain under the source error budget.
 
     Both incident charts subsequently receive the same curve. Endpoints and
@@ -101,11 +102,20 @@ def simplify_shared_curve(curve, points, tolerance, *, bounds=None, maximum_atte
             knots = np.delete(current.t, np.flatnonzero(current.t == knot)[0])
             count = len(knots) - current.k - 1
             insertion = BSpline(knots, np.eye(count), current.k).insert_knot(float(knot)).c
-            # Constrain the endpoints, not just the sampled residual.
+            # A fixed corner's surface normal depends on these endpoint
+            # tangents. Knot reduction must preserve them as well as positions;
+            # an interior surface solve cannot repair an inverted fixed corner.
             controls = np.zeros((count, 3))
             controls[[0, -1]] = current.c[[0, -1]]
-            right = current.c - insertion[:, [0, -1]] @ controls[[0, -1]]
-            controls[1:-1] = lstsq(insertion[:, 1:-1], right, lapack_driver='gelsy')[0]
+            fixed = [0, count - 1]
+            if preserve_endpoint_tangents:
+                controls[1] = controls[0] + current.derivative()(0.) * (knots[4] - knots[3]) / 3.
+                controls[-2] = controls[-1] - current.derivative()(1.) * (knots[-4] - knots[-5]) / 3.
+                fixed = [0, 1, count - 2, count - 1]
+            free = sorted(set(range(count)) - set(fixed))
+            right = current.c - insertion[:, fixed] @ controls[fixed]
+            if free:
+                controls[free] = lstsq(insertion[:, free], right, lapack_driver='gelsy')[0]
             if bounds is not None and (np.any(controls < bounds[0]) or np.any(controls > bounds[1])):
                 continue
             candidate = BSpline(knots, controls, current.k)
@@ -128,10 +138,23 @@ def simplify_shared_curve(curve, points, tolerance, *, bounds=None, maximum_atte
         if not changed:
             break
     return current, {'removed_knot_count': removed, 'attempts': attempts,
+                     'endpoint_tangents_preserved': bool(preserve_endpoint_tangents),
                      'boundary_simplified_jointly': True, 'control_points': len(current.c)}
 
 
-def _fit_curve(points, tolerance, *, preserve_polyline=False, bounds=None):
+def _endpoint_tangents_follow_source(curve, points):
+    """Check both directed one-sided source tangents after any stock clipping."""
+    edges = np.asarray([points[1] - points[0], points[-1] - points[-2]])
+    tangents = np.asarray([curve.derivative()(0.), curve.derivative()(1.)])
+    lengths = np.linalg.norm(edges, axis=1) * np.linalg.norm(tangents, axis=1)
+    if not np.isfinite(tangents).all() or np.any(lengths <= 0):
+        return False
+    cosine = np.einsum('ij,ij->i', edges, tangents) / lengths
+    return bool(np.all(cosine >= 1. - 1e-10))
+
+
+def _fit_curve(points, tolerance, *, preserve_polyline=False, bounds=None,
+               preserve_endpoint_tangents=False):
     lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
     if (lengths <= 0).any():
         raise ValueError("Shared boundary chain has zero-length edges")
@@ -140,6 +163,7 @@ def _fit_curve(points, tolerance, *, preserve_polyline=False, bounds=None):
     if preserve_polyline:
         curve = _polyline_curve(points, parameters)
         return curve, {"maximum_sampled_error": 0.0, "control_points": len(curve.c),
+                       "endpoint_tangent_directions_preserved": True,
                        "smooth_interior_knots": False, "exact_protected_chain": True,
                        "reason": "Protected source boundary retained by exact polyline degree elevation"}
     sample_t = np.unique(np.r_[parameters, np.linspace(0, 1, max(40, 5 * len(points)))])
@@ -153,11 +177,26 @@ def _fit_curve(points, tolerance, *, preserve_polyline=False, bounds=None):
         basis = BSpline.design_matrix(sample_t, knots, 3).toarray()
         controls = np.zeros((count, 3))
         controls[0], controls[-1] = points[0], points[-1]
-        residual = samples - basis[:, [0, -1]] @ controls[[0, -1]]
-        controls[1:-1] = lstsq(basis[:, 1:-1], residual, lapack_driver="gelsy")[0]
+        # Preserve both one-sided source tangent directions. Position-only
+        # curve fitting can reverse the corner normal even within its distance
+        # budget. Keep adjacent poles on their actual first/last source edges;
+        # the positive lengths also avoid creating a stationary endpoint.
+        fixed = [0, count - 1]
+        if preserve_endpoint_tangents:
+            first = min(float(lengths.sum()) * float(knots[4] - knots[3]) / 3., float(lengths[0]))
+            last = min(float(lengths.sum()) * float(knots[-4] - knots[-5]) / 3., float(lengths[-1]))
+            controls[1] = points[0] + first * (points[1] - points[0]) / lengths[0]
+            controls[-2] = points[-1] - last * (points[-1] - points[-2]) / lengths[-1]
+            fixed = [0, 1, count - 2, count - 1]
+        free = sorted(set(range(count)) - set(fixed))
+        residual = samples - basis[:, fixed] @ controls[fixed]
+        if free:
+            controls[free] = lstsq(basis[:, free], residual, lapack_driver="gelsy")[0]
         if bounds is not None:
             controls = np.clip(controls, bounds[0], bounds[1])
         curve = BSpline(knots, controls, 3)
+        if preserve_endpoint_tangents and not _endpoint_tangents_follow_source(curve, points):
+            continue
         dense_t = np.linspace(0, 1, max(80, 8 * len(points)))
         distance = max(float(np.linalg.norm(curve(sample_t) - samples, axis=1).max()),
                        float(_curve_distance_to_polyline(curve(dense_t), points).max()))
@@ -169,15 +208,18 @@ def _fit_curve(points, tolerance, *, preserve_polyline=False, bounds=None):
                     project_canonical_chain(curve, points, bounds, tolerance)
                 except CanonicalChainCertificationError:
                     continue
-            curve, reduction = simplify_shared_curve(curve, points, tolerance, bounds=bounds)
+            curve, reduction = simplify_shared_curve(curve, points, tolerance, bounds=bounds,
+                preserve_endpoint_tangents=preserve_endpoint_tangents)
             distance = max(float(np.linalg.norm(curve(sample_t) - samples, axis=1).max()),
                            float(_curve_distance_to_polyline(curve(dense_t), points).max()))
             return curve, {"maximum_sampled_error": distance, "control_points": len(curve.c),
+                           "endpoint_tangent_directions_preserved": bool(preserve_endpoint_tangents),
                            "smooth_interior_knots": True, 'shared_curve_reduction': reduction}
     # True sharp turns cannot always be approximated within tolerance by a small
     # smooth curve. Preserve their polyline instead of rounding material away.
     curve = _polyline_curve(points, parameters)
     return curve, {"maximum_sampled_error": 0.0,
+        "endpoint_tangent_directions_preserved": True,
         "control_points": len(curve.c), "smooth_interior_knots": False,
         "reason": "Smooth curve exceeded source-boundary tolerance",
         "rejected_smooth_error": best[1] if best else None}
@@ -224,10 +266,13 @@ def reparameterize_shared_curve(curve, chord_parameters, native_parameters, tole
 
 
 def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None, blocked_junction_positions=(),
-                                   certify_stock_hull=False):
+                                   certify_stock_hull=False, preserve_endpoint_tangents=False,
+                                   tangent_preserving_edges=()):
     """Fit seams once; retain protected source creases and junctions exactly."""
     def key(point):
         return tuple(map(float, point))
+    tangent_edges = {tuple(sorted((key(a), key(b)))) for a, b in tangent_preserving_edges}
+    tangent_chain_count = 0
     protected_edges = {tuple(sorted((key(edge[0]), key(edge[1]))))
                        for layout in layouts for edge in getattr(layout, "protected_source_crease_edges", ())}
     protected_edges.update(
@@ -290,7 +335,11 @@ def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None, blocked_j
                 if identifier not in cache:
                     protected = any(tuple(sorted((a, b))) in protected_edges
                                     for a, b in zip(identifier, identifier[1:]))
-                    curve, report = _fit_curve(canonical, tolerance, preserve_polyline=protected, bounds=bounds)
+                    retain_tangents = preserve_endpoint_tangents or any(
+                        tuple(sorted((a, b))) in tangent_edges for a, b in zip(identifier, identifier[1:]))
+                    curve, report = _fit_curve(canonical, tolerance, preserve_polyline=protected, bounds=bounds,
+                        preserve_endpoint_tangents=retain_tangents)
+                    tangent_chain_count += int(retain_tangents)
                     if certify_stock_hull:
                         from .amrto_shared_stock import project_canonical_chain
                         curve, stock = project_canonical_chain(curve, canonical, bounds, tolerance)
@@ -345,6 +394,8 @@ def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None, blocked_j
         layout.shared_boundary_parameterization_report = {
             "retained_native_uv": retained_native, "sides": layout_native_reports}
     return {"method": "Common cubic B-spline graph chains with fixed junctions",
+            "endpoint_tangent_preservation_extension": bool(preserve_endpoint_tangents or tangent_edges),
+            "endpoint_tangent_preserving_chain_count": tangent_chain_count,
             "chain_count": len(cache), "smooth_chain_count": sum(r["smooth_interior_knots"] for r in reports),
             "polyline_fallback_chain_count": sum(not r["smooth_interior_knots"] and not r.get("exact_protected_chain", False)
                                                    for r in reports),
