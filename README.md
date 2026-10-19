@@ -39,16 +39,6 @@ OpenCourant and FreeCAD, run `python scripts/install_solvers.py`.
 
 For only the crash solver, run `python scripts/install_solvers.py --only opencourant`.
 
-CAD FEA uses the standalone Gmsh mesher when available. The Windows installer
-includes it; for a source checkout, run `python scripts/install_solvers.py --only gmsh`.
-Set `PYLCSS_GMSH_EXE` to use another installed Gmsh executable. CAD meshing and
-analysis run in child processes and retain the fitted CAD and exact interfaces.
-
-FEA and crash solvers use at most four CPU threads by default. To tune a model,
-set `PYLCSS_CALCULIX_THREADS` (FEA) or `PYLCSS_OPENCOURANT_THREADS` (crash) to a
-positive integer. Explicit limits are capped to the available logical CPUs and
-apply only to solver processes.
-
 ## Help
 
 Open **Help** inside the app for workflows, examples and solver configuration.
