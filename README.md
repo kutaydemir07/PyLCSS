@@ -17,7 +17,7 @@ simulation and optimization through visual, node-based workflows.
 
 ### Windows
 
-Download the Windows installer from [Releases](https://github.com/kutaydemir07/PyLCSS/releases).
+Download the Windows installer [PyLCSS-3.0.0-Setup-x64.exe](PyLCSS-3.0.0-Setup-x64.exe) directly from the repository.
 Choose **CAE**, **MDAO**, or both during setup, then launch **PyLCSS** from the
 Start Menu. External solvers and FreeCAD are optional setup components.
 
@@ -48,10 +48,6 @@ FEA and crash solvers use at most four CPU threads by default. To tune a model,
 set `PYLCSS_CALCULIX_THREADS` (FEA) or `PYLCSS_OPENCOURANT_THREADS` (crash) to a
 positive integer. Explicit limits are capped to the available logical CPUs and
 apply only to solver processes.
-
-Windows release builds use `installer/windows/build_windows_installer.ps1
--RequireSignature` with a trusted code-signing certificate. Publish the generated
-installer and `.exe.sha256` as assets of the matching `vX.Y.Z` GitHub Release.
 
 ## Help
 

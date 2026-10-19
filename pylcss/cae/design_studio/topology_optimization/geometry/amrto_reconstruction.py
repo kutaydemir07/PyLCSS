@@ -556,6 +556,10 @@ def reconstruct_topopt_cad(
                         retry_surface.exportBrep(str(candidate_file))
                         retry_report['candidate_checkpoint_file'] = candidate_file.name
                         retry_report['candidate_checkpoint_is_export_ready_solid'] = False
+                        # Preserve the accepted source-fit evidence before a
+                        # potentially long native Boolean operation starts.
+                        (folder/'retry_fit_report.json').write_text(
+                            json.dumps(retry_report, indent=2), encoding='utf-8')
                     except MemoryError:
                         raise
                     except Exception as error:

@@ -1292,7 +1292,20 @@ def _assert_source_contains_material(material: Any, domain: Any) -> None:
             inside_volume = abs(float(inside.Volume(tol=1e-7)))
             if (not np.isfinite(inside_volume)
                     or abs(inside_volume - volume) > volume_tolerance):
-                raise RuntimeError("inside partition did not retain the complete material volume")
+                if (not np.isfinite(inside_volume) or outside.Solids()
+                        or outside.Faces() or outside.Edges() or outside.Vertices()):
+                    raise RuntimeError("inside partition did not retain the complete material volume")
+                # Internal Boolean seams can distort the integral of an
+                # otherwise complete local collar. Accept a normalized
+                # witness only with unchanged surfaces/physical boundaries,
+                # independent common-origin integrals, the original volume
+                # and bounds limits, and a genuinely empty outside result.
+                from .cad_partition_proof import normalize_contained_partition
+                inside, proof = normalize_contained_partition(
+                    material, inside, volume_tolerance=volume_tolerance,
+                    linear_tolerance=linear_tolerance)
+                inside_volume = abs(float(inside.Volume(tol=1e-7)))
+                logger.info("Verified complete material after exact face-partition cancellation: %s", proof)
             # Common can split an unchanged planar pad into coplanar faces.
             # Their redundant internal spline seam can extend beyond the
             # material within its native edge tolerance, misleading both
@@ -1408,29 +1421,26 @@ def _stock_boundary_pad_tools(source: Any, pads: list[Any]) -> Optional[list[Any
 
 
 def _fuse_stock_boundary_pads(body: Any, tools: list[Any], source: Any) -> Any:
-    """Perform the certified pad union once, then restore the exact stock boundary."""
-    import cadquery as cq
-    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
-    from OCP.TopTools import TopTools_ListOfShape
+    """Union exact pads, with one exact subdivision retry for invalid trims."""
+    from .amrto_boolean_retry import (boolean_with_history,
+        incident_original_spline_faces, exact_bezier_retry_body)
     from .step_export import _closed
 
-    arguments, native_tools = TopTools_ListOfShape(), TopTools_ListOfShape()
-    arguments.Append(body.wrapped)
-    for tool in tools:
-        native_tools.Append(tool.wrapped)
-    builder = BRepAlgoAPI_Fuse()
-    builder.SetArguments(arguments)
-    builder.SetTools(native_tools)
-    builder.SetNonDestructive(True)
-    builder.SetRunParallel(True)
-    builder.Build()
-    if not builder.IsDone():
-        raise RuntimeError('Stock-boundary pad union failed')
-    fused = cq.Shape.cast(builder.Shape())
-    result = _native_boolean(fused, source, 'common')
+    fused, union_history = boolean_with_history(body, tools, 'fuse')
+    result, clip_history = boolean_with_history(fused, [source], 'common')
+    retry = None
+    if not result.isValid():
+        selected = incident_original_spline_faces(body, result, (union_history, clip_history))
+        candidate, retry = exact_bezier_retry_body(body, selected)
+        fused, _ = boolean_with_history(candidate, tools, 'fuse')
+        result, _ = boolean_with_history(fused, [source], 'common')
     if (not result.isValid() or not _closed(result)
             or len(result.Solids()) != len(body.Solids())):
         raise RuntimeError('Stock-boundary pad union did not retain connected closed material')
+    if retry is not None:
+        logger.info('Recovered stock-boundary pad trims by exact Bezier subdivision of %d '
+                    'original faces into %d children; no refitting or material removal.',
+                    len(selected), sum(row['child_count'] for row in retry['patches']))
     return result
 
 
