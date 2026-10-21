@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import math
 
 
-CAD_RECONSTRUCTION_REVISION = 28
+CAD_RECONSTRUCTION_REVISION = 31
 
 
 def cached_cad_shape(payload, strategy):
@@ -34,9 +34,9 @@ def cached_cad_shape(payload, strategy):
 def require_step_export_ready(report):
     """Reject known incomplete reconstruction before starting STEP transfer.
 
-    Keep the original integration diagnosis instead of refitting the same
-    input or replacing it with the exporter's generic topology error. Missing
-    legacy metadata still reaches the exporter's native closed-solid check.
+    Prefer the latest failed candidate's diagnosis and layout IDs, retaining
+    the initial integration evidence in the report. Missing legacy metadata
+    still reaches the exporter's native closed-solid check.
     """
     if not isinstance(report, dict):
         return
@@ -49,13 +49,16 @@ def require_step_export_ready(report):
         return
     stages = report.get('stages') or report.get('stage_reports') or {}
     integration = stages.get('solid_integration') or {}
-    reason = integration.get('reason') or report.get('error')
+    retry = stages.get('local_chart_retry') or {}
+    latest = (report.get('latest_retry_failure') or integration.get('latest_retry_failure')
+              or retry.get('latest_retry_failure') or {})
+    reason = latest.get('reason') or integration.get('reason') or report.get('error')
     if not reason:
         warnings = report.get('warnings') or ()
         reason = warnings if isinstance(warnings, str) else '; '.join(map(str, warnings))
     if not reason:
         reason = 'The fitted surfaces have not produced a verified closed solid.'
-    rejected = integration.get('rejected_layout_ids')
+    rejected = latest.get('rejected_layout_ids') if latest else integration.get('rejected_layout_ids')
     if rejected:
         reason = f"{reason} (layouts {', '.join(map(str, rejected))})"
     if report.get('is_solid') is False:
@@ -66,6 +69,12 @@ def require_step_export_ready(report):
         f'STEP export requires a valid closed CAD solid. {status}\n'
         f'Solid construction: {reason}'
     )
+    if not latest and retry.get('accepted') is False and retry.get('reason'):
+        retry_reason = retry['reason']
+        retry_rejected = retry.get('rejected_layout_ids')
+        if retry_rejected:
+            retry_reason = f"{retry_reason} (layouts {', '.join(map(str, retry_rejected))})"
+        message += f'\nLatest chart retry: {retry_reason}'
     checkpoint = report.get('failure_checkpoint_dir')
     if checkpoint:
         message += f'\nDiagnostics saved to: {checkpoint}'

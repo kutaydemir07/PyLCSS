@@ -58,7 +58,7 @@ def build_topopt_beam_lattice(payload, structure_options, member_plan=None):
 
 
 def _fit_paper_layout(task):
-    layout, cfg = task
+    layout, cfg = task[:2]
     scope = threadpool_limits(limits=1, user_api='blas') if threadpool_limits else nullcontext()
     with scope:
         fit_paper_nurbs_surface_for_layout(
@@ -71,16 +71,20 @@ def _fit_paper_layout(task):
             join_boundaries=cfg.stitch_surface_boundaries,
             maximum_source_deviation=getattr(layout, 'solid_source_fit_limit', None),
             maximum_multires_displacement=getattr(layout, 'solid_fit_tolerance', None))
+        if len(task) == 3 and task[2] is not None:
+            from .amrto_intrinsic import reject_intrinsic_retry_fit
+            reject_intrinsic_retry_fit(layout, tolerance=task[2])
     return layout
 
 
-def _fit_paper_layouts(layouts, cfg):
+def _fit_paper_layouts(layouts, cfg, *, intrinsic_tolerance=None):
     workers = min(max(1, int(cfg.fitting_workers)), os.cpu_count() or 1, len(layouts), 61)
+    tasks = ((layout, cfg, intrinsic_tolerance) for layout in layouts)
     if workers == 1 or getattr(__import__('sys'), 'frozen', False):
-        yield from map(_fit_paper_layout, ((layout, cfg) for layout in layouts))
+        yield from map(_fit_paper_layout, tasks)
     else:
         with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context('spawn')) as pool:
-            yield from pool.map(_fit_paper_layout, ((layout, cfg) for layout in layouts), chunksize=1)
+            yield from pool.map(_fit_paper_layout, tasks, chunksize=1)
 
 
 def _assemble_paper_cad(layouts, tolerance):
@@ -96,8 +100,11 @@ def _assemble_paper_cad(layouts, tolerance):
 
 def _complete_paper_solid(shape, payload, *, tolerance, source_scale,
                           source_volume, maximum_volume_delta,
-                          void_axial_margin, void_radial_margin, progress_callback=None):
+                          void_axial_margin, void_radial_margin, progress_callback=None,
+                          fitted_layout_ids=None, contact_checkpoint_dir=None):
     """Join once, restore exact CAD interfaces and retain surfaces on failure."""
+    from .amrto_contact_retry import ContactIntegrationError, map_fitted_contact_layouts
+
     surface_model = shape
     report = {'status': 'surface_only', 'is_solid': False, 'fitting_attempts': 0}
     def progress(stage):
@@ -121,6 +128,11 @@ def _complete_paper_solid(shape, payload, *, tolerance, source_scale,
                 void_radial_margin=void_radial_margin)
         except MemoryError:
             raise
+        except ContactIntegrationError as nd_err:
+            report['non_design'] = {'applied': False, 'error': str(nd_err)}
+            # Keep the actual failed Boolean/STEP candidate attached only to
+            # this in-process exception until its supports are mapped below.
+            raise
         except Exception as nd_err:
             logger.warning('Could not apply exact non-design regions onto CAD solid: %s', nd_err)
             report['non_design'] = {'applied': False, 'error': str(nd_err)}
@@ -131,7 +143,21 @@ def _complete_paper_solid(shape, payload, *, tolerance, source_scale,
         progress('Checking final CAD solid')
         report['intersections'] = _assess_brep_self_intersections(shape)
         if not report['intersections']['passed']:
-            raise RuntimeError('The stitched CAD body has unresolved geometric intersections')
+            raise ContactIntegrationError(
+                'The stitched CAD body has unresolved geometric intersections',
+                shape=shape, quality=report['intersections'], stage='final_native')
+        progress('Verifying final CAD STEP transfer')
+        from .cad_features import _normalize_boolean_trims
+        transferred_shape = _normalize_boolean_trims(shape)
+        transfer_quality = _assess_brep_self_intersections(transferred_shape)
+        report['step_roundtrip'] = {
+            'method': 'STEP reimport with unchanged supports, strict volume and bounds checks',
+            'intersections': transfer_quality, 'passed': bool(transfer_quality.get('passed', False)),
+            'returned_body': 'Native body verified by the complete material, source and void guards'}
+        if not transfer_quality.get('passed', False):
+            raise ContactIntegrationError(
+                'The final CAD body did not survive verified STEP transfer',
+                shape=transferred_shape, quality=transfer_quality, stage='final_step')
         volume = _solid_volume(shape, relative_tolerance=1e-6)
         if not shape.isValid() or not shape.Solids() or volume is None or volume <= 0:
             raise RuntimeError('Solid CAD construction did not retain valid enclosed material')
@@ -140,6 +166,48 @@ def _complete_paper_solid(shape, payload, *, tolerance, source_scale,
         return shape, report
     except MemoryError:
         raise
+    except ContactIntegrationError as error:
+        report['reason'] = str(error)
+        evidence = {'stage': error.stage, 'reason': str(error),
+                    'native_quality': error.quality, 'repair_evidence': error.evidence}
+        if contact_checkpoint_dir is not None:
+            try:
+                checkpoint = Path(contact_checkpoint_dir)
+                checkpoint.mkdir(parents=True, exist_ok=True)
+                candidate_path = checkpoint / 'integration_contact_candidate.brep'
+                error.shape.exportBrep(str(candidate_path))
+                evidence['candidate_brep'] = str(candidate_path)
+            except MemoryError:
+                raise
+            except Exception as checkpoint_error:
+                evidence['checkpoint_error'] = str(checkpoint_error)
+        report['integration_contact_failure'] = evidence
+        if fitted_layout_ids is not None:
+            try:
+                from .cad_features import _collect_passive_tools, _coerce_to_solid
+                solids, cuts, hardware = _collect_passive_tools(
+                    payload, void_axial_margin=void_axial_margin,
+                    void_radial_margin=void_radial_margin)
+                protected = [(f'original {kind} {index}', body)
+                             for kind, bodies in (('material', solids), ('void', cuts),
+                                                  ('hardware', hardware))
+                             for index, body in enumerate(bodies)]
+                source = (_coerce_to_solid(payload.get('source_cad_shape'))
+                          if isinstance(payload, dict) else None)
+                if source is not None:
+                    protected.append(('original source CAD', source))
+                report['integration_contact_mapping'] = map_fitted_contact_layouts(
+                    surface_model, fitted_layout_ids, error.shape, error.quality,
+                    protected_shapes=protected)
+            except MemoryError:
+                raise
+            except Exception as mapping_error:
+                report['integration_contact_mapping'] = {
+                    'retry_mapping_complete': False, 'retry_layout_ids': [],
+                    'reason': f'Contact support correspondence failed: {mapping_error}'}
+        logger.warning('AMRTO solid integration has unresolved %s contacts: %s',
+                       error.stage, error)
+        return surface_model, report
     except Exception as error:
         # Keep the complete fitted model visible. Do not publish a solid-shaped
         # but unusable intermediate to FEA or lattice consumers.
@@ -497,79 +565,186 @@ def reconstruct_topopt_cad(
             source_scale=source_scale, source_volume=reference_volume,
             maximum_volume_delta=maximum_volume_delta,
             void_axial_margin=void_axial_margin, void_radial_margin=void_radial_margin,
-            progress_callback=progress)
+            progress_callback=progress, fitted_layout_ids=[int(layout.layout_id) for layout in fitted],
+            contact_checkpoint_dir=folder/'initial_integration_contacts' if folder else None)
         if intrinsic_preflight:
             solid_report['intrinsic_patch_preflight'] = intrinsic_preflight
     finish('solid_integration', solid_report)
-    if not solid_report['is_solid'] and rejected and boundary_rejection is None and cfg.stitch_surface_boundaries:
+    initial_contact_mapping = solid_report.get('integration_contact_mapping', {})
+    contact_targets = (initial_contact_mapping.get('retry_layout_ids', [])
+                       if initial_contact_mapping.get('retry_mapping_complete') else [])
+    if (not solid_report['is_solid'] and (rejected or contact_targets)
+            and boundary_rejection is None and cfg.stitch_surface_boundaries):
         from .amrto_chart_retry import propose_failed_chart_retry, refine_failed_chart_retry
+        from .amrto_retry_fitting import fit_bounded_chart_retry
         retry_report = {'accepted': False, 'engineering_extension': True,
                         'paper_algorithm': False, 'initial_solid_integration': deepcopy(solid_report),
                         'initial_rejected_layout_ids': rejected.copy(),
                         'initial_patch_reports': step5['patch_reports']}
+        retry_failure_phase = 'contact_chart_refinement' if not rejected else 'source_chart_refinement'
+        retry_failure_report = retry_report
+        contact_stage_used = not bool(rejected)
+        contact_stages_used = int(contact_stage_used)
+        initial_contact_report = None
+        retry_report.update(maximum_contact_stages=2, contact_stages_used=contact_stages_used)
         try:
             progress('Retrying rejected CAD charts on the unchanged source mesh')
-            retry_layouts, tangent_edges, proposal = propose_failed_chart_retry(clean_layouts, rejected, cfg)
+            if contact_stage_used:
+                retry_layouts, tangent_edges, proposal = refine_failed_chart_retry(
+                    clean_layouts, contact_targets, cfg, round_index=1)
+                proposal.update(integration_contact_mapping=initial_contact_mapping,
+                                contact_driven=True, maximum_contact_stages=2, contact_stage_index=1,
+                                patch_partition_unchanged=not proposal['subdivision']['applied'])
+                if not proposal['applied']:
+                    raise RuntimeError('The mapped CAD contacts have no eligible source-chart refinement')
+            else:
+                retry_layouts, tangent_edges, proposal = propose_failed_chart_retry(clean_layouts, rejected, cfg)
             retry_report.update(proposal)
-            retry_report['refinement_rounds'] = []
-            for refinement_round in range(3):
-                # Keep pristine source UVs for the next proposal. Shared seam
-                # preparation/fitting can change their parameter clocks.
-                retry_clean = deepcopy(retry_layouts)
-                retry_report['boundary_curves'] = prepare_shared_boundary_curves(
-                    retry_layouts, boundary_tolerance, bounds=bounds, certify_stock_hull=bounds is not None,
-                    blocked_junction_positions={tuple(map(float, point)) for layout in retry_layouts for point in layout.vertices},
-                    tangent_preserving_edges=tangent_edges)
-                for layout in retry_layouts:
-                    layout.source_box_bounds = bounds
-                    layout.solid_fit_tolerance = boundary_tolerance
-                    layout.solid_source_fit_limit = max(source_scale * float(maximum_relative_deviation), 1e-12)
-                retry_fitted = []
-                for index, layout in enumerate(_fit_paper_layouts(retry_layouts, cfg), 1):
-                    retry_fitted.append(layout)
-                    progress(f'Refitting CAD charts {index}/{len(retry_layouts)}', index, len(retry_layouts))
-                retry_rejected = [int(layout.layout_id) for layout in retry_fitted
-                                  if not layout.fitting_report.get('source_fit_acceptance', {}).get('accepted', False)]
-                retry_report['attempts'] = refinement_round + 1
-                retry_report['rejected_layout_ids'] = retry_rejected
-                retry_report['patch_reports'] = [
-                    {'layout_id': int(layout.layout_id), **layout.fitting_report,
-                     'multiresolution': layout.multiresolution_report} for layout in retry_fitted]
-                if not retry_rejected or refinement_round == 2:
-                    break
-                progress('Subdividing rejected CAD charts while retaining every source quad')
-                retry_layouts, added_edges, refinement = refine_failed_chart_retry(
-                    retry_clean, retry_rejected, cfg, round_index=refinement_round+1)
-                retry_report['refinement_rounds'].append(refinement)
-                if not refinement['applied']:
-                    break
-                tangent_edges.update(added_edges)
-                if refinement['subdivision']['applied']:
-                    retry_report['patch_partition_unchanged'] = False
+            retry_report['refinement_rounds'] = [deepcopy(proposal)] if contact_stage_used else []
+            retry_failure_phase = 'contact_chart_fitting' if contact_stage_used else 'source_chart_fitting'
+            retry_fits = fit_bounded_chart_retry(
+                retry_layouts, cfg, tangent_edges=tangent_edges, bounds=bounds,
+                boundary_tolerance=boundary_tolerance,
+                source_fit_limit=max(source_scale * float(maximum_relative_deviation), 1e-12),
+                intrinsic_tolerance=min(effective_sew_tol, 1e-4), report=retry_report,
+                progress_callback=progress)
+            retry_fitted, retry_clean = retry_fits.fitted, retry_fits.pristine
+            tangent_edges = retry_fits.tangent_edges
+            retry_rejected = retry_report['rejected_layout_ids']
+            if contact_stage_used:
+                initial_contact_report = deepcopy(retry_report)
+            # Each fitter retains its three-pass bound. This field records
+            # the total budget across the source stage and contact stages.
+            retry_report['maximum_fitting_attempts'] = 6 if contact_stage_used else 9
             if retry_rejected:
-                retry_report['reason'] = 'The bounded chart retry did not pass every original source-fit check'
+                retry_report['reason'] = ('The bounded chart retry did not pass every source-fit '
+                                          'and intrinsic-intersection check')
             else:
                 retry_surface = _assemble_paper_cad(retry_fitted, effective_sew_tol)
                 if folder:
                     try:
-                        candidate_file = folder/'retry_fitted_surfaces.brep'
+                        prefix = 'contact_retry_stage_1' if contact_stage_used else 'retry'
+                        candidate_file = folder/f'{prefix}_fitted_surfaces.brep'
                         retry_surface.exportBrep(str(candidate_file))
                         retry_report['candidate_checkpoint_file'] = candidate_file.name
                         retry_report['candidate_checkpoint_is_export_ready_solid'] = False
                         # Preserve the accepted source-fit evidence before a
                         # potentially long native Boolean operation starts.
-                        (folder/'retry_fit_report.json').write_text(
-                            json.dumps(retry_report, indent=2), encoding='utf-8')
+                        checkpoint_report = initial_contact_report if contact_stage_used else retry_report
+                        checkpoint_report.update(candidate_checkpoint_file=candidate_file.name,
+                            candidate_checkpoint_is_export_ready_solid=False)
+                        (folder/f'{prefix}_fit_report.json').write_text(
+                            json.dumps(checkpoint_report, indent=2), encoding='utf-8')
                     except MemoryError:
                         raise
                     except Exception as error:
                         retry_report['candidate_checkpoint_error'] = str(error)
+                retry_failure_phase = 'contact_chart_integration' if contact_stage_used else 'source_chart_integration'
                 retry_shape, retry_solid = _complete_paper_solid(
                     retry_surface, payload, tolerance=min(effective_sew_tol, 1e-4),
                     source_scale=source_scale, source_volume=reference_volume,
                     maximum_volume_delta=maximum_volume_delta,
                     void_axial_margin=void_axial_margin, void_radial_margin=void_radial_margin,
-                    progress_callback=progress)
+                    progress_callback=progress,
+                    fitted_layout_ids=[int(layout.layout_id) for layout in retry_fitted],
+                    contact_checkpoint_dir=(folder/('contact_retry_stage_1_integration_contacts'
+                        if contact_stage_used else 'retry_integration_contacts')) if folder else None)
+                if initial_contact_report is not None:
+                    initial_contact_report.update(solid_integration=deepcopy(retry_solid),
+                                                  accepted=bool(retry_solid['is_solid']))
+                    if not retry_solid['is_solid']:
+                        initial_contact_report['reason'] = retry_solid.get(
+                            'reason', 'Contact chart retry did not produce an accepted solid')
+                contact_refinements = []
+                contact_partition_unchanged = True
+                while not retry_solid['is_solid'] and contact_stages_used < 2:
+                    mapping = retry_solid.get('integration_contact_mapping', {})
+                    if not (mapping.get('retry_mapping_complete') and mapping.get('retry_layout_ids')):
+                        break
+                    # A new stage uses only the latest source-accepted fit's
+                    # pristine charts and its exact current support mapping.
+                    # The initial contact-only path has already spent stage 1.
+                    contact_stages_used += 1
+                    retry_report['contact_stages_used'] = contact_stages_used
+                    retry_failure_phase = 'contact_chart_refinement'
+                    contact_report = {
+                        'accepted': False, 'contact_driven': True, 'engineering_extension': True,
+                        'paper_algorithm': False, 'maximum_contact_stages': 2,
+                        'contact_stage_index': contact_stages_used, 'maximum_fitting_attempts': 3,
+                        'integration_contact_mapping': deepcopy(mapping),
+                        'initial_solid_integration': deepcopy(retry_solid),
+                        'refinement_rounds': [],
+                    }
+                    retry_report.setdefault('contact_chart_retries', []).append(contact_report)
+                    # Keep the existing accessor pointed at the newest stage.
+                    retry_report['contact_chart_retry'] = contact_report
+                    retry_failure_report = contact_report
+                    retry_report.setdefault('initial_chart_fitting_attempts', retry_report['attempts'])
+                    progress('Refining fitted charts identified by final CAD contacts')
+                    contact_layouts, contact_edges, contact_proposal = refine_failed_chart_retry(
+                        retry_clean, mapping['retry_layout_ids'], cfg, round_index=1)
+                    contact_report.update(initial_source_refinement=contact_proposal,
+                        patch_partition_unchanged=not contact_proposal['subdivision']['applied'])
+                    if not contact_proposal['applied']:
+                        contact_report['reason'] = 'No eligible mapped source-chart refinement was available'
+                        break
+                    retry_failure_phase = 'contact_chart_fitting'
+                    try:
+                        contact_fits = fit_bounded_chart_retry(
+                            contact_layouts, cfg, tangent_edges=tangent_edges | contact_edges, bounds=bounds,
+                            boundary_tolerance=boundary_tolerance,
+                            source_fit_limit=max(source_scale * float(maximum_relative_deviation), 1e-12),
+                            intrinsic_tolerance=min(effective_sew_tol, 1e-4), report=contact_report,
+                            progress_callback=progress)
+                    finally:
+                        retry_report['attempts'] += contact_report.get('attempts', 0)
+                    if contact_report['rejected_layout_ids']:
+                        contact_report['reason'] = (
+                            'The contact chart retry did not pass every source-fit and intrinsic check')
+                        break
+                    contact_surface = _assemble_paper_cad(contact_fits.fitted, effective_sew_tol)
+                    prefix = f'contact_retry_stage_{contact_stages_used}'
+                    if folder:
+                        candidate_file = folder/f'{prefix}_fitted_surfaces.brep'
+                        contact_surface.exportBrep(str(candidate_file))
+                        contact_report.update(candidate_checkpoint_file=candidate_file.name,
+                            candidate_checkpoint_is_export_ready_solid=False)
+                        (folder/f'{prefix}_fit_report.json').write_text(
+                            json.dumps(contact_report, indent=2), encoding='utf-8')
+                    # Native failure does not invalidate accepted source fits.
+                    # Preserve their pristine maps and accumulated tangents
+                    # before the next native contact can request another stage.
+                    retry_fitted, retry_clean = contact_fits.fitted, contact_fits.pristine
+                    tangent_edges = contact_fits.tangent_edges
+                    contact_refinements.extend([contact_proposal, *contact_report['refinement_rounds']])
+                    contact_partition_unchanged &= contact_report['patch_partition_unchanged']
+                    retry_failure_phase = 'contact_chart_integration'
+                    contact_shape, contact_solid = _complete_paper_solid(
+                        contact_surface, payload, tolerance=min(effective_sew_tol, 1e-4),
+                        source_scale=source_scale, source_volume=reference_volume,
+                        maximum_volume_delta=maximum_volume_delta,
+                        void_axial_margin=void_axial_margin, void_radial_margin=void_radial_margin,
+                        progress_callback=progress,
+                        fitted_layout_ids=[int(layout.layout_id) for layout in retry_fitted],
+                        contact_checkpoint_dir=folder/f'{prefix}_integration_contacts' if folder else None)
+                    contact_report['solid_integration'] = contact_solid
+                    contact_report['accepted'] = bool(contact_solid['is_solid'])
+                    retry_solid = contact_solid
+                    if not contact_report['accepted']:
+                        contact_report['reason'] = contact_solid.get(
+                            'reason', 'Contact chart retry did not produce an accepted solid')
+                        continue
+                    retry_surface, retry_shape = contact_surface, contact_shape
+                    retry_report.setdefault('initial_chart_patch_reports', retry_report['patch_reports'])
+                    retry_report['patch_reports'] = contact_report['patch_reports']
+                    retry_report.setdefault('initial_chart_boundary_curves', retry_report['boundary_curves'])
+                    retry_report['boundary_curves'] = contact_report['boundary_curves']
+                    retry_report['refinement_rounds'].extend(contact_refinements)
+                    retry_report['patch_partition_unchanged'] &= contact_partition_unchanged
+                    if 'candidate_checkpoint_file' in contact_report:
+                        retry_report.setdefault('initial_chart_candidate_checkpoint_file',
+                                                retry_report.get('candidate_checkpoint_file'))
+                        retry_report['candidate_checkpoint_file'] = contact_report['candidate_checkpoint_file']
                 retry_report['solid_integration'] = retry_solid
                 if retry_solid['is_solid']:
                     shape, solid_report, fitted = retry_shape, retry_solid, retry_fitted
@@ -609,12 +784,34 @@ def reconstruct_topopt_cad(
                         stages[name] = {**data, 'elapsed_s': stages[name]['elapsed_s'],
                                         'timing_scope': 'Initial attempt; retry work is recorded in local_chart_retry'}
                 else:
-                    retry_report['reason'] = retry_solid.get('reason', 'Chart retry did not produce an accepted solid')
+                    retry_report['reason'] = (
+                        retry_failure_report.get('reason') if retry_failure_report is not retry_report else None
+                    ) or retry_solid.get('reason', 'Chart retry did not produce an accepted solid')
         except MemoryError:
             raise
         except Exception as error:
             retry_report['reason'] = str(error)
             logger.warning('AMRTO bounded chart retry rejected: %s', error)
+        if contact_stage_used:
+            if initial_contact_report is None:
+                initial_contact_report = deepcopy(retry_report)
+            initial_contact_report.update(contact_stage_index=1, maximum_fitting_attempts=3)
+            if retry_failure_report is retry_report and not retry_report['accepted']:
+                initial_contact_report['reason'] = retry_report.get('reason')
+            retry_report.setdefault('contact_chart_retries', []).insert(0, initial_contact_report)
+        if not retry_report['accepted']:
+            latest_failure = {
+                'reason': retry_report['reason'],
+                'rejected_layout_ids': list(retry_failure_report.get('rejected_layout_ids', [])),
+                'phase': retry_failure_phase,
+            }
+            retry_report['latest_retry_failure'] = latest_failure
+            # Failed retries leave the original surface result in place. Its
+            # fit warnings and IDs still describe that result, while this
+            # separate record identifies the newest failed candidate.
+            solid_report['initial_integration_reason'] = solid_report.get('reason')
+            solid_report['latest_retry_failure'] = deepcopy(latest_failure)
+            solid_report['reason'] = latest_failure['reason']
         finish('local_chart_retry', retry_report)
     if fit_warnings:
         solid_report['fit_warnings'] = fit_warnings
@@ -655,6 +852,10 @@ def reconstruct_topopt_cad(
     display_layout.update(source_geometry_sha256=geometry_fingerprint(*display_source),
                           design_geometry_sha256=fingerprint, requested_settings=settings)
     add_source_groups(display_layout, *display_source)
+    incomplete_reason = solid_report.get('reason', 'Solid CAD construction is incomplete')
+    latest_failure = solid_report.get('latest_retry_failure')
+    if latest_failure and latest_failure['rejected_layout_ids']:
+        incomplete_reason += f" (layouts {', '.join(map(str, latest_failure['rejected_layout_ids']))})"
     report = {
         'method': 'AMRTO five-step reconstruction (Ren et al., 2025)', 'paper_pipeline': True,
         'backend': 'in-process', 'revision': CAD_RECONSTRUCTION_REVISION,
@@ -668,9 +869,13 @@ def reconstruct_topopt_cad(
         'validation_status': 'passed' if solid_ready else 'incomplete',
         'export_ready': solid_ready, 'display_ready': True,
         'qa_geometry_source': 'Stitched fitted NURBS with original CAD non-design interfaces' if solid_ready else 'Fitted NURBS surfaces',
-        'warnings': [] if solid_ready else [solid_report.get('reason', 'Solid CAD construction is incomplete')],
+        'warnings': [] if solid_ready else [incomplete_reason],
         'stages': stages, 'elapsed_seconds': time.perf_counter()-started,
     }
+    if not solid_ready:
+        report['reason'] = incomplete_reason
+        if latest_failure:
+            report['latest_retry_failure'] = deepcopy(latest_failure)
     if not solid_ready and failure_checkpoint_dir is not None:
         _write_incomplete_cad_checkpoint(failure_checkpoint_dir, vertices, triangles, shape, report)
     if folder:

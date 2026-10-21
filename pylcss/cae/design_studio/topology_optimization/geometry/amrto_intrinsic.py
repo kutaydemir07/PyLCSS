@@ -13,7 +13,7 @@ from .occ_shapes import _assess_brep_self_intersections
 
 
 def _surface_fingerprint(surface, tolerance):
-    digest = hashlib.sha256(b"AMRTO intrinsic C1 check v1")
+    digest = hashlib.sha256(b"AMRTO intrinsic C1 check v2: child and cross-child FACE faults")
     digest.update(np.asarray((surface.degree_u, surface.degree_v,
                               surface.ctrlpts_size_u, surface.ctrlpts_size_v,
                               bool(getattr(surface, "segment_boundary_edges", False)),
@@ -76,16 +76,17 @@ def _validate_patch_partition(original, divided):
 
 
 def preflight_layout_intrinsic_fold(layout, *, tolerance=1e-4):
-    """Find a definite fold in an isolated exact C1 child without compound BOP.
+    """Find definite folds within and between one patch's exact C1 children.
 
-    Call only for source-rejected fits before potentially expensive Boolean
-    integration. A pure FACE self-intersection on a single child establishes
-    an intrinsic fold; edge/vertex contacts, unknown faults and unsupported
-    native checks defer to the required complete-body checker. A clean result
-    is never an acceptance certificate for either the patch or the final CAD.
+    A source-distance and orientation check can pass a self-crossing surface:
+    local derivative directions do not prove global injectivity. Pure FACE
+    self-intersections reject a fit, including intersections between separate
+    children of the same source patch. Edge/vertex contacts, unknown faults
+    and unsupported native checks defer to the required complete-body checker.
+    A clean result never certifies either the patch or the final CAD.
     """
     started = time.perf_counter()
-    report = {'method': 'Individual exact C1 child native FACE self-intersection preflight',
+    report = {'method': 'Exact C1 child and cross-child native FACE self-intersection preflight',
               'layout_id': int(layout.layout_id), 'definitive_fold': False,
               'deferred_to_global': True, 'closed_body_and_final_step_checks_required': True,
               'compound_BOP_executed': False, 'child_reports': [], 'cache_hit': False}
@@ -154,8 +155,35 @@ def preflight_layout_intrinsic_fold(layout, *, tolerance=1e-4):
                 row.update(deferred_to_global=True, reason=f'{type(error).__name__}: {error}')
                 report['child_reports'].append(row)
         report['checked_child_count'] = len(report['child_reports'])
+        if not report['definitive_fold'] and len(children) > 1:
+            # Each regular C1 span can be injective while two spans cross.
+            # Keep the divider's shared edges and original parameterization:
+            # rebuilding a loose compound would introduce duplicate boundary
+            # contacts and needlessly enlarge the native intersector's work.
+            # This compound contains one source patch only, never the body.
+            report['compound_BOP_executed'] = True
+            compound_quality = _assess_brep_self_intersections(candidate)
+            face_faults = [
+                fault for fault in compound_quality.get('self_intersection_faults', [])
+                if fault.get('shape_types') == ['FACE']
+                and fault.get('face_indices')
+                and all(0 <= index < len(children) for index in fault['face_indices'])
+            ]
+            report['cross_child_report'] = {
+                'native_quality': compound_quality,
+                'mapped_pure_face_faults': face_faults,
+                'shared_child_topology_retained': True,
+                'source_patch_count': 1,
+            }
+            if (not compound_quality.get('passed', False) and face_faults
+                    and not compound_quality.get('unmapped_fault_count', 0)
+                    and not compound_quality.get('other_fault_count', 0)):
+                report.update(
+                    definitive_fold=True, deferred_to_global=False,
+                    failed_child_groups=[fault['face_indices'] for fault in face_faults],
+                    reason='One source patch has a mapped pure FACE intersection among its exact C1 children')
         if not report['definitive_fold']:
-            report['reason'] = 'No definitive isolated-child fold; complete-body and STEP checks remain required'
+            report['reason'] = 'No definitive within-child or cross-child fold; complete-body and STEP checks remain required'
     except MemoryError:
         raise
     except Exception as error:
@@ -165,6 +193,30 @@ def preflight_layout_intrinsic_fold(layout, *, tolerance=1e-4):
         layout._intrinsic_preflight_fingerprint = fingerprint
         layout._intrinsic_preflight_report = deepcopy(report)
     return report
+
+
+def reject_intrinsic_retry_fit(layout, *, tolerance=1e-4):
+    """Keep a source-accepted but intrinsically intersecting retry targetable.
+
+    Check the fitted surface in its existing C1 representation. Subdividing
+    it further until a native intersector stops reporting the crossing would
+    preserve the defective geometry and is not a fitting repair.
+    """
+    acceptance = layout.fitting_report.get("source_fit_acceptance", {})
+    if not acceptance.get("accepted", False):
+        return
+    check = preflight_layout_intrinsic_fold(layout, tolerance=tolerance)
+    layout.fitting_report["intrinsic_surface_preflight"] = check
+    if check["definitive_fold"]:
+        # Retain the successful local tests as evidence; only their combined
+        # fit acceptance changes. The unchanged source chart can then enter
+        # the existing bounded corner/subdivision retry.
+        acceptance.update(
+            accepted=False,
+            sampled_source_checks_accepted_before_intrinsic_rejection=True,
+            intrinsic_self_intersection_detected=True,
+            intrinsic_rejection_reason=check["reason"],
+        )
 
 
 def assess_layout_intrinsic_intersections(layout, *, tolerance=1e-4):

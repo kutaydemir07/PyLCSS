@@ -1063,8 +1063,9 @@ def _box_domain_contains_shape(shape: Any, domain: Any) -> bool:
                 and np.all(body_bounds[:, 1] <= domain_bounds[:, 1] + tolerance))
 
 
-def _repair_boolean_vertex_contacts(shape: Any, quality: Optional[dict[str, Any]] = None) -> Any:
-    """Merge only existing short contacts in overlapping vertex tolerances.
+def _repair_boolean_vertex_contacts(shape: Any, quality: Optional[dict[str, Any]] = None, *,
+                                    contact_repair_report: Optional[dict[str, Any]] = None) -> Any:
+    """Normalize proven analytic partitions or bounded short vertex contacts.
 
     Boolean intersections can split a curve twice inside its endpoint
     uncertainty. Shrinking the resulting vertex tolerances is invalid: those
@@ -1078,13 +1079,61 @@ def _repair_boolean_vertex_contacts(shape: Any, quality: Optional[dict[str, Any]
     from OCP.Precision import Precision
     from OCP.ShapeFix import ShapeFix_Wireframe
     from OCP.TopTools import TopTools_IndexedMapOfShape
+    from .amrto_contact_retry import ContactIntegrationError
+    from .cad_contact_partition import normalize_coplanar_contact_partitions
     from .step_export import _assert_matching_surface_geometry
 
     quality = quality if quality is not None else _assess_brep_self_intersections(shape)
+    audit = contact_repair_report if contact_repair_report is not None else {}
+    audit.update(applied=False, passed=False, native_before=quality, verified_transfers=[])
     if quality.get("passed", False):
+        audit.update(passed=True, method='Native Boolean body already has no mapped intersections')
         return shape
 
     transfer = _normalize_boolean_trims
+    partition_evidence = {}
+
+    def contact_failure(message, candidate, native, stage):
+        return ContactIntegrationError(
+            message, shape=candidate, quality=native, stage=stage,
+            evidence={'coplanar_contact_partition': partition_evidence,
+                      'contact_repair': audit})
+
+    if any(fault.get('shape_types') == ['FACE']
+           for fault in quality.get('self_intersection_faults', [])):
+        # A representation change can hide an intrinsic crossing. Preserve
+        # this explicit native surface failure for source-chart refinement.
+        raise contact_failure(
+            "Post-Boolean CAD has unresolved surface intersections",
+            shape, quality, 'post_boolean_native')
+
+    # The bounded proof removes only a redundant coplanar internal partition.
+    # It rejects fitted/intrinsic FACE faults, preserves every outer edge and
+    # supporting surface, and changes no geometric tolerances. Native success
+    # must survive two strict STEP transfers before material guards run.
+    candidate, candidate_quality, partition_evidence = normalize_coplanar_contact_partitions(
+        shape, quality)
+    audit['coplanar_contact_partition'] = partition_evidence
+    if partition_evidence.get('applied', False):
+        shape, quality = candidate, candidate_quality
+        audit.update(applied=True, method='Proven bounded coplanar internal partition normalization',
+                     native_after_partition=quality)
+        if not quality.get('passed', False):
+            raise contact_failure(
+                "Post-Boolean coplanar partition normalization left unresolved intersections",
+                shape, quality, 'post_boolean_coplanar_partition')
+        for transfer_index in range(2):
+            shape = transfer(shape)
+            quality = _assess_brep_self_intersections(shape)
+            audit['verified_transfers'].append({
+                'transfer_index': transfer_index + 1, 'native_quality': quality,
+                'support_geometry_volume_and_bounds_preserved': True})
+            if not quality.get('passed', False):
+                raise contact_failure(
+                    "Post-Boolean coplanar partition normalization did not survive verified STEP transfer",
+                    shape, quality, f'post_boolean_coplanar_step_{transfer_index + 1}')
+        audit['passed'] = True
+        return shape
 
     def vertex_contacts(report):
         faults = report.get("self_intersection_faults", [])
@@ -1099,14 +1148,20 @@ def _repair_boolean_vertex_contacts(shape: Any, quality: Optional[dict[str, Any]
     # Already mapped vertex contacts are repaired directly, without another
     # transfer changing their graph before the merge.
     if not vertex_contacts(quality):
-        for _ in range(2):
+        for transfer_index in range(2):
             shape = transfer(shape)
             quality = _assess_brep_self_intersections(shape)
+            audit['verified_transfers'].append({
+                'transfer_index': transfer_index + 1, 'native_quality': quality,
+                'support_geometry_volume_and_bounds_preserved': True})
             if vertex_contacts(quality):
                 break
             if not quality.get("passed", False):
-                raise RuntimeError("Post-Boolean CAD has intersections beyond repairable vertex contacts")
+                raise contact_failure(
+                    "Post-Boolean CAD has intersections beyond repairable vertex contacts",
+                    shape, quality, 'post_boolean_step')
         else:
+            audit.update(passed=True, applied=True, method='Verified STEP trim normalization')
             return shape
     faults = quality["self_intersection_faults"]
 
@@ -1189,13 +1244,22 @@ def _repair_boolean_vertex_contacts(shape: Any, quality: Optional[dict[str, Any]
         retained.add(index)
     if not (set(range(len(vertices))) - retained).issubset(eligible):
         raise RuntimeError("Post-Boolean vertex repair removed unrelated vertices")
-    if not _assess_brep_self_intersections(repaired).get("passed", False):
-        raise RuntimeError("Post-Boolean vertex repair left unresolved intersections")
+    repaired_quality = _assess_brep_self_intersections(repaired)
+    if not repaired_quality.get("passed", False):
+        raise contact_failure("Post-Boolean vertex repair left unresolved intersections",
+                              repaired, repaired_quality, 'post_boolean_vertex_repair')
     logger.info("Recovered Shape STEP: merged %d overlapping Boolean contact vertex/vertices",
                 len(vertices) - len(retained))
     verified = transfer(repaired)
-    if not _assess_brep_self_intersections(verified).get("passed", False):
-        raise RuntimeError("Post-Boolean vertex repair did not survive verified STEP transfer")
+    verified_quality = _assess_brep_self_intersections(verified)
+    audit['verified_transfers'].append({
+        'transfer_index': len(audit['verified_transfers']) + 1, 'native_quality': verified_quality,
+        'support_geometry_volume_and_bounds_preserved': True})
+    if not verified_quality.get("passed", False):
+        raise contact_failure("Post-Boolean vertex repair did not survive verified STEP transfer",
+                              verified, verified_quality, 'post_boolean_vertex_step')
+    audit.update(passed=True, applied=True, method='Bounded overlapping contact vertex merge',
+                 removed_vertex_count=len(vertices) - len(retained))
     return verified
 
 
@@ -1288,7 +1352,14 @@ def _assert_source_contains_material(material: Any, domain: Any) -> None:
                 raise RuntimeError(f"outside partition contains {outside_volume:.9g} model-volume units")
             inside = _native_boolean(material, domain, 'common', fuzzy)
             if not inside.isValid() or not _closed(inside):
-                raise RuntimeError("inside partition is not a valid closed solid")
+                # A Boolean can incorrectly reuse a collar's own shared
+                # edges after that collar was fused into the domain. Isolate
+                # only its topology, retain the identical native geometry,
+                # and require both partition operations to succeed again.
+                from .cad_partition_retry import retry_shared_material_partition
+                inside = retry_shared_material_partition(
+                    material, domain, outside, inside, boolean=_native_boolean, fuzzy=fuzzy)
+                logger.info("Verified valid containment partitions after isolating shared material topology")
             inside_volume = abs(float(inside.Volume(tol=1e-7)))
             if (not np.isfinite(inside_volume)
                     or abs(inside_volume - volume) > volume_tolerance):
@@ -1455,6 +1526,7 @@ def _apply_passive_regions_to_step(
     prepare_continuity: bool = True,
     require_all_solid_tools: bool = False,
     source_clip_after_passive: bool = False,
+    contact_repair_report: Optional[dict[str, Any]] = None,
 ) -> Any:
     """Re-apply passive boxes/cylinders as analytic STEP features."""
     import cadquery as cq
@@ -1561,7 +1633,11 @@ def _apply_passive_regions_to_step(
     if (solid_tools or cut_tools) and extended_pad_tools is None and not require_all_solid_tools:
         result = _unify_same_domain_shape(result, merge_angle_deg=0.25)
     if repair_boolean_contacts:
-        result = _repair_boolean_vertex_contacts(result)
+        if contact_repair_report is None:
+            result = _repair_boolean_vertex_contacts(result)
+        else:
+            result = _repair_boolean_vertex_contacts(
+                result, contact_repair_report=contact_repair_report)
     material_result = result
 
     # Pins/shafts are assembly hardware. Add exact analytic cylinders after
@@ -1664,16 +1740,19 @@ def restore_paper_non_design_regions(
     from .amrto_parameter_domains import normalize_paper_parameter_domains
     boolean_ready, parameter_domains = normalize_paper_parameter_domains(boolean_ready)
     report['parameter_domains'] = parameter_domains
+    contact_repair_report = {}
     result = _apply_passive_regions_to_step(
         boolean_ready, payload, void_axial_margin=void_axial_margin,
         void_radial_margin=void_radial_margin, prepare_continuity=False,
         # Canonicalize bounded Boolean trim contacts before the existing
         # mandatory-material, source-domain and protected-void checks.
         require_all_solid_tools=True, repair_boolean_contacts=True,
+        contact_repair_report=contact_repair_report,
     )
     if not result.isValid() or not _closed(result):
         raise RuntimeError('Exact non-design restoration did not retain valid closed material')
     return result, {**report, 'applied': True,
+                    'contact_repair': contact_repair_report,
                     'solid_count': len(result.Solids()),
                     'face_count': len(result.Faces())}
 

@@ -1780,10 +1780,12 @@ def subdivide_fitting_layouts(layouts: List[QuadLayout], failed_ids: set[int]) -
         if len(pieces) <= 1:
             raise ValueError("Fitting refinement did not subdivide the failed patch")
         result.extend(pieces)
+        fit_report = getattr(layout, "fitting_report", {})
+        intersection_failed = fit_report.get("brep_self_intersection")
         repairs.append({"patch": layout.layout_id, "reason": "Independent spline position, source orientation or B-rep self-intersection validation failed",
-                        "position_passed": bool(getattr(layout, "fitting_report", {}).get("dense_map_residual_satisfied", True)),
-                        "self_intersection_passed": not getattr(layout, "fitting_report", {}).get("brep_self_intersection", False),
-                        "orientation_passed": getattr(layout, "fitting_report", {}).get("surface_orientation", {}).get("accepted"),
+                        "position_passed": fit_report.get("dense_map_residual_satisfied"),
+                        "self_intersection_passed": None if intersection_failed is None else not intersection_failed,
+                        "orientation_passed": fit_report.get("surface_orientation", {}).get("accepted"),
                         "replacement_count": len(pieces), "map_repairs": map_repairs})
     before = Counter(tuple(sorted(tuple(vertex) for vertex in layout.vertices[face]))
                      for layout in layouts for face in layout.quads)

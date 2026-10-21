@@ -61,8 +61,8 @@ def _topopt_cad_display_mesh(data, shape):
             or np.min(faces) < 0 or np.max(faces) >= len(vertices)
             or ranges[0, 0] != 0 or ranges[0, 2] != 0
             or ranges[-1, 1] != len(vertices) or ranges[-1, 3] != len(faces)
-            or np.any(ranges[:, 1] < ranges[:, 0])
-            or np.any(ranges[:, 3] < ranges[:, 2])
+            or np.any(ranges[:, 1] <= ranges[:, 0])
+            or np.any(ranges[:, 3] <= ranges[:, 2])
             or np.any(ranges[1:, 0] != ranges[:-1, 1])
             or np.any(ranges[1:, 2] != ranges[:-1, 3])
         ):

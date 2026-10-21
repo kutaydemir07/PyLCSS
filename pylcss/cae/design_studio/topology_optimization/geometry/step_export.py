@@ -36,10 +36,15 @@ def export_cad_model(workplane_or_shape, layouts=(), export_path=None, export_fo
         if require_solid and (not shape.isValid() or not _closed(shape)):
             raise RuntimeError('STEP export requires a valid closed CAD solid; the current result contains incomplete surfaces or invalid topology')
         from cadquery.occ_impl.exporters.assembly import exportAssembly
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
         # A compound's members belong to one named material part. XCAF carries
         # this grouping to CAD consumers instead of importing anonymous solids.
         assembly = cq.Assembly(name=str(product_name or 'Recovered design'))
-        assembly.add(shape, name='Material')
+        # STEP transfer can update edge tolerances and pcurves on its input.
+        # Keep both topology and geometry private so exporting cannot change
+        # the native model that the caller subsequently validates or displays.
+        export_shape = cq.Shape.cast(BRepBuilderAPI_Copy(shape.wrapped, True, False).Shape())
+        assembly.add(export_shape, name='Material')
         STEPControl_Writer()
         names = ('write.surfacecurve.mode', 'write.precision.mode', 'write.stepcaf.subshapes.name')
         previous = {name: Interface_Static.IVal_s(name) for name in names}

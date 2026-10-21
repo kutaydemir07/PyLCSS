@@ -220,15 +220,48 @@ def _external_build_cad_brep(payload, path, reconstruction_strategy,
 
 
 def _external_prepare_cad_display(shape):
-    """Prepare native bounds and tessellation only in the isolated CAD process."""
+    """Prepare a complete native-face display mesh in the isolated CAD process."""
     from pylcss.cae.design_studio.topology_optimization.geometry.cad_tessellation import (
         tessellate_cad_absolute,
     )
     body = shape.val() if hasattr(shape, "val") else shape
     box = body.BoundingBox()
     tolerance = max(float(np.linalg.norm([box.xlen, box.ylen, box.zlen])) * 1e-3, 1e-7)
-    vertices, faces, face_ranges = tessellate_cad_absolute(body, tolerance, .3, return_face_ranges=True)
-    return {"vertices": vertices, "faces": faces, "face_ranges": face_ranges}
+    face_count = len(body.Faces())
+    if not face_count:
+        raise ValueError("CAD display requires at least one native face")
+    # Small valid trims can remain unmeshed at the normal preview deflection.
+    # Retry once at a scale-relative finer deflection; the tessellator isolates
+    # both topology and geometry on every call. Never display a partial body.
+    display_parameters = ((tolerance, .3), (tolerance / 5., .1))
+    for attempt, (deflection, angle) in enumerate(display_parameters):
+        vertices, faces, face_ranges = tessellate_cad_absolute(
+            body, deflection, angle, return_face_ranges=True,
+            max_triangles=2_000_000, max_vertices=2_000_000,
+            missing_face_mesh_parameters=display_parameters,
+        )
+        ranges = np.asarray(face_ranges)
+        if ranges.shape != (face_count, 4):
+            raise RuntimeError("CAD display tessellation does not match the native faces")
+        missing = np.flatnonzero((ranges[:, 1] <= ranges[:, 0]) |
+                                 (ranges[:, 3] <= ranges[:, 2]))
+        if not len(missing):
+            return {"vertices": vertices, "faces": faces, "face_ranges": face_ranges,
+                    # Isolated faces can use either fixed display level;
+                    # report conservative upper bounds plus the global pass.
+                    "tessellation_tolerance": max(p[0] for p in display_parameters),
+                    "tessellation_angular_tolerance": max(p[1] for p in display_parameters),
+                    "tessellation_global_tolerance": deflection,
+                    "tessellation_global_angular_tolerance": angle,
+                    "tessellation_face_retry_parameters": display_parameters,
+                    "tessellation_retry": bool(attempt)}
+    indices = ", ".join(map(str, missing[:8]))
+    if len(missing) > 8:
+        indices += ", ..."
+    raise RuntimeError(
+        f"CAD display tessellation omitted {len(missing)} of {face_count} native faces "
+        f"after a finer retry (face indices: {indices}). No partial display was returned."
+    )
 
 
 #: Chordal deviation as a fraction of the body's bounding-box diagonal. The
