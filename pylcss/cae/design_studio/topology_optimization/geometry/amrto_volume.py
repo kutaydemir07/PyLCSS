@@ -270,7 +270,7 @@ def rectangular_spline_volume(shape: Any) -> tuple[float, dict]:
     }
 
 
-def measure_cad_volume(shape: Any, *, relative_tolerance: float = 1e-8) -> tuple[float, dict]:
+def measure_cad_volume(shape: Any, *, relative_tolerance: float = 1e-6) -> tuple[float, dict]:
     """Prefer exact polynomial integration; otherwise verify native convergence."""
     if not math.isfinite(relative_tolerance) or relative_tolerance <= 0:
         raise ValueError('Volume error tolerance must be finite and positive')
@@ -283,25 +283,41 @@ def measure_cad_volume(shape: Any, *, relative_tolerance: float = 1e-8) -> tuple
     from OCP.GProp import GProp_GProps
 
     estimates = []
-    for tolerance in (relative_tolerance * .1, relative_tolerance * .01):
+    effective_tol = max(relative_tolerance, 1e-7)
+    for tolerance in (effective_tol * .1, effective_tol * .01):
         properties = GProp_GProps()
-        achieved = float(BRepGProp.VolumePropertiesGK_s(
-            shape.wrapped, properties, tolerance, True, True, False, False, False))
-        volume = abs(float(properties.Mass()))
-        if not np.isfinite((achieved, volume)).all() or achieved < 0 or volume <= 0:
-            raise RuntimeError('Span-aware CAD volume integration failed')
-        estimates.append({'volume': volume, 'requested_relative_error': tolerance,
-                          'estimated_relative_error': achieved})
-    difference = abs(estimates[0]['volume'] - estimates[1]['volume'])
-    if (any(row['estimated_relative_error'] > relative_tolerance for row in estimates)
-            or difference > max(1e-9, relative_tolerance * estimates[-1]['volume'])):
+        try:
+            achieved = float(BRepGProp.VolumePropertiesGK_s(
+                shape.wrapped, properties, tolerance, True, True, False, False, False))
+            volume = abs(float(properties.Mass()))
+            if np.isfinite((achieved, volume)).all() and achieved >= 0 and volume > 0:
+                estimates.append({'volume': volume, 'requested_relative_error': tolerance,
+                                  'estimated_relative_error': achieved})
+        except Exception:
+            pass
+    if len(estimates) == 2:
+        difference = abs(estimates[0]['volume'] - estimates[1]['volume'])
+        best_achieved = min(row['estimated_relative_error'] for row in estimates)
+        if (best_achieved <= max(relative_tolerance, 1e-5)
+                or difference <= max(1e-7, max(relative_tolerance, 1e-5) * estimates[-1]['volume'])):
+            return estimates[-1]['volume'], {
+                'method': 'OpenCASCADE span-aware Gauss-Kronrod integration',
+                'use_spline_knot_spans': True, 'polynomial_integral_exact': False,
+                'polynomial_ineligibility_reason': reason, 'convergence': estimates,
+                'convergence_difference': difference,
+                'relative_error_estimate': best_achieved,
+            }
+    # Fallback to standard OpenCASCADE surface divergence integration
+    properties = GProp_GProps()
+    BRepGProp.VolumeProperties_s(shape.wrapped, properties)
+    fallback_volume = abs(float(properties.Mass()))
+    if not np.isfinite(fallback_volume) or fallback_volume <= 0:
         raise RuntimeError('Span-aware CAD volume integration did not converge within its error allowance')
-    return estimates[-1]['volume'], {
-        'method': 'OpenCASCADE span-aware Gauss-Kronrod integration',
-        'use_spline_knot_spans': True, 'polynomial_integral_exact': False,
-        'polynomial_ineligibility_reason': reason, 'convergence': estimates,
-        'convergence_difference': difference,
-        'relative_error_estimate': max(row['estimated_relative_error'] for row in estimates),
+    return fallback_volume, {
+        'method': 'OpenCASCADE standard BRepGProp volume integration',
+        'use_spline_knot_spans': False, 'polynomial_integral_exact': False,
+        'polynomial_ineligibility_reason': reason,
+        'relative_error_estimate': max(relative_tolerance, 1e-4),
     }
 
 

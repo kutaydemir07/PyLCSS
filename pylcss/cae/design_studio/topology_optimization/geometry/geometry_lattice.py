@@ -51,6 +51,12 @@ def geometry_triangle_mesh(geometry: Any, tolerance: float) -> trimesh.Trimesh:
     # vertices merge. Remove those faces without reorienting cavity shells.
     mesh.update_faces(mesh.nondegenerate_faces())
     mesh.remove_unreferenced_vertices()
+    if not mesh.is_watertight:
+        trimesh.repair.fill_holes(mesh)
+    if not mesh.is_winding_consistent:
+        trimesh.repair.fix_winding(mesh)
+    mesh.update_faces(mesh.nondegenerate_faces())
+    mesh.remove_unreferenced_vertices()
     if not len(mesh.faces) or not mesh.is_winding_consistent or not mesh.is_watertight:
         raise ValueError("The CAD/STL lattice envelope must be a closed, consistently oriented surface.")
     # Preserve inward cavity shells. Fixing every component independently would
