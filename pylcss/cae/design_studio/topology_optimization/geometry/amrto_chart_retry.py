@@ -202,12 +202,13 @@ def refine_failed_chart_retry(clean_layouts, rejected_layout_ids, cfg, *, round_
         raise ValueError('Source chart refinement permits at most two rounds')
     targets = set(map(int, rejected_layout_ids))
     layouts = deepcopy(clean_layouts)
+    max_subdivided_quads = 1024 if round_index == 2 else 256
     small = {int(layout.layout_id) for layout in layouts
-             if int(layout.layout_id) in targets and 1 < len(layout.quads) <= 256}
+             if int(layout.layout_id) in targets and 1 < len(layout.quads) <= max_subdivided_quads}
     layouts, subdivision = subdivide_rejected_source_charts(layouts, small)
     replacements = set(subdivision['replacement_layout_ids'])
     report = {'round': round_index, 'subdivision': subdivision, 'corner_proposals': [],
-              'maximum_subdivided_chart_quads': 256, 'maximum_subdivision_rounds': 2,
+              'maximum_subdivided_chart_quads': max_subdivided_quads, 'maximum_subdivision_rounds': 2,
               'engineering_extension': True, 'paper_algorithm': False, 'applied': subdivision['applied']}
     tangent_edges = set()
     for layout in layouts:
@@ -216,7 +217,7 @@ def refine_failed_chart_retry(clean_layouts, rejected_layout_ids, cfg, *, round_
         if remap:
             repair = repair_reflex_square_corners(layout)
             report['corner_proposals'].append({'layout_id': index, **repair})
-        elif index in targets and len(layout.quads) > 256 and round_index == 1:
+        elif index in targets and len(layout.quads) > max_subdivided_quads and round_index == 1:
             try:
                 repair = balance_convex_corners(layout)
                 report['corner_proposals'].append({'layout_id': index, **repair})

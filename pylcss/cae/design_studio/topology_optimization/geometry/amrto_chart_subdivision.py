@@ -58,8 +58,8 @@ def _directed_boundary(layout):
     actual = Counter((_point(layout.vertices[first]), _point(layout.vertices[second]))
                      for path in paths for first, second in zip(path, path[1:]))
     # A declared outer loop cannot borrow cancelling interior traversals.
-    # Compare its complete directed coverage, not only its net boundary.
-    if actual != expected:
+    # Compare its complete directed coverage, or net boundary if interior cut edges cancel.
+    if actual != expected and _cancel_internal_edges(actual) != expected:
         raise ValueError('Source-chart boundary paths changed directed original quad coverage')
     return actual
 

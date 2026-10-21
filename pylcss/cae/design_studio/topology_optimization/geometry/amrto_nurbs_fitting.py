@@ -894,9 +894,15 @@ def _fit_with_exact_polyline_boundaries(layout: QuadLayout, degree_u: int, degre
             right = grid_basis.T @ (sampled - evaluated_grid).reshape(-1, 3)
             right += weight_squared * node_basis.T @ (layout.vertices[ids] - evaluated_nodes)
             # The training grid includes Greville nodes, giving a full-rank
-            # basis. Tiny diagonal regularization guards numerical roundoff.
-            normal.setdiag(normal.diagonal() + max(float(normal.diagonal().max()), 1.) * 1e-12)
+            # basis. Diagonal regularization guards numerical roundoff and ill-conditioned modes.
+            diag_max = max(float(normal.diagonal().max()), 1.)
+            normal.setdiag(normal.diagonal() + diag_max * 1e-8)
             correction = spsolve(normal, right)
+            extent = float(np.linalg.norm(np.ptp(layout.vertices, axis=0))) if len(layout.vertices) else 100.0
+            if np.max(np.abs(correction)) > max(2.0 * extent, 10.0):
+                # Stronger Tikhonov damping if unconstrained solve produces wild oscillations
+                normal.setdiag(normal.diagonal() + diag_max * 1e-4)
+                correction = spsolve(normal, right)
             constrained_target = normal @ controls[1:-1, 1:-1].reshape(-1, 3) + right
             controls[1:-1, 1:-1] += correction.reshape(count_u - 2, count_v - 2, 3)
             if box_bounds is not None:

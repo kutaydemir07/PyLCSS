@@ -1463,21 +1463,22 @@ def _paper_D1_annular_layouts(vertices, patch):
                 best_neck = (score, c_cand, l_cand, cand_edges, disk_comps[0], r_comp, r_loops)
         if best_neck is not None:
             _, c_strip, l_strip, c_strip_edges, d_comp, ring_comp, ring_loops = best_neck
-            cuts.append({
-                "component": 0, "path": list(map(int, c_strip)),
-                "source_vertex_path": [int(used[v]) for v in c_strip],
-                "physical_length": float(l_strip),
-                "metric": "Shortest physical mesh-edge geodesic across peninsula neck",
-            })
-            cut_edges.extend(c_strip_edges)
             neck_ends = {int(used[c_strip[0]]), int(used[c_strip[-1]])}
             sub_loop_src = {int(used[v]) for v in _boundary_loops(local_quads[d_comp])[0]}
             tip_corners = (sub_loop_src & native_corners) - neck_ends
             if len(tip_corners) != 2:
                 tip_corners = {int(used[v]) for v in convex_outer if int(used[v]) in sub_loop_src} - neck_ends
             c_set = neck_ends | tip_corners
-            strip_corner_sets.append((set(d_comp), c_set))
-            inner_loop, outer_loop = ring_loops[0], ring_loops[1]
+            if len(c_set) == 4:
+                cuts.append({
+                    "component": 0, "path": list(map(int, c_strip)),
+                    "source_vertex_path": [int(used[v]) for v in c_strip],
+                    "physical_length": float(l_strip),
+                    "metric": "Shortest physical mesh-edge geodesic across peninsula neck",
+                })
+                cut_edges.extend(c_strip_edges)
+                strip_corner_sets.append((set(d_comp), c_set))
+                inner_loop, outer_loop = ring_loops[0], ring_loops[1]
 
     cut1 = None
     if seam_edges:
