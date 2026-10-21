@@ -585,24 +585,54 @@ def parameterize_paper_layout(layout: QuadLayout, config=None, *,
     """
     corner_repair = {'applied': False, 'enabled': False, 'engineering_extension': True,
                      'paper_algorithm': False}
-    if getattr(config, 'repair_reflex_square_corners', False):
+    should_repair = getattr(config, 'repair_reflex_square_corners', True) if config is not None else True
+    if should_repair:
         from .amrto_layout_partition import repair_reflex_square_corners
         corner_repair = repair_reflex_square_corners(layout)
         corner_repair['enabled'] = True
-    coordinates = hybrid_parameterization(
-        layout, scaffold_executable=scaffold_executable,
-        maximum_iterations=getattr(config, "scaffold_max_iter", 50),
-        relative_energy_tolerance=getattr(config, "scaffold_relative_energy_tolerance", 1e-4),
-        rectangle_tolerance=getattr(config, "scaffold_rectangle_tolerance", 1e-6),
-        timeout_s=getattr(config, "scaffold_timeout_s", 60.0),
-        harmonic_method="iterative_geodesic",
-        harmonic_max_iter=getattr(config, "harmonic_max_iter", 10000),
-        harmonic_energy_threshold=getattr(config, "harmonic_energy_threshold", 1e-10),
-        harmonic_residual_threshold=getattr(config, "harmonic_residual_threshold", 1e-8),
-        harmonic_edge_counts=False,
-        require_native=getattr(config, "scaffold_require_native", False) if config is not None else False,
-        minimum_area_ratio=0.0,
-    )
+
+    def _solve():
+        return hybrid_parameterization(
+            layout, scaffold_executable=scaffold_executable,
+            maximum_iterations=getattr(config, "scaffold_max_iter", 50),
+            relative_energy_tolerance=getattr(config, "scaffold_relative_energy_tolerance", 1e-4),
+            rectangle_tolerance=getattr(config, "scaffold_rectangle_tolerance", 1e-6),
+            timeout_s=getattr(config, "scaffold_timeout_s", 60.0),
+            harmonic_method="iterative_geodesic",
+            harmonic_max_iter=getattr(config, "harmonic_max_iter", 10000),
+            harmonic_energy_threshold=getattr(config, "harmonic_energy_threshold", 1e-10),
+            harmonic_residual_threshold=getattr(config, "harmonic_residual_threshold", 1e-8),
+            harmonic_edge_counts=False,
+            require_native=getattr(config, "scaffold_require_native", False) if config is not None else False,
+            minimum_area_ratio=0.0,
+        )
+
+    try:
+        coordinates = _solve()
+    except ValueError as error:
+        if "collapsed or flipped parameter triangles" in str(error):
+            repaired = False
+            if not corner_repair.get('applied'):
+                from .amrto_layout_partition import repair_reflex_square_corners
+                corner_repair = repair_reflex_square_corners(layout)
+                corner_repair['enabled'] = True
+                if corner_repair.get('applied'):
+                    repaired = True
+            if not repaired:
+                try:
+                    from .amrto_chart_retry import balance_convex_corners
+                    balanced = balance_convex_corners(layout)
+                    if balanced.get('applied'):
+                        corner_repair = balanced
+                        repaired = True
+                except Exception:
+                    pass
+            if repaired:
+                coordinates = _solve()
+            else:
+                raise
+        else:
+            raise
     layout.parameterization_report.update(paper_stage_4=True,
                                          area_compression_admission_guard_applied=False,
                                          corner_orientation_repair=corner_repair)

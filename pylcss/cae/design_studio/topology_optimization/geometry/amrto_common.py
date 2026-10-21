@@ -150,7 +150,7 @@ class AMRTOConfig:
     sampling_min_d: int = 6       # d_min
     sampling_max_d: int = 2000    # d_max
     # Optional engineering chart retry; the original paper path remains the default.
-    repair_reflex_square_corners: bool = False
+    repair_reflex_square_corners: bool = True
     parameterization_method: str = "hybrid"
     # Legacy compression admission is not part of the paper's hybrid mapping.
     parameterization_minimum_area_ratio: float = 0.0
