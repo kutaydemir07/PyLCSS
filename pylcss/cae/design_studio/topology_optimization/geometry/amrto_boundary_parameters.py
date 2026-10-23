@@ -11,6 +11,7 @@ This is an engineering parameterization extension, not an AMRTO paper step.
 from __future__ import annotations
 
 from typing import Any
+from copy import copy
 
 import numpy as np
 from scipy.interpolate import BSpline
@@ -147,6 +148,138 @@ def _certify_uv_tiles(maps) -> dict:
             "minimum_jacobian_determinant": float(minimum),
             "arithmetic_rounding_allowance": rounding_allowance,
             "strictly_positive_complete_UV_tiles": True}
+
+
+def _source_chart_distortion(vertices, triangles, parameters):
+    """Report physical/UV anisotropy; this is a diagnostic, not an admission rule."""
+    xyz = np.asarray(vertices, dtype=float)[triangles]
+    uv = np.asarray(parameters, dtype=float)[triangles]
+    physical = np.stack((xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0]), axis=2)
+    planar = np.stack((uv[:, 1] - uv[:, 0], uv[:, 2] - uv[:, 0]), axis=2)
+    singular = np.linalg.svd(physical @ np.linalg.inv(planar), compute_uv=False)
+    if not np.isfinite(singular).all() or np.any(singular[:, 1] <= 0):
+        raise ValueError('Boundary clock transport requires nondegenerate physical source triangles')
+    ratios = singular[:, 0] / singular[:, 1]
+    return {'physical_to_UV_stretch_ratio_maximum': float(ratios.max()),
+            'physical_to_UV_stretch_ratio_p95': float(np.percentile(ratios, 95)),
+            'physical_to_UV_stretch_ratio_median': float(np.median(ratios))}
+
+
+def transport_layout_to_chord_boundaries(layout: Any, *, maximum_clock_tiles: int = 65536,
+                                          refresh_samples: bool = True) -> dict:
+    """Atomically give a native rectangle source-chord boundary clocks.
+
+    Retiming a smooth boundary curve by every native edge's affine clock adds
+    C0 knots to the surface basis. Instead this changes the *source UV map*
+    before fitting, so a single canonical smooth physical curve can be used
+    directly. Its XYZ geometry, protected features and common curve poles do
+    not move. The transfinite clock map must preserve orientation on every
+    exact clock tile AND every actual source UV triangle; otherwise nothing
+    is published. Existing source grid samples are refreshed on a private copy.
+
+    This makes no claim that chord clocks always reduce distortion. Before
+    and after physical/UV stretch diagnostics are returned explicitly.
+    """
+    if (isinstance(maximum_clock_tiles, bool) or not isinstance(maximum_clock_tiles, int)
+            or maximum_clock_tiles < 1):
+        raise ValueError('Boundary clock tile budget must be a positive integer')
+    vertices = np.asarray(layout.vertices)
+    triangles = np.asarray(layout.triangles)
+    uv = np.asarray(layout.parameter_coords, dtype=float)
+    paths = getattr(layout, 'boundary_paths', None)
+    if (vertices.ndim != 2 or vertices.shape[1] != 3 or not np.isfinite(vertices).all()
+            or uv.shape != (len(vertices), 2) or not np.isfinite(uv).all()
+            or np.any(uv < 0) or np.any(uv > 1) or paths is None or len(paths) != 4
+            or triangles.ndim != 2 or triangles.shape[1] != 3 or not len(triangles)
+            or not np.issubdtype(triangles.dtype, np.integer) or triangles.min() < 0
+            or triangles.max() >= len(vertices)):
+        raise ValueError('Require finite indexed source geometry and four native rectangle boundary paths')
+    maps, boundary_indices = [], []
+    for side, path in enumerate(paths):
+        indices = np.asarray(path)
+        if (indices.ndim != 1 or len(indices) < 2 or not np.issubdtype(indices.dtype, np.integer)
+                or indices.min() < 0 or indices.max() >= len(vertices)):
+            raise ValueError('Boundary clock paths must have at least two valid source indices')
+        # Every map is expressed in the increasing coordinate direction used
+        # by transport_boundary_uv; top/left source paths run in reverse.
+        forward = indices if side < 2 else indices[::-1]
+        axis, constant = side % 2, 1 - side % 2
+        expected_constant = float(side in (1, 2))
+        if not np.allclose(uv[forward, constant], expected_constant, atol=1e-12, rtol=0):
+            raise ValueError('Boundary clock transport requires a genuine rectangle perimeter')
+        old = uv[forward, axis].copy()
+        if abs(old[0]) > 1e-12 or abs(old[-1] - 1.) > 1e-12 or np.any(np.diff(old) <= 0):
+            raise ValueError('Native rectangle boundary clocks must increase strictly from zero to one')
+        old[[0, -1]] = (0., 1.)
+        lengths = np.linalg.norm(np.diff(vertices[forward], axis=0), axis=1)
+        if np.any(lengths <= 0):
+            raise ValueError('Source boundary clock has a zero-length physical edge')
+        chord = np.r_[0., np.cumsum(lengths)] / lengths.sum()
+        chord[-1] = 1.
+        maps.append((old, chord))
+        boundary_indices.append(forward)
+    tile_count = ((len(np.unique(np.r_[maps[0][0], maps[2][0]])) - 1)
+                  * (len(np.unique(np.r_[maps[1][0], maps[3][0]])) - 1))
+    identity = all(np.array_equal(old, new) for old, new in maps)
+    if not identity and tile_count > maximum_clock_tiles:
+        raise ValueError('Native boundary clock transport exceeds its deterministic exact-tile work budget')
+    proof = ({'method': 'Identity boundary clocks have the identity Jacobian on the complete square',
+              'tile_count': 1, 'minimum_jacobian_determinant': 1.,
+              'arithmetic_rounding_allowance': 0., 'strictly_positive_complete_UV_tiles': True}
+             if identity else _certify_uv_tiles(maps))
+    mapped = uv.copy() if identity else transport_boundary_uv(uv, maps)
+    # Enforce the exact prescribed values at source boundary sites. This only
+    # eliminates final arithmetic roundoff in the transfinite identity.
+    for side, forward in enumerate(boundary_indices):
+        mapped[forward, side % 2] = maps[side][1]
+        mapped[forward, 1 - side % 2] = float(side in (1, 2))
+    old_tri, new_tri = uv[triangles], mapped[triangles]
+    def determinants(points):
+        a, b = points[:, 1] - points[:, 0], points[:, 2] - points[:, 0]
+        return a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]
+    old_det, new_det = determinants(old_tri), determinants(new_tri)
+    if (not np.isfinite(mapped).all() or np.any(mapped < 0) or np.any(mapped > 1)
+            or np.any(old_det == 0) or np.any(old_det * new_det <= 0)):
+        raise ValueError('Chord boundary clock transport reverses or degenerates a source UV triangle')
+    before = _source_chart_distortion(vertices, triangles, uv)
+    after = _source_chart_distortion(vertices, triangles, mapped)
+    changed = not np.array_equal(uv, mapped)
+    samples = getattr(layout, 'sampled_grid_3d', None)
+    sampled_shape = getattr(layout, 'sampled_shape', (0, 0))
+    refreshed = False
+    if changed and samples is not None and refresh_samples:
+        if (len(sampled_shape) != 2 or any(int(n) != n or n < 2 for n in sampled_shape)
+                or np.asarray(samples).shape != (int(np.prod(sampled_shape)), 3)):
+            raise ValueError('Existing source samples have no valid tensor shape for atomic clock refresh')
+        from .amrto_parameterization import sample_parameter_grid
+        working = copy(layout)
+        working.parameter_coords = mapped
+        samples = sample_parameter_grid(working, np.linspace(0., 1., sampled_shape[0]),
+                                         np.linspace(0., 1., sampled_shape[1])).reshape(-1, 3)
+        refreshed = True
+    report = {'method': 'Canonical chord boundary clocks through certified transfinite source UV transport',
+              'accepted': True, 'applied': changed, 'identity_boundary_clocks': identity,
+              'engineering_parameterization_extension': True,
+              'layout_id': int(layout.layout_id), 'source_XYZ_unchanged': True,
+              'source_triangles_unchanged': True, 'physical_boundary_geometry_unchanged': True,
+              'protected_mechanical_geometry_unchanged': True,
+              'common_curve_poles_unchanged': True, 'added_boundary_controls': 0,
+              'complete_UV_map': proof, 'maximum_exact_clock_tiles': maximum_clock_tiles,
+              'source_triangle_count': len(triangles), 'source_triangle_orientation_preserved': True,
+              'minimum_source_UV_area_ratio': float(np.min(new_det / old_det)),
+              'maximum_UV_vertex_shift': float(np.linalg.norm(mapped - uv, axis=1).max(initial=0.)),
+              'distortion_before': before, 'distortion_after': after,
+              'existing_source_grid_refreshed': refreshed,
+              'existing_source_grid_invalidated': bool(changed and samples is not None and not refresh_samples),
+              'surface_fits': 0,
+              'UV_maps': [{'old': old.tolist(), 'new': new.tolist()} for old, new in maps]}
+    # All validation, distortion measurement and sampling succeeded. Source
+    # XYZs and prepared boundary curves retain their original objects.
+    layout.parameter_coords = mapped if changed else layout.parameter_coords
+    if changed and getattr(layout, 'sampled_grid_3d', None) is not None:
+        layout.sampled_grid_3d = samples if refresh_samples else None
+    layout.shared_boundary_clock_transport_report = report
+    return report
 
 
 def align_layout_boundary_parameters(layout: Any, *, knot_alignment_tolerance: float = 1e-3) -> dict:

@@ -43,6 +43,30 @@ For only the crash solver, run `python scripts/install_solvers.py --only opencou
 
 Open **Help** inside the app for workflows, examples and solver configuration.
 
+## Topology workflow
+
+Larger voxel studies use a compiled matrix-free elasticity solver with
+multigrid preconditioning. CAD charts use compiled inverse sampling and bounded
+parallel preparation. TopOpt FEA selects MKL PARDISO for supported linear
+tetrahedral models; **FEA Solver** also offers CalculiX explicitly.
+
+Lattice sizing reuses fixed geometry and, where a cached periodic material law
+is available, starts with a coarse continuum proposal. It then checks the actual
+lattice material with solid FEA. Final acceptance still requires geometry,
+equilibrium, stress and mesh-convergence checks; a generated lattice alone does
+not establish its load capacity.
+
+CAD finishing fits source points and a filtered physical normal field together
+with neighboring surface normals. Displacement follows source voxel spacing and
+source-fit accuracy. Bounded shared-curve/UV repair and physical-curvature
+fairing are available, with separate checks for seam errors and interior
+ripples. A proposal replaces the current solid only after native geometry,
+visible-surface and STEP checks pass. The
+[reconstruction notes](pylcss/cae/design_studio/topology_optimization/geometry/RECONSTRUCTION.md)
+describe the method, spatial diagnostics and T-spline alternatives. FEA stores
+hotspot coordinates and can continue a matching saved analysis; changed geometry
+or loads invalidate that response.
+
 ## License
 
 Source available under the [PolyForm Shield License 1.0.0](LICENSE).

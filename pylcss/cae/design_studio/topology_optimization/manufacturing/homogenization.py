@@ -2,10 +2,10 @@
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE file for details.
 """Numerical homogenization of a periodic lattice unit cell.
 
-A lattice cannot be meshed at part scale — a 100 mm part with 2 mm cells and
-0.3 mm walls needs on the order of 1e9 elements. Every practical method
-therefore replaces the cell by an effective continuum, optimizes that, and
-generates explicit geometry only at the end.
+Resolving every wall can be expensive for parts containing many small cells.
+This module supplies a periodic effective continuum for preliminary sizing.
+Resolved material analysis is still needed for individual-cell boundaries,
+junction stresses and the final generated geometry.
 
 This module computes that effective continuum. For a periodic voxel cell it
 solves the six unit-macroscopic-strain boundary-value problems and assembles

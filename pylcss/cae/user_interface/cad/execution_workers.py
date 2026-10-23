@@ -491,6 +491,7 @@ def _lattice_job_input(result):
         "recovery_cutoff", "density_cutoff", "passive_solid_mask",
         "passive_void_mask", "passive_regions", "cad_shape", "shape",
         "source_cad_shape", "mass", "volume", "source_volume",
+        "physics_mode", "multibody",
     }
     payload = {key: value if key in required else None for key, value in source.items()}
     recovered = source.get("recovered_shape")

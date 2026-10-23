@@ -785,6 +785,7 @@ def build_topology_output(
         "max_iterations": problem.max_iter,
         "converged": result.converged,
         "message": result.message,
+        "performance": getattr(result, 'performance', {}),
         "compliance_history": result.compliance_history,
         "objective_history": result.objective_history,
         "objective_reduction_pct": objective_reduction_pct,

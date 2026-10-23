@@ -74,6 +74,43 @@ def _surface_area_weights_from_mesh_selection(
     return weights
 
 
+def _consistent_surface_force_weights(mesh, node_ids, geometries=None):
+    """Integrate constant traction over selected material boundary triangles.
+
+    Quadratic triangle corner integrals are zero and midpoint integrals A/3.
+    Equal force at every Tet10 boundary node is not a constant traction and
+    creates artificial concentrated loads at the vertices.
+    """
+    if not callable(getattr(mesh, 'boundary_facets', None)):
+        return {}
+    facets = mesh.boundary_facets()
+    from .selection import cad_facets_matching_geometries
+    owned=cad_facets_matching_geometries(mesh,geometries)
+    if owned is not None:
+        facets=np.intersect1d(facets,owned)
+    selected = np.zeros(mesh.p.shape[1], dtype=bool)
+    selected[np.asarray(node_ids, dtype=int)-1] = True
+    corners = mesh.facets[:, facets]
+    mask = np.all(selected[corners], axis=0)
+    quadratic = tet10_connectivity(mesh) is not None
+    if quadratic:
+        try:
+            mids = mesh.dofs.edge_dofs[0, mesh.f2e[:, facets]]
+        except (AttributeError, IndexError):
+            return {}
+        mask &= np.all(selected[mids], axis=0)
+    if not np.any(mask):
+        return {}
+    corners = corners[:, mask]
+    xyz = mesh.p[:, corners].transpose(2, 1, 0)
+    area = .5*np.linalg.norm(np.cross(xyz[:, 1]-xyz[:, 0], xyz[:, 2]-xyz[:, 0]), axis=1)
+    nodes = mids[:, mask] if quadratic else corners
+    values = np.zeros(mesh.p.shape[1])
+    for index in range(3):
+        np.add.at(values, nodes[index], area/3.)
+    return {int(node): float(values[node]) for node in np.flatnonzero(values)}
+
+
 def _build_sets_and_step(
     mesh: Any,
     constraints: list[dict],
@@ -177,10 +214,12 @@ def _build_sets_and_step(
                     "named selection and mesh tolerance before solving."
                 )
             force = load_vector(load)
-            area_weights = _surface_area_weights_from_mesh_selection(geoms)
+            area_weights = (_consistent_surface_force_weights(mesh, node_ids,geoms)
+                            or _surface_area_weights_from_mesh_selection(geoms))
+            valid_nodes = set(int(v) for v in (node_ids - 1).tolist())
+            area_weights = {node: area for node, area in area_weights.items() if node in valid_nodes}
             if area_weights:
                 total_area = float(sum(area_weights.values()))
-                valid_nodes = set(int(v) for v in (node_ids - 1).tolist())
                 if total_area > 1e-16:
                     for node_idx0, area in sorted(area_weights.items()):
                         if node_idx0 not in valid_nodes:
@@ -237,8 +276,10 @@ def _build_sets_and_step(
             node_weights: dict[int, float] = {}
 
             if faces:
-                pts, cells = mesh_to_tet4(mesh, [])
+                quadratic = tet10_connectivity(mesh) is not None
+                pts, cells = mesh_to_tet10(mesh, []) if quadratic else mesh_to_tet4(mesh, [])
                 local_faces = ((0, 1, 2), (0, 1, 3), (1, 2, 3), (0, 2, 3))
+                midpoint_faces = ((4, 5, 6), (4, 8, 7), (5, 9, 8), (6, 9, 7))
                 opp_nodes = (3, 2, 0, 1)
                 for elem_id, face_id in faces:
                     cell = cells[elem_id - 1]
@@ -260,7 +301,8 @@ def _build_sets_and_step(
                     if cos_theta > 0.0:
                         w_face = area * cos_theta
                         share = w_face / 3.0
-                        for nid in tri:
+                        traction_nodes = cell[list(midpoint_faces[f_idx])] if quadratic else tri
+                        for nid in traction_nodes:
                             node_weights[int(nid)] = (
                                 node_weights.get(int(nid), 0.0) + share
                             )

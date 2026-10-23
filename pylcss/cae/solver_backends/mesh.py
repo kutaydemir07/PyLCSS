@@ -191,6 +191,20 @@ def mesh_to_tet10(
     return points, cells
 
 
+def straight_sided_tetrahedra(mesh: Any) -> bool:
+    """Whether quadratic edge nodes lie at their corner-edge midpoints."""
+    if tet10_connectivity(mesh) is None:
+        return True
+    points, cells = mesh_to_tet10(mesh, [])
+    edges = ((0, 1), (1, 2), (0, 2), (0, 3), (1, 3), (2, 3))
+    for local_midpoint, (first, second) in enumerate(edges, start=4):
+        expected = .5*(points[cells[:, first]]+points[cells[:, second]])
+        if not np.allclose(points[cells[:, local_midpoint]], expected, rtol=0.,
+                           atol=max(1e-12, float(np.ptp(points, axis=0).max())*1e-10)):
+            return False
+    return True
+
+
 def is_shell_mesh(mesh: Any) -> bool:
     """Return whether a mesh exposes triangle surface connectivity."""
     if mesh is None or not hasattr(mesh, "t"):

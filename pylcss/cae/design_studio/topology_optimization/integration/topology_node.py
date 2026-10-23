@@ -104,6 +104,8 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, GeometryStudyNode):
                 self.create_property(
                     name, default, widget_type="combo", items=["C3D10", "C3D4"]
                 )
+            elif name == 'fea_solver_backend':
+                self.create_property(name, default, widget_type='combo', items=['Automatic', 'Sparse Direct', 'CalculiX'])
             else:
                 self.create_property(
                     name,
@@ -167,6 +169,8 @@ class TopologyOptVoxelNode(_TopologyExecutionMixin, GeometryStudyNode):
         self.create_property("post_lattice_skin_thickness_mm", 0.0, widget_type="float")
         self.create_property("post_lattice_min_density", 0.15, widget_type="float")
         self.create_property("post_lattice_max_density", 0.60, widget_type="float")
+        self.create_property("post_lattice_use_fea", False, widget_type="bool")
+        self.create_property("post_lattice_sizing_iterations", 3, widget_type="int")
 
         # Solver settings.
         self.create_property(

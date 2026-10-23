@@ -9,7 +9,7 @@ one explicitly reported local chart retry without changing the source mesh.
 """
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from contextlib import nullcontext
 from dataclasses import asdict, replace
@@ -85,6 +85,33 @@ def _fit_paper_layouts(layouts, cfg, *, intrinsic_tolerance=None):
     else:
         with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context('spawn')) as pool:
             yield from pool.map(_fit_paper_layout, tasks, chunksize=1)
+
+
+def _parameterize_paper_layouts(layouts, cfg, progress):
+    """Independent charts share bounded threads, avoiding per-chart processes."""
+    def prepare(layout):
+        parameterize_paper_layout(layout, cfg)
+        adaptive_sample_layout(layout, k_sample=cfg.sampling_rate_k,
+                               d_min=cfg.sampling_min_d, d_max=cfg.sampling_max_d)
+        return layout
+    workers = min(max(1, int(cfg.fitting_workers)), len(layouts), os.cpu_count() or 1)
+    scope = threadpool_limits(limits=1, user_api='blas') if threadpool_limits else nullcontext()
+    with scope:
+        if workers <= 1:
+            for index, layout in enumerate(layouts, 1):
+                prepare(layout)
+                progress(f'Step 4/5 — Parameterization and sampling {index}/{len(layouts)}', index, len(layouts))
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [pool.submit(prepare, layout) for layout in layouts]
+                try:
+                    for index, future in enumerate(as_completed(futures), 1):
+                        future.result()
+                        progress(f'Step 4/5 — Parameterization and sampling {index}/{len(layouts)}', index, len(layouts))
+                except BaseException:
+                    for future in futures:
+                        future.cancel()
+                    raise
 
 
 def _assemble_paper_cad(layouts, tolerance):
@@ -460,15 +487,9 @@ def reconstruct_topopt_cad(
     finish('step3', step3)
 
     # 4. Native Scaffold-Map rectangles, otherwise Algorithm 1; Eqs. 14/15 sampling.
-    parameterizations = []
-    for index, layout in enumerate(layouts, 1):
-        progress(f'Step 4/5 — Parameterization and sampling {index}/{len(layouts)}', index, len(layouts))
-        parameterize_paper_layout(layout, cfg)
-        adaptive_sample_layout(layout, k_sample=cfg.sampling_rate_k, d_min=cfg.sampling_min_d,
-                               d_max=cfg.sampling_max_d)
-        parameterizations.append({'layout_id': int(layout.layout_id),
-                                  'sampled_shape': list(layout.sampled_shape),
-                                  **layout.parameterization_report})
+    _parameterize_paper_layouts(layouts, cfg, progress)
+    parameterizations = [{'layout_id': int(layout.layout_id), 'sampled_shape': list(layout.sampled_shape),
+                         **layout.parameterization_report} for layout in layouts]
     step4 = {'method': 'Section 2.6; Algorithm 1; Eqs. 14 and 15',
              'patch_count': len(layouts), 'parameterizations': parameterizations}
     if folder:
@@ -476,7 +497,7 @@ def reconstruct_topopt_cad(
     finish('step4', step4)
 
     # Section 2.7's stitching needs consistent physical curves at T-junctions.
-    # Fit those curves once; do not re-partition or couple a tangent network.
+    # Fit those curves once; optional tangent coupling precedes the surface basis.
     source_scale = float(np.max(np.ptp(vertices, axis=0)))
     fitting_cfg = cfg
     boundary_rejection = None
@@ -493,7 +514,8 @@ def reconstruct_topopt_cad(
             boundary_report = prepare_shared_boundary_curves(
                 layouts, boundary_tolerance, bounds=bounds,
                 certify_stock_hull=bounds is not None,
-                blocked_junction_positions={tuple(map(float, point)) for layout in layouts for point in layout.vertices})
+                blocked_junction_positions=(() if cfg.couple_shared_boundary_tangents else
+                    {tuple(map(float, point)) for layout in layouts for point in layout.vertices}))
         except ValueError as error:
             layouts = clean_layouts
             fitting_cfg = replace(cfg, stitch_surface_boundaries=False)
@@ -813,6 +835,153 @@ def reconstruct_topopt_cad(
             solid_report['latest_retry_failure'] = deepcopy(latest_failure)
             solid_report['reason'] = latest_failure['reason']
         finish('local_chart_retry', retry_report)
+    if ((cfg.seam_normal_fitting or cfg.fair_surface_interiors or cfg.fair_surface_network) and cfg.stitch_surface_boundaries
+            and solid_report['is_solid'] and boundary_rejection is None):
+        from .amrto_seam_fairing import fair_shared_seam_normals
+        progress('Fairing CAD interiors and checking smooth seams')
+        # Work on a private proposal. A failed normal fit or native rebuild
+        # must never discard the already accepted CAD solid.
+        candidate_fitted = deepcopy(fitted)
+        candidate_shape, candidate_solid = None, {'is_solid': False}
+        seam_report = {'accepted': False, 'previous_accepted_solid_retained': True}
+        try:
+            if cfg.fair_surface_network:
+                from .amrto_network_reconstruction import complete_surface_network
+                network_native_attempt = [0]
+
+                def complete_network_native(charts):
+                    network_native_attempt[0] += 1
+                    surface = _assemble_paper_cad(charts, effective_sew_tol)
+                    return _complete_paper_solid(
+                        surface, payload, tolerance=min(effective_sew_tol, 1e-4),
+                        source_scale=source_scale, source_volume=reference_volume,
+                        maximum_volume_delta=maximum_volume_delta,
+                        void_axial_margin=void_axial_margin, void_radial_margin=void_radial_margin,
+                        progress_callback=progress,
+                        fitted_layout_ids=[int(layout.layout_id) for layout in charts],
+                        contact_checkpoint_dir=(folder/'surface_network_contacts'/f'attempt_{network_native_attempt[0]}'
+                                                if folder else None))
+
+                candidate_fitted, candidate_shape, candidate_solid, network_report = complete_surface_network(
+                    fitted, payload, cfg, boundary_tolerance=boundary_tolerance,
+                    fit_layouts=lambda charts: _fit_paper_layouts(charts, fitting_cfg),
+                    complete_native=complete_network_native,
+                    progress_callback=progress)
+                seam_report.update(network_report)
+            interior_reports=[]
+            if cfg.fair_surface_interiors and not cfg.fair_surface_network:
+                from .amrto_surface_fairing import fair_surface_interior,fairing_displacement_budget
+                from .amrto_continuity import inspect_internal_spline_continuity
+                for layout in candidate_fitted:
+                    progress(f'Fairing CAD interior {layout.layout_id}')
+                    passes=[]
+                    budget,budget_report=fairing_displacement_budget(layout,payload)
+                    for normals,strength in ((False,100.),(True,10000.)):
+                        if budget>0:
+                            surface,item=fair_surface_interior(layout,.5*budget,
+                                strength=strength,normal_targets=normals)
+                        else:
+                            surface,item=layout.nurbs_surface,{'applied':False,'reason':'No source-deviation margin remains'}
+                        layout.nurbs_surface=surface;passes.append(item)
+                    if any(item['applied'] for item in passes):
+                        last=next(item for item in reversed(passes) if item['applied'])
+                        layout.fitting_report['source_fit_acceptance'].update(
+                            measured_deviation_mm=last['source_deviation_mm'],surface_orientation=last['orientation'])
+                        layout.fitting_report['internal_spline_continuity']=inspect_internal_spline_continuity(layout.nurbs_surface)
+                    layout.fitting_report['bounded_interior_fairing']=passes
+                    interior_reports.append({'layout_id':int(layout.layout_id),'passes':passes,'budget':budget_report})
+            if cfg.seam_normal_fitting and not cfg.fair_surface_network:
+                seam_report.update(fair_shared_seam_normals(
+                    candidate_fitted, boundary_tolerance,
+                    normal_weight=cfg.seam_normal_weight,
+                    source_crease_angle=cfg.seam_source_crease_angle,
+                    progress_callback=progress))
+            seam_report['interior_fairing']=interior_reports
+            seam_report['normal_fit_accepted'] = bool(seam_report['accepted'] or any(
+                item['applied'] for row in interior_reports for item in row['passes']))
+            seam_report['accepted'] = False
+            if seam_report['normal_fit_accepted']:
+                candidate_surface = _assemble_paper_cad(candidate_fitted, effective_sew_tol)
+                if not cfg.fair_surface_network:
+                    candidate_shape, candidate_solid = _complete_paper_solid(
+                        candidate_surface, payload, tolerance=min(effective_sew_tol, 1e-4),
+                        source_scale=source_scale, source_volume=reference_volume,
+                        maximum_volume_delta=maximum_volume_delta,
+                        void_axial_margin=void_axial_margin, void_radial_margin=void_radial_margin,
+                        progress_callback=progress,
+                        fitted_layout_ids=[int(layout.layout_id) for layout in candidate_fitted],
+                        contact_checkpoint_dir=folder/'seam_normal_integration_contacts' if folder else None)
+                seam_report['solid_integration'] = candidate_solid
+                mapping=candidate_solid.get('integration_contact_mapping') or {}
+                if (not candidate_solid['is_solid'] and not seam_report.get('shared_boundary_geometry_may_change')
+                        and seam_report.get('independent_contact_patch_rollback_allowed', True)
+                        and mapping.get('retry_mapping_complete')
+                        and mapping.get('retry_layout_ids')):
+                    rollback=set(map(int,mapping['retry_layout_ids']))
+                    original_by_id={int(layout.layout_id):layout for layout in fitted}
+                    if rollback.issubset(original_by_id):
+                        # Keep smoothing away from exact contacts, reverting
+                        # only the mapped patches. Common boundary curves are
+                        # unchanged, so no new seam or source fit is invented.
+                        candidate_fitted=[deepcopy(original_by_id[int(layout.layout_id)])
+                            if int(layout.layout_id) in rollback else layout for layout in candidate_fitted]
+                        seam_report['contact_layouts_retained_without_fairing']=sorted(rollback)
+                        seam_report['initial_proposal_solid_integration']=candidate_solid
+                        candidate_surface=_assemble_paper_cad(candidate_fitted,effective_sew_tol)
+                        candidate_shape,candidate_solid=_complete_paper_solid(
+                            candidate_surface,payload,tolerance=min(effective_sew_tol,1e-4),
+                            source_scale=source_scale,source_volume=reference_volume,
+                            maximum_volume_delta=maximum_volume_delta,
+                            void_axial_margin=void_axial_margin,void_radial_margin=void_radial_margin,
+                            progress_callback=progress,
+                            fitted_layout_ids=[int(layout.layout_id) for layout in candidate_fitted],
+                            contact_checkpoint_dir=folder/'fairing_contact_rollback' if folder else None)
+                        seam_report['solid_integration']=candidate_solid
+                if candidate_solid['is_solid']:
+                    shape, solid_report, fitted = candidate_shape, candidate_solid, candidate_fitted
+                    seam_report.update(accepted=True, previous_accepted_solid_retained=False)
+                    stages['step5']['patch_reports'] = [
+                        {'layout_id': int(layout.layout_id), **layout.fitting_report,
+                         'multiresolution': layout.multiresolution_report} for layout in fitted]
+                    stages['step5']['seam_normal_fitting_extension'] = True
+                    stages['step5']['connected_surface_fitting_extension'] = bool(cfg.fair_surface_network)
+                    control_count = sum(layout.nurbs_surface.ctrlpts_size_u*layout.nurbs_surface.ctrlpts_size_v
+                                        for layout in fitted)
+                    stages['step5']['control_point_count'] = control_count
+                    if folder:
+                        # The finishing pass has a separate checkpoint and
+                        # timer; never label the original Step5 fit as current.
+                        stages['step5'].pop('animation_mesh', None)
+                        stages['step5'].update(cad_checkpoint_file='step5_seam_cad.step',
+                                               cad_checkpoint_current=False)
+                        try:
+                            export_cad_model(candidate_surface, export_path=folder/'step5_seam_cad.step',
+                                             require_solid=False)
+                            stages['step5']['cad_checkpoint_current'] = True
+                            stages['step5']['animation_mesh'] = _export_cad_animation_mesh(
+                                folder, 'step5_cad', candidate_surface,
+                                max(float(np.linalg.norm(np.ptp(vertices, axis=0)))*1e-3, 1e-7))
+                        except MemoryError:
+                            raise
+                        except Exception as error:
+                            seam_report['checkpoint_error'] = str(error)
+                else:
+                    seam_report['reason'] = candidate_solid.get('reason', 'Native CAD admission rejected the seam proposal')
+        except MemoryError:
+            raise
+        except Exception as error:
+            seam_report['reason'] = str(error)
+            logger.warning('Bounded CAD seam normal fit retained the previous solid: %s', error)
+        finish('surface_seam_normals', seam_report)
+    # A successful connected refit can remove an initial warning; report the
+    # charts actually returned, not the superseded first fitting batch.
+    rejected = [int(layout.layout_id) for layout in fitted
+                if cfg.stitch_surface_boundaries
+                and not layout.fitting_report.get('source_fit_acceptance', {}).get('accepted', False)]
+    fit_warnings = [message for message in fit_warnings
+                    if not message.startswith('Fitted surfaces had localized deviation/orientation warnings')]
+    if rejected:
+        fit_warnings.append(f'Fitted surfaces had localized deviation/orientation warnings (layouts {", ".join(map(str, rejected))})')
     if fit_warnings:
         solid_report['fit_warnings'] = fit_warnings
         if rejected:
@@ -856,10 +1025,31 @@ def reconstruct_topopt_cad(
     latest_failure = solid_report.get('latest_retry_failure')
     if latest_failure and latest_failure['rejected_layout_ids']:
         incomplete_reason += f" (layouts {', '.join(map(str, latest_failure['rejected_layout_ids']))})"
+    from .amrto_continuity import inspect_internal_spline_continuity
+    continuity_reports = [inspect_internal_spline_continuity(layout.nurbs_surface) for layout in fitted]
+    network_quality = None
+    if cfg.fair_surface_network:
+        finishing = stages.get('surface_seam_normals', {})
+        if finishing.get('accepted') and finishing.get('after'):
+            network_quality = finishing['after']
+        else:
+            from .amrto_network_quality import inspect_network_quality
+            network_quality = inspect_network_quality(fitted)
     report = {
         'method': 'AMRTO five-step reconstruction (Ren et al., 2025)', 'paper_pipeline': True,
         'backend': 'in-process', 'revision': CAD_RECONSTRUCTION_REVISION,
-        'requested_strategy': str(reconstruction_strategy), 'smooth': True, 'editable': True,
+        'requested_strategy': str(reconstruction_strategy), 'smooth': None, 'editable': True,
+        'parametric_surfaces': True,
+        'surface_quality': {
+            'global_G1_continuity_certified': False,
+            'global_G2_continuity_certified': False,
+            'sharp_feature_intent_classified': False,
+            'status': 'Surface smoothness is separate from solid validity',
+            'internal_C0_knot_lines': sum(row['C0_knot_line_count'] for row in continuity_reports),
+            'internal_lines_with_sampled_jump_over_5_degrees': sum(
+                row['lines_with_sampled_jump_over_5_degrees'] for row in continuity_reports),
+            'network_diagnostics': network_quality,
+        },
         'valid': bool(shape.isValid()), 'is_solid': solid_ready,
         'cad_volume': solid_report.get('cad_volume'), 'cad_face_count': len(shape.Faces()),
         'cad_surface_types': {kind: sum(face.geomType() == kind for face in shape.Faces())
@@ -867,6 +1057,7 @@ def reconstruct_topopt_cad(
         'effective_fitting_layouts': len(fitted),
         'control_point_count': control_count, 'step5_nurbs_faces': len(fitted),
         'validation_status': 'passed' if solid_ready else 'incomplete',
+        'validation_scope': 'Native solid and exact-feature checks; global surface smoothness is not certified',
         'export_ready': solid_ready, 'display_ready': True,
         'qa_geometry_source': 'Stitched fitted NURBS with original CAD non-design interfaces' if solid_ready else 'Fitted NURBS surfaces',
         'warnings': [] if solid_ready else [incomplete_reason],

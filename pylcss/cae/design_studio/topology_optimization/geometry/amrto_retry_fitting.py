@@ -53,8 +53,8 @@ def fit_bounded_chart_retry(layouts, cfg, *, tangent_edges, bounds,
         report['boundary_curves'] = prepare_shared_boundary_curves(
             layouts, boundary_tolerance, bounds=bounds,
             certify_stock_hull=bounds is not None,
-            blocked_junction_positions={tuple(map(float, point))
-                                        for layout in layouts for point in layout.vertices},
+            blocked_junction_positions=(() if cfg.couple_shared_boundary_tangents else
+                {tuple(map(float, point)) for layout in layouts for point in layout.vertices}),
             tangent_preserving_edges=tangent_edges)
         for layout in layouts:
             layout.source_box_bounds = bounds

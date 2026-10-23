@@ -23,6 +23,12 @@ _VALIDATION_CHECKS = {
     "mesh_convergence_not_demonstrated",
     "validated_stress_exceeds_yield",
     "validated_displacement_exceeds_limit",
+    "lattice_analysis_geometry_mismatch",
+    "lattice_equilibrium_not_balanced",
+    "lattice_yield_strength_missing",
+    "cad_analysis_geometry_mismatch",
+    "equilibrium_not_balanced",
+    "yield_strength_missing",
 }
 _LEGACY_VALIDATION_MESSAGES = (
     "Independent analysis of the manufactured geometry was not run.",
@@ -114,9 +120,32 @@ def update_verification_status(
     current = output.get("fea_analysis_status") in (None, "completed")
     completed = (
         isinstance(analysis, dict)
-        and analysis.get("source") == "topopt_cad_fea"
+        and analysis.get("source") in {'topopt_cad_fea', 'topopt_lattice_fea'}
         and current
     )
+    lattice = bool(output.get('generated_lattice') or output.get('study_kind') == 'post_topopt_lattice')
+    if completed and lattice:
+        from ..geometry.lattice_tet_mesh import lattice_surface_fingerprint
+        surface = output.get('recovered_shape')
+        try:
+            matching = (analysis.get('source') == 'topopt_lattice_fea' and isinstance(surface, dict)
+                        and analysis.get('analysis_geometry_sha256') == lattice_surface_fingerprint(surface))
+        except (KeyError, TypeError, ValueError):
+            matching = False
+        if not matching:
+            block('lattice_analysis_geometry_mismatch', 'The FEA result does not describe the current lattice surface.')
+            completed = False
+    if completed and not lattice:
+        current_cad=output.get('cad_shape')
+        if current_cad is None:current_cad=output.get('shape')
+        if current_cad is not None:
+            from ..geometry.cad_fingerprint import cad_shape_fingerprint
+            try:
+                matching=analysis.get('analysis_geometry_sha256')==cad_shape_fingerprint(current_cad)
+            except (TypeError,ValueError,RuntimeError):matching=False
+            if not matching:
+                block('cad_analysis_geometry_mismatch','The FEA result does not describe the current CAD solid.')
+                completed=False
     validation_attempted = completed
     infill = output.get("study_kind") == "lattice_infill"
     if completed:
@@ -152,11 +181,17 @@ def update_verification_status(
                 "compliance": analysis.get("compliance"),
                 "converged": convergence.get("converged"),
             }
-            if convergence.get("converged") is False:
+            if convergence.get('converged') is not True:
                 block(
                     "mesh_convergence_not_demonstrated",
                     "The independent FEA mesh-convergence check did not converge.",
                 )
+            if analysis.get('equilibrium_balanced') is not True:
+                block('lattice_equilibrium_not_balanced' if lattice else 'equilibrium_not_balanced',
+                      'The independent FEA did not demonstrate force equilibrium.')
+            if allowable <= 0:
+                block('lattice_yield_strength_missing' if lattice else 'yield_strength_missing',
+                      'Yield verification requires a positive material yield strength.')
             if allowable > 0 and stress > allowable / factor:
                 block(
                     "validated_stress_exceeds_yield",
@@ -198,9 +233,14 @@ def update_verification_status(
         failed_checks=list(dict.fromkeys(failed)),
         advisory_checks=list(dict.fromkeys(advisory)),
         independent_validation_completed=completed,
+        verification_scope=('Resolved linear-elastic lattice yield and displacement; buckling and fatigue not assessed'
+                            if lattice else 'Independent CAD linear-elastic checks'),
         verification_warnings=messages,
     )
     output["quality_gate"] = gate
     output["release_ready"] = output["verification_passed"] = passed
     output["warnings"] = list(dict.fromkeys(warnings + messages))
+    if completed and lattice:
+        output['warnings'] = [warning for warning in output['warnings'] if not str(warning).startswith(
+            'Mechanical results refer to the original solid TopOpt solve.')]
     return output

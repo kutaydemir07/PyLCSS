@@ -44,7 +44,7 @@ def plan_lattice_adaptation(nominal_pitch, minimum_member, family, *, boundary_b
             area_factor *= .5
         minimum_pitch = max(minimum_member, area_factor * minimum_member / .8)
         feasible = refined_pitch > minimum_member and refined_pitch >= minimum_pitch * (1. - 1e-12)
-        constraint = "TPMS wall-derived occupancy must remain at or below80%"
+        constraint = "TPMS wall-derived occupancy must remain at or below 80%"
     elif family.kind == "prismatic" and family.base == "honeycomb":
         # Opposite flats are sqrt(3)*side apart; inward wall halves must not
         # consume that opening. This is geometry, not a sampling allowance.
@@ -59,7 +59,7 @@ def plan_lattice_adaptation(nominal_pitch, minimum_member, family, *, boundary_b
         refined_pitch = max(refined_pitch, minimum_pitch * 1.05)
         feasible = True
     report = {
-        "method": "Boundary cell refinement with continuous overlapping material union (up to2:1)",
+        "method": "Boundary cell refinement with continuous overlapping material union (up to 2:1)",
         "family": family.key,
         "nominal_pitch_mm": nominal_pitch,
         "refined_pitch_mm": refined_pitch,
@@ -82,10 +82,10 @@ def plan_lattice_adaptation(nominal_pitch, minimum_member, family, *, boundary_b
     }
     if not feasible:
         raise LatticeAdaptationError(
-            f"Boundary refinement of{nominal_pitch:g} mm {family.display_name} cells needs "
-            f"{refined_pitch:g} mm cells, which cannot retain the{minimum_member:g} mm minimum "
+            f"Boundary refinement of {nominal_pitch:g} mm {family.display_name} cells needs "
+            f"{refined_pitch:g} mm cells, which cannot retain the {minimum_member:g} mm minimum "
             f"wall/strut with an open cell ({constraint}). Increase nominal cell size or "
-            "reduce the minimum thickness. Neither requested dimension was changed.", report)
+            "turn off boundary refinement. Neither requested dimension was changed.", report)
     return report
 
 

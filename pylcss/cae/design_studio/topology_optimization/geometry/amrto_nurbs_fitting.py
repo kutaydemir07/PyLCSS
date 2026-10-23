@@ -308,6 +308,8 @@ def fit_paper_nurbs_surface_for_layout(
             },
             maximum_source_map_residual=final_error, source_orientation=final_orientation)
     layout.nurbs_surface = surface
+    from .amrto_continuity import inspect_internal_spline_continuity
+    layout.fitting_report['internal_spline_continuity'] = inspect_internal_spline_continuity(surface)
     layout.fitting_report.update(ctrlpts_u=surface.ctrlpts_size_u,
                                  ctrlpts_v=surface.ctrlpts_size_v,
                                  multiresolution=layout.multiresolution_report)

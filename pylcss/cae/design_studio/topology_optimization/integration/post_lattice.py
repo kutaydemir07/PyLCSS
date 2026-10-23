@@ -32,6 +32,8 @@ POST_LATTICE_DEFAULTS = {
     "post_lattice_skin_thickness_mm": 0.0,
     "post_lattice_min_density": 0.15,
     "post_lattice_max_density": 0.60,
+    "post_lattice_use_fea": False,
+    "post_lattice_sizing_iterations": 3,
 }
 
 
@@ -82,7 +84,7 @@ def _copy_containers(value):
     return value
 
 
-def lattice_design_mask(geometry, shape, bounds):
+def lattice_design_mask(geometry, shape, bounds, geometry_cache=None):
     """Measure the completed geometry on the sizing grid, independently of SIMP."""
     from ..geometry.geometry_lattice import geometry_triangle_mesh, mesh_signed_distance_grid
 
@@ -92,11 +94,17 @@ def lattice_design_mask(geometry, shape, bounds):
         lower[axis] + (np.arange(size) + .5) * spacing[axis]
         for axis, size in enumerate(shape)
     )
-    mesh = geometry_triangle_mesh(geometry, max(0.1, float(np.min(spacing)) * 0.35))
-    return mesh_signed_distance_grid(mesh, axes) > 0.
+    def build():
+        mesh = geometry_triangle_mesh(geometry, max(0.1, float(np.min(spacing)) * 0.35))
+        return mesh_signed_distance_grid(mesh, axes) > 0.
+    if geometry_cache is None:
+        return build()
+    return geometry_cache.get(('design_mask', geometry_cache.source_key(geometry),
+                               tuple(shape), tuple(lower), tuple(upper)), build)
 
 
-def prepare_lattice_field(result: dict[str, Any], settings: dict[str, Any], *, base_geometry=None):
+def prepare_lattice_field(result: dict[str, Any], settings: dict[str, Any], *, base_geometry=None,
+                          relative_density_override=None, geometry_cache=None):
     """Separate the optimized envelope from cell density and printable floors.
 
     A converged SIMP field is almost binary. Using its near-one values as cell
@@ -130,7 +138,7 @@ def prepare_lattice_field(result: dict[str, Any], settings: dict[str, Any], *, b
     cutoff = float(source.get("recovery_cutoff") or source.get("density_cutoff") or 0.3)
     if base_geometry is None:
         base_geometry, _ = lattice_base_geometry(source)
-    envelope = lattice_design_mask(base_geometry, field.shape, bounds)
+    envelope = lattice_design_mask(base_geometry, field.shape, bounds, geometry_cache)
     solid = np.zeros(field.shape, dtype=bool)
     void = np.zeros(field.shape, dtype=bool)
     for key, mask in (("passive_solid_mask", solid), ("passive_void_mask", void)):
@@ -185,7 +193,7 @@ def prepare_lattice_field(result: dict[str, Any], settings: dict[str, Any], *, b
         requested_skin=lengths[2],
         surface_quality=values["post_lattice_quality"],
         max_recovery_voxels=POST_LATTICE_QUALITY_BUDGETS[values["post_lattice_quality"]],
-        boundary_adaptation=bool(values["post_lattice_adaptive_cells"]),
+        boundary_adaptation=bool(values["post_lattice_adaptive_cells"] or values['post_lattice_use_fea']),
     )
     fit_report["non_design_solid_voxels"] = int(np.count_nonzero(solid))
     values["_fit_report"] = fit_report
@@ -211,16 +219,26 @@ def prepare_lattice_field(result: dict[str, Any], settings: dict[str, Any], *, b
     )
     normalized = np.clip((smooth - cutoff) / max(1.0 - cutoff, 1e-6), 0.0, 1.0)
     graded = np.where(envelope, minimum + (maximum - minimum) * normalized, 0.0)
+    if relative_density_override is not None:
+        proposed = np.asarray(relative_density_override, dtype=float)
+        material_design = design_region & ~void
+        if (proposed.shape != field.shape or not np.isfinite(proposed).all()
+                or np.any(proposed[material_design] < minimum) or np.any(proposed[material_design] > maximum)):
+            raise ValueError('FEA-guided cell density must match the sizing grid and its configured density bounds.')
+        graded = np.where(envelope, proposed, 0.)
     graded[solid & ~void] = 1.0
     return source, values, graded, bounds, minimum * 0.5, envelope, solid, void, options
 
 
-def generate_post_topopt_lattice(
+def _generate_lattice_once(
     result: dict[str, Any],
     settings: dict[str, Any],
     *,
     cancel_callback=None,
     progress_callback=None,
+    relative_density_override=None,
+    stress_refinement_mask=None,
+    geometry_cache=None,
 ) -> dict[str, Any]:
     from ..geometry.lattice_cad import topopt_export_formats
     from ..geometry.surface_recovery import _recover_voxel_shape
@@ -235,7 +253,8 @@ def generate_post_topopt_lattice(
     stage("Mapping optimized density to lattice thickness")
     base_geometry, base_report = lattice_base_geometry(topology_source(result))
     source, values, field, bounds, cutoff, envelope, solid, void, options = (
-        prepare_lattice_field(result, settings, base_geometry=base_geometry)
+        prepare_lattice_field(result, settings, base_geometry=base_geometry,
+                              relative_density_override=relative_density_override, geometry_cache=geometry_cache)
     )
     stage("Generating lattice cells inside the " + base_report["name"])
     regions = dict(source.get("passive_regions") or {})
@@ -250,6 +269,9 @@ def generate_post_topopt_lattice(
         max_recovery_voxels=POST_LATTICE_QUALITY_BUDGETS[values["post_lattice_quality"]],
         surface_quality=values["post_lattice_quality"],
         boundary_adaptation=bool(values["post_lattice_adaptive_cells"]),
+        stress_refinement_mask=stress_refinement_mask,
+        reserve_refined_sampling=bool(values['post_lattice_use_fea']),
+        geometry_cache=geometry_cache,
         raise_errors=True,
         progress_stage_callback=stage,
         passive_solid_mask=solid,
@@ -355,6 +377,8 @@ def generate_post_topopt_lattice(
             "cell_family": options.display_name,
             "cell_size_mm": options.cell_size_voxels
             * voxel_size_from_bounds(field.shape, bounds),
+            "minimum_member_thickness_mm": options.member_thickness_voxels
+            * voxel_size_from_bounds(field.shape, bounds),
             "method": "CAD/STL-clipped cells with density mapped to local thickness",
             "independent_validation_required": True,
             "lattice_sizing": recovered.get("lattice_sizing") or {},
@@ -409,3 +433,12 @@ def generate_post_topopt_lattice(
     }
     output["export_formats"] = list(topopt_export_formats(output))
     return output
+
+
+def generate_post_topopt_lattice(result, settings, *, cancel_callback=None, progress_callback=None):
+    if settings.get('post_lattice_use_fea'):
+        from .lattice_feedback import generate_stress_guided_lattice
+        return generate_stress_guided_lattice(result, settings, cancel_callback=cancel_callback,
+                                              progress_callback=progress_callback)
+    return _generate_lattice_once(result, settings, cancel_callback=cancel_callback,
+                                   progress_callback=progress_callback)

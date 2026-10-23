@@ -160,7 +160,7 @@ class WorkbenchGraphMixin:
         )
         if is_topopt_fea_setting(node, prop_name):
             cached = getattr(node, "_last_result", None)
-            if isinstance(cached, dict) and (cached.get("validation") or {}).get("source") == "topopt_cad_fea":
+            if isinstance(cached, dict) and (cached.get("validation") or {}).get("source") in {'topopt_cad_fea', 'topopt_lattice_fea'}:
                 from pylcss.cae.design_studio.topology_optimization.verification.quality_gate import (
                     VERIFICATION_DEFAULTS, update_verification_status,
                 )

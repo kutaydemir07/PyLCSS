@@ -309,6 +309,7 @@ def _solve_progressive_study(
                 "voxels": int(np.prod(shape)),
                 "iterations": int(result.n_iter),
                 "time_s": time.perf_counter() - started,
+                "performance": getattr(result, 'performance', {}),
                 "final_target": final_level,
                 "transition": "final solve"
                 if final_level

@@ -234,6 +234,7 @@ def nodes_matching_geometries(
     mesh: Any,
     geometries: Sequence[Any],
     tolerance: float = 1.5,
+    *, return_facets: bool = False,
 ) -> IntArray:
     """Return zero-based nodes close to CAD entities or stored selections."""
     try:
@@ -246,6 +247,9 @@ def nodes_matching_geometries(
         raise SolverBackendError(
             "Geometry-selection tolerance must be finite and non-negative."
         )
+    resolved_tolerance = getattr(mesh, 'geometry_selection_tolerance_mm', None)
+    if resolved_tolerance is not None:
+        tolerance_value = min(tolerance_value, float(resolved_tolerance))
 
     entities = [geometry for geometry in geometries if geometry is not None]
     if not entities:
@@ -253,6 +257,7 @@ def nodes_matching_geometries(
     points = _mesh_points(mesh, label="Geometry-based selection")
 
     selected: list[int] = []
+    selected_facets: list[int] = []
     cad_entities: list[Any] = []
     for entity in entities:
         if isinstance(entity, Mapping):
@@ -274,7 +279,34 @@ def nodes_matching_geometries(
         cad_entities.append(entity)
 
     if not cad_entities:
+        if return_facets:
+            raise SolverBackendError('Facet ownership requires native CAD faces.')
         return np.asarray(sorted(set(selected)), dtype=int)
+    if return_facets and (selected or not getattr(mesh,'cad_face_selection_by_facets',False)
+            or any(getattr(entity,'ShapeType',lambda:None)()!='Face' for entity in cad_entities)):
+        raise SolverBackendError('Facet ownership requires native CAD faces and native CAD meshing.')
+
+    cache_key = None
+    if getattr(mesh, 'enable_geometry_selection_cache', False):
+        try:
+            import hashlib
+            from pylcss.cae.design_studio.topology_optimization.geometry.cad_fingerprint import cad_shape_fingerprint
+            coordinate_key = hashlib.sha256(np.ascontiguousarray(points).tobytes()).hexdigest()
+            boundary = getattr(mesh, 'boundary_selection_nodes', np.array([], dtype=int))
+            boundary_key = hashlib.sha256(np.ascontiguousarray(boundary).tobytes()).hexdigest()
+            facet_key=None
+            if getattr(mesh,'cad_face_selection_by_facets',False):
+                facet_key=hashlib.sha256(np.ascontiguousarray(mesh.facets[:,mesh.boundary_facets()]).tobytes()).hexdigest()
+            cache_key = (coordinate_key, boundary_key, tolerance_value,facet_key,
+                         getattr(mesh,'cad_face_corner_tolerance_mm',None),
+                         tuple(cad_shape_fingerprint(entity) for entity in cad_entities))
+            cache = getattr(mesh, '_geometry_selection_cache', {})
+            lookup_key=('facets',cache_key) if return_facets else cache_key
+            if lookup_key in cache:
+                return np.unique(np.r_[selected, cache[lookup_key]]).astype(int)
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            cache_key = None
+    explicit_count = len(selected)
 
     try:
         from cadquery import Vector, Vertex
@@ -284,6 +316,11 @@ def nodes_matching_geometries(
         ) from exc
 
     for entity in cad_entities:
+        by_facets=(getattr(mesh,'cad_face_selection_by_facets',False)
+                   and getattr(entity,'ShapeType',lambda:None)()=='Face')
+        entity_tolerance=(min(tolerance_value,float(mesh.cad_face_corner_tolerance_mm))
+                          if by_facets else tolerance_value)
+        matched=[]
         candidates: Sequence[int] = range(points.shape[1])
         try:
             bounds = entity.BoundingBox()
@@ -298,6 +335,13 @@ def nodes_matching_geometries(
             candidates = np.flatnonzero(within_bounds).tolist()
         except Exception:
             pass
+
+        boundary_nodes = getattr(mesh, 'boundary_selection_nodes', None)
+        if boundary_nodes is not None and getattr(entity, 'ShapeType', lambda: None)() != 'Solid':
+            candidates = np.intersect1d(np.asarray(list(candidates), dtype=int), boundary_nodes)
+        if by_facets:
+            facets=mesh.boundary_facets()
+            candidates=np.intersect1d(candidates,np.unique(mesh.facets[:,facets]))
 
         distance = getattr(entity, "distance", None)
         distance_to = getattr(entity, "distanceTo", None)
@@ -327,10 +371,49 @@ def nodes_matching_geometries(
                 raise SolverBackendError(
                     "CAD selection returned a non-finite distance."
                 )
-            if separation <= tolerance_value:
-                selected.append(int(node_index))
+            if separation <= entity_tolerance:
+                matched.append(int(node_index))
+        if by_facets:
+            # Native linear surface corners lie on the selected CAD face.
+            # Straight quadratic mids lie on its chords and can be farther
+            # away. Inherit all six nodes from the owning boundary facets;
+            # a broad node-distance band also loads adjacent roof faces.
+            belongs=np.zeros(points.shape[1],dtype=bool);belongs[matched]=True
+            face_ids=facets[np.all(belongs[mesh.facets[:,facets]],axis=0)]
+            if len(face_ids):
+                xyz=points[:,mesh.facets[:,face_ids]].transpose(2,1,0)
+                normal=np.cross(xyz[:,1]-xyz[:,0],xyz[:,2]-xyz[:,0])
+                length=np.linalg.norm(normal,axis=1)
+                normal/=np.maximum(length[:,None],1e-30)
+                native=np.array([entity.normalAt(Vector(*point)).toTuple() for point in xyz.mean(axis=1)])
+                # Corner incidence alone is ambiguous on the cap of an outer
+                # cylinder. Require facet normals to agree with the CAD face.
+                face_ids=face_ids[(length>0)&(np.abs(np.einsum('ij,ij->i',normal,native))>=np.sqrt(.5))]
+            selected_facets.extend(face_ids.tolist())
+            matched=mesh.dofs.get_facet_dofs(face_ids).all().tolist()
+        selected.extend(matched)
 
-    return np.asarray(sorted(set(selected)), dtype=int)
+    if cache_key is not None:
+        cache = getattr(mesh, '_geometry_selection_cache', {})
+        ids = np.asarray(sorted(set(selected[explicit_count:])), dtype=int)
+        facet_ids=np.asarray(sorted(set(selected_facets)),dtype=int)
+        added_bytes=ids.nbytes+(facet_ids.nbytes if getattr(mesh,'cad_face_selection_by_facets',False) else 0)
+        if len(cache) >= 30 or sum(value.nbytes for value in cache.values()) + added_bytes > 16*1024**2:
+            cache = {}
+        if added_bytes<=16*1024**2:
+            cache[cache_key] = ids
+            if getattr(mesh,'cad_face_selection_by_facets',False):
+                cache[('facets',cache_key)]=facet_ids
+        mesh._geometry_selection_cache = cache
+    return np.asarray(sorted(set(selected_facets if return_facets else selected)), dtype=int)
+
+
+def cad_facets_matching_geometries(mesh,geometries):
+    """Native face ownership, or None for coordinate/mesh/lattice selections."""
+    if (not geometries or not getattr(mesh,'cad_face_selection_by_facets',False)
+            or any(getattr(entity,'ShapeType',lambda:None)()!='Face' for entity in geometries)):
+        return None
+    return nodes_matching_geometries(mesh,geometries,return_facets=True)
 
 
 def tet_face_sets_for_geometries(
@@ -341,6 +424,9 @@ def tet_face_sets_for_geometries(
     """Return 1-based CalculiX element/face ids on selected CAD boundaries."""
     if mesh is None or not hasattr(mesh, "p") or not hasattr(mesh, "t"):
         return []
+    resolved_tolerance = getattr(mesh, 'geometry_selection_tolerance_mm', None)
+    if resolved_tolerance is not None:
+        tolerance = min(float(tolerance), float(resolved_tolerance))
     try:
         points, cells = mesh_to_tet4(mesh, [])
     except SolverBackendError:
@@ -358,6 +444,9 @@ def tet_face_sets_for_geometries(
             key = (sorted_nodes[0], sorted_nodes[1], sorted_nodes[2])
             owners.setdefault(key, []).append((element_index, face_index))
 
+    native_facets=cad_facets_matching_geometries(mesh,geometries)
+    native_keys=(set(tuple(sorted(map(int,face))) for face in mesh.facets[:,native_facets].T)
+                 if native_facets is not None else None)
     selected_nodes = set(
         int(value)
         for value in nodes_matching_geometries(
@@ -368,7 +457,11 @@ def tet_face_sets_for_geometries(
     )
     result: list[tuple[int, int]] = []
     for node_key, face_owners in owners.items():
-        if len(face_owners) != 1 or not set(node_key).issubset(selected_nodes):
+        if len(face_owners) != 1:
+            continue
+        if native_keys is not None and node_key not in native_keys:
+            continue
+        if native_keys is None and not set(node_key).issubset(selected_nodes):
             continue
         element_index, face_index = face_owners[0]
         result.append((element_index + 1, face_index + 1))

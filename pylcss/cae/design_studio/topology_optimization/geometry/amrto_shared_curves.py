@@ -90,7 +90,8 @@ def simplify_shared_curve(curve, points, tolerance, *, bounds=None, maximum_atte
     protected polylines stay exact; patch-level compression still freezes borders.
     """
     lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
-    parameters = np.r_[0., np.cumsum(lengths)] / lengths.sum()
+    parameters = np.r_[0., np.cumsum(lengths)]
+    parameters /= parameters[-1]
     attempts = removed = 0
     current = curve
     while attempts < maximum_attempts:
@@ -153,8 +154,116 @@ def _endpoint_tangents_follow_source(curve, points):
     return bool(np.all(cosine >= 1. - 1e-10))
 
 
+def _curve_bending_rows(knots):
+    """Exact cubic second-derivative energy through three-point span quadrature."""
+    count = len(knots) - 4
+    basis = BSpline(knots, np.eye(count), 3).derivative(2)
+    nodes, weights = np.polynomial.legendre.leggauss(3)
+    spans = np.unique(knots)
+    sites = np.concatenate([.5 * (a + b) + .5 * (b - a) * nodes
+                            for a, b in zip(spans[:-1], spans[1:])])
+    factors = np.concatenate([np.sqrt(.5 * (b - a) * weights)
+                              for a, b in zip(spans[:-1], spans[1:])])
+    return basis(sites) * factors[:, None]
+
+
+def _fit_fair_curve(points, tolerance, *, bounds, preserve_endpoint_tangents,
+                    endpoint_directions=None, allow_baseline_fallback=True):
+    """Bounded position/bending fit of an artificial shared graph chain."""
+    lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
+    parameters = np.r_[0., np.cumsum(lengths)]
+    parameters /= parameters[-1]
+    sites = np.unique(np.r_[parameters, np.linspace(0., 1., max(40, 5 * len(points)))])
+    source = np.column_stack([np.interp(sites, parameters, points[:, axis]) for axis in range(3)])
+    maximum_count = max(4, min(64, 2 * len(points) + 2))
+    counts = sorted(set(count for count in (4, 6, 10, 16, 24, 40, maximum_count)
+                        if count <= maximum_count))
+    strengths = (100., 1., .01, .0001, 0.)
+    solves = attempts = bases = 0
+    for count in counts:
+        bases += 1
+        knots = np.r_[np.zeros(4), np.linspace(0., 1., count - 2)[1:-1], np.ones(4)]
+        basis = BSpline.design_matrix(sites, knots, 3).toarray()
+        bending = _curve_bending_rows(knots)
+        fixed_controls = np.zeros((count, 3))
+        fixed_controls[[0, -1]] = points[[0, -1]]
+        fixed = [0, count - 1]
+        if preserve_endpoint_tangents:
+            fixed_controls[1] = points[0] + min(lengths.sum() * knots[4] / 3., lengths[0]) * (points[1] - points[0]) / lengths[0]
+            fixed_controls[-2] = points[-1] - min(lengths.sum() * (1. - knots[-5]) / 3., lengths[-1]) * (points[-1] - points[-2]) / lengths[-1]
+            fixed = [0, 1, count - 2, count - 1]
+        for endpoint, direction in (endpoint_directions or {}).items():
+            if endpoint == 0:
+                fixed_controls[1] = points[0] + direction * lengths.sum() * knots[4] / 3.
+                fixed.append(1)
+            else:
+                fixed_controls[-2] = points[-1] + direction * lengths.sum() * (1. - knots[-5]) / 3.
+                fixed.append(count - 2)
+        fixed = sorted(set(fixed))
+        free = sorted(set(range(count)) - set(fixed))
+        # The relative strength is dimensionless after equalizing the two
+        # normal-matrix traces. It therefore does not vary just because one
+        # source chain has more samples or a different unit of length.
+        normalization = (float(np.square(basis[:, free]).sum())
+                         / max(float(np.square(bending[:, free]).sum()), np.finfo(float).tiny)) if free else 1.
+        for strength in strengths if free else (0.,):
+            attempts += 1
+            controls = fixed_controls.copy()
+            if free:
+                regularizer = np.sqrt(strength * normalization)
+                matrix = np.vstack((basis[:, free], regularizer * bending[:, free]))
+                target = np.vstack((source - basis[:, fixed] @ controls[fixed],
+                                    -regularizer * bending[:, fixed] @ controls[fixed]))
+                controls[free] = lstsq(matrix, target, lapack_driver='gelsy')[0]
+                solves += 1
+            if bounds is not None:
+                controls = np.clip(controls, bounds[0], bounds[1])
+            candidate = BSpline(knots, controls, 3)
+            if preserve_endpoint_tangents and not _endpoint_tangents_follow_source(candidate, points):
+                continue
+            dense = np.unique(np.r_[sites, np.linspace(0., 1., max(80, 8 * len(points)))])
+            target = np.column_stack([np.interp(dense, parameters, points[:, axis]) for axis in range(3)])
+            error = max(float(np.linalg.norm(candidate(dense) - target, axis=1).max()),
+                        float(_curve_distance_to_polyline(candidate(dense), points).max()))
+            if not np.isfinite(error) or error > tolerance:
+                continue
+            # Certify the COMPLETE curve against the original source chain,
+            # not only the fit samples. Without stock, use a broad source box
+            # only to invoke the same complete common-Bezier source proof.
+            from .amrto_shared_stock import CanonicalChainCertificationError, project_canonical_chain
+            certification_bounds = (bounds if bounds is not None else
+                np.array([points.min(axis=0) - tolerance, points.max(axis=0) + tolerance]))
+            try:
+                certified, certificate = project_canonical_chain(candidate, points, certification_bounds, tolerance)
+            except CanonicalChainCertificationError:
+                continue
+            if not np.array_equal(certified.c, candidate.c):
+                continue
+            return candidate, {"maximum_sampled_error": error, "control_points": count,
+                "endpoint_tangent_directions_preserved": bool(preserve_endpoint_tangents),
+                "smooth_interior_knots": True, 'shared_curve_fairing': {
+                    'accepted': True, 'method': 'Position least squares with integrated cubic bending energy',
+                    'relative_bending_strength': strength, 'normal_matrix_trace_normalization': normalization,
+                    'integrated_squared_second_derivative': float(np.square(bending @ controls).sum()),
+                    'candidate_count': attempts, 'linear_solve_count': solves, 'basis_count': bases,
+                    'maximum_basis_count': 7, 'maximum_strength_count_per_basis': 5,
+                    'maximum_regularized_linear_solves': 35, 'maximum_control_points': 64,
+                    'endpoint_positions_fixed': True, 'complete_source_certificate': certificate}}
+    if allow_baseline_fallback:
+        baseline, report = _fit_curve(points, tolerance, bounds=bounds,
+                                      preserve_endpoint_tangents=preserve_endpoint_tangents)
+    else:
+        baseline, report = None, {}
+    report['shared_curve_fairing'] = {'accepted': False, 'output': 'Original bounded shared-chain fit',
+        'candidate_count': attempts, 'linear_solve_count': solves, 'basis_count': bases,
+        'maximum_basis_count': 7, 'maximum_strength_count_per_basis': 5,
+        'maximum_regularized_linear_solves': 35, 'maximum_control_points': 64,
+        'reason': 'No fair candidate satisfied the complete source and stock bounds'}
+    return baseline, report
+
+
 def _fit_curve(points, tolerance, *, preserve_polyline=False, bounds=None,
-               preserve_endpoint_tangents=False):
+               preserve_endpoint_tangents=False, fair_curve=False):
     lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
     if (lengths <= 0).any():
         raise ValueError("Shared boundary chain has zero-length edges")
@@ -166,6 +275,9 @@ def _fit_curve(points, tolerance, *, preserve_polyline=False, bounds=None,
                        "endpoint_tangent_directions_preserved": True,
                        "smooth_interior_knots": False, "exact_protected_chain": True,
                        "reason": "Protected source boundary retained by exact polyline degree elevation"}
+    if fair_curve:
+        return _fit_fair_curve(points, tolerance, bounds=bounds,
+                               preserve_endpoint_tangents=preserve_endpoint_tangents)
     sample_t = np.unique(np.r_[parameters, np.linspace(0, 1, max(40, 5 * len(points)))])
     samples = np.column_stack([np.interp(sample_t, parameters, points[:, i]) for i in range(3)])
     best = None
@@ -267,7 +379,8 @@ def reparameterize_shared_curve(curve, chord_parameters, native_parameters, tole
 
 def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None, blocked_junction_positions=(),
                                    certify_stock_hull=False, preserve_endpoint_tangents=False,
-                                   tangent_preserving_edges=()):
+                                   tangent_preserving_edges=(), smooth_native_boundary_clocks=False,
+                                   fair_shared_curves=False):
     """Fit seams once; retain protected source creases and junctions exactly."""
     def key(point):
         return tuple(map(float, point))
@@ -313,7 +426,7 @@ def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None, blocked_j
                 anchors.add(vertex)
     if certify_stock_hull and bounds is None:
         raise ValueError('Strict canonical-chain stock certification requires supplied source box bounds')
-    cache, reports, native_reports, stock_reports = {}, [], [], []
+    cache, reports, native_reports, stock_reports, clock_reports = {}, [], [], [], []
     records, record_indices, side_specs = [], {}, []
     for layout in layouts:
         layout.cornerless_junction_positions = [
@@ -338,7 +451,10 @@ def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None, blocked_j
                     retain_tangents = preserve_endpoint_tangents or any(
                         tuple(sorted((a, b))) in tangent_edges for a, b in zip(identifier, identifier[1:]))
                     curve, report = _fit_curve(canonical, tolerance, preserve_polyline=protected, bounds=bounds,
-                        preserve_endpoint_tangents=retain_tangents)
+                        preserve_endpoint_tangents=retain_tangents, fair_curve=fair_shared_curves)
+                    report['classification'] = ('Protected physical feature or exact required boundary'
+                                                if protected else 'Artificial chart boundary')
+                    report['source_approximation_permitted'] = not protected
                     tangent_chain_count += int(retain_tangents)
                     if certify_stock_hull:
                         from .amrto_shared_stock import project_canonical_chain
@@ -349,6 +465,7 @@ def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None, blocked_j
                     reports.append(report)
                     record_indices[identifier] = len(records)
                     records.append({"points": canonical.copy(), "length": float(length),
+                                    "fair_curve": bool(fair_shared_curves),
                                     "protected": protected or not report["smooth_interior_knots"],
                                     "baseline": curve, "baseline_report": report})
                 pieces.append((record_indices[identifier], reverse))
@@ -360,20 +477,41 @@ def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None, blocked_j
     # reparameterization remains necessary for retained native rectangles.
     from .amrto_shared_network import fit_shared_boundary_network
     side_curves, network_report = fit_shared_boundary_network(
-        records, side_specs, tolerance, bounds=bounds, blocked_junction_positions=blocked_junction_positions)
-    if certify_stock_hull and network_report['active_component_count']:
-        raise ValueError('Strict canonical-chain certificate requires the fixed-junction boundary policy')
+        records, side_specs, tolerance, bounds=bounds,
+        blocked_junction_positions=blocked_junction_positions,
+        certify_source_hull=certify_stock_hull)
     side_index = 0
     for layout in layouts:
         sides = []
         influencing_positions = set()
         retained_native = getattr(layout, "parameterization_report", {}).get("branch") == "scaffold_rectangle"
+        chord_clock = False
+        if smooth_native_boundary_clocks:
+            from .amrto_boundary_parameters import transport_layout_to_chord_boundaries
+            try:
+                clock_report = transport_layout_to_chord_boundaries(layout)
+                chord_clock = True
+            except ValueError as error:
+                # The proposal is atomic. Keeping the former exact retiming
+                # retains physical common geometry even for a rejected chart.
+                clock_report = {'accepted': False, 'applied': False, 'layout_id': int(layout.layout_id),
+                                'rejection_reason': str(error), 'source_XYZ_unchanged': True,
+                                'source_UV_unchanged': True, 'existing_source_grid_unchanged': True,
+                                'fallback': 'Existing exact piecewise affine common-curve retiming'}
+                layout.shared_boundary_clock_transport_report = clock_report
+                if not retained_native:
+                    # A previously aligned harmonic chart may also have
+                    # changed clocks. Feeding chord curves into those old
+                    # clocks would corrupt its source targets. The enclosing
+                    # private whole-network proposal must retain its baseline.
+                    raise ValueError(f'Layout {layout.layout_id} canonical boundary clock proposal rejected: {error}') from error
+            clock_reports.append(clock_report)
         layout_native_reports = []
         for side, path in enumerate(layout.boundary_paths):
             side_curve = side_curves[side_index]
             influencing_positions.update(network_report["active_junction_positions_by_side"][side_index])
             side_index += 1
-            if retained_native:
+            if retained_native and not chord_clock:
                 chord = np.r_[0., np.cumsum(np.linalg.norm(np.diff(layout.vertices[path], axis=0), axis=1))]
                 chord /= chord[-1]
                 axis = 0 if side % 2 == 0 else 1
@@ -392,7 +530,9 @@ def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None, blocked_j
         layout.boundary_splines = sides
         layout._active_shared_network_junction_positions = tuple(sorted(influencing_positions))
         layout.shared_boundary_parameterization_report = {
-            "retained_native_uv": retained_native, "sides": layout_native_reports}
+            "retained_native_uv": retained_native and not chord_clock,
+            "canonical_chord_boundary_clocks": chord_clock, "sides": layout_native_reports,
+            "clock_transport": getattr(layout, 'shared_boundary_clock_transport_report', None)}
     return {"method": "Common cubic B-spline graph chains with fixed junctions",
             "endpoint_tangent_preservation_extension": bool(preserve_endpoint_tangents or tangent_edges),
             "endpoint_tangent_preserving_chain_count": tangent_chain_count,
@@ -401,6 +541,18 @@ def prepare_shared_boundary_curves(layouts, tolerance, *, bounds=None, blocked_j
                                                    for r in reports),
             "exact_protected_chain_count": sum(r.get("exact_protected_chain", False) for r in reports),
             "protected_source_crease_edge_count": len(protected_edges),
+            "artificial_shared_chain_count": sum(r['source_approximation_permitted'] for r in reports),
+            "protected_shared_chain_count": sum(not r['source_approximation_permitted'] for r in reports),
+            "fair_shared_curves_extension": bool(fair_shared_curves),
+            "fair_shared_curve_linear_solve_count": sum(
+                r.get('shared_curve_fairing', {}).get('linear_solve_count', 0) for r in reports)
+                + network_report.get('fair_shared_curve_linear_solve_count', 0),
+            "fair_shared_curve_maximum_linear_solves_per_chain_fit": 35,
+            "fair_shared_curve_reported_chain_count": sum('shared_curve_fairing' in r for r in reports),
+            "canonical_chord_boundary_clock_extension": bool(smooth_native_boundary_clocks),
+            "canonical_chord_boundary_clock_chart_count": sum(r['accepted'] for r in clock_reports),
+            "canonical_chord_boundary_clock_fallback_chart_count": sum(not r['accepted'] for r in clock_reports),
+            "canonical_chord_boundary_clock_reports": clock_reports,
             "maximum_sampled_chain_error": max(
                 max((r["maximum_sampled_error"] for r in reports), default=0),
                 network_report["maximum_sampled_chain_source_error"],

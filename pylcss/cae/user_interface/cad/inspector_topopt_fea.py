@@ -33,7 +33,7 @@ class TopOptFeaInspectorMixin:
 
         def changed(name, value):
             self.update_property(name, value)
-            if (result.get("validation") or {}).get("source") == "topopt_cad_fea":
+            if (result.get("validation") or {}).get("source") in {'topopt_cad_fea', 'topopt_lattice_fea'}:
                 if name in VERIFICATION_DEFAULTS:
                     update_verification_status(
                         result,
@@ -50,7 +50,7 @@ class TopOptFeaInspectorMixin:
         mesh_group = QtWidgets.QGroupBox("FEA Meshing")
         mesh_layout = QtWidgets.QFormLayout(mesh_group)
         mesh_note = QtWidgets.QLabel(
-            "Tetrahedral mesh of the recovered CAD solid. "
+            "Tetrahedral mesh of the current CAD solid or generated lattice material. "
             "TopOpt voxel sizing is separate."
         )
         mesh_note.setWordWrap(True)
@@ -87,6 +87,21 @@ class TopOptFeaInspectorMixin:
             "Must not exceed maximum size. Tiny CAD edges may still need repair."
         )
         mesh_layout.addRow("Minimum size:", minimum_size)
+        surface_tolerance = number('fea_surface_tolerance_mm')
+        surface_tolerance.setSuffix(' mm')
+        surface_tolerance.setSpecialValueText('Automatic')
+        surface_tolerance.setToolTip('Lattice FEA surface approximation only; the exported geometry is unchanged. '
+            'Automatic limits movement to 2% of the minimum wall, 10% of contour spacing, and 5% of element size. '
+            'The meshing report records the bound and volume change.')
+        mesh_layout.addRow('Lattice surface tolerance:', surface_tolerance)
+        backend = QtWidgets.QComboBox()
+        backend.addItems(['Automatic', 'Sparse Direct', 'CalculiX'])
+        backend.setCurrentText(node.get_property('fea_solver_backend') or 'Automatic')
+        backend.setEnabled(not running)
+        backend.setToolTip('Automatic uses sparse direct linear analysis when available, '
+                           'and CalculiX for other supported models. Both analyse the current solid mesh.')
+        backend.currentTextChanged.connect(lambda value: changed('fea_solver_backend', value))
+        mesh_layout.addRow('Linear solver:', backend)
         grading = number(
             "fea_mesh_grading", minimum=0.01, maximum=1.0, step=0.05, decimals=2
         )
@@ -133,15 +148,16 @@ class TopOptFeaInspectorMixin:
         quality.setCurrentText(node.get_property("fea_quality") or "Standard")
         quality.setEnabled(not running)
         quality.setToolTip(
-            "Standard solves one CAD mesh. Mesh Convergence solves a second mesh "
-            "with half the element sizes and compares compliance."
+            "Standard solves one mesh. Mesh Convergence refines the CAD mesh, or locally "
+            "refines lattice stress variations and hotspots. Both CAD and lattice checks compare compliance and peak stress. "
+            "Refinement stops on convergence, the element limit, or four levels."
         )
         quality.currentTextChanged.connect(lambda value: changed("fea_quality", value))
         layout.addRow("Analysis mode:", quality)
         tolerance = number("fea_convergence_tolerance", scale=100, step=1, decimals=2)
         tolerance.setSuffix(" %")
         tolerance.setToolTip(
-            "Maximum relative compliance change between the two mesh levels. "
+            "Maximum relative change of compliance and peak stress between successive mesh levels. "
             "Used when Analysis mode is Mesh Convergence."
         )
         layout.addRow("Convergence tolerance:", tolerance)
@@ -159,7 +175,7 @@ class TopOptFeaInspectorMixin:
         unavailable = topopt_fea_unavailable_reason(result)
         button.setEnabled(not running and not unavailable)
         button.setToolTip(
-            "Run CalculiX on the CAD solid using the connected material, supports and loads."
+            "Run CalculiX on the current CAD or actual lattice walls using the connected material, supports and loads."
         )
         button.clicked.connect(lambda _checked=False: self._analyse_topopt_fea(node))
         layout.addRow(button)
@@ -175,7 +191,7 @@ class TopOptFeaInspectorMixin:
             status = "Geometry changed — analyse again"
         elif unavailable:
             status = unavailable
-        elif (result.get("validation") or {}).get("source") == "topopt_cad_fea":
+        elif (result.get("validation") or {}).get("source") in {'topopt_cad_fea', 'topopt_lattice_fea'}:
             status = "Complete"
         else:
             status = "Ready"
@@ -189,7 +205,7 @@ class TopOptFeaInspectorMixin:
         self._topopt_verification_label = verification
         layout.addRow("Checks:", verification)
         analysis = result.get("validation")
-        if isinstance(analysis, dict) and analysis.get("source") == "topopt_cad_fea":
+        if isinstance(analysis, dict) and analysis.get("source") in {'topopt_cad_fea', 'topopt_lattice_fea'}:
             study = analysis.get("convergence_study") or {}
             levels = study.get("levels") or []
             converged = study.get("converged")
@@ -258,7 +274,7 @@ class TopOptFeaInspectorMixin:
         result.pop("fea_analysis_error", None)
         result["fea_analysis_status"] = "running"
         update_verification_status(result)
-        result["fea_analysis_stage"] = "Preparing CAD mesh"
+        result["fea_analysis_stage"] = "Preparing current geometry mesh"
 
         def _current_result():
             return getattr(node, "_last_result", None) is result

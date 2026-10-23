@@ -85,9 +85,29 @@ def _source_error(curve, points, *, distance_to_polyline):
                float(distance_to_polyline(sampled, points).max()))
 
 
-def _constrained_chain(record, directions, tolerance, bounds, *, distance_to_polyline):
+def _certify_unchanged_hull(curve, points, bounds, tolerance):
+    """Certify a tangent-coupled curve without independently moving its poles."""
+    from .amrto_shared_stock import project_canonical_chain
+    projected, report = project_canonical_chain(curve, points, bounds, tolerance)
+    if not np.array_equal(projected.c, curve.c):
+        raise ValueError('Stock projection would break the coupled tangent constraints')
+    return report
+
+
+def _constrained_chain(record, directions, tolerance, bounds, *, distance_to_polyline,
+                       certify_source_hull=False):
     if not directions:
         return record["baseline"], {"unchanged": True}
+    if record.get('fair_curve', False):
+        from .amrto_shared_curves import _fit_fair_curve
+        candidate, fit = _fit_fair_curve(record['points'], tolerance, bounds=bounds,
+            preserve_endpoint_tangents=False, endpoint_directions=directions,
+            allow_baseline_fallback=False)
+        fairing = fit.get('shared_curve_fairing', {})
+        return candidate, {'unchanged': False,
+            'maximum_sampled_source_error': fit.get('maximum_sampled_error', np.inf),
+            'complete_source_certificate': fairing.get('complete_source_certificate'),
+            'shared_curve_fairing': fairing}
     points, length = record["points"], record["length"]
     parameters = _source_parameters(points)
     sites = np.unique(np.r_[parameters, np.linspace(0., 1., max(40, 5 * len(points)))])
@@ -116,7 +136,14 @@ def _constrained_chain(record, directions, tolerance, bounds, *, distance_to_pol
         candidate = BSpline(knots, controls, 3)
         error = _source_error(candidate, points, distance_to_polyline=distance_to_polyline)
         if np.isfinite(error) and error <= tolerance:
-            return candidate, {"unchanged": False, "maximum_sampled_source_error": error}
+            certificate = None
+            if certify_source_hull:
+                try:
+                    certificate = _certify_unchanged_hull(candidate, points, bounds, tolerance)
+                except ValueError:
+                    continue
+            return candidate, {"unchanged": False, "maximum_sampled_source_error": error,
+                               "complete_source_certificate": certificate}
     return None, {"maximum_sampled_source_error": error}
 
 
@@ -185,7 +212,7 @@ def _compose_side(records, pieces, curves, active, endpoint_components):
 
 
 def fit_shared_boundary_network(records, side_specs, tolerance, *, bounds=None,
-                                blocked_junction_positions=()):
+                                blocked_junction_positions=(), certify_source_hull=False):
     """Return shared side curves with compatible ordinary continuations joined.
 
     ``records`` holds canonical points, lengths and baseline cubic curves.
@@ -195,6 +222,9 @@ def fit_shared_boundary_network(records, side_specs, tolerance, *, bounds=None,
     Blocked source-coordinate keys survive layout renumbering and subdivision.
     """
     from .amrto_shared_curves import _curve_distance_to_polyline
+
+    if certify_source_hull and bounds is None:
+        raise ValueError('Complete shared-network certification requires source stock bounds')
 
     components, endpoint_components, joins, skipped = _continuation_components(records, side_specs)
     blocked = {tuple(map(float, position)) for position in blocked_junction_positions}
@@ -222,7 +252,8 @@ def fit_shared_boundary_network(records, side_specs, tolerance, *, bounds=None,
             if signature not in cache:
                 try:
                     cache[signature] = _constrained_chain(record, directions, tolerance, bounds,
-                                                         distance_to_polyline=_curve_distance_to_polyline)
+                        distance_to_polyline=_curve_distance_to_polyline,
+                        certify_source_hull=certify_source_hull)
                 except (ValueError, np.linalg.LinAlgError, FloatingPointError):
                     cache[signature] = (None, {})
             candidate, report = cache[signature]
@@ -237,6 +268,7 @@ def fit_shared_boundary_network(records, side_specs, tolerance, *, bounds=None,
                 curve, report = _compose_side(records, pieces, curves, active, endpoint_components)
                 changed = any(curves[index] is not records[index]["baseline"] for index, reverse in pieces)
                 source_error, junction_error = 0., 0.
+                certificate = None
                 if changed:
                     points = [records[index]["points"][::-1] if reverse else records[index]["points"]
                               for index, reverse in pieces]
@@ -252,7 +284,14 @@ def fit_shared_boundary_network(records, side_specs, tolerance, *, bounds=None,
                             or junction_error > _JOIN_GEOMETRY_TOLERANCE):
                         failing.update(endpoint_components[(index, endpoint)] for index, reverse in pieces
                                        for endpoint in (0, 1) if endpoint_components.get((index, endpoint)) in active)
-                report.update(maximum_final_source_error=source_error, maximum_junction_error=junction_error)
+                    if certify_source_hull:
+                        try:
+                            certificate = _certify_unchanged_hull(curve, source, bounds, tolerance)
+                        except ValueError:
+                            failing.update(endpoint_components[(index, endpoint)] for index, reverse in pieces
+                                for endpoint in (0, 1) if endpoint_components.get((index, endpoint)) in active)
+                report.update(maximum_final_source_error=source_error, maximum_junction_error=junction_error,
+                              complete_source_certificate=certificate)
                 sides.append(curve)
                 side_reports.append(report)
         if not failing:
@@ -279,8 +318,17 @@ def fit_shared_boundary_network(records, side_specs, tolerance, *, bounds=None,
         "protected_or_nonsmooth_continuations_skipped": skipped,
         "active_component_count": len(active), "source_guard_fallback_component_count": len(fallback_components),
         "blocked_junction_count": len(blocked), "blocked_component_count": len(blocked_components),
+        "complete_source_hull_certification": bool(certify_source_hull),
+        "certified_changed_side_count": sum(row['complete_source_certificate'] is not None for row in side_reports),
+        "maximum_complete_side_source_error_bound": max((
+            row['complete_source_certificate']['complete_source_curve_error_bound']
+            for row in side_reports if row['complete_source_certificate'] is not None), default=0.),
         "active_junction_positions_by_side": active_positions_by_side,
         "fallback_passes": passes, "changed_chain_count": sum(not row.get("unchanged", False) for row in chain_reports.values()),
+        "fair_shared_curve_linear_solve_count": sum(
+            row.get('shared_curve_fairing', {}).get('linear_solve_count', 0) for curve, row in cache.values()),
+        "maximum_endpoint_constraint_variants_per_chain": 4,
+        "maximum_fair_shared_curve_linear_solves": 140 * sum(record.get('fair_curve', False) for record in records),
         "removed_c0_join_occurrences": sum(row["removed_c0_join_knots"] for row in side_reports),
         "maximum_sampled_chain_source_error": max((row.get("maximum_sampled_source_error", 0.) for row in chain_reports.values()), default=0.),
         "maximum_final_composed_side_source_error": max((row["maximum_final_source_error"] for row in side_reports), default=0.),

@@ -17,6 +17,7 @@ from pylcss.cae.solver_backends.mesh import (
     load_vector,
     mesh_to_tet4,
     tet10_connectivity,
+    straight_sided_tetrahedra,
 )
 from pylcss.cae.solver_backends.selection import (
     dict_geometries,
@@ -262,6 +263,19 @@ def _ingest_frd_into_result(
     total_strain_energy = float(np.sum(elem_ener * elem_vol))
     # The 2*SE identity is valid only for a linear elastic load path.
     compliance = 2.0 * total_strain_energy if analysis_type == "Linear" else None
+    compliance_method = 'Approximate integration of extrapolated nodal energy'
+    if analysis_type == 'Linear' and constraints and loads and straight_sided_tetrahedra(mesh):
+        try:
+            from .sparse_static import _boundary_vectors
+            nodal_load, _, prescribed = _boundary_vectors(mesh, material or {}, constraints, loads, [])
+            if not np.any(prescribed):
+                # External work is exact for this discrete linear system.
+                # Averaging Tet10 nodal ENER is not a Gauss integration rule.
+                compliance = float(nodal_load@flat_disp)
+                total_strain_energy = .5*compliance
+                compliance_method = 'Discrete external force work with homogeneous Dirichlet values'
+        except (ValueError, NotImplementedError, KeyError, AttributeError, SolverBackendError):
+            pass
 
     logger.debug(
         "FEA Solver (external): FRD ingest frd_nodes=%d, mesh_nodes=%d, "
@@ -339,6 +353,7 @@ def _ingest_frd_into_result(
         "element_volumes": elem_vol,
         "strain_energy": total_strain_energy,
         "compliance": compliance,
+        'compliance_method': compliance_method,
         "volume": total_volume,
         "peak_displacement": max_disp,
         "peak_stress_nodal": peak_vm,

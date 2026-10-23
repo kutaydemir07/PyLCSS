@@ -694,6 +694,19 @@ def adaptive_sample_layout(
 
 
 def sample_parameter_grid(layout: QuadLayout, grid_u: np.ndarray, grid_v: np.ndarray) -> np.ndarray:
+    """Sample the same source triangles with compiled footprint traversal."""
+    if layout.parameter_coords is None:
+        discrete_harmonic_mapping(layout)
+    u, v = np.asarray(grid_u, dtype=float), np.asarray(grid_v, dtype=float)
+    if np.all(np.diff(u) >= 0) and np.all(np.diff(v) >= 0):
+        from .uv_sampling import sample_chart
+        return sample_chart(np.asarray(layout.vertices, dtype=float),
+                            np.asarray(layout.triangles, dtype=np.int64),
+                            np.asarray(layout.parameter_coords, dtype=float), u, v)
+    return _sample_parameter_grid_numpy(layout, u, v)
+
+
+def _sample_parameter_grid_numpy(layout: QuadLayout, grid_u: np.ndarray, grid_v: np.ndarray) -> np.ndarray:
     """Inverse barycentric mapping at arbitrary tensor-grid parameters.
 
     Vectorized per triangle and bounded to its grid footprint. A missing inverse

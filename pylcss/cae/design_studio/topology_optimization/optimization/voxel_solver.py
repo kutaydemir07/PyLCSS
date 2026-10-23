@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+from time import perf_counter
 from typing import Any, Callable, Optional
 
 import numpy as np
@@ -269,6 +270,10 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
         """
         pym = import_pymoto()
 
+        started = perf_counter()
+        performance = {'network_response_seconds': 0., 'network_response_calls': 0,
+                       'design_update_seconds': 0., 'linear_solvers': []}
+        matrix_free_modules = []
         p = self.problem
 
         # ── domain ────────────────────────────────────────────────────────
@@ -548,30 +553,41 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                 branch_us: list[Any] = []
                 branch_weighted: list[Any] = []
                 branch_raw: list[Any] = []
+                shared_operators = {}
                 for case in load_cases:
-                    sK_raw = pym.AssembleStiffness(
-                        domain=domain,
-                        bc=case.boundary_dofs,
-                        poisson_ratio=p.nu,
-                        add_constant=case.joint_stiffness,
-                    )(material)
-                    case_solver = _linear_solver_for_case(
-                        pym,
-                        domain,
-                        case.joint_stiffness,
-                    )
-                    # Only the direct path factorizes this operator, and SciPy's
-                    # splu wants CSC. Multigrid-CG never factorizes the fine
-                    # grid -- it only forms matrix-vector products, which are
-                    # faster in the CSR layout the assembler already emits.
-                    # Converting there costs an O(nnz) rebuild per assembly and
-                    # then slows every smoothing matvec in every V-cycle.
-                    sK = SparseToCSC()(sK_raw) if case_solver is None else sK_raw
-                    su_i = pym.LinSolve(
-                        symmetric=True,
-                        positive_definite=True,
-                        solver=case_solver,
-                    )(sK, case.force)
+                    matrix_free = p.linear_solver == 'matrix_free' or (p.linear_solver == 'auto' and domain.nel >= 4096)
+                    if matrix_free:
+                        from .matrix_free import make_elastic_solve_module
+                        operator_key = (np.asarray(case.boundary_dofs, dtype=np.int64).tobytes(),
+                                        id(case.joint_stiffness) if getattr(case.joint_stiffness, 'nnz', 0) else None)
+                        module = make_elastic_solve_module(pym)(domain, case.force, case.boundary_dofs,
+                                                              p.nu, case.joint_stiffness,
+                                                              cancel_callback=lambda: self.stop_requested,
+                                                              elasticity=shared_operators.get(operator_key))
+                        shared_operators[operator_key] = module.elasticity
+                        matrix_free_modules.append(module)
+                        performance['linear_solvers'].append(dict(case=case.name,
+                            solver='Compiled matrix-free CG', preconditioner='Geometric multigrid; non-dyadic grids supported'))
+                        su_i = module(material)
+                    else:
+                        sK_raw = pym.AssembleStiffness(
+                            domain=domain,
+                            bc=case.boundary_dofs,
+                            poisson_ratio=p.nu,
+                            add_constant=case.joint_stiffness,
+                        )(material)
+                        case_solver = _linear_solver_for_case(
+                            pym, domain, case.joint_stiffness,
+                        )
+                        performance['linear_solvers'].append({
+                            'case': case.name,
+                            'solver': type(case_solver).__name__ if case_solver is not None else 'Sparse direct',
+                            'preconditioner': 'Geometric multigrid' if case_solver is not None else None,
+                        })
+                        sK = SparseToCSC()(sK_raw) if case_solver is None else sK_raw
+                        su_i = pym.LinSolve(
+                            symmetric=True, positive_definite=True, solver=case_solver,
+                        )(sK, case.force)
                     branch_us.append(su_i)
                     sc_i = pym.EinSum(expression="i,i->")(su_i, case.force)
                     sc_i.tag = f"compliance:{case.name}{label}"
@@ -691,7 +707,14 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                     filter_stage = net[: index + 1]
                     break
 
-        net.response()
+        performance['setup_seconds'] = perf_counter()-started
+        def timed_response():
+            response_started = perf_counter()
+            net.response()
+            performance['network_response_seconds'] += perf_counter()-response_started
+            performance['network_response_calls'] += 1
+
+        timed_response()
 
         # ── iteration loop ────────────────────────────────────────────────
         # `sx_blueprint` is the design that gets delivered: the nominal
@@ -824,6 +847,7 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
 
             it += 1
             x_old = sx.state.copy()
+            update_started = perf_counter()
 
             # ── design update ─────────────────────────────────────────────
             # The network already holds the response for the current design at
@@ -853,6 +877,7 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
                 x_new[~active_mask] = passive_density[~active_mask]
                 sx.state = x_new
                 mma.iter += 1
+            performance['design_update_seconds'] += perf_counter()-update_started
 
             # ── continuation, applied to the design just accepted ─────────
             # A continuation level gets a minimum dwell before either a plateau
@@ -958,7 +983,7 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
             # The single FE evaluation of the iteration. It reports the new
             # design and doubles as the response MMA differentiates next time,
             # which is why nothing above may invalidate it.
-            net.response()
+            timed_response()
 
             comp_val = float(sg0.state)
             objective_val = float(sobjective_raw.state)
@@ -1092,7 +1117,8 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
         if not result.message:
             result.message = f"Maximum iterations ({p.max_iter}) reached"
 
-        net.response()
+        # The last accepted design already has a current network response.
+        # Re-evaluating here repeats assembly and every load-case solve.
         result.design_density = _density_grid_from_state(sx.state, domain)
         result.density = _physical_density_grid(
             np.asarray(sx_blueprint.state, dtype=float)
@@ -1143,4 +1169,12 @@ class TopologyOptVoxelSolver(_SolverAssemblyMixin):
             )
             for case, signal in zip(load_cases, sus)
         }
+        performance.update(total_seconds=perf_counter()-started,
+                           grid_shape=[int(domain.nelx), int(domain.nely), int(domain.nelz)],
+                           voxel_count=int(domain.nel), load_cases=len(load_cases),
+                           stress_constraint_enabled=bool(p.stress_constraint_enabled),
+                           robust_length_scale=bool(use_robust))
+        if matrix_free_modules:
+            performance['matrix_free'] = [module.elasticity.statistics for module in matrix_free_modules]
+        result.performance = performance
         return result

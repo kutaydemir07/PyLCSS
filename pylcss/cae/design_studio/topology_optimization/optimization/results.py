@@ -46,6 +46,7 @@ class TopologyOptVoxelResult:
     penal_history: list[float] = field(default_factory=list)
     topology_convergence: dict[str, object] | None = None
     progressive_resolution: dict[str, object] | None = None
+    performance: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass

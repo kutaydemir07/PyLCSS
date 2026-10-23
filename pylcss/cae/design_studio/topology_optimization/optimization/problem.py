@@ -138,10 +138,14 @@ class TopologyOptVoxelProblem:
     # Share the explicit resource safeguard with the mesh planner. Zero
     # disables the cap; the solver must not impose a second hidden limit.
     max_voxel_elements: int = DEFAULT_MAX_VOXEL_ELEMENTS
+    # Library override for comparisons. Desktop studies select automatically.
+    linear_solver: str = 'auto'
 
     def __post_init__(self) -> None:
         """Reject physically invalid or memory-dangerous studies up front."""
         self.nelx, self.nely, self.nelz = int(self.nelx), int(self.nely), int(self.nelz)
+        if self.linear_solver not in ('auto', 'assembled', 'matrix_free'):
+            raise ValueError('Topology linear solver must be auto, assembled, or matrix_free.')
         if min(self.nelx, self.nely, self.nelz) < 1:
             raise ValueError("Topology grid dimensions must each be at least 1 voxel.")
         n_voxels = self.nelx * self.nely * self.nelz

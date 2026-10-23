@@ -194,6 +194,18 @@ def fit_lattice_dimensions(
             area *= 0.5
         member_pitch = max(member_pitch, area * member / 0.80)
     floor = max(resolution_floor, member_pitch)
+    if boundary_adaptation and automatic:
+        # Automatic sizing must reserve room for the *smaller* boundary
+        # cells. Previously a nominal TPMS cell could sit exactly at the
+        # wall/occupancy floor, making every attempted refinement impossible.
+        # Enlarge the automatic interior pitch; never thin a stated member.
+        # Both scales must also be resolved within the chosen sampling budget.
+        if family.kind == "prismatic" and family.base == "honeycomb":
+            open_pitch = member / np.sqrt(3.)
+        else:
+            open_pitch = member_pitch
+        boundary_resolution_floor = float(family.minimum_cell_voxels) * budget_edge
+        floor = max(floor, 2. * open_pitch * 1.05, 2. * boundary_resolution_floor)
     target = max(0.0, (feature - 2.0 * skin) / CELLS_ACROSS_FEATURE)
     if automatic:
         cell = max(target, floor)
@@ -222,6 +234,8 @@ def fit_lattice_dimensions(
     report = {
         "mode": "Automatic fit" if automatic else "Manual",
         "method": "Design-only medial thickness with printable and resolution bounds",
+        "sizing_basis": "Geometry and sampling limits; no lattice strength optimization",
+        "load_based_strength_sizing": False,
         "target_cells_across_feature": CELLS_ACROSS_FEATURE,
         "design_feature_thickness_mm": feature,
         "minimum_feasible_cell_mm": floor,

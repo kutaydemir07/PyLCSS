@@ -16,6 +16,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import atexit
 from time import monotonic, sleep
 from uuid import uuid4
 
@@ -23,6 +25,80 @@ from pylcss.process_utils import headless_subprocess_kwargs
 
 
 logger = logging.getLogger(__name__)
+_ANALYSIS_LOCK = threading.Lock()
+_ANALYSIS_WORKER = None
+_ANALYSIS_JOBS = 0
+_ANALYSIS_LOG = None
+
+
+def _close_analysis_worker():
+    global _ANALYSIS_WORKER, _ANALYSIS_JOBS, _ANALYSIS_LOG
+    if _ANALYSIS_WORKER is not None:
+        _terminate_cad_process(_ANALYSIS_WORKER)
+        if _ANALYSIS_WORKER.stdin is not None:
+            _ANALYSIS_WORKER.stdin.close()
+    _ANALYSIS_WORKER, _ANALYSIS_JOBS = None, 0
+    if _ANALYSIS_LOG is not None:
+        _ANALYSIS_LOG.close()
+        _ANALYSIS_LOG = None
+
+
+atexit.register(_close_analysis_worker)
+
+
+@contextmanager
+def _job_process(operation, command, job, result, out, err, cancel_callback):
+    """Reuse one isolated analysis interpreter; failures/cancellation retire it.
+
+    Native CAD construction retains fresh processes. Analysis workers are
+    recycled after eight jobs or high resident memory; all inputs are reloaded.
+    """
+    global _ANALYSIS_WORKER, _ANALYSIS_JOBS, _ANALYSIS_LOG
+    reusable = operation in {'fea', 'lattice', 'lattice_display'}
+    if not reusable:
+        process = subprocess.Popen(command, stdout=out, stderr=err,
+            cwd=Path(__file__).resolve().parents[4], **_cad_job_process_options(operation))
+        try:
+            yield process
+        finally:
+            if process.poll() is None:
+                try:
+                    process.wait(timeout=.5)
+                except subprocess.TimeoutExpired:
+                    _terminate_cad_process(process)
+        return
+    while not _ANALYSIS_LOCK.acquire(timeout=.1):
+        if callable(cancel_callback) and cancel_callback():
+            raise CadJobCancelled('Analysis cancelled while waiting for its worker.')
+    try:
+        if _ANALYSIS_WORKER is None or _ANALYSIS_WORKER.poll() is not None:
+            _close_analysis_worker()
+            _ANALYSIS_LOG = tempfile.TemporaryFile(mode='w+b')
+            _ANALYSIS_WORKER = subprocess.Popen([sys.executable, '-m', __name__, '--persistent'],
+                stdin=subprocess.PIPE, stdout=_ANALYSIS_LOG, stderr=_ANALYSIS_LOG,
+                text=True, encoding='utf-8', cwd=Path(__file__).resolve().parents[4],
+                **_cad_job_process_options('lattice'))
+        _ANALYSIS_WORKER.stdin.write(json.dumps({'job': str(job), 'result': str(result)})+'\n')
+        _ANALYSIS_WORKER.stdin.flush()
+        try:
+            yield _ANALYSIS_WORKER
+        except BaseException:
+            _close_analysis_worker()
+            raise
+        _ANALYSIS_JOBS += 1
+        recycle = _ANALYSIS_JOBS >= 8 or result.with_suffix('.error.json').is_file()
+        try:
+            import psutil
+            recycle |= psutil.Process(_ANALYSIS_WORKER.pid).memory_info().rss > 3*1024**3
+        except Exception:
+            # Optional resource telemetry must not change a completed job.
+            pass
+        if recycle:
+            if result.is_file() and not result.with_suffix('.error.json').is_file():
+                _ANALYSIS_WORKER._completed_retirement = True
+            _close_analysis_worker()
+    finally:
+        _ANALYSIS_LOCK.release()
 
 
 class _CadJobPickler(pickle.Pickler):
@@ -163,6 +239,8 @@ def _cad_job_directory(prefix):
 
 
 def _terminate_cad_process(process):
+    if process.poll() is not None:
+        return
     if os.name == "nt":
         # Windows venv executables launch another interpreter. Terminating
         # only the launcher leaves native CAD work and its file handles alive.
@@ -222,41 +300,34 @@ def run_cad_job(operation: str, *arguments, timeout_seconds: float | None = None
         # progress and check Stop. Waiting releases the parent's Python GIL.
         stdout = Path(directory) / "stdout.log"
         stderr = Path(directory) / "stderr.log"
-        with stdout.open("wb") as out, stderr.open("wb") as err:
-            process = subprocess.Popen(command, stdout=out, stderr=err,
-                                       cwd=Path(__file__).resolve().parents[4],
-                                       **_cad_job_process_options(operation))
+        with stdout.open("wb") as out, stderr.open("wb") as err, _job_process(
+                operation, command, job, result, out, err, cancel_callback) as process:
             started = monotonic()
             previous_progress = ""
-            try:
-                while True:
-                    if cancel_callback is not None and cancel_callback():
-                        raise CadJobCancelled("CAD reconstruction cancelled")
-                    if progress_callback is not None and progress.is_file():
-                        try:
-                            current = progress.read_text(encoding="utf-8")
-                        except (PermissionError, FileNotFoundError):
-                            # Windows can briefly deny opening a status file
-                            # during atomic replacement. Keep the job alive.
-                            current = previous_progress
-                        if current != previous_progress:
-                            payload, step, total = json.loads(current)
-                            progress_callback(payload, None, step, total)
-                            previous_progress = current
-                    remaining = None if timeout_seconds is None else timeout_seconds - (monotonic() - started)
-                    if remaining is not None and remaining <= 0:
-                        raise RuntimeError(f"CAD {operation} job exceeded {timeout_seconds:g} seconds; "
-                                           "the destination file was not replaced.")
-                    if process.poll() is not None:
-                        break
+            while True:
+                if cancel_callback is not None and cancel_callback():
+                    raise CadJobCancelled("CAD reconstruction cancelled")
+                if progress_callback is not None and progress.is_file():
                     try:
-                        process.wait(timeout=.1 if remaining is None else min(.1, remaining))
-                    except subprocess.TimeoutExpired:
-                        pass
-            finally:
-                if process.poll() is None:
-                    _terminate_cad_process(process)
-        if process.returncode or not result.is_file():
+                        current = progress.read_text(encoding="utf-8")
+                    except (PermissionError, FileNotFoundError):
+                        current = previous_progress
+                    if current != previous_progress:
+                        payload, step, total = json.loads(current)
+                        progress_callback(payload, None, step, total)
+                        previous_progress = current
+                remaining = None if timeout_seconds is None else timeout_seconds - (monotonic() - started)
+                if remaining is not None and remaining <= 0:
+                    raise RuntimeError(f"CAD {operation} job exceeded {timeout_seconds:g} seconds; "
+                                       "the destination file was not replaced.")
+                if process.poll() is not None or result.with_suffix('.ready').is_file():
+                    break
+                try:
+                    process.wait(timeout=.1 if remaining is None else min(.1, remaining))
+                except subprocess.TimeoutExpired:
+                    pass
+        if ((process.returncode and not getattr(process, '_completed_retirement', False))
+                or result.with_suffix('.error.json').is_file() or not result.is_file()):
             details = stderr.read_text(encoding="utf-8", errors="replace")
             if not details.strip():
                 details = stdout.read_text(encoding="utf-8", errors="replace")
@@ -309,10 +380,11 @@ def reconstruct_cad_in_background(payload, *, reconstruction_strategy="auto",
     return shape, report, preview_mesh
 
 
-def main():
+def main(job_path=None, result_path=None):
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    job = Path(sys.argv[1])
+    job = Path(sys.argv[1] if job_path is None else job_path)
+    result_path = Path(sys.argv[2] if result_path is None else result_path)
     with job.open("rb") as stream:
         operation, arguments = _CadJobUnpickler(stream, job.parent).load()
     if operation == "worker_environment":
@@ -360,13 +432,47 @@ def main():
             answer = functions[operation](*arguments, progress_callback=progress_callback)
         else:
             answer = functions[operation](*arguments)
-    with Path(sys.argv[2]).open("wb") as stream:
+    temporary = result_path.with_suffix('.tmp')
+    with temporary.open("wb") as stream:
         pickle.dump(answer, stream, protocol=pickle.HIGHEST_PROTOCOL)
+    os.replace(temporary, result_path)
+    result_path.with_suffix('.ready').touch()
+
+
+def _serve_analysis_jobs():
+    """stdin is private parent IPC; native/Python logs use each job's files."""
+    import gc
+    for line in sys.stdin:
+        message = json.loads(line)
+        job, result = Path(message['job']), Path(message['result'])
+        sys.stdout.flush(); sys.stderr.flush()
+        saved_out, saved_err = os.dup(1), os.dup(2)
+        try:
+            with (job.parent/'stdout.log').open('wb') as out, (job.parent/'stderr.log').open('wb') as err:
+                os.dup2(out.fileno(), 1); os.dup2(err.fileno(), 2)
+                try:
+                    main(job, result)
+                except Exception as error:
+                    import traceback
+                    result.with_suffix('.error.json').write_text(json.dumps(
+                        {'type': type(error).__name__, 'message': str(error)}), encoding='utf-8')
+                    traceback.print_exc()
+                    result.with_suffix('.ready').touch()
+                    return
+                finally:
+                    sys.stdout.flush(); sys.stderr.flush()
+        finally:
+            os.dup2(saved_out, 1); os.dup2(saved_err, 2)
+            os.close(saved_out); os.close(saved_err)
+        gc.collect()
 
 
 if __name__ == "__main__":
     try:
-        main()
+        if len(sys.argv) > 1 and sys.argv[1] == '--persistent':
+            _serve_analysis_jobs()
+        else:
+            main()
     except Exception as error:
         import traceback
         # Structured reasons travel separately from developer diagnostics.

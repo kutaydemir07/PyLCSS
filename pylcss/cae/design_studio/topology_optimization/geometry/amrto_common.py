@@ -184,6 +184,29 @@ class AMRTOConfig:
     # These constraints are an engineering extension, not an author-code claim.
     stitch_surface_boundaries: bool = True
     boundary_fit_relative_tolerance: float = 0.001
+    # Join compatible ordinary chain tangents before constructing the surface
+    # basis. Source/stock certificates remain mandatory. Protected and failed
+    # components retain their original curves.
+    couple_shared_boundary_tangents: bool = False
+    # One bounded normal-plane fit after a complete solid has been obtained.
+    # Keep it only after repeating exact-feature, native and STEP checks.
+    seam_normal_fitting: bool = False
+    seam_normal_weight: float = 25.0
+    seam_source_crease_angle: float = 30.0
+    # Bounded interior fairing retains exact common boundary curves. Native
+    # solid, feature and STEP admission still follows the fitting stage.
+    fair_surface_interiors: bool = True
+    # Coupled point/unit-normal fitting, with one shared-curve/UV refit fallback.
+    # A proposal must also pass native solid and matched visible-ripple checks.
+    fair_surface_network: bool = True
+    fair_network_boundary_curves: bool = True
+    repair_network_uv: bool = True
+    fair_network_physical_curvature: bool = True
+    network_normal_weight: float = 100.0
+    network_bending_weight: float = 5.0
+    network_interior_normal_weight: float = 25.0
+    network_maximum_iterations: int = 3
+    network_maximum_controls: int = 65536
     preserve_patch_boundaries: bool = False  # Legacy constrained fitter only; paper patches are independent.
     source_box_bounds: Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = None
     fitting_workers: int = 4  # Bound patch processes; each uses one BLAS thread

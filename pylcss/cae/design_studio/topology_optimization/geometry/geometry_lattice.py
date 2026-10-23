@@ -291,13 +291,90 @@ def _lattice_level(axes, lower, pitch, thickness, options, relative, member_plan
     return np.broadcast_to(thickness / 2. - best * pitch, shape).astype(np.float32).copy()
 
 
+def _double_precision_contour(field, spacing, origin, level):
+    """Contour the same nodal field with native double-precision coordinates.
+
+    VTK's image-data fast path returns float32 points despite the precision
+    request. An explicit structured grid is needed to retain double precision.
+    Populate XYZ by broadcasting, without three full meshgrid temporaries.
+    """
+    from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
+    from vtkmodules.vtkCommonCore import vtkPoints, VTK_DOUBLE
+    from vtkmodules.vtkCommonDataModel import vtkStructuredGrid
+    from vtkmodules.vtkCommonExecutionModel import vtkAlgorithm
+    from vtkmodules.vtkFiltersCore import vtkContourFilter
+
+    nx, ny, nz = field.shape
+    coordinates = np.empty((nz, ny, nx, 3), dtype=np.float64)
+    coordinates[..., 0] = origin[0] + spacing[0] * np.arange(nx)
+    coordinates[..., 1] = (origin[1] + spacing[1] * np.arange(ny))[None, :, None]
+    coordinates[..., 2] = (origin[2] + spacing[2] * np.arange(nz))[:, None, None]
+    points = vtkPoints()
+    points.SetData(numpy_to_vtk(coordinates.reshape(-1, 3), deep=False))
+    scalars = np.asarray(field).ravel(order='F')
+    grid = vtkStructuredGrid()
+    grid.SetDimensions(nx, ny, nz)
+    grid.SetPoints(points)
+    grid.GetPointData().SetScalars(numpy_to_vtk(scalars, deep=False))
+    contour = vtkContourFilter()
+    contour.SetInputData(grid)
+    contour.SetValue(0, level)
+    contour.SetOutputPointsPrecision(vtkAlgorithm.DOUBLE_PRECISION)
+    contour.ComputeNormalsOff()
+    contour.ComputeScalarsOff()
+    contour.Update()
+    output = contour.GetOutput()
+    if not output.GetNumberOfPoints() or output.GetPoints().GetDataType() != VTK_DOUBLE:
+        raise ValueError('Native contour did not return double-precision surface coordinates.')
+    vertices = vtk_to_numpy(output.GetPoints().GetData()).copy()
+    faces = vtk_to_numpy(output.GetPolys().GetConnectivityArray()).reshape(-1, 3).copy()
+    return vertices, faces
+
+
+def _contour_lattice_mesh(field, spacing, origin, level):
+    """Retain contour topology when moving from grid to model coordinates."""
+    vertices, faces, _, _ = marching_cubes(field, level=level, spacing=tuple(spacing),
+                                          allow_degenerate=False, gradient_direction="descent")
+    # skimage returns float32 vertices when removing degenerate triangles.
+    # In-place translation at e.g. -90 mm rounded distinct contour vertices
+    # onto each other, and trimesh then welded them into nonmanifold edges.
+    # Promote before adding the physical origin; do not move the isovalue or
+    # repair the surface to compensate for coordinate-rounding damage.
+    vertices = vertices.astype(np.float64) + np.asarray(origin, dtype=np.float64)
+    mesh = trimesh.Trimesh(vertices, faces, process=True)
+    method = 'Lewiner contour with double-precision model-space translation'
+    reextracted = False
+    minimum_edge = float(mesh.edges_unique_length.min(initial=np.inf))
+    precision_sensitive = minimum_edge < float(np.min(spacing))*1e-4
+    if not mesh.is_watertight or not mesh.is_winding_consistent or precision_sensitive:
+        # A cast after extraction cannot recover vertices already collapsed
+        # inside float32 interpolation. Re-extract the identical field and
+        # isovalue once in double precision. No healing or isovalue shift.
+        vertices, faces = _double_precision_contour(field, spacing, origin, level)
+        mesh = trimesh.Trimesh(vertices, faces, process=True)
+        method = 'VTK structured-grid contour with double-precision points'
+        reextracted = True
+    if mesh.volume < 0:
+        mesh.invert()
+    if not mesh.is_watertight or not mesh.is_winding_consistent:
+        raise ValueError("The sampled lattice boundary is not closed and consistently oriented. "
+                         "Increase lattice sampling quality; no surface repair was substituted.")
+    mesh.metadata['contour'] = {'method': method, 'precision_reextraction': reextracted,
+                                'precision_sensitive_short_edges': precision_sensitive,
+                                'isovalue': float(level), 'isovalue_changed': False,
+                                'surface_healed': False}
+    return mesh
+
+
 def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStructureOptions, *,
                              source_geometry, source_cad_shape=None, explicit_solid_shapes=(),
                              explicit_void_shapes=(), passive_solid_mask=None, passive_void_mask=None,
                              solid_boxes=(), void_boxes=(), solid_cylinders=(), void_cylinders=(),
                              joint_pin_cylinders=(), member_plan=None, surface_quality="Professional",
                              max_recovery_voxels=None, include_manufacturing_field=False,
-                             progress_stage_callback=None, boundary_adaptation=False, **_):
+                             progress_stage_callback=None, boundary_adaptation=False,
+                             stress_refinement_mask=None, reserve_refined_sampling=False,
+                             geometry_cache=None, **_):
     """Fill the geometric envelope with cells, preserving prescribed material.
 
     Numerical samples resolve the continuous surfaces; neither the source
@@ -317,14 +394,24 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
     family = options.family
     from ..integration.lattice_fit import plan_lattice_sampling
     adaptation = None
-    if boundary_adaptation:
+    stress_refinement = None
+    if stress_refinement_mask is not None:
+        stress_refinement = np.asarray(stress_refinement_mask, dtype=bool)
+        if stress_refinement.shape != density.shape:
+            raise ValueError('Stress refinement mask must match the physical lattice sizing grid.')
+        if not np.any(stress_refinement):
+            stress_refinement = None
+    sampling_adaptation = None
+    if boundary_adaptation or stress_refinement is not None or reserve_refined_sampling:
         if member_plan is not None:
             raise ValueError("Boundary cell refinement requires a periodic family, not an explicit member graph.")
         from .lattice_adaptation import plan_lattice_adaptation
-        adaptation = plan_lattice_adaptation(pitch, thickness, family)
+        sampling_adaptation = plan_lattice_adaptation(pitch, thickness, family)
+        if boundary_adaptation or stress_refinement is not None:
+            adaptation = sampling_adaptation
     intervals, spacing, sampling_report = plan_lattice_sampling(
         upper - lower, pitch, thickness, family, surface_quality, max_samples=max_recovery_voxels,
-        refined_pitch=None if adaptation is None else adaptation["refined_pitch_mm"])
+        refined_pitch=None if sampling_adaptation is None else sampling_adaptation["refined_pitch_mm"])
     dims = tuple(int(value + 3) for value in intervals)
     # Offset samples from the bound planes. Contouring an entire plane of
     # exactly-zero distances can create zero-area triangles at cell junctions.
@@ -333,20 +420,30 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
     contour_level = float(np.min(spacing)) * 1e-6
     tolerance = max(1e-6, min(0.1, float(np.min(spacing)) * 0.35))
     distance_reports = []
+    def triangles(raw):
+        return (geometry_triangle_mesh(raw, tolerance) if geometry_cache is None else
+                geometry_cache.triangle_mesh(raw, tolerance))
     def sample_boundary(mesh, name):
-        details = {"boundary": name}
-        result = mesh_signed_distance_grid(mesh, axes, progress_callback=stage, report=details)
+        def build():
+            details = {}
+            result = mesh_signed_distance_grid(mesh, axes, progress_callback=stage, report=details)
+            return result, details
+        if geometry_cache is None:
+            result, details = build()
+        else:
+            result, details = geometry_cache.get(geometry_cache.boundary_key(mesh, axes), build)
+        details['boundary'] = name
         distance_reports.append(details)
         return result
     stage("Trimming lattice against CAD/STL geometry")
-    envelope_mesh = geometry_triangle_mesh(source_geometry, tolerance)
+    envelope_mesh = triangles(source_geometry)
     envelope = sample_boundary(envelope_mesh, "Optimized CAD/STL envelope")
     original_boundary = None
     if source_cad_shape is not None:
         if source_cad_shape is source_geometry:
             original_boundary = envelope.copy()
         else:
-            original = geometry_triangle_mesh(source_cad_shape, tolerance)
+            original = triangles(source_cad_shape)
             original_boundary = sample_boundary(original, "Original source CAD")
         np.minimum(envelope, original_boundary, out=envelope)
     if not np.any(envelope > 0):
@@ -372,7 +469,7 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
         for number, raw in enumerate(shapes):
             key = id(raw)
             if key not in region_meshes:
-                region_meshes[key] = geometry_triangle_mesh(raw, tolerance)
+                region_meshes[key] = triangles(raw)
             sampled = sample_boundary(region_meshes[key],
                 f"Prescribed {'solid' if result is solid_level else 'void'} {number + 1}")
             if result is solid_level:
@@ -445,12 +542,27 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
         relative = np.full(dims, options.target_relative_density, dtype=np.float32)
     lattice = _lattice_level(axes, lower, pitch, thickness, options, relative, member_plan, cell)
     if adaptation is not None:
-        stage("Fitting smaller lattice cells near the CAD boundary")
+        stage("Applying boundary and load-based cell refinement")
         from .lattice_adaptation import blend_boundary_lattice_fields
         refined = _lattice_level(axes, lower, adaptation["refined_pitch_mm"], thickness,
                                  options, relative, None, cell)
-        lattice, adaptation = blend_boundary_lattice_fields(lattice, refined, envelope,
-            nominal_pitch=pitch, minimum_member=thickness, family=family)
+        if stress_refinement is None:
+            lattice, adaptation = blend_boundary_lattice_fields(lattice, refined, envelope,
+                nominal_pitch=pitch, minimum_member=thickness, family=family)
+        else:
+            # Positive means the finer native family is requested. Its field
+            # is continuous; both pitches coexist only in the overlap band.
+            requested = _mask_distance(stress_refinement, axes, lower, cell)
+            if boundary_adaptation:
+                np.maximum(requested, adaptation['boundary_band_mm'] - envelope, out=requested)
+            overlap = adaptation['overlap_mm']
+            coarse_allowed = np.minimum(lattice, overlap - requested)
+            np.minimum(refined, overlap + requested, out=refined)
+            np.maximum(coarse_allowed, refined, out=lattice)
+            adaptation.update(stress_guided_refinement=True,
+                stress_refinement_source_voxels=int(np.count_nonzero(stress_refinement)),
+                boundary_adaptation_enabled=bool(boundary_adaptation),
+                refinement_basis='Resolved lattice FEA utilization; candidate still requires its own reanalysis')
         del refined
     level_shift = 0.
     if options.target_relative_density > 0 and member_plan is None:
@@ -514,15 +626,8 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
     # Internal CAD faces can also coincide with sample planes. A microscopic
     # positive level breaks exactly-zero contour ties without a voxel step or
     # a measurable change to the prescribed boundary.
-    vertices, faces, _, _ = marching_cubes(lattice, level=contour_level, spacing=tuple(spacing),
-                                          allow_degenerate=False, gradient_direction="descent")
-    vertices += np.asarray([axis[0] for axis in axes])
-    mesh = trimesh.Trimesh(vertices, faces, process=True)
-    if mesh.volume < 0:
-        mesh.invert()
-    if not mesh.is_watertight or not mesh.is_winding_consistent:
-        raise ValueError("The sampled lattice boundary is not closed and consistently oriented. "
-                         "Increase lattice sampling quality; no surface repair was substituted.")
+    mesh = _contour_lattice_mesh(lattice, spacing, [axis[0] for axis in axes], contour_level)
+    contour_report = dict(mesh.metadata['contour'])
     from .bore_constraints import enforce_bore_clearance
     vertices, bore_report = enforce_bore_clearance(np.asarray(mesh.vertices), np.asarray(mesh.faces), bore_records, spacing)
     mesh = trimesh.Trimesh(vertices, mesh.faces, process=False)
@@ -533,22 +638,16 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
         for pin in pins:
             raw = _region_cylinder_to_solid(pin, (lower, upper))
             if raw is not None:
-                bodies.append(geometry_triangle_mesh(raw, tolerance))
+                bodies.append(triangles(raw))
         mesh = trimesh.util.concatenate(bodies)
     if not mesh.is_watertight or not mesh.is_winding_consistent:
         raise ValueError("Bore and preserved-geometry constraints produced an invalid lattice boundary.")
     stage("Checking lattice surface")
     from .mesh_screening import screen_mesh_intersections
-    if len(mesh.faces) <= 50_000:
-        screening = screen_mesh_intersections(mesh.vertices, mesh.faces)
-    else:
-        screening = {
-            "self_intersecting_faces": 0,
-            "screening_scope": "continuous_isosurface",
-            "screening_method": "Marching cubes topological non-self-intersection guarantee",
-            "boundary_contacts_included": True,
-            "screened_candidate_pairs": 0,
-        }
+    screening = screen_mesh_intersections(mesh.vertices, mesh.faces)
+    if screening.get('screening_scope') != 'full' or screening.get('self_intersecting_faces') != 0:
+        raise ValueError('The lattice surface intersects itself or could not be fully screened. '
+                         'Review the geometry and lattice dimensions before export.')
     component_labels = trimesh.graph.connected_component_labels(mesh.face_adjacency, node_count=len(mesh.faces))
     shell_count = int(component_labels.max()) + 1 if len(mesh.faces) else 0
     shell_volumes = np.zeros(shell_count, dtype=float)
@@ -572,6 +671,7 @@ def recover_geometry_lattice(density, bounds, cutoff, options: ManufacturingStru
               "member_thickness_model_units": thickness, "member_scale": options.member_scale,
               "cell_level_offset_model_units": level_shift}
     report = {"method": "Continuous cell level sets intersected with CAD/STL signed distances",
+              "contour": contour_report,
               "envelope_basis": "CAD/STL triangle boundary", "analysis_occupancy_used_for_boundary": False,
               "sampling_spacing": spacing.tolist(), "source_tessellation_tolerance": tolerance,
               "sampling_plan": sampling_report, "boundary_sampling": distance_reports,

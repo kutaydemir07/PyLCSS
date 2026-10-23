@@ -809,9 +809,26 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         adaptive.setChecked(True if saved_adaptive is None else bool(saved_adaptive))
         adaptive.setToolTip("Keep the nominal cell size in broad interiors. Fit smaller cells near the "
                             "CAD/STL boundary, joined through an overlapping transition. Minimum wall/strut "
-                            "thickness is retained. This can require more sampling and time.")
+                            "thickness is retained. Auto fit reserves room for both cell sizes. "
+                            "This can require more sampling and time.")
         adaptive.toggled.connect(lambda value: self.update_property("post_lattice_adaptive_cells", value))
         layout.addRow("Boundary Cells:", adaptive)
+        guided = QtWidgets.QCheckBox('Adjust using lattice FEA')
+        guided.setChecked(bool(node.get_property('post_lattice_use_fea')))
+        guided.setToolTip('Generate and analyse the actual lattice using connected material, supports and loads. '
+                          'Try thicker members and smaller cells near stress hotspots within the chosen bounds. '
+                          'Uses the FEA mesh settings and verification limits below. Includes a convergence check; '
+                            'final checks use quadratic elements. Selected linear guidance is compared with quadratic FEA. '
+                          'buckling and fatigue are not analysed.')
+        guided.toggled.connect(lambda value: self.update_property('post_lattice_use_fea', value))
+        layout.addRow('Load-based sizing:', guided)
+        attempts = QtWidgets.QSpinBox()
+        attempts.setRange(1, 20)
+        saved_attempts = node.get_property('post_lattice_sizing_iterations')
+        attempts.setValue(3 if saved_attempts is None else int(saved_attempts))
+        attempts.setToolTip('Maximum generate-and-solve candidates. Stops without a pass if the limits or mesh budget are insufficient.')
+        attempts.valueChanged.connect(lambda value: self.update_property('post_lattice_sizing_iterations', value))
+        layout.addRow('Sizing candidates:', attempts)
         for prop, label in (
             ("post_lattice_cell_size_mm", "Cell Size:"),
             ("post_lattice_min_thickness_mm", "Minimum Wall / Strut:"),
@@ -875,7 +892,10 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         mesh_note = QtWidgets.QLabel(
             "Fills all design material inside the optimized CAD/STL boundary with "
             "lattice. Explicit non-design regions remain solid. Boundary skin is "
-            "added only for a positive thickness. Creates a surface mesh for STL."
+            "added only for a positive thickness. Creates a surface mesh for STL. "
+            "Basic sizing uses geometry and the saved density field. Load-based sizing "
+            "analyses each lattice candidate and tries reinforcement within these density "
+            "and thickness bounds. Its final linear-static checks include mesh convergence."
         )
         mesh_note.setWordWrap(True)
         layout.addRow(mesh_note)
@@ -890,6 +910,11 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
             label = QtWidgets.QLabel(f"{report['cell_family']} · {report['cell_size_mm']:.3g} mm cells")
             label.setWordWrap(True)
             layout.addRow("Generated:", label)
+            feedback = result.get('lattice_optimization')
+            if isinstance(feedback, dict):
+                sizing_status = QtWidgets.QLabel(str(feedback.get('status', '')).replace('_', ' '))
+                sizing_status.setWordWrap(True)
+                layout.addRow('FEA sizing:', sizing_status)
             base = report.get("base_geometry") or {}
             if base:
                 base_label = QtWidgets.QLabel(str(base.get("name") or base.get("kind") or "CAD/STL"))
@@ -950,7 +975,17 @@ class TopologyInspectorMixin(TopOptFeaInspectorMixin, NonDesignInspectorMixin):
         result = getattr(node, "_last_result", None)
         if not isinstance(result, dict):
             return
-        worker = TopOptLatticeWorker(result, {key: node.get_property(key) for key in POST_LATTICE_DEFAULTS}, parent=self)
+        settings = {key: (POST_LATTICE_DEFAULTS[key] if node.get_property(key) is None else node.get_property(key))
+                    for key in POST_LATTICE_DEFAULTS}
+        if settings['post_lattice_use_fea']:
+            from pylcss.cae.design_studio.topology_optimization.configuration.fea_meshing import fea_mesh_options_from_node
+            settings['_mechanical_inputs'] = {
+                'material': node.get_input_value('material'), 'supports': node.get_input_list('supports'),
+                'loads': node.get_input_list('loads'), 'mesh_options': fea_mesh_options_from_node(node),
+                'safety_factor': node.get_property('validation_yield_safety_factor') or 1.,
+                'displacement_limit': node.get_property('validation_displacement_limit_mm') or 0.,
+            }
+        worker = TopOptLatticeWorker(result, settings, parent=self)
         self._topopt_lattice_worker = worker
         status_bar = window.statusBar() if callable(getattr(window, "statusBar", None)) else None
         outcome = {"message": "Lattice generation cancelled."}

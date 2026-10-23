@@ -17,3 +17,4 @@ numba==0.63.1
 pymeshlab==2025.7.post1
 threadpoolctl==3.6.0
 geomdl==5.4.0
+pypardiso==0.4.7; (sys_platform == 'win32' or sys_platform == 'linux') and (platform_machine == 'AMD64' or platform_machine == 'x86_64')

@@ -15,6 +15,8 @@ FEA_MESH_DEFAULTS = {
     "fea_element_order": "C3D10",
     "fea_max_elements": 500_000,
     "fea_convergence_tolerance": 0.05,
+    "fea_surface_tolerance_mm": 0.0,
+    "fea_solver_backend": 'Automatic',
 }
 FEA_QUALITY_OPTIONS = ("Standard", "Mesh Convergence")
 FEA_ELEMENT_ORDERS = {
@@ -54,9 +56,13 @@ class CadFeaMeshOptions:
     element_order: str = "C3D10"
     max_elements: int = 500_000
     convergence_tolerance: float = 0.05
+    surface_tolerance_mm: float = 0.0
+    solver_backend: str = 'Automatic'
 
     def __post_init__(self):
-        for name in ("element_size_mm", "min_element_size_mm", "mesh_grading", "convergence_tolerance"):
+        if self.solver_backend not in ('Automatic', 'Sparse Direct', 'CalculiX'):
+            raise ValueError('FEA solver backend must be Automatic, Sparse Direct, or CalculiX.')
+        for name in ("element_size_mm", "min_element_size_mm", "mesh_grading", "convergence_tolerance", "surface_tolerance_mm"):
             raw = getattr(self, name)
             if isinstance(raw, bool):
                 raise ValueError(

@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Kutay Demir.
 # Licensed under the PolyForm Shield License 1.0.0. See LICENSE.
-"""Bounded geometric screening for intersections of non-adjacent triangles."""
+"""Triangle intersection screening with explicit shared-boundary handling."""
 
 from __future__ import annotations
 
@@ -122,14 +122,16 @@ def screen_mesh_intersections(vertices: np.ndarray, faces: np.ndarray,
                               **legacy_limits) -> dict:
     """Check all spatially overlapping, topologically non-adjacent faces.
 
-    Shared-vertex neighbours are excluded; closure, winding and degenerate
-    faces are checked separately. Candidate pairs are streamed in batches;
+    Shared-vertex neighbours may touch at their common boundary, but their
+    interiors must not overlap. Closure and winding are checked separately.
+    Candidate pairs are streamed in batches;
     retired budget arguments warn and never skip a large mesh.
     """
     warn_retired_options(legacy_limits, operation='Mesh intersection screening')
     report = {"self_intersecting_faces": None, "screening_scope": "not_run",
-              "screening_method": "Non-adjacent triangle separating-axis test",
+              "screening_method": "Triangle separating-axis test with shared-boundary handling",
               "boundary_contacts_included": bool(include_boundary_contacts),
+              "adjacent_face_interiors_checked": True,
               "screened_candidate_pairs": 0}
     vertices, faces = np.asarray(vertices, dtype=float), np.asarray(faces, dtype=np.int64)
     if not len(faces):
@@ -160,6 +162,13 @@ def screen_mesh_intersections(vertices: np.ndarray, faces: np.ndarray,
         pending_first.clear()
         pending_second.clear()
         adjacent = np.any(faces[right, :, None] == faces[left, None, :], axis=(1, 2))
+        # A shared vertex is not permission for folded/coplanar interiors to
+        # overlap. Those contacts can make a PLC impossible to tetrahedralize.
+        for start in range(0, int(np.count_nonzero(adjacent)), 4096):
+            a, b = left[adjacent][start:start+4096], right[adjacent][start:start+4096]
+            hits = _intersecting_triangles(triangles[a], triangles[b], tolerance,
+                                           include_boundary_contacts=False)
+            intersected.update(a[hits].tolist());intersected.update(b[hits].tolist())
         left, right = left[~adjacent], right[~adjacent]
         report['screened_candidate_pairs'] += len(left)
         for start in range(0, len(left), 4096):

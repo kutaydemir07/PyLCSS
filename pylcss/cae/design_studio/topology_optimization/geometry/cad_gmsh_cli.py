@@ -20,6 +20,12 @@ from pylcss.cae.solver_backends.execution import resolve_executable, run_process
 
 logger = logging.getLogger(__name__)
 
+# Gmsh's 0.1 degree default rejects valid, very sharp material wedges as
+# overlapping facets. Keep a positive guard, and independently screen the
+# CAD and native triangles instead of treating this angular heuristic as an
+# intersection test. This changes no coordinates or completion tolerances.
+_FACET_OVERLAP_ANGLE_DEGREES = .01
+
 
 def resolve_gmsh_executable(explicit=None):
     """Use the same executable configuration and discovery as external solvers."""
@@ -43,6 +49,7 @@ def _geo_script(maximum, minimum, volume_maximum, timeout_s, grading=.3):
         'Mesh.MaxNumThreads1D': 4, 'Mesh.MaxNumThreads2D': 4,
         'Mesh.MaxNumThreads3D': 4, 'Mesh.Algorithm': 6,
         'Mesh.Algorithm3D': 1, 'Mesh.OptimizeNetgen': 0,
+        'Mesh.AngleToleranceFacetOverlap': _FACET_OVERLAP_ANGLE_DEGREES,
         'Mesh.MeshSizeFromCurvature': 0,
         'Mesh.MeshSizeMin': minimum, 'Mesh.MeshSizeMax': maximum,
         'Mesh.MeshSizeExtendFromBoundary': 1,
@@ -126,6 +133,16 @@ def _closed_boundary(points, triangles):
         raise ValueError('Gmsh native boundary has nonpositive oriented material volume.')
     return {'triangles': len(triangles), 'closed': True,
             'winding_consistent': True, 'oriented_volume_mm3': volume}
+
+
+def _screen_boundary(points, triangles):
+    """Reject real crossings independently of the mesher's wedge-angle guard."""
+    from .mesh_screening import screen_mesh_intersections
+
+    report = screen_mesh_intersections(points, triangles)
+    if report.get('screening_scope') != 'full' or report.get('self_intersecting_faces') != 0:
+        raise ValueError('Gmsh native CAD boundary intersects itself or could not be fully screened.')
+    return report
 
 
 def _same_surface(before_points, before_faces, after_points, after_faces):
@@ -239,6 +256,7 @@ def cad_tet_mesh_cli(shape, element_size, directory, *, name='analysis',
               'reference_cad_volume_mm3': reference, 'geometry_healing_enabled': False,
               'python_gmsh_api_used': False, 'maximum_elements': maximum_elements,
               'element_order': element_order, 'surface_stages': 0, 'volume_stages': 0,
+              'facet_overlap_angle_degrees': _FACET_OVERLAP_ANGLE_DEGREES,
               'retry_count': 0, 'passed': False}
     report_path = folder / 'meshing_report.json'
 
@@ -247,6 +265,10 @@ def cad_tet_mesh_cli(shape, element_size, directory, *, name='analysis',
         report_path.write_text(json.dumps(report, indent=2), encoding='utf-8')
 
     try:
+        from .occ_shapes import _assess_brep_self_intersections
+        report['cad_self_intersections'] = _assess_brep_self_intersections(shape)
+        if not report['cad_self_intersections']['passed']:
+            raise ValueError('CAD contains geometric self-intersections; rebuild the CAD before FEA.')
         source = folder / 'cad_input.step'
         shape.exportStep(str(source))
         source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -265,6 +287,7 @@ def cad_tet_mesh_cli(shape, element_size, directory, *, name='analysis',
             if not surface_state and (folder / 'surface.ready').is_file():
                 before_points, before_faces, _ = _mesh_arrays(folder / 'surface.msh')
                 report['native_surface'] = _closed_boundary(before_points, before_faces)
+                report['native_surface_intersections'] = _screen_boundary(before_points, before_faces)
                 surface_state.update(points=before_points, faces=before_faces)
                 if cancel_callback is not None and cancel_callback():
                     return True
@@ -279,6 +302,17 @@ def cad_tet_mesh_cli(shape, element_size, directory, *, name='analysis',
         process = run_process([program, script.name, '-parse_and_exit', '-nopopup', '-v', '4'],
                               cwd=folder, timeout_s=remaining, stdout_file=folder / 'native.log',
                               cancel_callback=check_surface_and_cancel)
+        native_log = (folder / 'native.log').read_text(encoding='utf-8', errors='replace')
+        # A successful exit can still contain a useful element-shape warning.
+        # Keep it with the analysis instead of losing it with the temp files.
+        report['native_warnings'] = list(dict.fromkeys(
+            line.split(':', 1)[1].strip() for line in native_log.splitlines()
+            if line.startswith('Warning') and ':' in line
+            and line.split(':', 1)[1].strip() not in {
+                '------------------------------', 'Mesh generation error summary',
+                'Check the full log for details',
+            } and not line.split(':', 1)[1].strip().endswith((' warning', ' warnings', ' errors'))
+        ))
         if process.returncode != 0 or not (folder / 'volume.msh').is_file():
             raise ValueError(f'Gmsh meshing failed (exit {process.returncode}); see {folder / "native.log"}.')
         if not surface_state:

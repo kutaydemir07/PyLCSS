@@ -1,7 +1,7 @@
 # PyLCSS Third-Party Notices
 
 Document version: 3.0.0
-Last updated: 2026-10-14
+Last updated: 2026-10-23
 
 This file identifies third-party software used by or obtainable through
 PyLCSS 3.0.0. It is a notice and license index, not a replacement for the
@@ -118,6 +118,7 @@ covers transitive distributions and bundled native libraries.
 | cadquery | 2.6.1 | Apache-2.0 |
 | vtk | 9.3.1 | BSD-3-Clause |
 | scikit-fem | 11.0.0 | BSD-3-Clause |
+| pypardiso | 0.4.7 | BSD-3-Clause; native Intel runtime retains its packaged terms |
 | netgen-mesher | 6.2.2506 | LGPL-2.1 |
 | meshio | 5.3.5 | MIT |
 | scikit-image | 0.26.0 | BSD-3-Clause and bundled terms |
@@ -144,6 +145,12 @@ covers transitive distributions and bundled native libraries.
 | numba | 0.63.1 | BSD-2-Clause and bundled terms |
 | pymeshlab | 2025.7.post1 | GPL-3.0-or-later |
 | threadpoolctl | 3.6.0 | BSD-3-Clause |
+
+The CAE sparse direct solver downloads Intel oneMKL and its runtime dependencies
+through Python wheels on supported x86-64 platforms. The `mkl` distribution
+identifies the Intel Simplified Software License; `onemkl-license` supplies its
+license materials. The installed-package license index also retains notices for
+Intel OpenMP, TBB, TCMLib, UMF and compiler runtime dependencies.
 
 ## Icon-font attribution
 
